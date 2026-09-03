@@ -21,7 +21,7 @@ import type {
 	CoreOptimizationPhase,
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
-import { CorePassManager } from "./core-pass-manager.ts";
+import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
@@ -104,42 +104,69 @@ export function optimizeCore(
 	}
 	measurePhase("construction-cleanup", () => undefined);
 	{
-		const analyses = new CoreAnalysisManager(
-			compilation.program,
-			compilation.context,
-			reportBuilder,
-		);
-		const annotationPasses = new CorePassManager(
-			compilation.program,
-			compilation.context,
-			analyses,
-			reportBuilder,
-			{
-				verification: options.verification,
-				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-				localOptimization: false,
-			},
-		);
-		measurePhase("initial-local-optimization", () =>
-			annotationPasses.runStage("canonicalize", CORE_CONSTRUCTION_ANNOTATION_PASSES),
-		);
-		const normalizationPasses = new CorePassManager(
-			compilation.program,
-			compilation.context,
-			analyses,
-			reportBuilder,
-			{
-				verification: options.verification,
-				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-				localOptimization: true,
-			},
-		);
-		measurePhase("structural-cfg-optimization", () =>
-			normalizationPasses.runStage(
-				"canonicalize",
-				CORE_CONSTRUCTION_NORMALIZATION_PASSES,
-			),
-		);
+		const resources = new CoreFunctionOptimizationResources(compilation.program);
+		const phaseTimes = new Map<CoreOptimizationPhase, number>();
+		const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
+			if (!reportBuilder.collectsPhases) return run();
+			const startedAt = Date.now();
+			try {
+				return run();
+			} finally {
+				phaseTimes.set(phase, (phaseTimes.get(phase) ?? 0) + Date.now() - startedAt);
+			}
+		};
+		for (const functionId of compilation.program.functionIds()) {
+			const analyses = new CoreAnalysisManager(
+				compilation.program,
+				compilation.context,
+				reportBuilder,
+				resources.scratch,
+			);
+			const annotationPasses = new CoreFunctionPassScheduler(
+				compilation.program,
+				compilation.context,
+				analyses,
+				reportBuilder,
+				functionId,
+				{
+					verification: options.verification,
+					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+					featureIndex: resources.featureIndex,
+				},
+			);
+			runFunctionPhase("initial-local-optimization", () =>
+				annotationPasses.runComponent(
+					"canonicalize",
+					CORE_CONSTRUCTION_ANNOTATION_PASSES,
+				),
+			);
+			const normalizationPasses = new CoreFunctionPassScheduler(
+				compilation.program,
+				compilation.context,
+				analyses,
+				reportBuilder,
+				functionId,
+				{
+					verification: options.verification,
+					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+					localOptimization: true,
+					featureIndex: resources.featureIndex,
+					localRules: resources.localRules,
+				},
+			);
+			runFunctionPhase("structural-cfg-optimization", () =>
+				normalizationPasses.runComponent(
+					"canonicalize",
+					CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+				),
+			);
+		}
+		for (const phase of [
+			"initial-local-optimization",
+			"structural-cfg-optimization",
+		] as const) {
+			reportBuilder.recordPhase(phase, phaseTimes.get(phase) ?? 0);
+		}
 	}
 	reportBuilder.recordCheckpoint(
 		"after-initial-local-structural-optimization",

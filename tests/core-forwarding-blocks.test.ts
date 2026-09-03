@@ -12,7 +12,7 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
 import { CoreProgram as MutableCoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -482,9 +482,9 @@ describe("Core empty forwarding blocks", () => {
 		const pass = CORE_LOCAL_CANONICALIZATION_PASSES.find(
 			({ name }) => name === "linear-block-merging",
 		)!;
-		new CorePassManager(program, context, analyses, report, {
+		new CoreFunctionPassScheduler(program, context, analyses, report, function_, {
 			verification: "per-pass",
-		}).runStage("canonicalize", [pass]);
+		}).runComponent("canonicalize", [pass]);
 		verifyCoreProgram(program, { stage: "pre-target" }, context);
 		const result = { program, fn: program.function(function_) };
 

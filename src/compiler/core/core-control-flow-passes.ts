@@ -38,7 +38,7 @@ import {
 	coreBlockId,
 	coreInstructionId,
 } from "./core-ir.ts";
-import type { CorePass, CorePassBudget } from "./core-pass.ts";
+import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const CONTROL_FLOW_BUDGET: CorePassBudget = Object.freeze({
@@ -246,10 +246,9 @@ function blockParameterSpecs(fn: CoreFunctionStore, block: CoreBlockId) {
 	return specs;
 }
 
-const canonicalizeNaturalLoops: CorePass = {
+const canonicalizeNaturalLoops: CoreFunctionPass = {
 	name: "natural-loop-canonicalization",
 	stage: "control-flow",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
@@ -257,7 +256,6 @@ const canonicalizeNaturalLoops: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		for (const loop of cfg.loops) {
@@ -452,10 +450,9 @@ function isContainedArrayLengthRead(
 	return exact?.layout.kind === "indexed" && exact.cell.kind === "object-slot";
 }
 
-const hoistLoopInvariants: CorePass = {
+const hoistLoopInvariants: CoreFunctionPass = {
 	name: "loop-invariant-code-motion",
 	stage: "control-flow",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
@@ -463,7 +460,6 @@ const hoistLoopInvariants: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
@@ -534,10 +530,9 @@ const hoistLoopInvariants: CorePass = {
 	},
 };
 
-const eliminateDominatedRedundancy: CorePass = {
+const eliminateDominatedRedundancy: CoreFunctionPass = {
 	name: "dominance-redundancy-elimination",
 	stage: "control-flow",
-	scope: "function",
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -547,7 +542,6 @@ const eliminateDominatedRedundancy: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
@@ -659,17 +653,15 @@ function translatedInputs(
 	return translated;
 }
 
-const eliminatePartialRedundancy: CorePass = {
+const eliminatePartialRedundancy: CoreFunctionPass = {
 	name: "partial-redundancy-elimination",
 	stage: "control-flow",
-	scope: "function",
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		for (const block of cfg.reversePostorder) {
@@ -837,17 +829,15 @@ function proveRangedInstruction(
 		: proveComparison(operator, range, bound);
 }
 
-const foldPathComparisons: CorePass = {
+const foldPathComparisons: CoreFunctionPass = {
 	name: "path-range-control-folding",
 	stage: "control-flow",
-	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: CONTROL_FLOW_CHANGES,
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const ranges = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
 		let editor: CoreEditor | undefined;
@@ -914,10 +904,9 @@ const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"typeofCompare",
 ]);
 
-const selectLoopScalarRepresentations: CorePass = {
+const selectLoopScalarRepresentations: CoreFunctionPass = {
 	name: "loop-scalar-representation-selection",
 	stage: "control-flow",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -929,7 +918,6 @@ const selectLoopScalarRepresentations: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const inductions = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).inductions;
 		if (inductions.length === 0) return undefined;
@@ -1167,17 +1155,15 @@ const selectLoopScalarRepresentations: CorePass = {
 	},
 };
 
-const reduceBoundedRemainders: CorePass = {
+const reduceBoundedRemainders: CoreFunctionPass = {
 	name: "path-range-strength-reduction",
 	stage: "control-flow",
-	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const ranges = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
@@ -1235,7 +1221,7 @@ const reduceBoundedRemainders: CorePass = {
 	},
 };
 
-export const CORE_CONTROL_FLOW_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_CONTROL_FLOW_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeNaturalLoops,
 	hoistLoopInvariants,
 	eliminateDominatedRedundancy,

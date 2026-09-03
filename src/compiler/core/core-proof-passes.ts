@@ -28,7 +28,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
-import type { CorePass, CorePassBudget } from "./core-pass.ts";
+import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const PROOF_BUDGET: CorePassBudget = Object.freeze({
@@ -103,16 +103,14 @@ function factIsReferenced(fn: CoreFunctionStore, fact: CoreFactId): boolean {
 	return false;
 }
 
-const canonicalizeFacts: CorePass = {
+const canonicalizeFacts: CoreFunctionPass = {
 	name: "canonicalize-fact-claims",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["facts", "body"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run({ program, item }) {
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const replacements = [...fn.factIds()].flatMap((fact) => {
 			const current = fn.fact(fact);
@@ -129,16 +127,14 @@ const canonicalizeFacts: CorePass = {
 	},
 };
 
-const removeEmptyUnreferencedFacts: CorePass = {
+const removeEmptyUnreferencedFacts: CoreFunctionPass = {
 	name: "empty-fact-elimination",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["facts", "body"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run({ program, item }) {
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const removable = [...fn.factIds()].filter((fact) => {
 			const value = fn.fact(fact);
@@ -156,17 +152,15 @@ const removeEmptyUnreferencedFacts: CorePass = {
 	},
 };
 
-const rewireSubsumedEffectProofs: CorePass = {
+const rewireSubsumedEffectProofs: CoreFunctionPass = {
 	name: "rewire-subsumed-effect-proofs",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg", "memoryEffects"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const availability = context.analysis(CORE_FACT_AVAILABILITY_ANALYSIS);
 		const rewrites = new Map<CoreInstructionId, CoreFactId>();
@@ -217,17 +211,15 @@ const rewireSubsumedEffectProofs: CorePass = {
 	},
 };
 
-const foldSubsumedGuards: CorePass = {
+const foldSubsumedGuards: CoreFunctionPass = {
 	name: "fold-subsumed-guards",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg"],
 	changes: { cfg: true, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		if ([...fn.factIds()].length < 2) return undefined;
 		const availability = context.analysis(CORE_FACT_AVAILABILITY_ANALYSIS);
@@ -298,17 +290,15 @@ const foldSubsumedGuards: CorePass = {
 	},
 };
 
-const refinePrimitiveEffects: CorePass = {
+const refinePrimitiveEffects: CoreFunctionPass = {
 	name: "primitive-effect-refinement",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		let editor: CoreEditor | undefined;
@@ -522,17 +512,15 @@ function scalarCandidate(
 	return representation;
 }
 
-const materializeLocalScalars: CorePass = {
+const materializeLocalScalars: CoreFunctionPass = {
 	name: "local-scalar-representation-selection",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const edgeUses = buildEdgeUseMask(fn);
@@ -569,17 +557,15 @@ function flowScalarRepresentation(
 	return undefined;
 }
 
-const materializeFlowScalars: CorePass = {
+const materializeFlowScalars: CoreFunctionPass = {
 	name: "flow-scalar-representation-selection",
 	stage: "proofs",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const neighbors = new Map<CoreValueId, Set<CoreValueId>>();
@@ -718,7 +704,7 @@ const materializeFlowScalars: CorePass = {
 	},
 };
 
-export const CORE_PROOF_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeFacts,
 	removeEmptyUnreferencedFacts,
 	refinePrimitiveEffects,

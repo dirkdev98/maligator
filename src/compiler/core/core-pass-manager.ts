@@ -11,8 +11,8 @@ import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
-import { CorePassContextDriver } from "./core-pass.ts";
-import type { CoreOptimizationStage, CorePass } from "./core-pass.ts";
+import { CoreFunctionPassContextDriver } from "./core-pass.ts";
+import type { CoreFunctionPass, CoreOptimizationStage } from "./core-pass.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 interface PendingLocalWork {
@@ -26,20 +26,15 @@ interface PassConsumption {
 	exhausted: boolean;
 }
 
-export interface CorePassManagerOptions {
+export interface CoreFunctionPassSchedulerOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly localOptimization?: boolean;
-	readonly functionIds?: ReadonlyArray<CoreFunctionId>;
 	readonly featureIndex?: CoreFunctionFeatureIndex;
 	readonly localRules?: CoreLocalRuleRegistry;
-	readonly sccs?: ReadonlyArray<{
-		readonly id: string;
-		readonly functions: ReadonlyArray<number>;
-	}>;
 }
 
-function wakesForChanges(pass: CorePass, changes: CoreChangeSet): boolean {
+function wakesForChanges(pass: CoreFunctionPass, changes: CoreChangeSet): boolean {
 	for (const wake of pass.wakesOn) {
 		if (changes.domains.includes(wake as never)) return true;
 		if (changes.programDomains.includes(wake as never)) return true;
@@ -47,37 +42,35 @@ function wakesForChanges(pass: CorePass, changes: CoreChangeSet): boolean {
 	return false;
 }
 
-export class CorePassManager {
+export class CoreFunctionPassScheduler {
 	readonly #program: CoreProgram;
 	readonly #context: CoreCompilationContext;
 	readonly #analyses: CoreAnalysisManager;
 	readonly #report: CoreOptimizationReportBuilder;
+	readonly #functionId: CoreFunctionId;
 	readonly #verification: CoreVerificationProfile;
 	readonly #optionalMaxRunsPerWorkItem: number;
 	readonly #localOptimization: boolean;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
-	readonly #functionIds: ReadonlyArray<CoreFunctionId> | undefined;
-	readonly #functionSlots: ReadonlyMap<CoreFunctionId, number> | undefined;
-	readonly #passOpcodeIds = new WeakMap<CorePass, ReadonlyArray<CoreOpcodeId>>();
-	readonly #passContexts = new WeakMap<CorePass, CorePassContextDriver>();
-	readonly #localSeeded = new Set<CoreFunctionId>();
-	readonly #sccs: ReadonlyArray<{
-		readonly id: string;
-		readonly functions: ReadonlyArray<number>;
-	}>;
+	readonly #passOpcodeIds = new WeakMap<CoreFunctionPass, ReadonlyArray<CoreOpcodeId>>();
+	readonly #passContexts = new WeakMap<CoreFunctionPass, CoreFunctionPassContextDriver>();
+	#localSeeded = false;
 
 	constructor(
 		program: CoreProgram,
 		context: CoreCompilationContext,
 		analyses: CoreAnalysisManager,
 		report: CoreOptimizationReportBuilder,
-		options: CorePassManagerOptions = {},
+		functionId: CoreFunctionId,
+		options: CoreFunctionPassSchedulerOptions = {},
 	) {
+		program.function(functionId);
 		this.#program = program;
 		this.#context = context;
 		this.#analyses = analyses;
 		this.#report = report;
+		this.#functionId = functionId;
 		this.#verification = options.verification ?? "boundary";
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
@@ -88,161 +81,96 @@ export class CorePassManager {
 		this.#features =
 			options.featureIndex ??
 			new CoreFunctionFeatureIndex(program, this.#localRules?.dispatch);
-		if (options.functionIds !== undefined) {
-			const functionIds = [...new Set(options.functionIds)];
-			for (const functionId of functionIds) program.function(functionId);
-			this.#functionIds = Object.freeze(functionIds);
-			this.#functionSlots = new Map(
-				functionIds.map((functionId, index) => [functionId, index] as const),
-			);
-		}
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
 		) {
 			throw new Error("Core pass work-item run limit must be a positive integer");
 		}
-		this.#sccs = options.sccs ?? [];
 	}
 
-	runStage(
+	runComponent(
 		stage: CoreOptimizationStage,
-		passes: ReadonlyArray<CorePass>,
+		passes: ReadonlyArray<CoreFunctionPass>,
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
-		_reportedStage: CoreOptimizationStage = stage,
 		seedLocalFromInitialChanges = true,
 	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
-		const functionStride = Math.max(
-			1,
-			this.#functionIds?.length ?? this.#program.functionCapacity,
-		);
-		const sccStride = Math.max(1, this.#sccs.length);
-		const sccBase = passes.length * functionStride;
-		const programBase = sccBase + passes.length * sccStride;
-		const localBase = programBase + passes.length;
-		const queueCapacity = localBase + functionStride;
+		const localKey = passes.length;
 		const queue: Array<number> = [];
 		let queueIndex = 0;
-		const queued = new Uint8Array(queueCapacity);
+		const queued = new Uint8Array(passes.length + 1);
 		const runs =
 			this.#optionalMaxRunsPerWorkItem === Number.MAX_SAFE_INTEGER
 				? undefined
-				: new Uint32Array(queueCapacity);
-		const profileExhausted = new Uint8Array(queueCapacity);
+				: new Uint32Array(passes.length);
+		const profileExhausted = new Uint8Array(passes.length);
 		const consumption = new Array<PassConsumption | undefined>(passes.length);
-		const pendingLocal = new Map<CoreFunctionId, PendingLocalWork>();
+		let pendingLocal: PendingLocalWork | undefined;
 		const appliedChanges: Array<CoreChangeSet> = [];
-		const enqueuePass = (passIndex: number, key: number): void => {
+		const enqueuePass = (passIndex: number): void => {
 			const pass = passes[passIndex]!;
-			if (queued[key] !== 0) return;
+			if (queued[passIndex] !== 0) return;
 			if (
 				pass.budget.exhaustion === "stop" &&
 				runs !== undefined &&
-				runs[key]! >= this.#optionalMaxRunsPerWorkItem
+				runs[passIndex]! >= this.#optionalMaxRunsPerWorkItem
 			) {
-				if (profileExhausted[key] === 0) {
-					profileExhausted[key] = 1;
+				if (profileExhausted[passIndex] === 0) {
+					profileExhausted[passIndex] = 1;
 					this.#report.recordBudgetExhaustion(pass.name);
 				}
 				return;
 			}
-			queued[key] = 1;
-			queue.push(key);
-			this.#report.recordQueuePush(queue.length - queueIndex);
-		};
-		const enqueueFunction = (passIndex: number, functionId: CoreFunctionId): void => {
-			const functionSlot = this.#functionSlots?.get(functionId) ?? functionId;
-			if (this.#functionSlots !== undefined && !this.#functionSlots.has(functionId))
-				return;
-			const pass = passes[passIndex]!;
 			if (
 				pass.requiredFunctionFeatures !== undefined &&
-				(this.#features.get(functionId) & pass.requiredFunctionFeatures) !==
+				(this.#features.get(this.#functionId) & pass.requiredFunctionFeatures) !==
 					pass.requiredFunctionFeatures
 			)
 				return;
 			if (
 				pass.requiredFunctionOpcodesAny !== undefined &&
-				!this.#features.hasAnyOpcode(functionId, this.#opcodeIds(pass))
+				!this.#features.hasAnyOpcode(this.#functionId, this.#opcodeIds(pass))
 			)
 				return;
-			enqueuePass(passIndex, passIndex * functionStride + functionSlot);
+			queued[passIndex] = 1;
+			queue.push(passIndex);
+			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
-		const enqueueScc = (passIndex: number, sccIndex: number): void => {
-			enqueuePass(passIndex, sccBase + passIndex * sccStride + sccIndex);
-		};
-		const enqueueProgram = (passIndex: number): void => {
-			enqueuePass(passIndex, programBase + passIndex);
-		};
-		const enqueueLocal = (functionId: CoreFunctionId, changes?: CoreChangeSet): void => {
+		const enqueueLocal = (changes?: CoreChangeSet): void => {
 			if (!this.#localOptimization) return;
 			if (
-				(this.#features.get(functionId) &
+				(this.#features.get(this.#functionId) &
 					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) ===
 				0
-			) {
+			)
 				return;
-			}
-			const pending = pendingLocal.get(functionId) ?? { full: false, changes: [] };
-			if (changes === undefined) pending.full = true;
-			else pending.changes.push(changes);
-			pendingLocal.set(functionId, pending);
-			const functionSlot = this.#functionSlots?.get(functionId) ?? functionId;
-			if (this.#functionSlots !== undefined && !this.#functionSlots.has(functionId))
-				return;
-			const key = localBase + functionSlot;
-			if (queued[key] !== 0) return;
-			queued[key] = 1;
-			queue.push(key);
+			pendingLocal ??= { full: false, changes: [] };
+			if (changes === undefined) pendingLocal.full = true;
+			else pendingLocal.changes.push(changes);
+			if (queued[localKey] !== 0) return;
+			queued[localKey] = 1;
+			queue.push(localKey);
 			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
 		const enqueueChanges = (changes: CoreChangeSet, enqueueLocalWork = true): void => {
-			if (enqueueLocalWork) enqueueLocal(changes.function, changes);
+			if (changes.function !== this.#functionId) {
+				throw new Error(
+					`Core function scheduler ${this.#functionId} received changes for ${changes.function}`,
+				);
+			}
+			if (enqueueLocalWork) enqueueLocal(changes);
 			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
-				const pass = passes[passIndex]!;
-				if (!wakesForChanges(pass, changes)) continue;
-				switch (pass.scope) {
-					case "function":
-						enqueueFunction(passIndex, changes.function);
-						break;
-					case "scc":
-						for (let sccIndex = 0; sccIndex < this.#sccs.length; sccIndex++) {
-							if (this.#sccs[sccIndex]!.functions.includes(changes.function)) {
-								enqueueScc(passIndex, sccIndex);
-							}
-						}
-						break;
-					case "program":
-						enqueueProgram(passIndex);
-						break;
-				}
+				if (wakesForChanges(passes[passIndex]!, changes)) enqueuePass(passIndex);
 			}
 		};
 		if (initialChanges === undefined) {
 			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
-				switch (passes[passIndex]!.scope) {
-					case "function":
-						for (const functionId of this.#functionIds ?? this.#program.functionIds()) {
-							enqueueFunction(passIndex, functionId);
-						}
-						break;
-					case "scc":
-						for (let sccIndex = 0; sccIndex < this.#sccs.length; sccIndex++) {
-							enqueueScc(passIndex, sccIndex);
-						}
-						break;
-					case "program":
-						enqueueProgram(passIndex);
-						break;
-				}
+				enqueuePass(passIndex);
 			}
-			if (stage === "canonicalize") {
-				for (const functionId of this.#functionIds ?? this.#program.functionIds()) {
-					if (this.#localSeeded.has(functionId)) continue;
-					enqueueLocal(functionId);
-					this.#localSeeded.add(functionId);
-				}
+			if (stage === "canonicalize" && !this.#localSeeded) {
+				enqueueLocal();
+				this.#localSeeded = true;
 			}
 		} else {
 			for (const changes of initialChanges) {
@@ -253,14 +181,11 @@ export class CorePassManager {
 			const key = queue[queueIndex++]!;
 			queued[key] = 0;
 			this.#report.recordQueuePop();
-			if (key >= localBase) {
-				const functionSlot = key - localBase;
-				const functionId =
-					this.#functionIds?.[functionSlot] ?? (functionSlot as CoreFunctionId);
-				const pending = pendingLocal.get(functionId);
-				pendingLocal.delete(functionId);
+			if (key === localKey) {
+				const pending = pendingLocal;
+				pendingLocal = undefined;
 				if (pending === undefined) continue;
-				const result = new CoreLocalOptimizer(this.#program, functionId, {
+				const result = new CoreLocalOptimizer(this.#program, this.#functionId, {
 					ruleRegistry: this.#localRules!,
 				}).run(pending.full ? undefined : pending.changes);
 				this.#report.recordLocalOptimizerWork("fused-local-optimizer", result.statistics);
@@ -277,15 +202,9 @@ export class CorePassManager {
 				enqueueChanges(changes);
 				continue;
 			}
-			let passIndex: number;
-			let passContext: CorePassContextDriver | undefined;
-			if (key < sccBase) passIndex = Math.floor(key / functionStride);
-			else if (key < programBase) {
-				passIndex = Math.floor((key - sccBase) / sccStride);
-			} else passIndex = key - programBase;
-			const pass = passes[passIndex]!;
+			const pass = passes[key]!;
 			if (runs !== undefined) runs[key] = runs[key]! + 1;
-			const used = consumption[passIndex] ?? {
+			const used = consumption[key] ?? {
 				workItems: 0,
 				edits: 0,
 				exhausted: false,
@@ -296,45 +215,28 @@ export class CorePassManager {
 				used.edits >= pass.budget.maxEdits
 			) {
 				this.#exhaust(pass, used);
-				consumption[passIndex] = used;
+				consumption[key] = used;
 				continue;
 			}
 			const passStartedAt = this.#report.collectsDetails ? Date.now() : 0;
-			passContext = this.#passContexts.get(pass);
+			let passContext = this.#passContexts.get(pass);
 			if (passContext === undefined) {
-				passContext = new CorePassContextDriver(
+				passContext = new CoreFunctionPassContextDriver(
 					this.#program,
 					this.#context,
 					this.#analyses,
 					pass,
+					this.#functionId,
 				);
 				this.#passContexts.set(pass, passContext);
 			}
 			const remainingEdits = pass.budget.maxEdits - used.edits;
-			const changes =
-				key < sccBase
-					? pass.run(
-							passContext.prepareFunction(
-								this.#functionIds?.[key % functionStride] ??
-									((key % functionStride) as CoreFunctionId),
-								remainingEdits,
-							),
-						)
-					: key < programBase
-						? pass.run(
-								passContext.prepareScc(
-									(key - sccBase) % sccStride,
-									this.#sccs[(key - sccBase) % sccStride]!.id,
-									this.#sccs[(key - sccBase) % sccStride]!.functions as never,
-									remainingEdits,
-								),
-							)
-						: pass.run(passContext.prepareProgram(remainingEdits));
+			const changes = pass.run(passContext.prepare(remainingEdits));
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
-			consumption[passIndex] = used;
+			consumption[key] = used;
 			this.#report.recordPassRun(pass.name, 1, edits > 0, edits, elapsedMs);
 			this.#report.recordBudget(1, edits);
 			if (changes === undefined || edits === 0) continue;
@@ -352,7 +254,7 @@ export class CorePassManager {
 		return appliedChanges;
 	}
 
-	#validatePass(stage: CoreOptimizationStage, pass: CorePass): void {
+	#validatePass(stage: CoreOptimizationStage, pass: CoreFunctionPass): void {
 		if (pass.stage !== stage) {
 			throw new Error(`Core pass ${pass.name} belongs to ${pass.stage}, not ${stage}`);
 		}
@@ -360,17 +262,18 @@ export class CorePassManager {
 		if (
 			pass.requiredFunctionFeatures !== undefined &&
 			((pass.requiredFunctionFeatures & ~CORE_FUNCTION_FEATURE_MASK) !== 0 ||
-				pass.requiredFunctionFeatures === 0 ||
-				pass.scope === "scc" ||
-				pass.scope === "program")
+				pass.requiredFunctionFeatures === 0)
 		) {
 			throw new Error(`Core pass ${pass.name} has an invalid function feature gate`);
 		}
 		if (
 			pass.requiredFunctionOpcodesAny !== undefined &&
-			(pass.scope !== "function" || pass.requiredFunctionOpcodesAny.length === 0)
+			pass.requiredFunctionOpcodesAny.length === 0
 		) {
 			throw new Error(`Core pass ${pass.name} has an invalid function opcode gate`);
+		}
+		if (pass.requiredAnalyses.some((analysis) => analysis.scope !== "function")) {
+			throw new Error(`Core function pass ${pass.name} requires a non-function analysis`);
 		}
 		if (
 			!Number.isSafeInteger(pass.budget.maxWorkItems) ||
@@ -382,7 +285,7 @@ export class CorePassManager {
 		}
 	}
 
-	#opcodeIds(pass: CorePass): ReadonlyArray<CoreOpcodeId> {
+	#opcodeIds(pass: CoreFunctionPass): ReadonlyArray<CoreOpcodeId> {
 		let ids = this.#passOpcodeIds.get(pass);
 		if (ids !== undefined) return ids;
 		ids = pass.requiredFunctionOpcodesAny!.flatMap((opcode) => {
@@ -393,7 +296,12 @@ export class CorePassManager {
 		return ids;
 	}
 
-	#validateChanges(pass: CorePass, changes: CoreChangeSet): void {
+	#validateChanges(pass: CoreFunctionPass, changes: CoreChangeSet): void {
+		if (changes.function !== this.#functionId) {
+			throw new Error(
+				`Core function pass ${pass.name} changed ${changes.function} in scheduler ${this.#functionId}`,
+			);
+		}
 		for (const domain of changes.domains) {
 			if (
 				(domain === "cfg" && !pass.changes.cfg) ||
@@ -406,7 +314,7 @@ export class CorePassManager {
 		}
 	}
 
-	#exhaust(pass: CorePass, consumption: PassConsumption): void {
+	#exhaust(pass: CoreFunctionPass, consumption: PassConsumption): void {
 		this.#report.recordBudgetExhaustion(pass.name);
 		if (pass.budget.exhaustion === "error") {
 			throw new Error(`Required Core pass ${pass.name} exhausted its work budget`);

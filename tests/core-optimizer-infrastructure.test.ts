@@ -18,8 +18,8 @@ import {
 import { CORE_CONSTRUCTION_NORMALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
-import type { CorePass } from "../src/compiler/core/core-pass.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
+import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
 import {
 	CORE_PROGRAM_FLOW_REPRESENTATIONS,
 	CoreProgram,
@@ -93,17 +93,15 @@ const cfgAnalysis = (recomputations: Array<number>): CoreAnalysisDefinition<numb
 	},
 });
 
-function noOpPass(name: string, runs: Array<number>): CorePass {
+function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
 	return {
 		name,
 		stage: "canonicalize",
-		scope: "function",
 		requiredAnalyses: [],
 		wakesOn: ["body", "representations"],
 		changes: { cfg: false, calls: false, facts: false, representations: false },
 		budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "stop" },
 		run({ item }) {
-			if (item.scope !== "function") throw new Error("expected function work item");
 			runs[item.function] = (runs[item.function] ?? 0) + 1;
 			return undefined;
 		},
@@ -236,8 +234,14 @@ describe("Core optimizer infrastructure", () => {
 		editor.setValueRepresentation(functions[0]!.value, "f64");
 		const changes = editor.commit();
 		const runs: Array<number> = [];
-		const manager = new CorePassManager(program, context(), analyses, report);
-		manager.runStage("canonicalize", [noOpPass("local", runs)], [changes]);
+		const manager = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		);
+		manager.runComponent("canonicalize", [noOpPass("local", runs)], [changes]);
 		expect(runs).toEqual([1]);
 	});
 
@@ -245,9 +249,13 @@ describe("Core optimizer infrastructure", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);
 		const runs: Array<number> = [];
-		new CorePassManager(program, context(), analyses, report, {
-			functionIds: [functions[1]!.id],
-		}).runStage("canonicalize", [noOpPass("session-local", runs)]);
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[1]!.id,
+		).runComponent("canonicalize", [noOpPass("session-local", runs)]);
 
 		expect(runs[functions[0]!.id]).toBeUndefined();
 		expect(runs[functions[1]!.id]).toBe(1);
@@ -308,9 +316,16 @@ describe("Core optimizer infrastructure", () => {
 		const changes = editor.commit();
 		const runs: Array<number> = [];
 
-		new CorePassManager(program, context(), analyses, report, {
-			localOptimization: true,
-		}).runStage("canonicalize", [noOpPass("late", runs)], [changes], "finalize", false);
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+			{
+				localOptimization: true,
+			},
+		).runComponent("canonicalize", [noOpPass("late", runs)], [changes], false);
 
 		expect(runs).toEqual([1]);
 		expect(
@@ -322,15 +337,21 @@ describe("Core optimizer infrastructure", () => {
 
 	it("does not rerun an existing pass when a no-op pass is registered", () => {
 		const run = (withExtraPass: boolean): Array<number> => {
-			const { program } = programWithTwoFunctions();
-			const { analyses, report } = analysisHarness(program);
+			const { program, functions } = programWithTwoFunctions();
+			const report = new CoreOptimizationReportBuilder(program);
 			const existingRuns: Array<number> = [];
 			const passes = [noOpPass("existing", existingRuns)];
 			if (withExtraPass) passes.push(noOpPass("extra", []));
-			new CorePassManager(program, context(), analyses, report).runStage(
-				"canonicalize",
-				passes,
-			);
+			for (const { id } of functions) {
+				const analyses = new CoreAnalysisManager(program, context(), report);
+				new CoreFunctionPassScheduler(
+					program,
+					context(),
+					analyses,
+					report,
+					id,
+				).runComponent("canonicalize", passes);
+			}
 			return existingRuns;
 		};
 		expect(run(false)).toEqual([1, 1]);
@@ -357,10 +378,9 @@ describe("Core optimizer infrastructure", () => {
 				return request.function;
 			},
 		};
-		const loopPass: CorePass = {
+		const loopPass: CoreFunctionPass = {
 			name: "test-loop-pass",
 			stage: "control-flow",
-			scope: "function",
 			requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 			requiredAnalyses: [loopAnalysis],
 			wakesOn: ["cfg"],
@@ -373,9 +393,13 @@ describe("Core optimizer infrastructure", () => {
 		};
 		const { analyses, report } = analysisHarness(program);
 
-		new CorePassManager(program, context(), analyses, report).runStage("control-flow", [
-			loopPass,
-		]);
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			loopFunction,
+		).runComponent("control-flow", [loopPass]);
 
 		expect(analyzed).toEqual([loopFunction]);
 	});
@@ -387,9 +411,13 @@ describe("Core optimizer infrastructure", () => {
 			({ name }) => name === "forward-exact-memory-loads",
 		)!;
 
-		new CorePassManager(program, context(), analyses, report, {
-			functionIds: [functions[0]!.id],
-		}).runStage("memory", [forwarding]);
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		).runComponent("memory", [forwarding]);
 
 		expect(
 			report
@@ -405,9 +433,13 @@ describe("Core optimizer infrastructure", () => {
 			({ name }) => name === "block-parameter-simplification",
 		)!;
 
-		new CorePassManager(program, context(), analyses, report, {
-			functionIds: [functions[0]!.id],
-		}).runStage("canonicalize", [simplification]);
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		).runComponent("canonicalize", [simplification]);
 
 		expect(
 			report
@@ -430,10 +462,9 @@ describe("Core optimizer infrastructure", () => {
 					return request.function;
 				},
 			};
-			const pass: CorePass = {
+			const pass: CoreFunctionPass = {
 				name: "test-candidate-pass",
 				stage: "canonicalize",
-				scope: "function",
 				requiredFunctionOpcodesAny,
 				requiredAnalyses: [candidateAnalysis],
 				wakesOn: ["body"],
@@ -444,10 +475,17 @@ describe("Core optimizer infrastructure", () => {
 					return undefined;
 				},
 			};
-			const { analyses, report } = analysisHarness(program);
-			new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
-				pass,
-			]);
+			const report = new CoreOptimizationReportBuilder(program);
+			for (const functionId of program.functionIds()) {
+				const analyses = new CoreAnalysisManager(program, context(), report);
+				new CoreFunctionPassScheduler(
+					program,
+					context(),
+					analyses,
+					report,
+					functionId,
+				).runComponent("canonicalize", [pass]);
+			}
 			return analyzed;
 		};
 
@@ -464,10 +502,9 @@ describe("Core optimizer infrastructure", () => {
 			const target = functions[0]!;
 			let runs = 0;
 			const remaining: Array<number> = [];
-			const pass: CorePass = {
+			const pass: CoreFunctionPass = {
 				name: "bounded-rewrite",
 				stage: "canonicalize",
-				scope: "function",
 				requiredAnalyses: [],
 				wakesOn: ["representations"],
 				changes: {
@@ -478,7 +515,7 @@ describe("Core optimizer infrastructure", () => {
 				},
 				budget: { maxWorkItems: 10, maxEdits: 10, exhaustion },
 				run({ item, remainingEdits }) {
-					if (item.scope !== "function" || item.function !== target.id) return undefined;
+					if (item.function !== target.id) return undefined;
 					remaining.push(remainingEdits);
 					runs++;
 					if (runs > 2) return undefined;
@@ -488,11 +525,11 @@ describe("Core optimizer infrastructure", () => {
 				},
 			};
 			const { analyses, report } = analysisHarness(program);
-			new CorePassManager(program, context(), analyses, report, {
+			new CoreFunctionPassScheduler(program, context(), analyses, report, target.id, {
 				...(optionalMaxRunsPerWorkItem === undefined
 					? {}
 					: { optionalMaxRunsPerWorkItem }),
-			}).runStage("canonicalize", [pass]);
+			}).runComponent("canonicalize", [pass]);
 			return {
 				runs,
 				representation: program.function(target.id).valueRepresentation(target.value),
@@ -549,13 +586,20 @@ describe("Core optimizer infrastructure", () => {
 	});
 
 	it("reports queue and budget work without a global round counter", () => {
-		const { program } = programWithTwoFunctions();
-		const { analyses, report } = analysisHarness(program);
-		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
-			noOpPass("reported", []),
-		]);
+		const { program, functions } = programWithTwoFunctions();
+		const report = new CoreOptimizationReportBuilder(program);
+		for (const { id } of functions) {
+			const analyses = new CoreAnalysisManager(program, context(), report);
+			new CoreFunctionPassScheduler(
+				program,
+				context(),
+				analyses,
+				report,
+				id,
+			).runComponent("canonicalize", [noOpPass("reported", [])]);
+		}
 		const finished = report.finish(program, { directEntries: [], specializations: [] });
-		expect(finished.queue).toEqual({ pushes: 2, pops: 2, maximumDepth: 2 });
+		expect(finished.queue).toEqual({ pushes: 2, pops: 2, maximumDepth: 1 });
 		expect(finished.budget).toMatchObject({ workItems: 2, edits: 0 });
 		expect(Object.keys(finished)).not.toContain("rounds");
 	});
@@ -564,16 +608,15 @@ describe("Core optimizer infrastructure", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const target = functions[0]!;
 		let edited = false;
-		const invalid: CorePass = {
+		const invalid: CoreFunctionPass = {
 			name: "invalid-rewrite",
 			stage: "control-flow",
-			scope: "function",
 			requiredAnalyses: [],
 			wakesOn: ["cfg"],
 			changes: { cfg: true, calls: false, facts: false, representations: false },
 			budget: { maxWorkItems: 10, maxEdits: 10, exhaustion: "error" },
 			run({ item }) {
-				if (edited || item.scope !== "function" || item.function !== target.id) {
+				if (edited || item.function !== target.id) {
 					return undefined;
 				}
 				edited = true;
@@ -600,9 +643,9 @@ describe("Core optimizer infrastructure", () => {
 		const { analyses, report } = analysisHarness(program);
 
 		expect(() =>
-			new CorePassManager(program, context(), analyses, report, {
+			new CoreFunctionPassScheduler(program, context(), analyses, report, target.id, {
 				verification: "per-pass",
-			}).runStage("control-flow", [invalid]),
+			}).runComponent("control-flow", [invalid]),
 		).toThrow(
 			/Core IR verification failed \[stage=control-flow pass=invalid-rewrite function=0\]/,
 		);

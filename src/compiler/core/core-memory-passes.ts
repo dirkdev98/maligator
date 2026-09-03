@@ -48,7 +48,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CorePass, CorePassBudget } from "./core-pass.ts";
+import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
@@ -181,10 +181,9 @@ function replaceTerminatorEdges(
 	}
 }
 
-const foldExactAllocationObservations: CorePass = {
+const foldExactAllocationObservations: CoreFunctionPass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
@@ -192,7 +191,6 @@ const foldExactAllocationObservations: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const objectStringIndex = program.stringConstants.findIndex(
@@ -255,10 +253,9 @@ const foldExactAllocationObservations: CorePass = {
 	},
 };
 
-const forwardFreshOwnSlotPrefix: CorePass = {
+const forwardFreshOwnSlotPrefix: CoreFunctionPass = {
 	name: "forward-fresh-own-slot-prefix",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
@@ -267,7 +264,6 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		for (const layout of provenance.layouts) {
@@ -332,17 +328,15 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 	},
 };
 
-const annotateKnownOwnSlots: CorePass = {
+const annotateKnownOwnSlots: CoreFunctionPass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	changes: { cfg: false, calls: false, facts: false, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const shapes = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
 		let editor: CoreEditor | undefined;
@@ -391,10 +385,9 @@ const annotateKnownOwnSlots: CorePass = {
 	},
 };
 
-const refineContainedOwnSlotAccesses: CorePass = {
+const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 	name: "refine-contained-own-slot-accesses",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredAnalyses: [
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
@@ -406,7 +399,6 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const shape = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
@@ -566,10 +558,9 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	},
 };
 
-const forwardExactMemoryLoads: CorePass = {
+const forwardExactMemoryLoads: CoreFunctionPass = {
 	name: "forward-exact-memory-loads",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -580,7 +571,6 @@ const forwardExactMemoryLoads: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).ordinary();
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
@@ -632,17 +622,15 @@ const forwardExactMemoryLoads: CorePass = {
 	},
 };
 
-const refineExactCollectionAccesses: CorePass = {
+const refineExactCollectionAccesses: CoreFunctionPass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
 		let editor: CoreEditor | undefined;
@@ -694,10 +682,9 @@ const refineExactCollectionAccesses: CorePass = {
 	},
 };
 
-const rewriteContainedFreshArrayBuiltins: CorePass = {
+const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 	name: "rewrite-contained-fresh-array-builtins",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createArray"],
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
@@ -706,11 +693,7 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
-		if (
-			item.scope !== "function" ||
-			compilationContext.facts.world.primordialPolicy !== "locked"
-		)
-			return undefined;
+		if (compilationContext.facts.world.primordialPolicy !== "locked") return undefined;
 		const fn = program.function(item.function);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		interface Candidate {
@@ -1308,10 +1291,9 @@ function scalarizeRootedLayout(
 	return editor.commit();
 }
 
-const scalarizeRootedContainedObjects: CorePass = {
+const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	name: "scalarize-rooted-contained-objects",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
@@ -1320,7 +1302,6 @@ const scalarizeRootedContainedObjects: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const provenance = facts.provenance;
@@ -1368,10 +1349,9 @@ function joinAggregateCellContent(
 	return "boxed";
 }
 
-const refineStackObjectCellRepresentations: CorePass = {
+const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	name: "refine-stack-object-cell-representations",
 	stage: "memory",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [
@@ -1383,7 +1363,6 @@ const refineStackObjectCellRepresentations: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const proofs = context.analysis(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
@@ -1498,10 +1477,9 @@ const refineStackObjectCellRepresentations: CorePass = {
 	},
 };
 
-const scalarReplaceContainedAggregates: CorePass = {
+const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	name: "scalar-replace-contained-aggregates",
 	stage: "memory",
-	scope: "function",
 	requiredAnalyses: [
 		CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
@@ -1512,7 +1490,6 @@ const scalarReplaceContainedAggregates: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
@@ -1697,7 +1674,7 @@ const scalarReplaceContainedAggregates: CorePass = {
 	},
 };
 
-export const CORE_MEMORY_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,

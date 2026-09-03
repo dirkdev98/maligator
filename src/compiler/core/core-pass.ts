@@ -1,7 +1,6 @@
 import type {
 	CoreAnalysisDefinition,
 	CoreAnalysisManager,
-	CoreAnalysisRequest,
 } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
@@ -13,8 +12,6 @@ import type {
 	CoreProgramChangeDomain,
 } from "./core-store.ts";
 
-export type CorePassScope = "function" | "scc" | "program";
-
 export type CoreOptimizationStage =
 	| "canonicalize"
 	| "control-flow"
@@ -25,15 +22,9 @@ export type CoreOptimizationStage =
 
 export type CorePassWakeKind = CoreChangeDomain | CoreProgramChangeDomain;
 
-export type CorePassWorkItem =
-	| { readonly scope: "function"; readonly function: CoreFunctionId }
-	| {
-			readonly scope: "scc";
-			readonly index: number;
-			readonly id: string;
-			readonly functions: ReadonlyArray<CoreFunctionId>;
-	  }
-	| { readonly scope: "program" };
+export interface CoreFunctionPassWorkItem {
+	readonly function: CoreFunctionId;
+}
 
 export interface CorePassBudget {
 	readonly maxWorkItems: number;
@@ -48,119 +39,63 @@ export interface CorePassCapabilities {
 	readonly representations: boolean;
 }
 
-export interface CorePassContext {
+export interface CoreFunctionPassContext {
 	readonly program: CoreProgram;
 	readonly compilationContext: CoreCompilationContext;
-	readonly item: CorePassWorkItem;
+	readonly item: CoreFunctionPassWorkItem;
 	readonly remainingEdits: number;
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result;
 }
 
-export interface CorePass {
+export interface CoreFunctionPass {
 	readonly name: string;
 	readonly stage: CoreOptimizationStage;
-	readonly scope: CorePassScope;
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredFunctionOpcodesAny?: ReadonlyArray<string>;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly changes: CorePassCapabilities;
 	readonly budget: CorePassBudget;
-	run(context: CorePassContext): CoreChangeSet | undefined;
+	run(context: CoreFunctionPassContext): CoreChangeSet | undefined;
 }
 
-export function coreAnalysisRequestForPass(
-	definition: CoreAnalysisDefinition<unknown>,
-	item: CorePassWorkItem,
-): CoreAnalysisRequest {
-	if (definition.scope === "program") return { scope: "program" };
-	if (definition.scope === "scc") {
-		if (item.scope !== "scc") {
-			throw new Error(`Analysis ${definition.key} requires an SCC-scoped pass work item`);
-		}
-		return {
-			scope: "scc",
-			index: item.index,
-			id: item.id,
-			functions: item.functions,
-		};
-	}
-	if (item.scope === "program" || item.scope === "scc") {
-		throw new Error(
-			`Analysis ${definition.key} requires a function-scoped pass work item`,
-		);
-	}
-	return { scope: "function", function: item.function };
-}
-
-export class CorePassContextDriver implements CorePassContext {
+export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 	readonly program: CoreProgram;
 	readonly compilationContext: CoreCompilationContext;
+	readonly item: CoreFunctionPassWorkItem;
 	readonly #analyses: CoreAnalysisManager;
-	readonly #pass: CorePass;
-	readonly #item: CorePassWorkItem;
+	readonly #pass: CoreFunctionPass;
 	#remainingEdits = 0;
 
 	constructor(
 		program: CoreProgram,
 		compilationContext: CoreCompilationContext,
 		analyses: CoreAnalysisManager,
-		pass: CorePass,
+		pass: CoreFunctionPass,
+		functionId: CoreFunctionId,
 	) {
 		this.program = program;
 		this.compilationContext = compilationContext;
 		this.#analyses = analyses;
 		this.#pass = pass;
-		this.#item =
-			pass.scope === "function"
-				? { scope: "function", function: 0 as CoreFunctionId }
-				: pass.scope === "scc"
-					? { scope: "scc", index: 0, id: "", functions: [] }
-					: { scope: "program" };
-	}
-
-	get item(): CorePassWorkItem {
-		return this.#item;
+		this.item = Object.freeze({ function: functionId });
 	}
 
 	get remainingEdits(): number {
 		return this.#remainingEdits;
 	}
 
-	prepareFunction(functionId: CoreFunctionId, remainingEdits: number): CorePassContext {
-		if (this.#item.scope !== "function")
-			throw new Error("Expected function pass context");
-		(this.#item as { function: CoreFunctionId }).function = functionId;
-		this.#remainingEdits = remainingEdits;
-		return this;
-	}
-
-	prepareScc(
-		index: number,
-		id: string,
-		functions: ReadonlyArray<CoreFunctionId>,
-		remainingEdits: number,
-	): CorePassContext {
-		if (this.#item.scope !== "scc") throw new Error("Expected SCC pass context");
-		const item = this.#item as {
-			index: number;
-			id: string;
-			functions: ReadonlyArray<CoreFunctionId>;
-		};
-		item.index = index;
-		item.id = id;
-		item.functions = functions;
-		this.#remainingEdits = remainingEdits;
-		return this;
-	}
-
-	prepareProgram(remainingEdits: number): CorePassContext {
-		if (this.#item.scope !== "program") throw new Error("Expected program pass context");
+	prepare(remainingEdits: number): CoreFunctionPassContext {
 		this.#remainingEdits = remainingEdits;
 		return this;
 	}
 
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {
+		if (definition.scope !== "function") {
+			throw new Error(
+				`Core function pass ${this.#pass.name} queried ${definition.scope}-scoped analysis ${definition.key}`,
+			);
+		}
 		let declared = false;
 		for (const allowed of this.#pass.requiredAnalyses) {
 			if (allowed.key !== definition.key) continue;
@@ -172,9 +107,9 @@ export class CorePassContextDriver implements CorePassContext {
 				`Core pass ${this.#pass.name} queried undeclared analysis ${definition.key}`,
 			);
 		}
-		return this.#analyses.get(
-			definition,
-			coreAnalysisRequestForPass(definition, this.item),
-		);
+		return this.#analyses.get(definition, {
+			scope: "function",
+			function: this.item.function,
+		});
 	}
 }

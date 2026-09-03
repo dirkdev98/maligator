@@ -23,7 +23,7 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { CORE_NO_EFFECTS, coreValueId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -50,10 +50,12 @@ const context: CoreCompilationContext = {
 
 function runProofs(program: CoreProgram): void {
 	const report = new CoreOptimizationReportBuilder(program);
-	const analyses = new CoreAnalysisManager(program, context, report);
-	new CorePassManager(program, context, analyses, report, {
-		verification: "per-pass",
-	}).runStage("proofs", CORE_PROOF_PASSES);
+	for (const functionId of program.functionIds()) {
+		const analyses = new CoreAnalysisManager(program, context, report);
+		new CoreFunctionPassScheduler(program, context, analyses, report, functionId, {
+			verification: "per-pass",
+		}).runComponent("proofs", CORE_PROOF_PASSES);
+	}
 }
 
 function fn(program: CoreProgram, functionId: CoreFunctionId): CoreFunctionStore {

@@ -22,7 +22,7 @@ import type {
 	CoreOptimizationPhase,
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
-import { CorePassManager } from "./core-pass-manager.ts";
+import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
@@ -81,7 +81,7 @@ export class CoreFunctionOptimizationSession {
 	readonly #program: CoreProgram;
 	readonly #context: CoreCompilationContext;
 	readonly #analyses: CoreAnalysisManager;
-	readonly #passes: CorePassManager;
+	readonly #passes: CoreFunctionPassScheduler;
 	readonly #specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly #localRules: CoreLocalRuleRegistry;
 	readonly #report: CoreOptimizationReportBuilder;
@@ -109,14 +109,20 @@ export class CoreFunctionOptimizationSession {
 		this.#report = report;
 		this.#verification = options.verification ?? "boundary";
 		this.#crossCall = options.crossCallWave !== undefined;
-		this.#passes = new CorePassManager(program, context, this.#analyses, report, {
-			verification: options.verification,
-			optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
-			localOptimization: true,
-			functionIds: [functionId],
-			featureIndex: resources.featureIndex,
-			localRules: resources.localRules,
-		});
+		this.#passes = new CoreFunctionPassScheduler(
+			program,
+			context,
+			this.#analyses,
+			report,
+			functionId,
+			{
+				verification: options.verification,
+				optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
+				localOptimization: true,
+				featureIndex: resources.featureIndex,
+				localRules: resources.localRules,
+			},
+		);
 	}
 
 	optimizePrimary(
@@ -130,29 +136,28 @@ export class CoreFunctionOptimizationSession {
 		}
 		this.#optimized = true;
 		runPhase("post-barrier-local-optimization", () =>
-			this.#passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
+			this.#passes.runComponent("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
 		);
 		runPhase("advanced-cfg-optimization", () =>
-			this.#passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES),
+			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES),
 		);
 		const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
 		lateCanonicalizationChanges.push(
 			...runPhase("proof-and-representation-optimization", () =>
-				this.#passes.runStage("proofs", CORE_PROOF_PASSES),
+				this.#passes.runComponent("proofs", CORE_PROOF_PASSES),
 			),
 		);
 		lateCanonicalizationChanges.push(
 			...runPhase("memory-and-provenance-optimization", () =>
-				this.#passes.runStage("memory", CORE_MEMORY_PASSES),
+				this.#passes.runComponent("memory", CORE_MEMORY_PASSES),
 			),
 		);
 		runPhase("late-local-cleanup", () => {
 			if (lateCanonicalizationChanges.length === 0) return;
-			this.#passes.runStage(
+			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
 				lateCanonicalizationChanges,
-				"finalize",
 				false,
 			);
 		});
@@ -195,15 +200,9 @@ export class CoreFunctionOptimizationSession {
 		}
 		if (result.changes !== undefined && result.changes.edits > 0) {
 			const initial = [result.changes];
-			this.#passes.runStage(
-				"control-flow",
-				CORE_CONTROL_FLOW_PASSES,
-				initial,
-				"control-flow",
-				false,
-			);
-			this.#passes.runStage("proofs", CORE_PROOF_PASSES, initial, "proofs", false);
-			this.#passes.runStage("memory", CORE_MEMORY_PASSES, initial, "memory", false);
+			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, false);
+			this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, false);
+			this.#passes.runComponent("memory", CORE_MEMORY_PASSES, initial, false);
 		}
 		return Object.freeze({
 			changes: result.changes,

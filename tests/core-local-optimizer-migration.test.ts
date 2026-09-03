@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
-import type { CorePass } from "../src/compiler/core/core-pass.ts";
+import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 
 const MIGRATION_OWNERS = new Set([
@@ -37,7 +37,9 @@ const MIGRATED_NAMES = new Set([
 	"typeof-comparison-canonicalization",
 ]);
 
-const RUNTIME_REGISTRIES: ReadonlyArray<readonly [string, ReadonlyArray<CorePass>]> = [
+const RUNTIME_REGISTRIES: ReadonlyArray<
+	readonly [string, ReadonlyArray<CoreFunctionPass>]
+> = [
 	["CORE_LOCAL_CANONICALIZATION_PASSES", CORE_LOCAL_CANONICALIZATION_PASSES],
 	["CORE_PROOF_PASSES", CORE_PROOF_PASSES],
 	["CORE_CONTROL_FLOW_PASSES", CORE_CONTROL_FLOW_PASSES],
@@ -142,13 +144,19 @@ describe("Core local optimizer migration matrix", () => {
 		expect(source).not.toMatch(/JSON\.stringify|Map<string>/);
 	});
 
-	it("has no registered instruction- or block-scoped optimizer passes", () => {
-		const source = readFileSync(
+	it("has no generic function-pass scope or multi-function scheduler", () => {
+		const passSource = readFileSync(
 			new URL("../src/compiler/core/core-pass.ts", import.meta.url),
 			"utf8",
 		);
+		const schedulerSource = readFileSync(
+			new URL("../src/compiler/core/core-pass-manager.ts", import.meta.url),
+			"utf8",
+		);
 
-		expect(source).not.toMatch(/readonly scope: "(?:instruction|block)"/);
+		expect(passSource).not.toMatch(/CorePassScope|readonly scope:/);
+		expect(schedulerSource).toMatch(/class CoreFunctionPassScheduler/);
+		expect(schedulerSource).not.toMatch(/scope: "(?:scc|program)"|functionIds|sccs/);
 	});
 
 	it("uses numeric identities for optimizer queue membership", () => {

@@ -44,7 +44,7 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { CorePass, CorePassBudget } from "./core-pass.ts";
+import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const LOCAL_BUDGET: CorePassBudget = Object.freeze({
@@ -572,16 +572,14 @@ function edgeReturnsUndefined(
 	);
 }
 
-const annotateTerminalYieldSites: CorePass = {
+const annotateTerminalYieldSites: CoreFunctionPass = {
 	name: "annotate-terminal-yield-sites",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run({ program, item }) {
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		if (
 			!fn.isGenerator ||
@@ -748,10 +746,9 @@ function exactBuiltinReceiver(
 	return false;
 }
 
-const rewriteExactBuiltinCalls: CorePass = {
+const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
-	scope: "function",
 	requiredFunctionOpcodesAny: ["call"],
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
@@ -759,7 +756,6 @@ const rewriteExactBuiltinCalls: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const calls = [...fn.instructionIds()].filter(
 			(instruction) =>
@@ -1017,17 +1013,15 @@ function typeofObservation(
 	return actual === undefined ? undefined : actual === expected;
 }
 
-const foldValueKindObservations: CorePass = {
+const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const replacements: Array<{
@@ -1081,10 +1075,9 @@ const foldValueKindObservations: CorePass = {
 	},
 };
 
-const foldPrimitiveCoercions: CorePass = {
+const foldPrimitiveCoercions: CoreFunctionPass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
-	scope: "function",
 	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
@@ -1092,7 +1085,6 @@ const foldPrimitiveCoercions: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const coercible = (value: CoreValueId): boolean => {
@@ -1187,17 +1179,15 @@ function constructedCollectionReceiver(
 	);
 }
 
-const rewriteNumericIdentities: CorePass = {
+const rewriteNumericIdentities: CoreFunctionPass = {
 	name: "numeric-algebraic-simplification",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const numeric = (value: CoreValueId): boolean => {
@@ -1288,10 +1278,9 @@ const rewriteNumericIdentities: CorePass = {
 	},
 };
 
-const foldRedundantTdzChecks: CorePass = {
+const foldRedundantTdzChecks: CoreFunctionPass = {
 	name: "redundant-tdz-check-folding",
 	stage: "canonicalize",
-	scope: "function",
 	requiredFunctionOpcodesAny: ["throwIfTdz"],
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "memoryEffects", "representations"],
@@ -1299,7 +1288,6 @@ const foldRedundantTdzChecks: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const checks = [...fn.instructionIds()].filter(
 			(instruction) =>
@@ -1388,17 +1376,15 @@ const foldRedundantTdzChecks: CorePass = {
 	},
 };
 
-const lowerLocalExplicitThrows: CorePass = {
+const lowerLocalExplicitThrows: CoreFunctionPass = {
 	name: "local-explicit-throw-lowering",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		if (fn.handlerBlockCount === 0) return undefined;
 		const flows = context.analysis(CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS);
@@ -1478,17 +1464,15 @@ const lowerLocalExplicitThrows: CorePass = {
 	},
 };
 
-const removeUnreachableBlocks: CorePass = {
+const removeUnreachableBlocks: CoreFunctionPass = {
 	name: "unreachable-block-removal",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
 		const reachable = new Set(control.reachable);
@@ -1544,17 +1528,15 @@ const removeUnreachableBlocks: CorePass = {
 	},
 };
 
-const eliminateForwardingBlocks: CorePass = {
+const eliminateForwardingBlocks: CoreFunctionPass = {
 	name: "forwarding-block-elimination",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
 		const candidates = new Array<{
@@ -1675,17 +1657,15 @@ const eliminateForwardingBlocks: CorePass = {
 	},
 };
 
-const mergeLinearBlocks: CorePass = {
+const mergeLinearBlocks: CoreFunctionPass = {
 	name: "linear-block-merging",
 	stage: "canonicalize",
-	scope: "function",
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item, remainingEdits } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
 		let selected: Array<{
@@ -1804,10 +1784,9 @@ const mergeLinearBlocks: CorePass = {
 	},
 };
 
-const simplifyBlockParameters: CorePass = {
+const simplifyBlockParameters: CoreFunctionPass = {
 	name: "block-parameter-simplification",
 	stage: "canonicalize",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "body"],
@@ -1815,7 +1794,6 @@ const simplifyBlockParameters: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
 		let editor: CoreEditor | undefined;
@@ -1937,10 +1915,9 @@ const simplifyBlockParameters: CorePass = {
 	},
 };
 
-const canonicalizeBlockParameters: CorePass = {
+const canonicalizeBlockParameters: CoreFunctionPass = {
 	name: "canonical-block-parameter-elimination",
 	stage: "canonicalize",
-	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -1951,7 +1928,6 @@ const canonicalizeBlockParameters: CorePass = {
 	budget: CANONICAL_BLOCK_PARAMETER_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
@@ -2039,7 +2015,7 @@ const canonicalizeBlockParameters: CorePass = {
 	},
 };
 
-export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
@@ -2054,18 +2030,18 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldRedundantTdzChecks,
 ];
 
-export const CORE_CONSTRUCTION_ANNOTATION_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_CONSTRUCTION_ANNOTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 ];
 
-export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	simplifyBlockParameters,
 	eliminateForwardingBlocks,
 	mergeLinearBlocks,
 	removeUnreachableBlocks,
 ];
 
-export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
+export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	foldRedundantTdzChecks,

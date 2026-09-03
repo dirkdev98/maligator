@@ -18,7 +18,7 @@ import {
 } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -145,10 +145,13 @@ describe("Core local proofs and representations", () => {
 			throw new Error("Expected instruction result");
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		new CorePassManager(program, context, analyses, report).runStage(
-			"proofs",
-			CORE_PROOF_PASSES,
-		);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
 		const refinement = fn.instructionEffectRefinement(sumDefinition.instruction);
 		expect(refinement).toBeDefined();
 		expect(fn.fact(refinement!.proof)).toMatchObject({
@@ -192,10 +195,13 @@ describe("Core local proofs and representations", () => {
 		const fn = program.function(finished.function);
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		new CorePassManager(program, context, analyses, report).runStage(
-			"proofs",
-			CORE_PROOF_PASSES,
-		);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
 		expect(fn.valueRepresentation(source!)).toBe("boxed");
 		expect(fn.valueRepresentation(numeric!)).toBe("boxed");
 		expect(fn.valueRepresentation(incremented!)).toBe("boxed");
@@ -242,10 +248,13 @@ describe("Core local proofs and representations", () => {
 		if (definition.kind !== "instruction") throw new Error("expected instruction result");
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		new CorePassManager(program, context, analyses, report).runStage(
-			"proofs",
-			CORE_PROOF_PASSES,
-		);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
 		expect(fn.instructionEffectRefinement(definition.instruction)?.proof).toBe(proof);
 		expect(fn.fact(proof)).toMatchObject({
 			kind: "primitive-operator-effects",
@@ -274,10 +283,13 @@ describe("Core local proofs and representations", () => {
 		if (definition.kind !== "instruction") throw new Error("Expected binary result");
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		new CorePassManager(program, context, analyses, report).runStage(
-			"proofs",
-			CORE_PROOF_PASSES,
-		);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
 		const refinement = fn.instructionEffectRefinement(definition.instruction);
 		expect(refinement).toBeDefined();
 		const editor = CoreEditor.open(program, finished.function);
@@ -286,10 +298,13 @@ describe("Core local proofs and representations", () => {
 			effectRefinement: refinement,
 		});
 		editor.commit();
-		new CorePassManager(program, context, analyses, report).runStage(
-			"proofs",
-			CORE_PROOF_PASSES,
-		);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
 		expect(fn.instructionEffectRefinement(definition.instruction)).toBeUndefined();
 		expect(fn.isFactLive(refinement!.proof)).toBe(false);
 	});
