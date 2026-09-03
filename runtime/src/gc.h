@@ -52,9 +52,6 @@ extern volatile bool mal_gc_poll;
  * MAL_GC_OFF). Read by the allocator on every allocation. */
 extern usize mal_gc_next_at;
 
-/** Emit the enabled collector counters for an external benchmark controller. */
-void mal_gc_print_stats_now(void);
-
 /* SATB (snapshot-at-the-beginning) deletion-barrier record: hands the collector
  * a reference about to be overwritten so it stays in the snapshot. No-op until
  * the concurrent collector (Phase 3/5) drains a real SATB buffer. */

@@ -1,5 +1,6 @@
 #include "./gc.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -252,6 +253,15 @@ static MalGcState *g_gc = nullptr;
  * fields, so the snapshot's stale buffer pointers are never dereferenced. */
 static MalGcState g_gc_stats_snapshot;
 static MalGcState *g_gc_stats_state = nullptr;
+static volatile sig_atomic_t g_gc_stats_snapshot_requested = 0;
+static bool g_gc_stats_signal_installed = false;
+static struct sigaction g_gc_stats_previous_signal_action;
+
+static void mal_gc_request_stats_snapshot(int signal_number) {
+    (void) signal_number;
+    g_gc_stats_snapshot_requested = 1;
+    mal_gc_poll = true;
+}
 
 MalHeap *mal_gc_current_heap(void) {
     return &g_gc_vm->heap;
@@ -329,7 +339,7 @@ void mal_gc_satb_record(MalValue old_value) {
 #endif
 }
 
-void mal_gc_print_stats_now(void) {
+static void mal_gc_print_stats_now(void) {
     MalGcState *g = g_gc_stats_state;
     if (g == nullptr) {
         return;
@@ -479,6 +489,15 @@ void mal_gc_init(MalVm *vm) {
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
         atexit(mal_gc_print_stats_at_exit);
+        if (getenv("MAL_GC_CONTROL") != nullptr) {
+            struct sigaction action = {0};
+            action.sa_handler = mal_gc_request_stats_snapshot;
+            sigemptyset(&action.sa_mask);
+            action.sa_flags = SA_RESTART;
+            if (sigaction(SIGUSR1, &action, &g_gc_stats_previous_signal_action) == 0) {
+                g_gc_stats_signal_installed = true;
+            }
+        }
     }
 
 #if MAL_GC_GENERATIONAL
@@ -2055,6 +2074,10 @@ void mal_gc_safepoint(MalVm *vm) {
 		return;
 	}
 	mal_profile_safepoint(vm);
+    if (g_gc_stats_snapshot_requested != 0) {
+        g_gc_stats_snapshot_requested = 0;
+        mal_gc_print_stats_now();
+    }
 #if MAL_GC_CONCURRENT
     mal_gc_concurrent_safepoint(vm);
 #else
@@ -2134,6 +2157,11 @@ void mal_gc_state_free(MalVm *vm) {
         }
         g_gc_stats_snapshot = *g;
         g_gc_stats_state = &g_gc_stats_snapshot;
+    }
+    if (g_gc_stats_signal_installed) {
+        sigaction(SIGUSR1, &g_gc_stats_previous_signal_action, nullptr);
+        g_gc_stats_signal_installed = false;
+        g_gc_stats_snapshot_requested = 0;
     }
     free(g);
     vm->gc = nullptr;

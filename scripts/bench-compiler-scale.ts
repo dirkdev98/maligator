@@ -150,7 +150,7 @@ const HEAP_SAMPLING_INTERVAL = 32_768;
 const HELP = `Usage: node scripts/bench-compiler-scale.ts [options]
 
 Runs the permanent 14-tier compiler complexity ladder. By default tiers 1-13 run;
-tier 14 requires --include-test-check.
+tier 14 requires --include-test-check unless --core-opt3-start selects the complete gate.
 
   --list                       print the committed fixture manifest
   --tier N[,N...]              select one or more tiers
@@ -251,7 +251,9 @@ function parseOptions(
 	}
 	const tiers =
 		selected ??
-		new Set(manifest.tiers.map(({ tier }) => tier).filter((tier) => tier < 14));
+		new Set(
+			manifest.tiers.map(({ tier }) => tier).filter((tier) => coreOpt3Start || tier < 14),
+		);
 	for (const tier of tiers) {
 		if (!manifest.tiers.some((entry) => entry.tier === tier)) {
 			throw new Error(`tier ${tier} is not in the manifest`);
@@ -277,7 +279,7 @@ function parseOptions(
 		instrumentation,
 		compareInstrumentation,
 		profile,
-		includeTestCheck,
+		includeTestCheck: includeTestCheck || coreOpt3Start,
 		quick,
 		coreOpt3Start,
 		output,
@@ -854,6 +856,12 @@ function commandOutput(command: ReadonlyArray<string>) {
 		maxBuffer: 64 * 1024 * 1024,
 		timeout: 1_800_000,
 	});
+	if (result.error !== undefined) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			`${command.join(" ")} failed with status ${String(result.status)}\n${result.stderr}`,
+		);
+	}
 	return {
 		command,
 		wallMs: performance.now() - startedAt,

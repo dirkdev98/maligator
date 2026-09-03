@@ -952,25 +952,6 @@ static MalValue mal_intrinsic_perf_stats_reset(
     return MAL_VALUE_UNDEFINED;
 }
 
-/** Benchmark controller hook for long-lived processes that cannot reach atexit. */
-static MalValue mal_intrinsic_gc_stats_print(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee
-) {
-    (void) vm;
-    (void) this_value;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
-    mal_gc_print_stats_now();
-    return MAL_VALUE_UNDEFINED;
-}
-
 /**
  * Expose the intrinsics as properties of a globalThis namespace object.
  */
@@ -1078,11 +1059,5 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
             vm, global_this, "__mal_reset_perf_stats",
             mal_intrinsic_perf_stats_reset);
     }
-    if (getenv("MAL_GC_STATS") != nullptr && getenv("MAL_GC_CONTROL") != nullptr) {
-        mal_intrinsic_define_method(
-            vm, global_this, "__mal_print_gc_stats",
-            mal_intrinsic_gc_stats_print);
-    }
-
     mal_primordials_lock(vm);
 }

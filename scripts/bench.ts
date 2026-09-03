@@ -1060,10 +1060,11 @@ async function terminateProcess(child: ReturnType<typeof spawn>): Promise<void> 
 
 async function stopMeasuredRuntimeProcess(
 	measured: MeasuredRuntimeProcess,
-	statsUrl: string,
+	wakeUrl: string,
 ): Promise<NativeRuntimeMetrics> {
-	execFileSync("curl", ["-s", "-X", "POST", "-o", "/dev/null", statsUrl]);
 	const rssBytes = processRssBytes(measured.process);
+	measured.process.kill("SIGUSR1");
+	execFileSync("curl", ["-s", "-o", "/dev/null", wakeUrl]);
 	await terminateProcess(measured.process);
 	return nativeRuntimeMetrics(Buffer.concat(measured.stderr).toString(), rssBytes);
 }
@@ -1115,10 +1116,7 @@ async function benchHttp(
 			runs,
 		);
 	} finally {
-		bareRuntime = await stopMeasuredRuntimeProcess(
-			bareMal,
-			"http://127.0.0.1:3111/__maligator_gc_stats",
-		);
+		bareRuntime = await stopMeasuredRuntimeProcess(bareMal, "http://127.0.0.1:3111/");
 		await terminateProcess(bareNode);
 	}
 
@@ -1162,7 +1160,7 @@ async function benchHttp(
 	} finally {
 		expressRuntime = await stopMeasuredRuntimeProcess(
 			expressMal,
-			"http://127.0.0.1:3113/__maligator_gc_stats",
+			"http://127.0.0.1:3113/middleware",
 		);
 		await terminateProcess(expressNode);
 		rmSync(temporary, { recursive: true, force: true });
