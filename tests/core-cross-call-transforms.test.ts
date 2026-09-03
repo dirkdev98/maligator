@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
+import {
+	CoreFunctionOptimizationResources,
+	CoreFunctionOptimizationSession,
+} from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { CoreTransformCandidateService } from "../src/compiler/core/core-transform-candidates.ts";
@@ -35,8 +38,21 @@ function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits)
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
 	const analyses = new CoreAnalysisManager(program, context, report);
-	const passes = new CorePassManager(program, context, analyses, report);
-	const result = runCoreCrossCallTransforms(program, analyses, passes, limits);
+	const resources = new CoreFunctionOptimizationResources(program);
+	const result = runCoreCrossCallTransforms(
+		program,
+		analyses,
+		(wave, functionId, editor) =>
+			new CoreFunctionOptimizationSession(
+				program,
+				context,
+				report,
+				resources,
+				functionId,
+				{ crossCallWave: wave },
+			).optimizeCrossCall(editor),
+		limits,
+	);
 	return {
 		...result,
 		plan: buildCoreOptimizationPlan(program, analyses, result.summaries, [
@@ -73,6 +89,7 @@ describe("bounded Core cross-call transforms", () => {
 		expect(source).toMatch(/wave < 2/);
 		expect(source).not.toMatch(/while\s*\(true\)/);
 		expect(source).not.toMatch(/passes\.runStage/);
+		expect(source).not.toMatch(/finishCrossCallWave/);
 	});
 
 	it("deduplicates candidates and enforces site, caller, and compiler-work limits", () => {

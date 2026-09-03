@@ -202,19 +202,6 @@ export function optimizeCore(
 		compilation.context,
 		reportBuilder,
 	);
-	const passes = new CorePassManager(
-		compilation.program,
-		compilation.context,
-		analyses,
-		reportBuilder,
-		{
-			verification: options.verification,
-			optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-			localOptimization: true,
-			featureIndex: functionResources.featureIndex,
-			localRules: functionResources.localRules,
-		},
-	);
 	reportBuilder.recordCheckpoint("before-program-flow", compilation.program);
 	const initialFlow = measurePhase("program-flow", () =>
 		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
@@ -223,7 +210,19 @@ export function optimizeCore(
 		runCoreCrossCallTransforms(
 			compilation.program,
 			analyses,
-			passes,
+			(wave, functionId, editor) =>
+				new CoreFunctionOptimizationSession(
+					compilation.program,
+					compilation.context,
+					reportBuilder,
+					functionResources,
+					functionId,
+					{
+						verification: options.verification,
+						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+						crossCallWave: wave,
+					},
+				).optimizeCrossCall(editor),
 			profile.crossCallBudgets,
 			initialFlow,
 		),
@@ -239,6 +238,12 @@ export function optimizeCore(
 		summaries.statistics,
 		reachability.statistics,
 	);
+	const finalLocalPlanInputs = new Map(
+		localPlanInputs.map((input) => [input.function, input] as const),
+	);
+	for (const input of crossCall.localPlanInputs) {
+		finalLocalPlanInputs.set(input.function, input);
+	}
 	const plan = buildCoreOptimizationPlan(
 		compilation.program,
 		analyses,
@@ -247,7 +252,7 @@ export function optimizeCore(
 		{
 			context: compilation.context,
 			budgets: profile.specializationBudgets,
-			localInputs: localPlanInputs,
+			localInputs: [...finalLocalPlanInputs.values()],
 			...(reportBuilder.collectsPhases
 				? {
 						onPhase(phase: "discovery" | "selection", elapsedMs: number) {

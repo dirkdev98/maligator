@@ -1,7 +1,9 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CoreEditor } from "./core-editor.ts";
+import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
+import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
 import type { CoreProgramValueKinds } from "./core-ir-value-kinds.ts";
@@ -12,7 +14,6 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { CorePassManager } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -701,6 +702,12 @@ interface CoreValueKindFold {
 	readonly result: boolean;
 }
 
+export type CoreCrossCallCallerOptimizer = (
+	wave: number,
+	functionId: CoreFunctionId,
+	editor: CoreEditor,
+) => CoreCrossCallFunctionOptimizationResult;
+
 function discoverProgramValueKindObservations(
 	program: CoreProgram,
 	kinds: CoreProgramValueKinds,
@@ -726,12 +733,13 @@ function discoverProgramValueKindObservations(
 export function runCoreCrossCallTransforms(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
-	passes: CorePassManager,
+	optimizeCaller: CoreCrossCallCallerOptimizer,
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
 ): {
 	readonly summaries: CoreProgramSummaries;
 	readonly statistics: CoreCrossCallTransformStatistics;
+	readonly localPlanInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>;
 } {
 	const service = new CoreTransformCandidateService(limits);
 	let flow =
@@ -754,6 +762,7 @@ export function runCoreCrossCallTransforms(
 	let callerLocalOptimizations = 0;
 	let programFlowResolves = 1;
 	let valueKindFolds = 0;
+	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	for (let wave = 0; wave < 2; wave++) {
 		discoverCoreCrossCallCandidates(program, summaries, service);
 		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
@@ -810,14 +819,19 @@ export function runCoreCrossCallTransforms(
 				editor.commit();
 				continue;
 			}
-			const optimized = passes.finishCrossCallCaller(editor);
+			const optimized = optimizeCaller(wave, functionId, editor);
+			if (optimized.localPlanInput.function !== functionId) {
+				throw new Error(
+					`Cross-call session for function ${functionId} returned function ${optimized.localPlanInput.function}`,
+				);
+			}
+			localPlanInputs.set(functionId, optimized.localPlanInput);
 			callerLocalOptimizations++;
 			if (optimized.changes !== undefined && optimized.changes.edits > 0) {
 				waveChanges.push(optimized.changes);
 			}
 		}
 		if (waveChanges.length === 0 || !published) break;
-		passes.finishCrossCallWave(waveChanges);
 		waves++;
 		const priorFlow = flow;
 		flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
@@ -850,6 +864,7 @@ export function runCoreCrossCallTransforms(
 	const budget = service.statistics();
 	return Object.freeze({
 		summaries,
+		localPlanInputs: Object.freeze([...localPlanInputs.values()]),
 		statistics: Object.freeze({
 			...budget,
 			waves,

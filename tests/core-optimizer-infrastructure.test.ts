@@ -255,6 +255,25 @@ describe("Core optimizer infrastructure", () => {
 		).toThrow("already has a primary session");
 	});
 
+	it("opens a changed caller at most once per cross-call wave", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const report = new CoreOptimizationReportBuilder(program);
+		const resources = new CoreFunctionOptimizationResources(program);
+		const open = (wave: number) =>
+			new CoreFunctionOptimizationSession(
+				program,
+				context(),
+				report,
+				resources,
+				functions[0]!.id,
+				{ crossCallWave: wave },
+			);
+		open(0);
+
+		expect(() => open(0)).toThrow("already has a cross-call session in wave 0");
+		expect(() => open(1)).not.toThrow();
+	});
+
 	it("does not reseed fused local work for an already-consumed change batch", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const report = new CoreOptimizationReportBuilder(program, "full");
