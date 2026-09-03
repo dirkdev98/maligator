@@ -2,7 +2,7 @@ import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "./core-function-features.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
-	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
@@ -251,7 +251,7 @@ const canonicalizeNaturalLoops: CorePass = {
 	stage: "control-flow",
 	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
 	changes: CONTROL_FLOW_CHANGES,
 	budget: CONTROL_FLOW_BUDGET,
@@ -259,7 +259,7 @@ const canonicalizeNaturalLoops: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		for (const loop of cfg.loops) {
 			if (
 				[...loop.blocks].some(
@@ -457,10 +457,7 @@ const hoistLoopInvariants: CorePass = {
 	stage: "control-flow",
 	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
-	requiredAnalyses: [
-		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
-		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
-	],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
@@ -468,7 +465,7 @@ const hoistLoopInvariants: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const moves: Array<{
 			readonly instruction: CoreInstructionId;
@@ -542,7 +539,7 @@ const eliminateDominatedRedundancy: CorePass = {
 	stage: "control-flow",
 	scope: "function",
 	requiredAnalyses: [
-		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
@@ -552,7 +549,7 @@ const eliminateDominatedRedundancy: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
 		type AvailableExpression = {
 			readonly instruction: CoreInstructionId;
@@ -666,7 +663,7 @@ const eliminatePartialRedundancy: CorePass = {
 	name: "partial-redundancy-elimination",
 	stage: "control-flow",
 	scope: "function",
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
@@ -674,7 +671,7 @@ const eliminatePartialRedundancy: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		for (const block of cfg.reversePostorder) {
 			if (
 				fn.kernel.blockHandlerBlock(block) !== undefined ||
@@ -923,7 +920,7 @@ const selectLoopScalarRepresentations: CorePass = {
 	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [
-		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
@@ -936,7 +933,7 @@ const selectLoopScalarRepresentations: CorePass = {
 		const fn = program.function(item.function);
 		const inductions = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).inductions;
 		if (inductions.length === 0) return undefined;
-		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const inductionValues = new Set(
 			inductions.flatMap(({ value, initial, update }) => [value, initial, update]),

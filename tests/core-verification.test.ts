@@ -4,7 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
 import {
-	CORE_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
@@ -250,7 +250,7 @@ describe("Core verification", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const request = { scope: "function", function: fn.id } as const;
-		const first = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
+		const first = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary();
 		const representationEditor = CoreEditor.open(program, fn.id);
 		const condition = inspectCoreInstructionResults(
 			fn,
@@ -259,7 +259,9 @@ describe("Core verification", () => {
 		representationEditor.setValueRepresentation(condition, "boolean");
 		const representationChanges = representationEditor.commit();
 		verifyCoreChangeSet(program, representationChanges, { stage: "canonicalize" });
-		expect(analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request)).toBe(first);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary()).toBe(
+			first,
+		);
 
 		const cfgEditor = CoreEditor.open(program, fn.id);
 		cfgEditor.removeInstruction(fn.blockTerminator(entry));
@@ -271,7 +273,9 @@ describe("Core verification", () => {
 		});
 		const cfgChanges = cfgEditor.commit();
 		verifyCoreChangeSet(program, cfgChanges, { stage: "control-flow" });
-		expect(analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request)).not.toBe(first);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary()).not.toBe(
+			first,
+		);
 	});
 
 	it("formats the store through read-only lookup and iteration", () => {

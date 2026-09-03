@@ -1,6 +1,6 @@
 import { effectSummaryCovers, normalizeEffectSummary } from "../shared/effect-summary.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type {
 	CoreBlockId,
@@ -516,7 +516,7 @@ export const CORE_FACT_AVAILABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFactAva
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			return analyzeCoreFactAvailability(
 				program.function(request.function),
-				get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 			);
 		},
 	};

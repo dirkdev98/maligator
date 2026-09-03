@@ -17,7 +17,7 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
 import type { CoreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
@@ -988,10 +988,12 @@ export function buildCoreLocalOptimizationPlanInput(
 				function: functionId,
 			}).candidates
 		: Object.freeze([]);
-	const cfg = analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-		scope: "function",
-		function: functionId,
-	});
+	const cfg = analyses
+		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		})
+		.exceptional();
 	const pending: Array<CorePendingOptimizationCandidate> = [];
 	if (candidates.length > 0) {
 		const costModel = coreGeneratedCodeCostModel(fn, cfg);

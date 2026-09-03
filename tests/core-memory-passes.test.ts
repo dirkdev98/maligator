@@ -4,7 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
-	CORE_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreTerminatorEdges,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS } from "../src/compiler/core/core-ir-interprocedural-flow.ts";
@@ -552,7 +552,8 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const report = new CoreOptimizationReportBuilder(core);
 		const analyses = new CoreAnalysisManager(core, context, report);
 		const request = { scope: "function", function: finished.function } as const;
-		const cfg = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
+		const control = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
+		const cfg = control.ordinary();
 		const calls = analyses.get(CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS, request);
 		const memory = analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request);
 		const candidates = analyses.get(
@@ -580,7 +581,8 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const changes = editor.commit();
 		expect(changes.domains).not.toContain("cfg");
 		expect(changes.domains).not.toContain("calls");
-		expect(analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request)).toBe(cfg);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request)).toBe(control);
+		expect(control.ordinary()).toBe(cfg);
 		expect(analyses.get(CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS, request)).toBe(calls);
 		expect(analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request)).not.toBe(memory);
 		expect(analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, request)).not.toBe(

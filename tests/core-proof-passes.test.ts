@@ -4,7 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
-	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import {
@@ -447,10 +447,12 @@ describe("Core local proofs and representations", () => {
 		create.commit();
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		const firstCfg = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, {
-			scope: "function",
-			function: functions[0]!.function,
-		});
+		const firstCfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: functions[0]!.function,
+			})
+			.exceptional();
 		const firstFacts = analyses.get(CORE_FACT_AVAILABILITY_ANALYSIS, {
 			scope: "function",
 			function: functions[0]!.function,
@@ -476,10 +478,12 @@ describe("Core local proofs and representations", () => {
 		expect(changes.domains).toEqual(["facts", "specializationInputs"]);
 		expect(changes.facts).toEqual([fact]);
 		expect(
-			analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, {
-				scope: "function",
-				function: functions[0]!.function,
-			}),
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: functions[0]!.function,
+				})
+				.exceptional(),
 		).toBe(firstCfg);
 		expect(
 			analyses.get(CORE_FACT_AVAILABILITY_ANALYSIS, {

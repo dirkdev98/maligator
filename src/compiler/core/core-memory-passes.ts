@@ -4,10 +4,7 @@ import {
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 } from "./core-function-features.ts";
 import { CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE } from "./core-internal-attributes.ts";
-import {
-	CORE_CONTROL_FLOW_ANALYSIS,
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-} from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
 import {
@@ -574,7 +571,10 @@ const forwardExactMemoryLoads: CorePass = {
 	stage: "memory",
 	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_MEMORY_ACCESSES,
-	requiredAnalyses: [CORE_CONTROL_FLOW_ANALYSIS, CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS],
+	requiredAnalyses: [
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+		CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+	],
 	wakesOn: ["body", "cfg", "memoryEffects"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -582,7 +582,7 @@ const forwardExactMemoryLoads: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_ANALYSIS);
+		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).ordinary();
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
 		const available = new Map<
 			number,
@@ -1314,10 +1314,7 @@ const scalarizeRootedContainedObjects: CorePass = {
 	scope: "function",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
-	requiredAnalyses: [
-		CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
-	],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -1327,7 +1324,7 @@ const scalarizeRootedContainedObjects: CorePass = {
 		const fn = program.function(item.function);
 		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const provenance = facts.provenance;
-		const control = context.analysis(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS);
+		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		for (const layout of provenance.layouts) {
 			if (layout.kind !== "named-slots") continue;
 			if (provenance.allocationOf(layout.result) !== layout) continue;

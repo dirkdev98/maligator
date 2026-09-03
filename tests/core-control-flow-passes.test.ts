@@ -4,10 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
-	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
-	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreCanonicalValueRoots } from "../src/compiler/core/core-ir-control-flow.ts";
@@ -129,8 +126,8 @@ describe("Core control-flow analyses and passes", () => {
 		const analyses = new CoreAnalysisManager(program, context, report);
 		const request = { scope: "function" as const, function: functionId };
 		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
-		const ordinary = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
-		const exceptional = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request);
+		const ordinary = bundle.ordinary();
+		const exceptional = bundle.exceptional();
 
 		expect(exceptional.successors).toBe(bundle.structural.successors);
 		expect(exceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
@@ -139,6 +136,27 @@ describe("Core control-flow analyses and passes", () => {
 			to: handler,
 			kind: "exceptional",
 		});
+
+		const call = [...program.function(functionId).bodyInstructionIds(entry)][0]!;
+		const editor = CoreEditor.open(program, functionId);
+		const proof = editor.addFact({
+			kind: "test-call-effects",
+			value: true,
+			claims: [{ kind: "effect", instruction: call, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "test-call-effects" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(call, { effects: CORE_NO_EFFECTS, proof });
+		const changes = editor.commit();
+		expect(changes.domains).not.toContain("cfg");
+		const retained = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
+		expect(retained).toBe(bundle);
+		expect(retained.ordinary()).toBe(ordinary);
+		const refinedExceptional = retained.exceptional();
+		expect(refinedExceptional).not.toBe(exceptional);
+		expect(refinedExceptional.successors[entry]).toHaveLength(1);
+		expect(refinedExceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
 	});
 
 	it("does not reuse a protected-block value after an exceptional join", () => {
@@ -1149,20 +1167,20 @@ describe("Core control-flow analyses and passes", () => {
 		const finished = builder.finish(entry);
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		const ordinary = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, {
+		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 			scope: "function",
 			function: finished.function,
 		});
-		const first = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, {
-			scope: "function",
-			function: finished.function,
-		});
+		const ordinary = bundle.ordinary();
+		const first = bundle.exceptional();
 		expect(first).toBe(ordinary);
 		expect(
-			analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-				scope: "function",
-				function: finished.function,
-			}),
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: finished.function,
+				})
+				.exceptional(),
 		).toBe(first);
 		const definition = inspectCoreValueDefinition(
 			program.function(finished.function),
@@ -1174,18 +1192,18 @@ describe("Core control-flow analyses and passes", () => {
 		editor.removeInstruction(definition.instruction);
 		const changes = editor.commit();
 		expect(changes.domains).not.toContain("cfg");
-		const second = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, {
-			scope: "function",
-			function: finished.function,
-		});
+		const second = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: finished.function,
+			})
+			.exceptional();
 		expect(second).toBe(first);
 		expect(second.successors[entry]![0]!.arguments).toEqual([parameter]);
 		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
-			{ analysis: "control-flow-bundle", queries: 2, hits: 1, recomputations: 1 },
-			{ analysis: "control-flow", queries: 1, hits: 0, recomputations: 1 },
-			{ analysis: "exception-control-flow", queries: 3, hits: 2, recomputations: 1 },
+			{ analysis: "control-flow-bundle", queries: 3, hits: 2, recomputations: 1 },
 		]);
 	});
 });

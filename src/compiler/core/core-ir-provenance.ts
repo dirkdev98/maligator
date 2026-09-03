@@ -1,7 +1,7 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 } from "./core-ir-control-flow.ts";
@@ -632,7 +632,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 				throw new Error("Expected function analysis request");
 			const functionId = request.function;
 			const fn = program.function(functionId);
-			const control = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
+			const control = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
 			let localIndex: CoreLocalFactIndex | undefined;
 			let valueKindAnalysis: CoreValueKindAnalysis | undefined;

@@ -1,5 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreBlockId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
@@ -97,9 +97,7 @@ export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<
 		const fn = program.function(request.function);
 		return analyzeCoreLocalExceptionFlows(
 			fn,
-			get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request),
+			get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 		);
 	},
 };
-
-export { CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS };

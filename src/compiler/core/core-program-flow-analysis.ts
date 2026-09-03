@@ -1,10 +1,7 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndexState } from "./core-ir-call-targets.ts";
-import {
-	CORE_CONTROL_FLOW_ANALYSIS,
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-} from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
 import { CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaryState } from "./core-ir-summaries.ts";
@@ -65,20 +62,20 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 				: programFlow.solveCallTargets(
 						context.facts.closure.sourceClosure.kind === "known",
 						(functionId) =>
-							get(CORE_CONTROL_FLOW_ANALYSIS, {
+							get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 								scope: "function",
 								function: functionId,
-							}),
+							}).ordinary(),
 						CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS,
 						prior?.targets,
 						context,
 						targetDirty,
 					);
 		const exceptionalControl = (functionId: CoreFunctionId) =>
-			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
+			get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 				scope: "function" as const,
 				function: functionId,
-			});
+			}).exceptional();
 		const summaryDirty = dirtyFor(CORE_PROGRAM_FLOW_SUMMARIES);
 		const targetsChanged = targets !== prior?.targets;
 		const summaries =

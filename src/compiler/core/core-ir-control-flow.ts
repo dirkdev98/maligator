@@ -112,10 +112,7 @@ function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boo
 	return false;
 }
 
-function buildEdges(
-	fn: CoreFunctionStore,
-	includeExceptions: boolean,
-): {
+function buildEdges(fn: CoreFunctionStore): {
 	readonly successors: Array<Array<CoreControlEdge>>;
 	readonly predecessors: Array<Array<CoreControlEdge>>;
 } {
@@ -147,29 +144,6 @@ function buildEdges(
 						argumentVersion = version;
 						argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
 							fn.kernel.operandAt(argumentStart + index),
-						);
-					}
-					return argumentsCache;
-				},
-			});
-		}
-		const handler = includeExceptions ? fn.kernel.blockHandlerBlock(block) : undefined;
-		if (handler !== undefined && blockHasExceptionalExit(fn, block)) {
-			const start = fn.kernel.blockHandlerArgumentStart(block);
-			const count = fn.kernel.blockHandlerArgumentCount(block);
-			let argumentVersion = -1;
-			let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-			if (successors[block] === empty) successors[block] = [];
-			successors[block].push({
-				from: block,
-				to: handler,
-				kind: "exceptional",
-				get arguments() {
-					const version = fn.version("body");
-					if (argumentsCache === undefined || version !== argumentVersion) {
-						argumentVersion = version;
-						argumentsCache = Array.from({ length: count }, (_, index) =>
-							fn.kernel.handlerArgumentAt(start + index),
 						);
 					}
 					return argumentsCache;
@@ -216,16 +190,56 @@ function traversal(
 	return { reachable, reversePostorder: postorder.reverse() };
 }
 
-function buildStructural(
-	fn: CoreFunctionStore,
-	includeExceptions: boolean,
-): CoreStructuralControlFlow {
-	const { successors, predecessors } = buildEdges(fn, includeExceptions);
+function buildStructural(fn: CoreFunctionStore): CoreStructuralControlFlow {
+	const { successors, predecessors } = buildEdges(fn);
 	const { reachable, reversePostorder } = traversal(fn.entry, successors);
 	return Object.freeze({
 		function: fn.id,
 		cfgVersion: fn.versions.cfg,
-		exceptionFlowVersion: includeExceptions ? fn.versions.exceptionFlow : 0,
+		exceptionFlowVersion: 0,
+		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
+		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
+		reachable: Object.freeze(reachable),
+		reversePostorder: Object.freeze(reversePostorder),
+	});
+}
+
+function buildExceptionalStructural(
+	fn: CoreFunctionStore,
+	ordinary: CoreStructuralControlFlow,
+): CoreStructuralControlFlow {
+	const successors = ordinary.successors.map((edges) => [...edges]);
+	const predecessors = ordinary.predecessors.map((edges) => [...edges]);
+	for (const block of fn.blockIds()) {
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
+		const start = fn.kernel.blockHandlerArgumentStart(block);
+		const count = fn.kernel.blockHandlerArgumentCount(block);
+		let argumentVersion = -1;
+		let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+		const edge: CoreControlEdge = {
+			from: block,
+			to: handler,
+			kind: "exceptional",
+			get arguments() {
+				const version = fn.version("body");
+				if (argumentsCache === undefined || version !== argumentVersion) {
+					argumentVersion = version;
+					argumentsCache = Array.from({ length: count }, (_, index) =>
+						fn.kernel.handlerArgumentAt(start + index),
+					);
+				}
+				return argumentsCache;
+			},
+		};
+		successors[block]!.push(edge);
+		predecessors[handler]!.push(edge);
+	}
+	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+	return Object.freeze({
+		function: fn.id,
+		cfgVersion: fn.versions.cfg,
+		exceptionFlowVersion: fn.versions.exceptionFlow,
 		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
 		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
 		reachable: Object.freeze(reachable),
@@ -676,56 +690,45 @@ function buildFromStructural(
 	});
 }
 
-function withoutExceptionalEdges(
-	fn: CoreFunctionStore,
-	structural: CoreStructuralControlFlow,
-): CoreStructuralControlFlow {
-	const successors = Object.freeze(
-		structural.successors.map((edges) => {
-			const ordinary = edges.filter(({ kind }) => kind === "ordinary");
-			return ordinary.length === edges.length ? edges : Object.freeze(ordinary);
-		}),
-	);
-	const predecessors = Object.freeze(
-		structural.predecessors.map((edges) => {
-			const ordinary = edges.filter(({ kind }) => kind === "ordinary");
-			return ordinary.length === edges.length ? edges : Object.freeze(ordinary);
-		}),
-	);
-	const { reachable, reversePostorder } = traversal(fn.entry, successors);
-	return Object.freeze({
-		function: fn.id,
-		cfgVersion: fn.versions.cfg,
-		exceptionFlowVersion: 0,
-		successors,
-		predecessors,
-		reachable: Object.freeze(reachable),
-		reversePostorder: Object.freeze(reversePostorder),
-	});
-}
-
 function buildControlFlowBundle(
 	fn: CoreFunctionStore,
 	scratch: CoreAnalysisScratchPool,
 ): CoreControlFlowBundle {
-	const includesExceptions = fn.handlerBlockCount > 0;
-	const structural = buildStructural(fn, includesExceptions);
+	const ordinaryStructural = buildStructural(fn);
 	let ordinary: CoreControlFlow | undefined;
+	let structural: CoreStructuralControlFlow | undefined;
 	let exceptional: CoreControlFlow | undefined;
+	let structuralExceptionFlowVersion = -1;
+	let structuralMemoryEffectsVersion = -1;
+	const ordinaryFlow = (): CoreControlFlow => {
+		ordinary ??= buildFromStructural(fn, ordinaryStructural, false, scratch);
+		return ordinary;
+	};
+	const exceptionalStructural = (): CoreStructuralControlFlow => {
+		if (fn.handlerBlockCount === 0) return ordinaryStructural;
+		const exceptionFlowVersion = fn.versions.exceptionFlow;
+		const memoryEffectsVersion = fn.versions.memoryEffects;
+		if (
+			structural === undefined ||
+			structuralExceptionFlowVersion !== exceptionFlowVersion ||
+			structuralMemoryEffectsVersion !== memoryEffectsVersion
+		) {
+			structural = buildExceptionalStructural(fn, ordinaryStructural);
+			exceptional = undefined;
+			structuralExceptionFlowVersion = exceptionFlowVersion;
+			structuralMemoryEffectsVersion = memoryEffectsVersion;
+		}
+		return structural;
+	};
 	return Object.freeze({
-		structural,
-		ordinary() {
-			ordinary ??= buildFromStructural(
-				fn,
-				includesExceptions ? withoutExceptionalEdges(fn, structural) : structural,
-				false,
-				scratch,
-			);
-			return ordinary;
+		get structural() {
+			return exceptionalStructural();
 		},
+		ordinary: ordinaryFlow,
 		exceptional() {
-			if (!includesExceptions) return this.ordinary();
-			exceptional ??= buildFromStructural(fn, structural, true, scratch);
+			if (fn.handlerBlockCount === 0) return ordinaryFlow();
+			const currentStructural = exceptionalStructural();
+			exceptional ??= buildFromStructural(fn, currentStructural, true, scratch);
 			return exceptional;
 		},
 	});
@@ -745,47 +748,12 @@ export const CORE_CONTROL_FLOW_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreContr
 	{
 		key: "control-flow-bundle",
 		scope: "function",
-		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
+		functionDependencies: ["cfg"],
 		compute({ program, request, scratch }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			return buildControlFlowBundle(program.function(request.function), scratch);
 		},
 	};
-
-export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> = {
-	key: "control-flow",
-	scope: "function",
-	functionDependencies: ["cfg"],
-	compute({ request, get }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis");
-		return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary();
-	},
-};
-
-export const CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreStructuralControlFlow> =
-	{
-		key: "structural-control-flow",
-		scope: "function",
-		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ request, get }) {
-			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).structural;
-		},
-	};
-
-export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
-	{
-		key: "exception-control-flow",
-		scope: "function",
-		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ request, get }) {
-			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-		},
-	};
-
-export const CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS =
-	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS;
 
 class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 	override get(value: CoreValueId): CoreValueId {
@@ -920,13 +888,13 @@ export const CORE_CANONICAL_VALUE_ROOTS_ANALYSIS: CoreAnalysisDefinition<
 > = {
 	key: "canonical-value-roots",
 	scope: "function",
-	functionDependencies: ["body", "cfg", "exceptionFlow"],
+	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	compute({ program, request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
 		const fn = program.function(request.function);
 		return coreCanonicalValueRoots(
 			fn,
-			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+			get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 		);
 	},
 };

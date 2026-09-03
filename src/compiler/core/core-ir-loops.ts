@@ -1,7 +1,7 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
@@ -544,7 +544,7 @@ export const CORE_LOOP_INDUCTION_ANALYSIS: CoreAnalysisDefinition<CoreLoopInduct
 			const kinds = get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request);
 			return analyzeCoreLoopInductions(
 				fn,
-				get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
 				(value) => kinds.exactScalar(value),
 			);

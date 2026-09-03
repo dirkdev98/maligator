@@ -15,7 +15,7 @@ import {
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
-import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type {
 	CoreFunctionId,
@@ -516,7 +516,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
-			const cfg = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
+			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			const closedGlobals = new Set(context.data.singleAssignmentGlobalSlots);
 			const stores = new Map<
 				number,
