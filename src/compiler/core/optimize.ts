@@ -7,6 +7,7 @@ import {
 } from "./core-function-optimization-session.ts";
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
 import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
+import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
@@ -158,6 +159,7 @@ export function optimizeCore(
 	}
 	const functionResources = new CoreFunctionOptimizationResources(compilation.program);
 	const functionPhaseTimes = new Map<CoreOptimizationPhase, number>();
+	const localPlanInputs: Array<CoreLocalOptimizationPlanInput> = [];
 	const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
 		if (!reportBuilder.collectsPhases) return run();
 		const startedAt = Date.now();
@@ -171,17 +173,19 @@ export function optimizeCore(
 		}
 	};
 	for (const functionId of compilation.program.functionIds()) {
-		new CoreFunctionOptimizationSession(
-			compilation.program,
-			compilation.context,
-			reportBuilder,
-			functionResources,
-			functionId,
-			{
-				verification: options.verification,
-				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-			},
-		).optimizePrimary(runFunctionPhase);
+		localPlanInputs.push(
+			new CoreFunctionOptimizationSession(
+				compilation.program,
+				compilation.context,
+				reportBuilder,
+				functionResources,
+				functionId,
+				{
+					verification: options.verification,
+					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+				},
+			).optimizePrimary(runFunctionPhase),
+		);
 	}
 	for (const phase of [
 		"post-barrier-local-optimization",
@@ -243,6 +247,7 @@ export function optimizeCore(
 		{
 			context: compilation.context,
 			budgets: profile.specializationBudgets,
+			localInputs: localPlanInputs,
 			...(reportBuilder.collectsPhases
 				? {
 						onPhase(phase: "discovery" | "selection", elapsedMs: number) {
@@ -250,7 +255,9 @@ export function optimizeCore(
 								phase === "discovery"
 									? "specialization-discovery"
 									: "specialization-selection",
-								elapsedMs,
+								phase === "discovery"
+									? elapsedMs + (functionPhaseTimes.get("specialization-discovery") ?? 0)
+									: elapsedMs,
 							);
 						},
 					}

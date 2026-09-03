@@ -3,9 +3,14 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
+import {
+	buildCoreLocalOptimizationPlanInput,
+	buildCoreOptimizationPlan,
+	coreLocalSpecializationFeatureIndex,
+} from "../src/compiler/core/core-ir-region-selection.ts";
 import {
 	corePlanAdmissionMode,
 	verifyCoreOptimizationPlan,
@@ -517,6 +522,45 @@ describe("late Core specialization plan", () => {
 
 		expect(functions).toBe(1);
 		expect(candidates).toBeGreaterThan(0);
+	});
+
+	it("reuses current local planning inputs and rebuilds stale ones", () => {
+		const { program, function: functionId } = numericProgram();
+		const prepared = planning(program, [functionId]);
+		const input = buildCoreLocalOptimizationPlanInput(
+			program,
+			prepared.analyses,
+			coreLocalSpecializationFeatureIndex(program),
+			functionId,
+			prepared.context,
+		);
+		const currentReport = new CoreOptimizationReportBuilder(program, "full");
+		const current = buildCoreOptimizationPlan(
+			program,
+			new CoreAnalysisManager(program, prepared.context, currentReport),
+			prepared.summaries,
+			[functionId],
+			{ context: prepared.context, localInputs: [input] },
+		);
+
+		expect(current).toEqual(prepared.plan);
+		expect(currentReport.finish(program, current).analyses).toEqual([]);
+
+		const editor = CoreEditor.open(program, functionId);
+		const unreachable = editor.createBlock();
+		editor.setTerminator(unreachable, { kind: "unreachable" });
+		editor.commit();
+		const staleReport = new CoreOptimizationReportBuilder(program, "full");
+		const stale = buildCoreOptimizationPlan(
+			program,
+			new CoreAnalysisManager(program, prepared.context, staleReport),
+			prepared.summaries,
+			[functionId],
+			{ context: prepared.context, localInputs: [input] },
+		);
+
+		expect(stale.blockOrders[0]?.omittedBlocks).toContain(unreachable);
+		expect(staleReport.finish(program, stale).analyses.length).toBeGreaterThan(0);
 	});
 
 	it("rejects numeric fusion when the intermediate has multiple uses", () => {

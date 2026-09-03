@@ -42,13 +42,14 @@ import type {
 } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type {
+	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
-import type { CoreProgram } from "./core-store.ts";
+import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type {
 	CoreTransformBudgetLimits,
@@ -66,7 +67,7 @@ export const DEFAULT_CORE_SPECIALIZATION_BUDGETS: CoreTransformBudgetLimits =
 		programCompilerWork: 32_768,
 	});
 
-interface PendingSpecialization {
+export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
 	readonly selection: CorePlanSpecialization;
 }
@@ -79,7 +80,61 @@ interface PendingDirectEntry {
 	readonly resultRepresentation: CorePlanRepresentation;
 }
 
-type PendingCandidate = PendingSpecialization | PendingDirectEntry;
+type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
+
+export interface CoreLocalCandidateSummary {
+	readonly kind: CoreLocalSpecializationCandidate["kind"];
+	readonly fanOut: number;
+}
+
+export interface CoreLocalOptimizationPlanInput {
+	readonly function: CoreFunctionId;
+	readonly scanned: boolean;
+	readonly candidateSummaries: ReadonlyArray<CoreLocalCandidateSummary>;
+	readonly pending: ReadonlyArray<CorePendingOptimizationCandidate>;
+	readonly blocks: ReadonlyArray<CoreBlockId>;
+	readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
+	readonly versions: Pick<
+		CoreFunctionVersions,
+		| "body"
+		| "cfg"
+		| "exceptionFlow"
+		| "memoryEffects"
+		| "representations"
+		| "specializationInputs"
+	>;
+	readonly dataVersion: number;
+}
+
+const LOCAL_SPECIALIZATION_OPCODES = Object.freeze([
+	"binary",
+	"call",
+	"callBuiltin",
+	"getIterator",
+	"iteratorStep",
+]);
+
+export function coreLocalSpecializationFeatureIndex(
+	program: CoreProgram,
+): CoreFunctionFeatureIndex {
+	const candidateOpcodes: Array<number> = [];
+	for (const opcode of LOCAL_SPECIALIZATION_OPCODES) {
+		const descriptor = program.registry.get(opcode);
+		if (descriptor !== undefined) candidateOpcodes[descriptor.id] = 1;
+	}
+	return new CoreFunctionFeatureIndex(program, candidateOpcodes);
+}
+
+function hasLocalSpecializationFeatures(
+	features: CoreFunctionFeatureIndex,
+	functionId: CoreFunctionId,
+): boolean {
+	return (
+		(features.get(functionId) &
+			(CORE_FUNCTION_HAS_ALLOCATIONS | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) !==
+		0
+	);
+}
 
 function isPendingDirectEntry(
 	candidate: PendingCandidate,
@@ -322,7 +377,7 @@ function pendingLocalCandidate(
 	cfg: CoreControlFlow,
 	costModel: CoreGeneratedCodeCostModel,
 	context: CoreCompilationContext | undefined,
-): PendingSpecialization | undefined {
+): CorePendingOptimizationCandidate | undefined {
 	if (candidate.kind === "dense-array" && candidate.mode === "contained") {
 		return undefined;
 	}
@@ -918,12 +973,81 @@ function pendingLocalCandidate(
 	};
 }
 
+export function buildCoreLocalOptimizationPlanInput(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	features: CoreFunctionFeatureIndex,
+	functionId: CoreFunctionId,
+	context?: CoreCompilationContext,
+): CoreLocalOptimizationPlanInput {
+	const fn = program.function(functionId);
+	const scanned = hasLocalSpecializationFeatures(features, functionId);
+	const candidates = scanned
+		? analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			}).candidates
+		: Object.freeze([]);
+	const cfg = analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
+		scope: "function",
+		function: functionId,
+	});
+	const pending: Array<CorePendingOptimizationCandidate> = [];
+	if (candidates.length > 0) {
+		const costModel = coreGeneratedCodeCostModel(fn, cfg);
+		for (const candidate of candidates) {
+			const planned = pendingLocalCandidate(program, candidate, cfg, costModel, context);
+			if (planned !== undefined) pending.push(planned);
+		}
+	}
+	const blocks = Object.freeze([...cfg.reversePostorder]);
+	const included = new Set(blocks);
+	const versions = fn.versions;
+	return Object.freeze({
+		function: functionId,
+		scanned,
+		candidateSummaries: Object.freeze(
+			candidates.map(({ kind, fanOut }) => Object.freeze({ kind, fanOut })),
+		),
+		pending: Object.freeze(pending),
+		blocks,
+		omittedBlocks: Object.freeze(
+			[...fn.blockIds()].filter((block) => !included.has(block)),
+		),
+		versions: Object.freeze({
+			body: versions.body,
+			cfg: versions.cfg,
+			exceptionFlow: versions.exceptionFlow,
+			memoryEffects: versions.memoryEffects,
+			representations: versions.representations,
+			specializationInputs: versions.specializationInputs,
+		}),
+		dataVersion: program.programVersion("data"),
+	});
+}
+
+function localOptimizationPlanInputIsCurrent(
+	program: CoreProgram,
+	input: CoreLocalOptimizationPlanInput,
+): boolean {
+	const versions = program.function(input.function).versions;
+	return (
+		program.programVersion("data") === input.dataVersion &&
+		versions.body === input.versions.body &&
+		versions.cfg === input.versions.cfg &&
+		versions.exceptionFlow === input.versions.exceptionFlow &&
+		versions.memoryEffects === input.versions.memoryEffects &&
+		versions.representations === input.versions.representations &&
+		versions.specializationInputs === input.versions.specializationInputs
+	);
+}
+
 function guardedCallCandidates(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
-): ReadonlyArray<PendingSpecialization> {
-	const candidates: Array<PendingSpecialization> = [];
+): ReadonlyArray<CorePendingOptimizationCandidate> {
+	const candidates: Array<CorePendingOptimizationCandidate> = [];
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		for (const site of summaries.targets.outgoing(caller)) {
@@ -1090,10 +1214,11 @@ function claim(
 export interface BuildCoreOptimizationPlanOptions {
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly context?: CoreCompilationContext;
+	readonly localInputs?: ReadonlyArray<CoreLocalOptimizationPlanInput>;
 	readonly onPhase?: (phase: "discovery" | "selection", elapsedMs: number) => void;
 	readonly onLocalCandidates?: (
 		functionId: CoreFunctionId,
-		candidates: ReadonlyArray<CoreLocalSpecializationCandidate>,
+		candidates: ReadonlyArray<CoreLocalCandidateSummary>,
 	) => void;
 }
 
@@ -1107,40 +1232,32 @@ export function buildCoreOptimizationPlan(
 	const discoveryStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const live = new Set(liveFunctions);
 	const pending: Array<PendingCandidate> = [];
-	const candidateOpcodes: Array<number> = [];
-	for (const opcode of ["binary", "call", "callBuiltin", "getIterator", "iteratorStep"]) {
-		const descriptor = program.registry.get(opcode);
-		if (descriptor !== undefined) candidateOpcodes[descriptor.id] = 1;
-	}
-	const features = new CoreFunctionFeatureIndex(program, candidateOpcodes);
-	for (const functionId of liveFunctions) {
-		if (
-			(features.get(functionId) &
-				(CORE_FUNCTION_HAS_ALLOCATIONS | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) ===
-			0
-		)
-			continue;
-		const discovered = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
-		options.onLocalCandidates?.(functionId, discovered.candidates);
-		if (discovered.candidates.length === 0) continue;
-		const cfg = analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
-		const costModel = coreGeneratedCodeCostModel(program.function(functionId), cfg);
-		for (const candidate of discovered.candidates) {
-			const planned = pendingLocalCandidate(
-				program,
-				candidate,
-				cfg,
-				costModel,
-				options.context,
+	const localInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
+	for (const input of options.localInputs ?? []) {
+		if (localInputs.has(input.function)) {
+			throw new Error(
+				`Duplicate local optimization input for function ${input.function}`,
 			);
-			if (planned !== undefined) pending.push(planned);
 		}
+		localInputs.set(input.function, input);
+	}
+	let features: CoreFunctionFeatureIndex | undefined;
+	const resolvedLocalInputs: Array<CoreLocalOptimizationPlanInput> = [];
+	for (const functionId of liveFunctions) {
+		const prepared = localInputs.get(functionId);
+		const input =
+			prepared !== undefined && localOptimizationPlanInputIsCurrent(program, prepared)
+				? prepared
+				: buildCoreLocalOptimizationPlanInput(
+						program,
+						analyses,
+						(features ??= coreLocalSpecializationFeatureIndex(program)),
+						functionId,
+						options.context,
+					);
+		resolvedLocalInputs.push(input);
+		if (input.scanned) options.onLocalCandidates?.(functionId, input.candidateSummaries);
+		pending.push(...input.pending);
 	}
 	pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
 	pending.push(...directEntryCandidates(program, summaries, live));
@@ -1227,23 +1344,13 @@ export function buildCoreOptimizationPlan(
 		version: corePlanVersionStamp(program),
 		liveFunctions: Object.freeze([...liveFunctions]),
 		blockOrders: Object.freeze(
-			liveFunctions.map((functionId) => {
-				const fn = program.function(functionId);
-				const blocks = Object.freeze([
-					...analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-						scope: "function",
-						function: functionId,
-					}).reversePostorder,
-				]);
-				const included = new Set(blocks);
-				return Object.freeze({
-					function: functionId,
-					blocks,
-					omittedBlocks: Object.freeze(
-						[...fn.blockIds()].filter((block) => !included.has(block)),
-					),
-				});
-			}),
+			resolvedLocalInputs.map((input) =>
+				Object.freeze({
+					function: input.function,
+					blocks: input.blocks,
+					omittedBlocks: input.omittedBlocks,
+				}),
+			),
 		),
 		directEntries: Object.freeze(directEntries),
 		recipes: buildCoreSpecializationRecipeTable(specializations),

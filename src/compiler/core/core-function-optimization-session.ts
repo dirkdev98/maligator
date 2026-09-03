@@ -2,6 +2,11 @@ import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { CoreFunctionFeatureIndex } from "./core-function-features.ts";
+import {
+	buildCoreLocalOptimizationPlanInput,
+	coreLocalSpecializationFeatureIndex,
+} from "./core-ir-region-selection.ts";
+import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import { CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
@@ -31,11 +36,13 @@ export interface CoreFunctionOptimizationSessionOptions {
 export class CoreFunctionOptimizationResources {
 	readonly localRules: CoreLocalRuleRegistry;
 	readonly featureIndex: CoreFunctionFeatureIndex;
+	readonly specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
 
 	constructor(program: CoreProgram) {
 		this.localRules = new CoreLocalRuleRegistry(program);
 		this.featureIndex = new CoreFunctionFeatureIndex(program, this.localRules.dispatch);
+		this.specializationFeatureIndex = coreLocalSpecializationFeatureIndex(program);
 	}
 
 	claimPrimary(functionId: CoreFunctionId): void {
@@ -48,7 +55,11 @@ export class CoreFunctionOptimizationResources {
 
 export class CoreFunctionOptimizationSession {
 	readonly functionId: CoreFunctionId;
+	readonly #program: CoreProgram;
+	readonly #context: CoreCompilationContext;
+	readonly #analyses: CoreAnalysisManager;
 	readonly #passes: CorePassManager;
+	readonly #specializationFeatureIndex: CoreFunctionFeatureIndex;
 	#optimized = false;
 
 	constructor(
@@ -62,8 +73,11 @@ export class CoreFunctionOptimizationSession {
 		program.function(functionId);
 		resources.claimPrimary(functionId);
 		this.functionId = functionId;
-		const analyses = new CoreAnalysisManager(program, context, report);
-		this.#passes = new CorePassManager(program, context, analyses, report, {
+		this.#program = program;
+		this.#context = context;
+		this.#analyses = new CoreAnalysisManager(program, context, report);
+		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
+		this.#passes = new CorePassManager(program, context, this.#analyses, report, {
 			verification: options.verification,
 			optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
 			localOptimization: true,
@@ -73,7 +87,9 @@ export class CoreFunctionOptimizationSession {
 		});
 	}
 
-	optimizePrimary(runPhase: CoreFunctionOptimizationPhaseRunner): void {
+	optimizePrimary(
+		runPhase: CoreFunctionOptimizationPhaseRunner,
+	): CoreLocalOptimizationPlanInput {
 		if (this.#optimized) {
 			throw new Error(`Core function ${this.functionId} session already optimized`);
 		}
@@ -105,5 +121,14 @@ export class CoreFunctionOptimizationSession {
 				false,
 			);
 		});
+		return runPhase("specialization-discovery", () =>
+			buildCoreLocalOptimizationPlanInput(
+				this.#program,
+				this.#analyses,
+				this.#specializationFeatureIndex,
+				this.functionId,
+				this.#context,
+			),
+		);
 	}
 }
