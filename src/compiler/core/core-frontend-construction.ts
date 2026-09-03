@@ -11,6 +11,7 @@ import type {
 	CoreEdge,
 	CoreFunctionId,
 	CoreFunctionMetadata,
+	CoreInstructionId,
 	CoreInstructionAttributes,
 	CoreTerminatorInput,
 	CoreValueId,
@@ -48,12 +49,44 @@ export interface CoreConstructionFunction {
 	};
 }
 
+type VirtualPhiId = number & { readonly __virtualPhiId: unique symbol };
+type ConstructionValue = CoreValueId | VirtualPhiId;
+
+class DefinitionTable {
+	readonly #latest = new Map<number, number>();
+	readonly #versions: Array<number> = [];
+	readonly #values: Array<ConstructionValue> = [];
+	readonly #previous: Array<number> = [];
+	#version = 0;
+
+	get version(): number {
+		return this.#version;
+	}
+
+	get(variable: number, version = this.#version): ConstructionValue | undefined {
+		let revision = this.#latest.get(variable) ?? -1;
+		while (revision >= 0 && this.#versions[revision]! > version) {
+			revision = this.#previous[revision]!;
+		}
+		return revision < 0 ? undefined : this.#values[revision];
+	}
+
+	set(variable: number, value: ConstructionValue): void {
+		this.#version++;
+		const revision = this.#values.length;
+		this.#versions.push(this.#version);
+		this.#values.push(value);
+		this.#previous.push(this.#latest.get(variable) ?? -1);
+		this.#latest.set(variable, revision);
+	}
+}
+
 interface ConstructionState {
 	readonly core: CoreBlockId;
 	readonly isEntry: boolean;
-	readonly definitions: Map<number, CoreValueId>;
-	readonly entryValues: Map<number, CoreValueId>;
-	readonly parameterVariables: Array<number>;
+	readonly definitions: DefinitionTable;
+	readonly entryValues: Map<number, ConstructionValue>;
+	readonly materializedPhis: Array<VirtualPhiId>;
 	terminator?: TerminatorDraft;
 	handler?: HandlerDraft;
 	exceptionValue?: CoreValueId;
@@ -61,7 +94,17 @@ interface ConstructionState {
 
 interface ValueEnvironment {
 	readonly state: ConstructionState;
-	readonly definitions: ReadonlyMap<number, CoreValueId>;
+	readonly version: number;
+}
+
+interface VirtualPhi {
+	readonly state: ConstructionState;
+	readonly variable: number;
+}
+
+interface DeferredOperands {
+	readonly instruction: CoreInstructionId;
+	readonly inputs: ReadonlyArray<ConstructionValue>;
 }
 
 type TargetReference =
@@ -82,7 +125,7 @@ type TerminatorDraft =
 	  }
 	| {
 			readonly kind: "branch";
-			readonly condition: CoreValueId;
+			readonly condition: ConstructionValue;
 			readonly consequent: TargetReference;
 			readonly alternate: TargetReference;
 			readonly environment: ValueEnvironment;
@@ -90,7 +133,7 @@ type TerminatorDraft =
 	  }
 	| {
 			readonly kind: "return" | "throw";
-			readonly value: CoreValueId;
+			readonly value: ConstructionValue;
 			readonly sourcePosition?: number;
 	  }
 	| { readonly kind: "unreachable" };
@@ -103,7 +146,7 @@ interface HandlerDraft {
 interface PendingConditional {
 	readonly instruction: Extract<CompilerInstruction, { type: "jumpIf" }>;
 	readonly state: ConstructionState;
-	readonly condition: CoreValueId;
+	readonly condition: ConstructionValue;
 	readonly sourcePosition?: number;
 }
 
@@ -191,7 +234,19 @@ function immediateOperand(
 }
 
 function valueEnvironment(state: ConstructionState): ValueEnvironment {
-	return { state, definitions: new Map(state.definitions) };
+	return { state, version: state.definitions.version };
+}
+
+function virtualPhiId(index: number): VirtualPhiId {
+	return (-index - 1) as VirtualPhiId;
+}
+
+function virtualPhiIndex(value: VirtualPhiId): number {
+	return -(value as number) - 1;
+}
+
+function isVirtualPhi(value: ConstructionValue): value is VirtualPhiId {
+	return value < 0;
 }
 
 function localVariable(index: number): number {
@@ -276,10 +331,19 @@ export class DirectCoreFunctionConstruction {
 	readonly #builder: CoreFunctionBuilder;
 	readonly #states: Array<ConstructionState> = [];
 	readonly #blocks: Array<BlockEmitter> = [];
+	readonly #virtualPhis: Array<VirtualPhi> = [];
+	readonly #phiAliases: Array<ConstructionValue | undefined> = [];
+	readonly #deferredOperands: Array<DeferredOperands> = [];
 	readonly #activeHandlers: Array<Extract<CompilerInstruction, { type: "tryBegin" }>> =
 		[];
 	readonly #prelude: ConstructionState;
 	readonly #entry: CoreBlockId;
+	#placeholderValue: CoreValueId | undefined;
+	#virtualPhisCollapsed = 0;
+	#materializedBlockParameters = 0;
+	#edgeArgumentsEmitted = 0;
+	#aliasResolutions = 0;
+	#maximumUnresolvedPhiDepth = 0;
 	#sourcePosition: number | undefined;
 
 	constructor(program: CoreProgram, fn: CoreConstructionFunction) {
@@ -460,8 +524,18 @@ export class DirectCoreFunctionConstruction {
 			environment: valueEnvironment(this.#prelude),
 		};
 
-		this.#propagateEntryVariables();
+		this.#resolveVirtualPhis();
+		this.#patchDeferredOperands();
 		this.#materializeControlFlow();
+		this.#builder.program._recordConstructionStatistics({
+			virtualPhisCreated: this.#virtualPhis.length,
+			virtualPhisCollapsed: this.#virtualPhisCollapsed,
+			materializedBlockParameters: this.#materializedBlockParameters,
+			edgeArgumentsEmitted: this.#edgeArgumentsEmitted,
+			definitionSnapshotEntriesCopied: 0,
+			aliasResolutions: this.#aliasResolutions,
+			maximumUnresolvedPhiDepth: this.#maximumUnresolvedPhiDepth,
+		});
 		this.#builder.configureFunction({
 			isGenerator: this.#fn.isGenerator === true,
 			isAsync: this.#fn.isAsync === true,
@@ -499,9 +573,9 @@ export class DirectCoreFunctionConstruction {
 		const state: ConstructionState = {
 			core,
 			isEntry,
-			definitions: new Map(),
+			definitions: new DefinitionTable(),
 			entryValues: new Map(),
-			parameterVariables: [],
+			materializedPhis: [],
 		};
 		this.#states.push(state);
 		return state;
@@ -580,7 +654,7 @@ export class DirectCoreFunctionConstruction {
 			throw new Error(`Cannot emit structural ${instruction.type} as a Core instruction`);
 		}
 		const destinations = definedVariables(instruction);
-		const inputs: Array<CoreValueId> = [];
+		const inputs: Array<ConstructionValue> = [];
 		let expandedImmediates = false;
 		if ("registers" in instruction) {
 			for (
@@ -599,10 +673,15 @@ export class DirectCoreFunctionConstruction {
 				expandedImmediates = true;
 			}
 		}
-		const outputs = this.#builder.appendInstruction(
+		const hasVirtualInputs = inputs.some(isVirtualPhi);
+		const inserted = this.#builder.editor.appendInstruction(
 			state.core,
 			instruction.type,
-			inputs,
+			hasVirtualInputs
+				? inputs.map((input) =>
+						isVirtualPhi(input) ? this.#ensurePlaceholderValue() : input,
+					)
+				: (inputs as ReadonlyArray<CoreValueId>),
 			{
 				outputCount: destinations.length,
 				attributes: instructionAttributes(instruction, expandedImmediates),
@@ -611,8 +690,11 @@ export class DirectCoreFunctionConstruction {
 					: { sourcePosition: this.#sourcePosition }),
 			},
 		);
+		if (hasVirtualInputs) {
+			this.#deferredOperands.push({ instruction: inserted.instruction, inputs });
+		}
 		for (const [index, variable] of destinations.entries()) {
-			const output = outputs[index]!;
+			const output = inserted.outputs[index]!;
 			state.definitions.set(variable, output);
 		}
 	}
@@ -649,11 +731,22 @@ export class DirectCoreFunctionConstruction {
 		return output!;
 	}
 
-	#read(state: ConstructionState, variable: number): CoreValueId {
+	#ensurePlaceholderValue(): CoreValueId {
+		if (this.#placeholderValue !== undefined) return this.#placeholderValue;
+		const [value] = this.#builder.appendInstruction(
+			this.#prelude.core,
+			"createUndefined",
+			[],
+		);
+		this.#placeholderValue = value!;
+		return value!;
+	}
+
+	#read(state: ConstructionState, variable: number): ConstructionValue {
 		return state.definitions.get(variable) ?? this.#readEntry(state, variable);
 	}
 
-	#readEntry(state: ConstructionState, variable: number): CoreValueId {
+	#readEntry(state: ConstructionState, variable: number): ConstructionValue {
 		const existing = state.entryValues.get(variable);
 		if (existing !== undefined) return existing;
 		if (state.isEntry) {
@@ -666,10 +759,11 @@ export class DirectCoreFunctionConstruction {
 			state.definitions.set(variable, undefinedValue!);
 			return undefinedValue!;
 		}
-		const parameter = this.#builder.appendBlockParameter(state.core);
-		state.entryValues.set(variable, parameter);
-		state.parameterVariables.push(variable);
-		return parameter;
+		const phi = virtualPhiId(this.#virtualPhis.length);
+		this.#virtualPhis.push({ state, variable });
+		this.#phiAliases.push(undefined);
+		state.entryValues.set(variable, phi);
+		return phi;
 	}
 
 	#ensureExceptionParameter(state: ConstructionState): CoreValueId {
@@ -713,9 +807,12 @@ export class DirectCoreFunctionConstruction {
 		return emitter.entry;
 	}
 
-	#resolveEnvironment(environment: ValueEnvironment, variable: number): CoreValueId {
+	#resolveEnvironment(
+		environment: ValueEnvironment,
+		variable: number,
+	): ConstructionValue {
 		return (
-			environment.definitions.get(variable) ??
+			environment.state.definitions.get(variable, environment.version) ??
 			this.#readEntry(environment.state, variable)
 		);
 	}
@@ -756,38 +853,223 @@ export class DirectCoreFunctionConstruction {
 		return edges;
 	}
 
-	#propagateEntryVariables(): void {
+	#resolveVirtualPhis(): void {
 		const incoming = new Map<ConstructionState, Array<ValueEnvironment>>();
 		for (const edge of this.#allEdgeDrafts()) {
 			const environments = incoming.get(edge.target) ?? [];
 			environments.push(edge.environment);
 			incoming.set(edge.target, environments);
 		}
-		const queue: Array<ConstructionState> = [];
-		const queued = new Set<ConstructionState>();
-		const processedVariables = new Map<ConstructionState, number>();
-		const enqueue = (state: ConstructionState): void => {
-			if (queued.has(state)) return;
-			queued.add(state);
-			queue.push(state);
-		};
-		for (const state of this.#states) {
-			if (state.parameterVariables.length > 0) enqueue(state);
+		const mutableIncomingStarts: Array<number> = [];
+		const incomingValues: Array<ConstructionValue> = [];
+		for (let index = 0; index < this.#virtualPhis.length; index++) {
+			const phi = this.#virtualPhis[index]!;
+			mutableIncomingStarts[index] = incomingValues.length;
+			for (const environment of incoming.get(phi.state) ?? []) {
+				incomingValues.push(this.#resolveEnvironment(environment, phi.variable));
+			}
 		}
-		for (let index = 0; index < queue.length; index++) {
-			const target = queue[index]!;
-			queued.delete(target);
-			const processed = processedVariables.get(target) ?? 0;
-			const variables = target.parameterVariables.slice(processed);
-			processedVariables.set(target, target.parameterVariables.length);
-			for (const environment of incoming.get(target) ?? []) {
-				for (const variable of variables) {
-					const source = environment.state;
-					const before = source.parameterVariables.length;
-					this.#resolveEnvironment(environment, variable);
-					if (source.parameterVariables.length !== before) enqueue(source);
+		const count = this.#virtualPhis.length;
+		mutableIncomingStarts[count] = incomingValues.length;
+		const incomingStarts = Uint32Array.from(mutableIncomingStarts);
+
+		const reverseStarts = new Uint32Array(count + 1);
+		for (let index = 0; index < count; index++) {
+			for (
+				let position = incomingStarts[index]!;
+				position < incomingStarts[index + 1]!;
+				position++
+			) {
+				const value = incomingValues[position]!;
+				if (isVirtualPhi(value)) reverseStarts[virtualPhiIndex(value) + 1]!++;
+			}
+		}
+		for (let index = 1; index <= count; index++) {
+			reverseStarts[index]! += reverseStarts[index - 1]!;
+		}
+		const reversePositions = reverseStarts.slice(0, count);
+		const reverseEdges = new Uint32Array(reverseStarts[count]!);
+		for (let index = 0; index < count; index++) {
+			for (
+				let position = incomingStarts[index]!;
+				position < incomingStarts[index + 1]!;
+				position++
+			) {
+				const value = incomingValues[position]!;
+				if (!isVirtualPhi(value)) continue;
+				const dependency = virtualPhiIndex(value);
+				reverseEdges[reversePositions[dependency]!] = index;
+				reversePositions[dependency]!++;
+			}
+		}
+
+		const visited = new Uint8Array(count);
+		const order = new Uint32Array(count);
+		let orderLength = 0;
+		for (let start = 0; start < count; start++) {
+			if (visited[start] !== 0) continue;
+			const nodes = [start];
+			const positions = [incomingStarts[start]!];
+			visited[start] = 1;
+			while (nodes.length > 0) {
+				const stackPosition = positions.length - 1;
+				const node = nodes[stackPosition]!;
+				let next = positions[stackPosition]!;
+				const end = incomingStarts[node + 1]!;
+				let descended = false;
+				while (next < end) {
+					const value = incomingValues[next++]!;
+					positions[stackPosition] = next;
+					if (!isVirtualPhi(value)) continue;
+					const dependency = virtualPhiIndex(value);
+					if (visited[dependency] !== 0) continue;
+					visited[dependency] = 1;
+					nodes.push(dependency);
+					positions.push(incomingStarts[dependency]!);
+					descended = true;
+					break;
+				}
+				if (descended) continue;
+				order[orderLength++] = node;
+				nodes.pop();
+				positions.pop();
+			}
+		}
+
+		const componentByPhi = new Int32Array(count);
+		componentByPhi.fill(-1);
+		const nextMember = new Int32Array(count);
+		nextMember.fill(-1);
+		const componentHeads: Array<number> = [];
+		for (let position = orderLength - 1; position >= 0; position--) {
+			const start = order[position]!;
+			if (componentByPhi[start] !== -1) continue;
+			const component = componentHeads.length;
+			let head = -1;
+			const stack = [start];
+			componentByPhi[start] = component;
+			while (stack.length > 0) {
+				const node = stack.pop()!;
+				nextMember[node] = head;
+				head = node;
+				for (
+					let reverse = reverseStarts[node]!;
+					reverse < reverseStarts[node + 1]!;
+					reverse++
+				) {
+					const predecessor = reverseEdges[reverse]!;
+					if (componentByPhi[predecessor] !== -1) continue;
+					componentByPhi[predecessor] = component;
+					stack.push(predecessor);
 				}
 			}
+			componentHeads.push(head);
+		}
+
+		for (let component = componentHeads.length - 1; component >= 0; component--) {
+			this.#resolveVirtualPhiComponent(
+				componentHeads[component]!,
+				nextMember,
+				componentByPhi,
+				incomingStarts,
+				incomingValues,
+			);
+		}
+		this.#materializeVirtualPhis();
+	}
+
+	#resolveVirtualPhiComponent(
+		head: number,
+		nextMember: Int32Array,
+		componentByPhi: Int32Array,
+		incomingStarts: Uint32Array,
+		incomingValues: ReadonlyArray<ConstructionValue>,
+	): void {
+		const component = componentByPhi[head]!;
+		let replacement: ConstructionValue | undefined;
+		let conflicting = false;
+		let memberCount = 0;
+		for (let member = head; member >= 0; member = nextMember[member]!) {
+			memberCount++;
+			for (
+				let position = incomingStarts[member]!;
+				position < incomingStarts[member + 1]!;
+				position++
+			) {
+				const value = incomingValues[position]!;
+				if (isVirtualPhi(value) && componentByPhi[virtualPhiIndex(value)] === component) {
+					continue;
+				}
+				const concrete = this.#canonicalConstructionValue(value);
+				if (replacement === undefined) replacement = concrete;
+				else if (replacement !== concrete) conflicting = true;
+			}
+		}
+		if (!conflicting) {
+			this.#phiAliases[head] = replacement ?? this.#ensurePlaceholderValue();
+			for (let member = nextMember[head]!; member >= 0; member = nextMember[member]!) {
+				this.#phiAliases[member] = virtualPhiId(head);
+			}
+			this.#virtualPhisCollapsed += memberCount;
+			return;
+		}
+		for (let member = head; member >= 0; member = nextMember[member]!) {
+			const phi = this.#virtualPhis[member]!;
+			this.#phiAliases[member] = virtualPhiId(member);
+			phi.state.materializedPhis.push(virtualPhiId(member));
+			this.#materializedBlockParameters++;
+		}
+	}
+
+	#materializeVirtualPhis(): void {
+		for (let stateIndex = 0; stateIndex < this.#states.length; stateIndex++) {
+			const state = this.#states[stateIndex]!;
+			if (state.materializedPhis.length === 0) continue;
+			const parameters = this.#builder.appendBlockParameters(
+				state.core,
+				new Array(state.materializedPhis.length).fill({}),
+			);
+			for (let index = 0; index < parameters.length; index++) {
+				this.#phiAliases[virtualPhiIndex(state.materializedPhis[index]!)] =
+					parameters[index]!;
+			}
+		}
+	}
+
+	#canonicalConstructionValue(value: ConstructionValue): ConstructionValue {
+		if (!isVirtualPhi(value)) return value;
+		const path: Array<number> = [];
+		while (isVirtualPhi(value)) {
+			const index = virtualPhiIndex(value);
+			const alias = this.#phiAliases[index];
+			if (alias === undefined) throw new Error(`Unresolved virtual phi ${index}`);
+			if (alias === value) break;
+			path.push(index);
+			value = alias;
+		}
+		this.#aliasResolutions += path.length;
+		this.#maximumUnresolvedPhiDepth = Math.max(
+			this.#maximumUnresolvedPhiDepth,
+			path.length,
+		);
+		for (const index of path) this.#phiAliases[index] = value;
+		return value;
+	}
+
+	#coreValue(value: ConstructionValue): CoreValueId {
+		const resolved = this.#canonicalConstructionValue(value);
+		if (isVirtualPhi(resolved)) {
+			throw new Error(`Unmaterialized virtual phi ${virtualPhiIndex(resolved)}`);
+		}
+		return resolved;
+	}
+
+	#patchDeferredOperands(): void {
+		for (const deferred of this.#deferredOperands) {
+			this.#builder.editor.replaceOperands(
+				deferred.instruction,
+				deferred.inputs.map((input) => this.#coreValue(input)),
+			);
 		}
 	}
 
@@ -797,11 +1079,14 @@ export class DirectCoreFunctionConstruction {
 			environment: ValueEnvironment,
 		): CoreEdge => {
 			const target = this.#resolveTarget(reference);
+			const arguments_ = target.materializedPhis.map((phi) => {
+				const variable = this.#virtualPhis[virtualPhiIndex(phi)]!.variable;
+				return this.#coreValue(this.#resolveEnvironment(environment, variable));
+			});
+			this.#edgeArgumentsEmitted += arguments_.length;
 			const result: CoreEdge = {
 				block: target.core,
-				arguments: target.parameterVariables.map((variable) =>
-					this.#resolveEnvironment(environment, variable),
-				),
+				arguments: arguments_,
 			};
 			return result;
 		};
@@ -830,7 +1115,7 @@ export class DirectCoreFunctionConstruction {
 				case "branch":
 					terminator = {
 						kind: "branch",
-						condition: draft.condition,
+						condition: this.#coreValue(draft.condition),
 						consequent: edge(draft.consequent, draft.environment),
 						alternate: edge(draft.alternate, draft.environment),
 						...(draft.sourcePosition === undefined
@@ -842,7 +1127,7 @@ export class DirectCoreFunctionConstruction {
 				case "throw":
 					terminator = {
 						kind: draft.kind,
-						value: draft.value,
+						value: this.#coreValue(draft.value),
 						...(draft.sourcePosition === undefined
 							? {}
 							: { sourcePosition: draft.sourcePosition }),

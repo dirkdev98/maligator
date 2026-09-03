@@ -98,12 +98,7 @@ interface CoreFrontendContext {
 	directEvalDirtyTrackerBinding?: Binding;
 	directEvalPersistentScopeBinding?: Binding;
 
-	/**
-	 * The functions that we have compiled.
-	 *
-	 * The first function in this list is the initial entrypoint.
-	 */
-	functions: Array<CoreFrontendFunction>;
+	nextFunctionIndex: number;
 	stringConstants: Array<Array<number>>;
 	stringConstantToIndex: Map<string, number>;
 
@@ -778,7 +773,7 @@ export function constructSemanticProgramCore(
 			varEnvironmentIsGlobal: false,
 		},
 
-		functions: [],
+		nextFunctionIndex: 0,
 		stringConstants: [],
 		stringConstantToIndex: new Map(),
 
@@ -878,14 +873,6 @@ export function constructSemanticProgramCore(
 }
 
 function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
-	for (const fn of program.functions) {
-		const functionId = finishDirectCoreFunction(fn);
-		if (functionId !== fn.functionIndex) {
-			throw new Error(
-				`Finished Core function ${functionId} does not match semantic function ${fn.functionIndex}`,
-			);
-		}
-	}
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -972,8 +959,13 @@ function registerCoreFunction(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 ): void {
+	if (fn.functionIndex !== program.nextFunctionIndex) {
+		throw new Error(
+			`Core function ${fn.functionIndex} is out of sequence; expected ${program.nextFunctionIndex}`,
+		);
+	}
 	initializeDirectCoreFunction(program.core, fn);
-	program.functions.push(fn);
+	program.nextFunctionIndex++;
 }
 
 /**
@@ -1002,7 +994,7 @@ function compileMergedModuleInit(
 		// Switched to each module in turn so identifier resolution uses the right
 		// file's bindings while compiling that module's segment.
 		semanticFile: program.semantic.files[0]!,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 		isAsync: evaluationOrder.some((path) => {
@@ -1122,7 +1114,7 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 
 	const fn: CoreFrontendFunction = {
 		semanticFile: initFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 		isAsync: hasTopLevelAwait(initFile.ast),
@@ -1833,7 +1825,7 @@ function emitStoreProperty(
 function compileCjsEntryDriver(program: CoreFrontendContext, entryId: number) {
 	const fn: CoreFrontendFunction = {
 		semanticFile: program.semantic.files[0]!,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 
@@ -1869,7 +1861,7 @@ function compileCjsModuleWrapper(
 
 	const fn: CoreFrontendFunction = {
 		semanticFile: file,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 
@@ -2565,7 +2557,7 @@ function compileNewFunction(
 	const fnFile = foundFile ?? program.semantic.files[0]!;
 	const fn: CoreFrontendFunction = {
 		semanticFile: fnFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
 			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
@@ -2635,7 +2627,7 @@ function compileNewFunctionExpression(
 
 	const compiledFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
 			nameOverride ??
@@ -2955,7 +2947,7 @@ function buildStaticInitializer(
 ): number {
 	const initFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 		classContext: staticContext,
@@ -3019,7 +3011,7 @@ function buildInstanceInitializer(
 ): number {
 	const initFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 		classContext: {
@@ -3065,7 +3057,7 @@ function compileClass(
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
-	const classId = program.functions.length;
+	const classId = program.nextFunctionIndex;
 	const selfBinding = classNode.id
 		? fn.semanticFile.nodeToBinding.get(classNode.id)
 		: undefined;
@@ -3818,7 +3810,7 @@ function compileDefaultConstructor(
 ): number {
 	const ctorFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
-		functionIndex: program.functions.length,
+		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, name),
 		blocks: [],
 		classContext,
@@ -3893,6 +3885,13 @@ function endFunction(program: CoreFrontendContext, fn: CoreFrontendFunction) {
 			registers: [destinationRegister],
 		});
 		emitReturn(program, fn, block, destinationRegister);
+	}
+
+	const functionId = finishDirectCoreFunction(fn);
+	if (functionId !== fn.functionIndex) {
+		throw new Error(
+			`Finished Core function ${functionId} does not match semantic function ${fn.functionIndex}`,
+		);
 	}
 }
 
@@ -10956,7 +10955,7 @@ function compileObjectExpression(
 		homeObjectBinding = createCapturedBinding(
 			program,
 			fn,
-			`__home_${program.functions.length}`,
+			`__home_${program.nextFunctionIndex}`,
 		);
 		storeRegisterAtLocation(
 			cursor.block,

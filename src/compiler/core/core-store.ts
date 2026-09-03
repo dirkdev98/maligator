@@ -146,6 +146,16 @@ export interface CoreFunctionLiveStorageCounts {
 	readonly effectRefinements: number;
 }
 
+export interface CoreConstructionStatistics {
+	readonly virtualPhisCreated: number;
+	readonly virtualPhisCollapsed: number;
+	readonly materializedBlockParameters: number;
+	readonly edgeArgumentsEmitted: number;
+	readonly definitionSnapshotEntriesCopied: number;
+	readonly aliasResolutions: number;
+	readonly maximumUnresolvedPhiDepth: number;
+}
+
 export interface CoreBlockLayout {
 	readonly live: boolean;
 	readonly firstInstruction: number;
@@ -1022,31 +1032,46 @@ export class CoreFunctionStore {
 		spec: CoreBlockParameterSpec,
 		prepend: boolean,
 	): CoreValueId {
+		return this._appendBlockParameters(mutation, block, [spec], prepend)[0]!;
+	}
+
+	_appendBlockParameters(
+		mutation: CoreStoreMutation,
+		block: CoreBlockId,
+		specs: ReadonlyArray<CoreBlockParameterSpec>,
+		prepend: boolean,
+	): ReadonlyArray<CoreValueId> {
 		this.#assertEditing(mutation);
 		this.#requireBlock(block);
+		if (specs.length === 0) return [];
 		const start = this.#blockParameterStart[block]!;
 		const count = this.#blockParameterCount[block]!;
-		const index = prepend ? 0 : count;
-		const value = this.#createValue(spec.representation ?? "boxed", 0, block, index);
-		const values = new Array<CoreValueId>(count);
-		const roles = new Array<"value" | "exception">(count);
+		const added = specs.map((spec, offset) =>
+			this.#createValue(
+				spec.representation ?? "boxed",
+				0,
+				block,
+				(prepend ? 0 : count) + offset,
+			),
+		);
+		const values = new Array<CoreValueId>(count + added.length);
+		const roles = new Array<"value" | "exception">(count + added.length);
+		const existingOffset = prepend ? added.length : 0;
 		for (let parameter = 0; parameter < count; parameter++) {
-			values[parameter] = this.#blockParameterValues[start + parameter]!;
-			roles[parameter] =
+			values[existingOffset + parameter] = this.#blockParameterValues[start + parameter]!;
+			roles[existingOffset + parameter] =
 				BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + parameter]!]!;
 		}
-		if (prepend) {
-			values.unshift(value);
-			roles.unshift(spec.role ?? "value");
-		} else {
-			values.push(value);
-			roles.push(spec.role ?? "value");
+		const addedOffset = prepend ? 0 : count;
+		for (let offset = 0; offset < added.length; offset++) {
+			values[addedOffset + offset] = added[offset]!;
+			roles[addedOffset + offset] = specs[offset]!.role ?? "value";
 		}
 		for (const [parameterIndex, parameterValue] of values.entries()) {
 			this.#valueDefinitionIndex[parameterValue] = parameterIndex;
 		}
 		this.#replaceBlockParameterRange(block, values, roles);
-		return value;
+		return added;
 	}
 
 	_removeBlockParameter(
@@ -2025,6 +2050,15 @@ export class CoreProgram {
 	#literalTemplateData: ReadonlyArray<number> = [];
 	#sourcePositions: ReadonlyArray<CoreSourcePosition> = [];
 	#globalCount = 0;
+	readonly #constructionStatistics = {
+		virtualPhisCreated: 0,
+		virtualPhisCollapsed: 0,
+		materializedBlockParameters: 0,
+		edgeArgumentsEmitted: 0,
+		definitionSnapshotEntriesCopied: 0,
+		aliasResolutions: 0,
+		maximumUnresolvedPhiDepth: 0,
+	};
 	#sealed = false;
 
 	constructor(registry: CoreOpcodeRegistry, data: CoreProgramDataTables = {}) {
@@ -2090,6 +2124,10 @@ export class CoreProgram {
 		return this.#globalCount;
 	}
 
+	get constructionStatistics(): CoreConstructionStatistics {
+		return Object.freeze({ ...this.#constructionStatistics });
+	}
+
 	*functionIds(): Iterable<CoreFunctionId> {
 		for (let id = 0; id < this.#functions.length; id++) {
 			if (this.#functions[id] !== undefined) yield coreFunctionId(id);
@@ -2122,6 +2160,22 @@ export class CoreProgram {
 
 	_configureProgramData(data: CoreProgramDataTables): void {
 		this._setProgramData(CORE_STORE_MUTATION, data);
+	}
+
+	_recordConstructionStatistics(statistics: CoreConstructionStatistics): void {
+		if (this.#sealed) throw new Error("Core program is sealed");
+		this.#constructionStatistics.virtualPhisCreated += statistics.virtualPhisCreated;
+		this.#constructionStatistics.virtualPhisCollapsed += statistics.virtualPhisCollapsed;
+		this.#constructionStatistics.materializedBlockParameters +=
+			statistics.materializedBlockParameters;
+		this.#constructionStatistics.edgeArgumentsEmitted += statistics.edgeArgumentsEmitted;
+		this.#constructionStatistics.definitionSnapshotEntriesCopied +=
+			statistics.definitionSnapshotEntriesCopied;
+		this.#constructionStatistics.aliasResolutions += statistics.aliasResolutions;
+		this.#constructionStatistics.maximumUnresolvedPhiDepth = Math.max(
+			this.#constructionStatistics.maximumUnresolvedPhiDepth,
+			statistics.maximumUnresolvedPhiDepth,
+		);
 	}
 
 	seal(): SealedCoreProgram {

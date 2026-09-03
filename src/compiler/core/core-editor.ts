@@ -365,6 +365,25 @@ export class CoreEditor {
 		return this.#addBlockParameter(block, spec, false);
 	}
 
+	appendBlockParameters(
+		block: CoreBlockId,
+		specs: ReadonlyArray<CoreBlockParameterSpec>,
+	): ReadonlyArray<CoreValueId> {
+		this.#assertActive();
+		if (specs.length === 0) return [];
+		const values = this.function._appendBlockParameters(
+			this.#mutation,
+			block,
+			specs,
+			false,
+		);
+		this.#touchBlock(block);
+		this.#touchValues(values);
+		this.#mark("body", "cfg", "specializationInputs");
+		this.#edits++;
+		return values;
+	}
+
 	prependBlockParameter(
 		block: CoreBlockId,
 		spec: CoreBlockParameterSpec = {},

@@ -97,6 +97,7 @@ interface CompilerScaleSample {
 	readonly phases: CompilerScalePhases;
 	readonly optimizer: Pick<
 		CoreOptimizationReport,
+		| "construction"
 		| "input"
 		| "output"
 		| "phases"
@@ -702,6 +703,7 @@ async function compileSample(
 		wallMs,
 		phases,
 		optimizer: {
+			construction: report.construction,
 			input: report.input,
 			output: report.output,
 			phases: report.phases,

@@ -61,6 +61,13 @@ export class CoreFunctionBuilder {
 		return this.editor.appendBlockParameter(block, spec);
 	}
 
+	appendBlockParameters(
+		block: CoreBlockId,
+		specs: ReadonlyArray<CoreBlockParameterSpec>,
+	): ReadonlyArray<CoreValueId> {
+		return this.editor.appendBlockParameters(block, specs);
+	}
+
 	prependBlockParameter(
 		block: CoreBlockId,
 		spec: CoreBlockParameterSpec = {},

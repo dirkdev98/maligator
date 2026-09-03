@@ -3,7 +3,7 @@ import type {
 	CoreOptimizationPlanStatistics,
 } from "./core-ir-regions.ts";
 import type { CoreLocalOptimizerStatistics } from "./core-local-optimizer.ts";
-import type { CoreProgram } from "./core-store.ts";
+import type { CoreConstructionStatistics, CoreProgram } from "./core-store.ts";
 
 export type CoreInstrumentationMode = "off" | "phases" | "counters" | "full";
 
@@ -81,6 +81,7 @@ export interface CoreBudgetWorkReport {
 
 export interface CoreOptimizationReport {
 	readonly instrumentation: CoreInstrumentationMode;
+	readonly construction: CoreConstructionStatistics;
 	readonly input: CoreOptimizationCounts;
 	readonly output: CoreOptimizationCounts;
 	readonly phases: ReadonlyArray<CoreOptimizationPhaseReport>;
@@ -324,6 +325,16 @@ const EMPTY_COUNTS: CoreOptimizationCounts = Object.freeze({
 	values: 0,
 	facts: 0,
 	planCandidates: 0,
+});
+
+const EMPTY_CONSTRUCTION_STATISTICS: CoreConstructionStatistics = Object.freeze({
+	virtualPhisCreated: 0,
+	virtualPhisCollapsed: 0,
+	materializedBlockParameters: 0,
+	edgeArgumentsEmitted: 0,
+	definitionSnapshotEntriesCopied: 0,
+	aliasResolutions: 0,
+	maximumUnresolvedPhiDepth: 0,
 });
 
 function liveCounts(
@@ -910,6 +921,7 @@ export class CoreOptimizationReportBuilder {
 		if (this.instrumentation === "off") {
 			EMPTY_CORE_OPTIMIZATION_REPORT ??= Object.freeze({
 				instrumentation: "off",
+				construction: EMPTY_CONSTRUCTION_STATISTICS,
 				input: EMPTY_COUNTS,
 				output: EMPTY_COUNTS,
 				phases: Object.freeze([]),
@@ -952,6 +964,7 @@ export class CoreOptimizationReportBuilder {
 		);
 		return Object.freeze({
 			instrumentation: this.instrumentation,
+			construction: program.constructionStatistics,
 			input: this.#input,
 			output: Object.freeze({
 				functions: this.#checkpoints?.at(-1)?.functions.live ?? 0,
@@ -1044,6 +1057,10 @@ export function formatCoreOptimizationReport(
 					)
 					.join("; ");
 	return [
+		{
+			label: "Core construction",
+			value: `${report.construction.virtualPhisCreated} virtual phis/${report.construction.virtualPhisCollapsed} collapsed/${report.construction.materializedBlockParameters} materialized, ${report.construction.edgeArgumentsEmitted} edge arguments, ${report.construction.definitionSnapshotEntriesCopied} snapshot entries copied, ${report.construction.aliasResolutions} alias resolutions, depth ${report.construction.maximumUnresolvedPhiDepth}`,
+		},
 		{ label: "Core optimizer input", value: countsLine(report.input) },
 		{ label: "Core optimizer output", value: countsLine(report.output) },
 		{

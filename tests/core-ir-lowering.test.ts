@@ -138,20 +138,13 @@ describe("Core IR lowering", () => {
 			new Set(inspectCoreFunctionParameters(fn).keys()),
 			blockOrder,
 		);
-		const handlerRegisters = new Set(
-			[...fn.blockIds()].flatMap((block) => {
-				const handler = inspectCoreBlockHandler(fn, block);
-				if (handler === undefined) return [];
-				return inspectCoreBlockParameters(fn, handler.block)
-					.slice(1)
-					.map(({ value }) => allocation.registers.get(value))
-					.filter((register): register is number => register !== undefined);
-			}),
-		);
+		const object = inspectCoreFunctionParameters(fn)[0]!;
+		const objectRegister = allocation.registers.get(object);
+		expect(objectRegister).toBeDefined();
 
 		expect(
 			executionFunction.gc.safepoints.some(({ rootRegisters }) =>
-				rootRegisters.some((register) => handlerRegisters.has(register)),
+				rootRegisters.includes(objectRegister!),
 			),
 		).toBe(true);
 	});
