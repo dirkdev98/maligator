@@ -763,6 +763,27 @@ describe("Core store", () => {
 		expect(program.finalizeConstructionGeneration()).toBe(false);
 	});
 
+	it("transfers immutable attributes without local IDs across the dense barrier", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "constant", [], {
+			attributes: { literal: { kind: "number", value: 42 } },
+			outputRepresentations: ["i32"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const finished = builder.finish(entry);
+		const attributes = program
+			.function(finished.function)
+			.instructionAttributes(0 as never);
+
+		program.finalizeConstructionGeneration();
+
+		expect(program.function(finished.function).instructionAttributes(0 as never)).toBe(
+			attributes,
+		);
+	});
+
 	it("produces the same dense IR regardless of construction tombstone layout", () => {
 		const build = (withTombstones: boolean): string => {
 			const program = new CoreProgram(registry());

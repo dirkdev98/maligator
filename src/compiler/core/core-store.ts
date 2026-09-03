@@ -334,6 +334,8 @@ function freezeAttributes(
 	return freezeAttribute(attributes) as CoreInstructionAttributes;
 }
 
+const EMPTY_CORE_INSTRUCTION_ATTRIBUTES: CoreInstructionAttributes = Object.freeze({});
+
 function freezeEffects(effects: CoreInstructionEffects): CoreInstructionEffects {
 	return Object.freeze({
 		...effects,
@@ -476,11 +478,11 @@ function relocateAttributePath(
 			if (!Array.isArray(child) || !child.every(Number.isSafeInteger)) {
 				throw new Error(`Core attribute relocation ${path.join(".")} requires local IDs`);
 			}
-			replacement = child.map((id) => relocate(id as never));
+			replacement = Object.freeze(child.map((id) => relocate(id as never)));
 		}
 	}
 	if (replacement === child) return value;
-	return { ...value, [key]: replacement };
+	return Object.freeze({ ...value, [key]: replacement });
 }
 
 function relocateInstructionAttributes(
@@ -1178,7 +1180,7 @@ export class CoreFunctionStore {
 				Array.from({ length: resultCount }, (_, index) =>
 					this.valueRepresentation(this.#results[resultStart + index]!),
 				),
-				this.#instructionPayload[instruction] ?? {},
+				EMPTY_CORE_INSTRUCTION_ATTRIBUTES,
 				this.#instructionSourcePosition[instruction]! < 0
 					? undefined
 					: this.#instructionSourcePosition[instruction],
@@ -1330,17 +1332,15 @@ export class CoreFunctionStore {
 		for (const instruction of operations) {
 			const relocated = mappedInstruction(instruction);
 			const opcode = coreOpcodeId(this.#instructionOpcode[instruction]!);
-			dense.#instructionPayload[relocated] = freezeAttributes(
-				relocateInstructionAttributes(
-					this.#instructionPayload[instruction] ?? {},
-					this.registry.byId(opcode).attributeRelocations,
-					{
-						block: (id) => mappedBlock(coreBlockId(id)),
-						instruction: (id) => mappedInstruction(coreInstructionId(id)),
-						value: (id) => mappedValue(coreValueId(id)),
-						fact: (id) => mappedFact(coreFactId(id)),
-					},
-				),
+			dense.#instructionPayload[relocated] = relocateInstructionAttributes(
+				this.#instructionPayload[instruction] ?? EMPTY_CORE_INSTRUCTION_ATTRIBUTES,
+				this.registry.byId(opcode).attributeRelocations,
+				{
+					block: (id) => mappedBlock(coreBlockId(id)),
+					instruction: (id) => mappedInstruction(coreInstructionId(id)),
+					value: (id) => mappedValue(coreValueId(id)),
+					fact: (id) => mappedFact(coreFactId(id)),
+				},
 			);
 		}
 
