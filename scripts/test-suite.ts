@@ -660,10 +660,15 @@ const coldSmokeRun =
 		path.join(root, ".cache/test262/.git"),
 		path.join(root, ".cache/test262-cache.json"),
 	].some((entry) => !existsSync(entry));
-const smokeFuseMs = coldSmokeRun ? 240_000 : 20_000;
+// Cumulative gates must finish when earlier benchmark work evicts an exact artifact
+// while leaving the coarse cache roots that the standalone warm probe can inspect.
+const useColdSmokeBudget = coldSmokeRun || tier !== "smoke";
+const smokeFuseMs = useColdSmokeBudget ? 240_000 : 20_000;
 
 if (coldSmokeRun) {
 	console.log("[test-suite] cold caches detected; smoke fuse extended to four minutes");
+} else if (tier !== "smoke") {
+	console.log("[test-suite] cumulative gate uses four-minute smoke completion budget");
 }
 
 let failures = 0;
@@ -671,7 +676,7 @@ const smokeStarted = Date.now();
 const commands = [...smokeCommands, ...laterCommands];
 const progress = new CommandProgress("test-suite");
 progress.start(
-	`${tier} gate · ${commands.length} stages · ${coldSmokeRun ? "cold" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
+	`${tier} gate · ${commands.length} stages · ${coldSmokeRun ? "cold" : useColdSmokeBudget ? "completion" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
 );
 let stageIndex = 0;
 for (const command of smokeCommands) {

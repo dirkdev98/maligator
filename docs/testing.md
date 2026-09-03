@@ -107,11 +107,14 @@ the broad native and standards matrices. The much slower whole-compiler
 differential follows the regular check matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
-The smoke fuse measures its cumulative stages and fails if they exceed 20
-seconds on a warm run. It allows two minutes when the reusable native or Test262
-cache roots are missing. It does not kill a native build in progress because
-terminating an npm wrapper can orphan compiler descendants. Both budgets include
-cache population rather than silently excluding it from the measurement.
+The standalone smoke fuse measures its cumulative stages and fails if they exceed
+20 seconds on a warm run. It allows four minutes when the reusable native or
+Test262 cache roots are missing. The cumulative check and full gates always allow
+that four-minute smoke completion budget because preceding benchmark work can
+evict an exact artifact while leaving the coarse cache roots intact. It does not
+kill a native build in progress because terminating an npm wrapper can orphan
+compiler descendants. Both budgets include cache population rather than silently
+excluding it from the measurement.
 
 Smoke and check compile their standards selections to cached MalW and execute
 them in reusable standard runtimes. Full reruns the complete Test262 corpus and
