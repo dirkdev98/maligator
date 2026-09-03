@@ -916,7 +916,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 				const coldRuns = options.quick
 					? 1
 					: (options.coldRuns ?? (tier.tier === 13 ? 3 : 1));
-				const compare = options.compareInstrumentation || tier.tier === 13;
+				const compare = options.compareInstrumentation;
 				const sequence: Array<CoreInstrumentationMode> = [];
 				if (compare) {
 					for (let index = 0; index < warmRuns; index++) {
