@@ -304,6 +304,7 @@ const PHASE_KEYS = [
 	"construction-cleanup",
 	"initial-local-optimization",
 	"structural-cfg-optimization",
+	"dense-generation-barrier",
 	"proof-and-representation-optimization",
 	"memory-and-provenance-optimization",
 	"late-local-cleanup",

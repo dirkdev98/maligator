@@ -10,9 +10,11 @@ import {
 } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
+	CoreAttributeRelocation,
 	CoreBlockId,
 	CoreBlockParameterSpec,
 	CoreEffectRefinement,
+	CoreEdge,
 	CoreExceptionHandler,
 	CoreFact,
 	CoreFactId,
@@ -429,9 +431,74 @@ function terminatorOperands(payload: CoreTerminatorPayload): Array<CoreValueId> 
 	}
 }
 
+interface CoreLocalRelocations {
+	readonly block: (id: CoreBlockId) => CoreBlockId;
+	readonly instruction: (id: CoreInstructionId) => CoreInstructionId;
+	readonly value: (id: CoreValueId) => CoreValueId;
+	readonly fact: (id: CoreFactId) => CoreFactId;
+}
+
+function relocateAttributePath(
+	value: CoreAttributeValue,
+	path: ReadonlyArray<string>,
+	pathIndex: number,
+	relocation: CoreAttributeRelocation,
+	relocations: CoreLocalRelocations,
+): CoreAttributeValue {
+	if (value === undefined) return value;
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(
+			`Core attribute relocation ${path.join(".")} crosses non-object data`,
+		);
+	}
+	const key = path[pathIndex]!;
+	const child = (value as Readonly<Record<string, CoreAttributeValue>>)[key];
+	if (child === undefined) return value;
+	let replacement: CoreAttributeValue;
+	if (pathIndex + 1 < path.length) {
+		replacement = relocateAttributePath(
+			child,
+			path,
+			pathIndex + 1,
+			relocation,
+			relocations,
+		);
+	} else {
+		const relocate = relocations[relocation.kind] as (id: never) => number;
+		if (relocation.cardinality === "one") {
+			if (!Number.isSafeInteger(child)) {
+				throw new Error(
+					`Core attribute relocation ${path.join(".")} requires one local ID`,
+				);
+			}
+			replacement = relocate(child as never);
+		} else {
+			if (!Array.isArray(child) || !child.every(Number.isSafeInteger)) {
+				throw new Error(`Core attribute relocation ${path.join(".")} requires local IDs`);
+			}
+			replacement = child.map((id) => relocate(id as never));
+		}
+	}
+	if (replacement === child) return value;
+	return { ...value, [key]: replacement };
+}
+
+function relocateInstructionAttributes(
+	attributes: CoreInstructionAttributes,
+	contracts: ReadonlyArray<CoreAttributeRelocation>,
+	relocations: CoreLocalRelocations,
+): CoreInstructionAttributes {
+	let relocated: CoreAttributeValue = attributes;
+	for (const contract of contracts) {
+		relocated = relocateAttributePath(relocated, contract.path, 0, contract, relocations);
+	}
+	return relocated as CoreInstructionAttributes;
+}
+
 export class CoreFunctionStore {
 	readonly id: CoreFunctionId;
 	readonly registry: CoreOpcodeRegistry;
+	readonly generation: number;
 	#program: CoreProgram;
 	#isGenerator: boolean;
 	#isAsync: boolean;
@@ -442,6 +509,7 @@ export class CoreFunctionStore {
 	#bodyEntry: CoreBlockId | undefined;
 	#activeEditor = false;
 	#sealed = false;
+	#retired = false;
 
 	readonly #versions: Record<CoreChangeDomain, number> = {
 		body: 0,
@@ -543,11 +611,13 @@ export class CoreFunctionStore {
 		program: CoreProgram,
 		id: CoreFunctionId,
 		options: CoreFunctionOptions,
+		generation = program.generation,
 	) {
 		this.#requireMutation(mutation);
 		this.#program = program;
 		this.id = id;
 		this.registry = program.registry;
+		this.generation = generation;
 		this.#isGenerator = options.isGenerator === true;
 		this.#isAsync = options.isAsync === true;
 		this.#parameterCount = checkedCount(
@@ -720,6 +790,7 @@ export class CoreFunctionStore {
 	}
 
 	blockIds(): Iterable<CoreBlockId> {
+		this.#requireCurrentGeneration();
 		if (this.#sealedBlocks !== undefined) return this.#sealedBlocks;
 		if (!this.#activeEditor) {
 			if (this.#blockSnapshot === undefined) {
@@ -741,6 +812,7 @@ export class CoreFunctionStore {
 	}
 
 	instructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
+		this.#requireCurrentGeneration();
 		if (block === undefined && this.#sealedInstructions !== undefined)
 			return this.#sealedInstructions;
 		if (block === undefined && !this.#activeEditor) {
@@ -797,24 +869,29 @@ export class CoreFunctionStore {
 	}
 
 	*factIds(): Iterable<CoreFactId> {
+		this.#requireCurrentGeneration();
 		for (let id = 0; id < this.#facts.length; id++) {
 			if (this.#facts[id] !== undefined) yield coreFactId(id);
 		}
 	}
 
 	isBlockLive(id: CoreBlockId): boolean {
+		this.#requireCurrentGeneration();
 		return this.#blockLive[id] === 1;
 	}
 
 	isInstructionLive(id: CoreInstructionId): boolean {
+		this.#requireCurrentGeneration();
 		return this.#instructionLive[id] === 1;
 	}
 
 	isValueLive(id: CoreValueId): boolean {
+		this.#requireCurrentGeneration();
 		return this.#valueLive[id] === 1;
 	}
 
 	isFactLive(id: CoreFactId): boolean {
+		this.#requireCurrentGeneration();
 		return this.#facts[id] !== undefined;
 	}
 
@@ -970,6 +1047,370 @@ export class CoreFunctionStore {
 			facts: this.#liveFacts,
 			effectRefinements: this.#liveEffectRefinements,
 		};
+	}
+
+	_denseConstructionGenerationCopy(
+		mutation: CoreStoreMutation,
+		generation: number,
+	): CoreFunctionStore {
+		this.#requireMutation(mutation);
+		if (this.#activeEditor) {
+			throw new Error(`Core function ${this.id} has an active editor`);
+		}
+		if (this.#sealed) throw new Error(`Core function ${this.id} is sealed`);
+		const dense = new CoreFunctionStore(
+			mutation,
+			this.#program,
+			this.id,
+			{
+				isGenerator: this.#isGenerator,
+				isAsync: this.#isAsync,
+				parameterCount: this.#parameterCount,
+				metadata: this.#metadata,
+			},
+			generation,
+		);
+		dense._beginEdit(mutation);
+		const blockMap = new Int32Array(this.blockCapacity);
+		const instructionMap = new Int32Array(this.instructionCapacity);
+		const valueMap = new Int32Array(this.valueCapacity);
+		const factMap = new Int32Array(this.factCapacity);
+		blockMap.fill(-1);
+		instructionMap.fill(-1);
+		valueMap.fill(-1);
+		factMap.fill(-1);
+		const mappedBlock = (block: CoreBlockId): CoreBlockId => {
+			const mapped = blockMap[block] ?? -1;
+			if (mapped < 0) throw new Error(`Core block ${block} was not relocated`);
+			return coreBlockId(mapped);
+		};
+		const mappedInstruction = (instruction: CoreInstructionId): CoreInstructionId => {
+			const mapped = instructionMap[instruction] ?? -1;
+			if (mapped < 0) {
+				throw new Error(`Core instruction ${instruction} was not relocated`);
+			}
+			return coreInstructionId(mapped);
+		};
+		const mappedValue = (value: CoreValueId): CoreValueId => {
+			const mapped = valueMap[value] ?? -1;
+			if (mapped < 0) throw new Error(`Core value ${value} was not relocated`);
+			return coreValueId(mapped);
+		};
+		const mappedFact = (fact: CoreFactId): CoreFactId => {
+			const mapped = factMap[fact] ?? -1;
+			if (mapped < 0) throw new Error(`Core fact ${fact} was not relocated`);
+			return coreFactId(mapped);
+		};
+
+		const blocks = [...this.blockIds()];
+		const operations: Array<CoreInstructionId> = [];
+		for (const block of blocks) {
+			const parameterStart = this.#blockParameterStart[block]!;
+			const parameterCount = this.#blockParameterCount[block]!;
+			const created = dense._createBlock(
+				mutation,
+				Array.from({ length: parameterCount }, (_, index) => {
+					const row = parameterStart + index;
+					const value = this.#blockParameterValues[row]!;
+					return {
+						representation: this.valueRepresentation(value),
+						role: BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[row]!]!,
+					};
+				}),
+			);
+			blockMap[block] = created.block;
+			for (let index = 0; index < parameterCount; index++) {
+				valueMap[this.#blockParameterValues[parameterStart + index]!] =
+					created.values[index]!;
+			}
+			for (const instruction of this.instructionIds(block)) {
+				if (this.instructionKind(instruction) === "operation") {
+					operations.push(instruction);
+				}
+			}
+		}
+
+		const pendingDependencies = new Int32Array(this.instructionCapacity);
+		const dependents = new Array<Array<CoreInstructionId> | undefined>(
+			this.instructionCapacity,
+		);
+		const ready: Array<CoreInstructionId> = [];
+		for (const instruction of operations) {
+			const dependencies = new Set<CoreInstructionId>();
+			const operandStart = this.#instructionOperandStart[instruction]!;
+			const operandCount = this.#instructionOperandCount[instruction]!;
+			for (let offset = 0; offset < operandCount; offset++) {
+				const value = this.#operands[operandStart + offset]!;
+				if ((valueMap[value] ?? -1) >= 0) continue;
+				if (this.#valueDefinitionKind[value] !== 1) {
+					throw new Error(`Core value ${value} has no live relocation source`);
+				}
+				const dependency = coreInstructionId(this.#valueDefinitionOwner[value]!);
+				if (this.instructionKind(dependency) !== "operation") {
+					throw new Error(`Core value ${value} is defined by a terminator`);
+				}
+				dependencies.add(dependency);
+			}
+			pendingDependencies[instruction] = dependencies.size;
+			if (dependencies.size === 0) ready.push(instruction);
+			for (const dependency of dependencies) {
+				const users = dependents[dependency] ?? [];
+				users.push(instruction);
+				dependents[dependency] = users;
+			}
+		}
+		let relocatedOperations = 0;
+		for (let cursor = 0; cursor < ready.length; cursor++) {
+			const instruction = ready[cursor]!;
+			const operandStart = this.#instructionOperandStart[instruction]!;
+			const operandCount = this.#instructionOperandCount[instruction]!;
+			const resultStart = this.#instructionResultStart[instruction]!;
+			const resultCount = this.#instructionResultCount[instruction]!;
+			const opcode = coreOpcodeId(this.#instructionOpcode[instruction]!);
+			const created = dense._insertOperation(
+				mutation,
+				mappedBlock(coreBlockId(this.#instructionBlock[instruction]!)),
+				undefined,
+				opcode,
+				Array.from({ length: operandCount }, (_, index) =>
+					mappedValue(this.#operands[operandStart + index]!),
+				),
+				Array.from({ length: resultCount }, (_, index) =>
+					this.valueRepresentation(this.#results[resultStart + index]!),
+				),
+				this.#instructionPayload[instruction] ?? {},
+				this.#instructionSourcePosition[instruction]! < 0
+					? undefined
+					: this.#instructionSourcePosition[instruction],
+				undefined,
+			);
+			instructionMap[instruction] = created.instruction;
+			for (let index = 0; index < resultCount; index++) {
+				valueMap[this.#results[resultStart + index]!] = created.results[index]!;
+			}
+			relocatedOperations++;
+			for (const dependent of dependents[instruction] ?? []) {
+				pendingDependencies[dependent] = pendingDependencies[dependent]! - 1;
+				if (pendingDependencies[dependent] === 0) ready.push(dependent);
+			}
+		}
+		if (relocatedOperations !== operations.length) {
+			throw new Error(`Core function ${this.id} has an instruction dependency cycle`);
+		}
+		for (const block of blocks) {
+			let before: CoreInstructionId | undefined;
+			const ordered = [...this.instructionIds(block)].filter(
+				(instruction) => this.instructionKind(instruction) === "operation",
+			);
+			for (let index = ordered.length - 1; index >= 0; index--) {
+				const instruction = mappedInstruction(ordered[index]!);
+				dense._moveInstruction(mutation, instruction, mappedBlock(block), before);
+				before = instruction;
+			}
+		}
+
+		for (const factId of this.factIds()) {
+			const fact = this.fact(factId);
+			factMap[factId] = dense._addFact(mutation, {
+				kind: fact.kind,
+				value: fact.value,
+				claims: fact.claims,
+				validity: fact.validity,
+				obligations: fact.obligations,
+				origin: fact.origin,
+			});
+		}
+		const readTerminator = (instruction: CoreInstructionId): CoreTerminatorPayload => {
+			const kind = this.instructionKind(instruction);
+			if (kind === "operation") {
+				throw new Error(`Core instruction ${instruction} is not a terminator`);
+			}
+			const operandStart = this.#instructionOperandStart[instruction]!;
+			const edgeStart = this.#instructionTerminatorEdgeStart[instruction]!;
+			const edge = (offset: number): CoreEdge => {
+				const row = edgeStart + offset;
+				const argumentStart = this.#terminatorEdgeArgumentStart[row]!;
+				const argumentCount = this.#terminatorEdgeArgumentCount[row]!;
+				return {
+					block: this.#terminatorEdgeBlock[row]!,
+					arguments: this.#operands.slice(argumentStart, argumentStart + argumentCount),
+				};
+			};
+			switch (kind) {
+				case "jump":
+					return { kind, edge: edge(0) };
+				case "branch":
+					return {
+						kind,
+						condition: this.#operands[operandStart]!,
+						consequent: edge(0),
+						alternate: edge(1),
+					};
+				case "guard":
+					return {
+						kind,
+						condition: this.#operands[operandStart]!,
+						fact: coreFactId(this.#instructionTerminatorFact[instruction]!),
+						success: edge(0),
+						fallback: edge(1),
+					};
+				case "switch": {
+					const edgeCount = this.#instructionTerminatorEdgeCount[instruction]!;
+					return {
+						kind,
+						discriminant: this.#operands[operandStart]!,
+						cases: Array.from({ length: edgeCount - 1 }, (_, index) => ({
+							value: this.#terminatorEdgeCaseValue[edgeStart + index]!,
+							edge: edge(index),
+						})),
+						default: edge(edgeCount - 1),
+					};
+				}
+				case "return":
+				case "throw":
+					return { kind, value: this.#operands[operandStart]! };
+				case "unreachable":
+					return { kind };
+			}
+		};
+		const relocateEdge = (edge: CoreEdge): CoreEdge => ({
+			block: mappedBlock(edge.block),
+			arguments: edge.arguments.map(mappedValue),
+		});
+		const relocateTerminator = (
+			payload: CoreTerminatorPayload,
+		): CoreTerminatorPayload => {
+			switch (payload.kind) {
+				case "jump":
+					return { kind: payload.kind, edge: relocateEdge(payload.edge) };
+				case "branch":
+					return {
+						kind: payload.kind,
+						condition: mappedValue(payload.condition),
+						consequent: relocateEdge(payload.consequent),
+						alternate: relocateEdge(payload.alternate),
+					};
+				case "guard":
+					return {
+						kind: payload.kind,
+						condition: mappedValue(payload.condition),
+						fact: mappedFact(payload.fact),
+						success: relocateEdge(payload.success),
+						fallback: relocateEdge(payload.fallback),
+					};
+				case "switch":
+					return {
+						kind: payload.kind,
+						discriminant: mappedValue(payload.discriminant),
+						cases: payload.cases.map(({ value, edge }) => ({
+							value,
+							edge: relocateEdge(edge),
+						})),
+						default: relocateEdge(payload.default),
+					};
+				case "return":
+				case "throw":
+					return { kind: payload.kind, value: mappedValue(payload.value) };
+				case "unreachable":
+					return { kind: payload.kind };
+			}
+		};
+		for (const block of blocks) {
+			const terminator = this.blockTerminator(block);
+			const relocated = dense._setTerminator(
+				mutation,
+				mappedBlock(block),
+				relocateTerminator(readTerminator(terminator)),
+				this.#instructionSourcePosition[terminator]! < 0
+					? undefined
+					: this.#instructionSourcePosition[terminator],
+			);
+			instructionMap[terminator] = relocated;
+		}
+		for (const instruction of operations) {
+			const relocated = mappedInstruction(instruction);
+			const opcode = coreOpcodeId(this.#instructionOpcode[instruction]!);
+			dense.#instructionPayload[relocated] = freezeAttributes(
+				relocateInstructionAttributes(
+					this.#instructionPayload[instruction] ?? {},
+					this.registry.byId(opcode).attributeRelocations,
+					{
+						block: (id) => mappedBlock(coreBlockId(id)),
+						instruction: (id) => mappedInstruction(coreInstructionId(id)),
+						value: (id) => mappedValue(coreValueId(id)),
+						fact: (id) => mappedFact(coreFactId(id)),
+					},
+				),
+			);
+		}
+
+		for (const factId of this.factIds()) {
+			const fact = this.fact(factId);
+			dense._replaceFact(mutation, mappedFact(factId), {
+				kind: fact.kind,
+				value: fact.value,
+				claims: fact.claims.map((claim) =>
+					claim.kind === "effect"
+						? { ...claim, instruction: mappedInstruction(claim.instruction) }
+						: { ...claim, subject: mappedValue(claim.subject) },
+				),
+				validity:
+					fact.validity.kind === "guard"
+						? {
+								...fact.validity,
+								instruction: mappedInstruction(fact.validity.instruction),
+							}
+						: fact.validity,
+				obligations: fact.obligations.map((obligation) =>
+					obligation.kind === "guard"
+						? {
+								...obligation,
+								instruction: mappedInstruction(obligation.instruction),
+							}
+						: obligation,
+				),
+				origin: fact.origin,
+			});
+		}
+		for (const instruction of operations) {
+			const refinement = this.instructionEffectRefinement(instruction);
+			if (refinement === undefined) continue;
+			dense._setInstructionEffectRefinement(mutation, mappedInstruction(instruction), {
+				effects: refinement.effects,
+				proof: mappedFact(refinement.proof),
+			});
+		}
+		for (const block of blocks) {
+			const handler = this.#blockHandlerBlock[block]!;
+			if (handler < 0) continue;
+			const argumentStart = this.#blockHandlerArgumentStart[block]!;
+			const argumentCount = this.#blockHandlerArgumentCount[block]!;
+			dense._setHandler(mutation, mappedBlock(block), {
+				block: mappedBlock(coreBlockId(handler)),
+				arguments: Array.from({ length: argumentCount }, (_, index) =>
+					mappedValue(this.#handlerArguments[argumentStart + index]!),
+				),
+			});
+		}
+		dense._finishFunction(
+			mutation,
+			mappedBlock(this.entry),
+			this.#bodyEntry === undefined ? undefined : mappedBlock(this.#bodyEntry),
+		);
+		dense.#activeEditor = false;
+		for (const domain of FUNCTION_DOMAINS) {
+			dense.#versions[domain] = this.#versions[domain] + 1;
+		}
+		dense.#featureVersion = this.#featureVersion + 1;
+		return dense;
+	}
+
+	_retireConstructionGeneration(mutation: CoreStoreMutation): void {
+		this.#requireMutation(mutation);
+		if (this.#activeEditor) {
+			throw new Error(`Core function ${this.id} has an active editor`);
+		}
+		this.#retired = true;
 	}
 
 	fact(id: CoreFactId): CoreFact {
@@ -2003,6 +2444,14 @@ export class CoreFunctionStore {
 			throw new Error("Core store mutation is private");
 	}
 
+	#requireCurrentGeneration(): void {
+		if (this.#retired) {
+			throw new Error(
+				`Core function ${this.id} belongs to retired generation ${this.generation}`,
+			);
+		}
+	}
+
 	#assertEditing(mutation: CoreStoreMutation): void {
 		this.#requireMutation(mutation);
 		if (!this.#activeEditor) throw new Error(`Core function ${this.id} has no editor`);
@@ -2024,6 +2473,7 @@ export class CoreFunctionStore {
 export class CoreProgram {
 	readonly registry: CoreOpcodeRegistry;
 	readonly #functions: Array<CoreFunctionStore | undefined> = [];
+	#generation = 0;
 	readonly #versions: Record<CoreProgramChangeDomain, number> = {
 		functions: 0,
 		data: 0,
@@ -2068,6 +2518,10 @@ export class CoreProgram {
 
 	get sealed(): boolean {
 		return this.#sealed;
+	}
+
+	get generation(): number {
+		return this.#generation;
 	}
 
 	get versions(): CoreProgramVersions {
@@ -2176,6 +2630,31 @@ export class CoreProgram {
 			this.#constructionStatistics.maximumUnresolvedPhiDepth,
 			statistics.maximumUnresolvedPhiDepth,
 		);
+	}
+
+	finalizeConstructionGeneration(): boolean {
+		if (this.#generation === 1) return false;
+		if (this.#sealed) {
+			throw new Error("Cannot finalize a sealed Core program construction generation");
+		}
+		const generation = 1;
+		for (let id = 0; id < this.#functions.length; id++) {
+			const fn = this.#functions[id];
+			if (fn !== undefined) {
+				const dense = fn._denseConstructionGenerationCopy(
+					CORE_STORE_MUTATION,
+					generation,
+				);
+				fn._retireConstructionGeneration(CORE_STORE_MUTATION);
+				this.#functions[id] = dense;
+			}
+		}
+		this.#programFlowFunctions.length = 0;
+		this.#programFlowDomainMasks.length = 0;
+		for (const domain of FUNCTION_DOMAINS) this.#functionVersions[domain]++;
+		for (const domain of PROGRAM_DOMAINS) this.#versions[domain]++;
+		this.#generation = generation;
+		return true;
 	}
 
 	seal(): SealedCoreProgram {

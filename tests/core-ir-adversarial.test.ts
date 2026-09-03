@@ -19,6 +19,7 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import {
 	inspectCoreBlockHandler,
 	inspectCoreBlockParameters,
+	inspectCoreFunctionParameters,
 	inspectCoreTerminatorPayload,
 } from "./helpers/core-inspection.ts";
 import { coreOperations } from "./helpers/core-inspection.ts";
@@ -127,7 +128,7 @@ describe("adversarial Core graphs", () => {
 			consequent: { block: left, arguments: [] },
 			alternate: { block: right, arguments: [] },
 		});
-		const [deadInLeft] = builder.appendInstruction(left, "createNumber", [], {
+		const [_deadInLeft] = builder.appendInstruction(left, "createNumber", [], {
 			attributes: { value: 99 },
 		});
 		const [leftValue] = builder.appendInstruction(left, "createF64", [], {
@@ -165,29 +166,39 @@ describe("adversarial Core graphs", () => {
 		const join = [...fn.blockIds()].find(
 			(block) => ordinaryPredecessorCount(optimized, fn, block) === 2,
 		)!;
+		const finalJoined = inspectCoreBlockParameters(fn, join)[0]!.value;
 		expect(inspectCoreBlockParameters(fn, join)).toEqual([
-			{ value: joined, representation: "f64", role: "value" },
+			{ value: finalJoined, representation: "f64", role: "value" },
 		]);
-		expect(fn.valueRepresentation(joined)).toBe("f64");
+		expect(fn.valueRepresentation(finalJoined)).toBe("f64");
 		const incoming = [...fn.blockIds()]
 			.flatMap((block) =>
 				coreTerminatorEdges(inspectCoreTerminatorPayload(fn, fn.blockTerminator(block))),
 			)
 			.filter((edge) => edge.block === join);
-		expect(incoming.map(({ arguments: arguments_ }) => arguments_)).toEqual([
-			[leftValue],
-			[rightValue],
-		]);
+		const f64Values = coreOperations(fn)
+			.filter(({ opcode }) => opcode === "createF64")
+			.map(({ outputs }) => outputs[0]!);
+		expect(incoming.map(({ arguments: arguments_ }) => arguments_)).toEqual(
+			f64Values.map((value) => [value]),
+		);
 		expect(opcodesOf(fn)).not.toContain("move");
-		expect(fn.isValueLive(deadInLeft!)).toBe(false);
-		expect(fn.fact(fact)).toMatchObject({
+		expect(
+			coreOperations(fn).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 99,
+			),
+		).toBe(false);
+		const relocatedFact = [...fn.factIds()]
+			.map((factId) => fn.fact(factId))
+			.find(({ kind }) => kind === "locked-primordials")!;
+		expect(relocatedFact).toMatchObject({
 			validity: { kind: "world", fact: "primordials.locked" },
 		});
 		expect(coreOperations(fn).find(({ opcode }) => opcode === "call")?.id).toBeDefined();
 		const call = coreOperations(fn).find(({ opcode }) => opcode === "call")!;
 		expect(fn.instructionEffectRefinement(call.id)).toEqual({
 			effects: REFINED_CALL_EFFECTS,
-			proof: fact,
+			proof: relocatedFact.id,
 		});
 	});
 
@@ -217,7 +228,7 @@ describe("adversarial Core graphs", () => {
 			alternate: { block: exit, arguments: [carried] },
 		});
 		const bodyCarried = values(builder, body)[0]!;
-		const [deadInBody] = builder.appendInstruction(body, "createNumber", [], {
+		const [_deadInBody] = builder.appendInstruction(body, "createNumber", [], {
 			attributes: { value: 77 },
 		});
 		const [step] = builder.appendInstruction(body, "createNumber", [], {
@@ -237,18 +248,31 @@ describe("adversarial Core graphs", () => {
 		const fn = optimized.function(finished.function);
 		const cfg = buildCoreControlFlow(optimized, finished.function);
 		expect(cfg.loops).toHaveLength(1);
-		expect(cfg.loops[0]).toMatchObject({ header, latches: new Set([body]) });
-		expect(inspectCoreBlockParameters(fn, header)).toEqual([
-			{ value: carried, representation: "f64", role: "value" },
+		const loop = cfg.loops[0]!;
+		const finalHeader = loop.header;
+		const finalBody = [...loop.latches][0]!;
+		const finalCarried = inspectCoreBlockParameters(fn, finalHeader)[0]!.value;
+		expect(inspectCoreBlockParameters(fn, finalHeader)).toEqual([
+			{ value: finalCarried, representation: "f64", role: "value" },
 		]);
-		expect(ordinaryPredecessorCount(optimized, fn, header)).toBe(2);
-		const bodyTerminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(body));
+		expect(ordinaryPredecessorCount(optimized, fn, finalHeader)).toBe(2);
+		const bodyTerminator = inspectCoreTerminatorPayload(
+			fn,
+			fn.blockTerminator(finalBody),
+		);
+		const finalNext = coreOperations(fn).find(
+			({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+		)!.outputs[0]!;
 		expect(bodyTerminator).toMatchObject({
 			kind: "jump",
-			edge: { block: header, arguments: [next] },
+			edge: { block: finalHeader, arguments: [finalNext] },
 		});
 		expect(opcodesOf(fn)).not.toContain("move");
-		expect(fn.isValueLive(deadInBody!)).toBe(false);
+		expect(
+			coreOperations(fn).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 77,
+			),
+		).toBe(false);
 	});
 
 	it("keeps irreducible control flow while canonicalizing its cyclic arguments", () => {
@@ -378,7 +402,7 @@ describe("adversarial Core graphs", () => {
 		]);
 		const input = values(builder, entry)[0]!;
 		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
-		const [deadInEntry] = builder.appendInstruction(entry, "createNumber", [], {
+		const [_deadInEntry] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 5 },
 		});
 		const [entryResult] = builder.appendInstruction(entry, "call", [callee!, callee!]);
@@ -405,25 +429,35 @@ describe("adversarial Core graphs", () => {
 		const optimized = optimizeVerified(program_, [finished.function]).compilation.program;
 		const fn = optimized.function(finished.function);
 		const cfg = buildCoreControlFlow(optimized, finished.function);
-		expect(inspectCoreBlockParameters(fn, handler).map(({ role }) => role)).toEqual([
+		const finalHandler = [...fn.blockIds()].find(
+			(block) => inspectCoreBlockParameters(fn, block)[0]?.role === "exception",
+		)!;
+		expect(inspectCoreBlockParameters(fn, finalHandler).map(({ role }) => role)).toEqual([
 			"exception",
 			"value",
 		]);
-		expect(inspectCoreBlockHandler(fn, entry)).toEqual({
-			block: handler,
-			arguments: [input],
-		});
-		expect(inspectCoreBlockHandler(fn, body)).toEqual({
-			block: handler,
-			arguments: [callee],
-		});
-		expect(
-			cfg.predecessors[handler]!.filter(({ kind }) => kind === "exceptional"),
-		).toHaveLength(2);
-		expect(cfg.predecessors[handler]!.every(({ kind }) => kind === "exceptional")).toBe(
-			true,
+		const protectedHandlers = [...fn.blockIds()]
+			.map((block) => inspectCoreBlockHandler(fn, block))
+			.filter((edge) => edge !== undefined);
+		const finalCallee = coreOperations(fn).find(
+			({ opcode }) => opcode === "createUndefined",
+		)!.outputs[0]!;
+		expect(protectedHandlers).toHaveLength(2);
+		expect(protectedHandlers.every((edge) => edge.block === finalHandler)).toBe(true);
+		expect(protectedHandlers.map(({ arguments: arguments_ }) => arguments_)).toEqual(
+			expect.arrayContaining([[inspectCoreFunctionParameters(fn)[0]!], [finalCallee]]),
 		);
-		expect(fn.isValueLive(deadInEntry!)).toBe(false);
+		expect(
+			cfg.predecessors[finalHandler]!.filter(({ kind }) => kind === "exceptional"),
+		).toHaveLength(2);
+		expect(
+			cfg.predecessors[finalHandler]!.every(({ kind }) => kind === "exceptional"),
+		).toBe(true);
+		expect(
+			coreOperations(fn).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 5,
+			),
+		).toBe(false);
 	});
 
 	it("keeps the resume dispatch of a terminal yield and of an await", () => {
@@ -531,7 +565,7 @@ describe("adversarial Core graphs", () => {
 		const yieldInstruction = coreOperations(generatorFn).find(
 			({ opcode }) => opcode === "yield",
 		)!;
-		expect(yieldInstruction.outputs).toEqual([sent, mode]);
+		expect(yieldInstruction.outputs).toHaveLength(2);
 		expect(yieldInstruction.attributes.terminal).toBe(true);
 		expect(
 			[...generatorFn.blockIds()].filter(
@@ -552,18 +586,17 @@ describe("adversarial Core graphs", () => {
 		const awaitInstruction = coreOperations(asyncFn).find(
 			({ opcode }) => opcode === "await",
 		)!;
-		expect(awaitInstruction.outputs).toEqual([settled, asyncMode]);
-		expect(
-			inspectCoreTerminatorPayload(asyncFn, asyncFn.blockTerminator(rejected)),
-		).toEqual({
+		const [finalSettled] = awaitInstruction.outputs;
+		const asyncTerminations = [...asyncFn.blockIds()].map((block) =>
+			inspectCoreTerminatorPayload(asyncFn, asyncFn.blockTerminator(block)),
+		);
+		expect(asyncTerminations.find(({ kind }) => kind === "throw")).toEqual({
 			kind: "throw",
-			value: settled,
+			value: finalSettled,
 		});
-		expect(
-			inspectCoreTerminatorPayload(asyncFn, asyncFn.blockTerminator(fulfilled)),
-		).toEqual({
+		expect(asyncTerminations.find(({ kind }) => kind === "return")).toEqual({
 			kind: "return",
-			value: settled,
+			value: finalSettled,
 		});
 	});
 
@@ -577,7 +610,7 @@ describe("adversarial Core graphs", () => {
 		const fast = builder.createBlock([{ representation: "boxed" }]);
 		const slow = builder.createBlock([{ representation: "boxed" }]);
 		const [condition, input] = values(builder, entry);
-		const [deadInEntry] = builder.appendInstruction(entry, "createNumber", [], {
+		const [_deadInEntry] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 13 },
 		});
 		const [copiedInput] = builder.appendInstruction(entry, "move", [input!]);
@@ -593,7 +626,7 @@ describe("adversarial Core graphs", () => {
 				obligations: [{ kind: "fallback", id: "generic-call" }],
 			},
 		});
-		const epochFact = builder.addFact({
+		const _epochFact = builder.addFact({
 			kind: "shape-epoch",
 			value: "object-shapes",
 			claims: [],
@@ -612,32 +645,43 @@ describe("adversarial Core graphs", () => {
 		const finished = builder.finish(entry);
 		const optimized = optimizeVerified(program_, [finished.function]).compilation.program;
 		const fn = optimized.function(finished.function);
-		const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry));
+		const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(fn.entry));
+		const finalProvenFact = [...fn.factIds()]
+			.map((factId) => fn.fact(factId))
+			.find(({ kind }) => kind === "exact-call-target")!;
+		const finalEpochFact = [...fn.factIds()]
+			.map((factId) => fn.fact(factId))
+			.find(({ kind }) => kind === "shape-epoch")!;
 		expect(terminator).toMatchObject({
 			kind: "guard",
-			fact: provenFact,
-			success: { block: fast, arguments: [] },
-			fallback: { block: slow, arguments: [] },
+			fact: finalProvenFact.id,
+			success: { arguments: [] },
+			fallback: { arguments: [] },
 		});
-		expect(fn.fact(provenFact).validity).toEqual({
+		expect(finalProvenFact.validity).toEqual({
 			kind: "guard",
-			instruction: fn.blockTerminator(entry),
+			instruction: fn.blockTerminator(fn.entry),
 		});
-		expect(fn.fact(epochFact)).toMatchObject({
+		expect(finalEpochFact).toMatchObject({
 			validity: { kind: "epoch", family: "object-shapes" },
 			obligations: [{ kind: "fallback", id: "shape-deopt" }],
 		});
+		const fastBlock = terminator.kind === "guard" ? terminator.success.block : undefined;
 		const fastCall = coreOperations(fn).find(
-			(operation) => operation.block === fast && operation.opcode === "call",
+			(operation) => operation.block === fastBlock && operation.opcode === "call",
 		)!;
-		expect(fastCall.inputs).toEqual([input, input]);
+		const finalInput = inspectCoreFunctionParameters(fn)[1]!;
+		expect(fastCall.inputs).toEqual([finalInput, finalInput]);
 		expect(fn.instructionEffectRefinement(fastCall.id)).toEqual({
 			effects: REFINED_CALL_EFFECTS,
-			proof: provenFact,
+			proof: finalProvenFact.id,
 		});
 		expect(opcodesOf(fn)).not.toContain("move");
-		expect(fn.isValueLive(deadInEntry!)).toBe(false);
-		expect(fn.isValueLive(copiedInput!)).toBe(false);
+		expect(
+			coreOperations(fn).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 13,
+			),
+		).toBe(false);
 	});
 });
 
@@ -783,13 +827,26 @@ describe("generated valid Core graph variations", () => {
 			const built = buildVariation(variation);
 			const result = optimizeVerified(built.program, [built.function]);
 			const fn = result.compilation.program.function(built.function);
-			expect(opcodesOf(fn)).not.toContain("move");
-			if (built.deadValue !== undefined)
-				expect(fn.isValueLive(built.deadValue)).toBe(false);
-			if (built.joinParameter !== undefined) {
-				expect(fn.isValueLive(built.joinParameter)).toBe(variation.branch === "dynamic");
-			}
 			const cfg = buildCoreControlFlow(result.compilation.program, built.function);
+			expect(opcodesOf(fn)).not.toContain("move");
+			if (built.deadValue !== undefined) {
+				expect(
+					coreOperations(fn).some(
+						({ opcode, attributes }) =>
+							opcode === "createNumber" && attributes.value === 11,
+					),
+				).toBe(false);
+			}
+			if (built.joinParameter !== undefined) {
+				const join = [...fn.blockIds()].find(
+					(block) =>
+						block !== cfg.loops[0]?.header &&
+						ordinaryPredecessorCount(result.compilation.program, fn, block) === 2,
+				);
+				expect(join === undefined ? 0 : inspectCoreBlockParameters(fn, join).length).toBe(
+					variation.branch === "dynamic" ? 1 : 0,
+				);
+			}
 			if (built.header === undefined) {
 				expect(cfg.loops).toHaveLength(0);
 			} else {

@@ -113,7 +113,7 @@ describe("Core control-flow analyses and passes", () => {
 		const join = builder.createBlock();
 		const callee = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.appendInstruction(entry, "call", [callee, callee]);
-		const [protectedValue] = builder.appendInstruction(entry, "createNumber", [], {
+		const [_protectedValue] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 2 },
 		});
 		builder.setHandler(entry, handler);
@@ -134,8 +134,20 @@ describe("Core control-flow analyses and passes", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect(fn.isValueLive(protectedValue!)).toBe(false);
-		expect(fn.isValueLive(joinedValue!)).toBe(true);
+		const finalValues = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "createNumber" &&
+				fn.instructionAttributes(instruction).value === 2,
+		);
+		expect(finalValues).toHaveLength(1);
+		const returned = [...fn.blockIds()]
+			.map((block) => inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)))
+			.find(({ kind }) => kind === "return");
+		expect(returned).toEqual({
+			kind: "return",
+			value: inspectCoreInstructionResults(fn, finalValues[0]!)[0],
+		});
 	});
 
 	it("recognizes canonical induction ranges and loop nesting metadata", () => {
@@ -504,9 +516,25 @@ describe("Core control-flow analyses and passes", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect(fn.instructionBlock(definingInstruction(fn, constant!))).toBe(entry);
-		expect(fn.instructionBlock(definingInstruction(fn, sine!))).toBe(entry);
-		expect(fn.instructionBlock(definingInstruction(fn, object!))).toBe(body);
+		const finalConstant = [...fn.instructionIds()].find(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "createF64" &&
+				fn.instructionAttributes(instruction).value === 0.5,
+		)!;
+		const finalSine = [...fn.instructionIds()].find(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "mathUnaryNumber",
+		)!;
+		const finalObject = [...fn.instructionIds()].find(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "createObject",
+		)!;
+		expect(fn.instructionBlock(finalConstant)).toBe(fn.entry);
+		expect(fn.instructionBlock(finalSine)).toBe(fn.entry);
+		expect(fn.instructionBlock(finalObject)).not.toBe(fn.entry);
 	});
 
 	it("batches independent loop invariants in one pass item", () => {
@@ -660,8 +688,20 @@ describe("Core control-flow analyses and passes", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect(fn.instructionBlock(definingInstruction(fn, changing!))).toBe(header);
-		expect(fn.instructionBlock(definingInstruction(fn, stable!))).toBe(entry);
+		const loads = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "loadGlobal",
+		);
+		const changingLoad = loads.find(
+			(instruction) => fn.instructionAttributes(instruction).index === 0,
+		)!;
+		const stableLoad = loads.find(
+			(instruction) => fn.instructionAttributes(instruction).index === 1,
+		)!;
+		const cfg = buildCoreControlFlow(program, function_);
+		expect(fn.instructionBlock(changingLoad)).toBe(cfg.loops[0]!.header);
+		expect(fn.instructionBlock(stableLoad)).toBe(fn.entry);
 	});
 
 	it("does not hoist memory reads across calls into unknown user code", () => {
@@ -757,6 +797,7 @@ describe("Core control-flow analyses and passes", () => {
 			outputs: coreArity(1),
 			effects: CORE_NO_EFFECTS,
 			discardable: true,
+			attributeRelocations: [],
 		});
 		registry.define({
 			opcode: "keep",
@@ -764,6 +805,7 @@ describe("Core control-flow analyses and passes", () => {
 			outputs: coreArity(0),
 			effects: CORE_NO_EFFECTS,
 			discardable: false,
+			attributeRelocations: [],
 		});
 		const program = new CoreProgram(registry);
 		const builder = new CoreFunctionBuilder(program);

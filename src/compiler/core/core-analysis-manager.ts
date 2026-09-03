@@ -77,6 +77,7 @@ function sortedFunctions(
 
 export class CoreAnalysisManager {
 	readonly #program: CoreProgram;
+	readonly #generation: number;
 	readonly #context: CoreCompilationContext;
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #programFlow: CoreProgramFlowEngine;
@@ -94,6 +95,7 @@ export class CoreAnalysisManager {
 		report: CoreOptimizationReportBuilder,
 	) {
 		this.#program = program;
+		this.#generation = program.generation;
 		this.#context = context;
 		this.#report = report;
 		this.#programFlow = new CoreProgramFlowEngine(program, report);
@@ -103,6 +105,11 @@ export class CoreAnalysisManager {
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
 	): Result {
+		if (this.#program.generation !== this.#generation) {
+			throw new Error(
+				`Core analysis manager belongs to retired generation ${this.#generation}`,
+			);
+		}
 		this.#validateDefinition(definition, request);
 		const definitionCache = this.#cache.get(definition) ?? {
 			functions: [],

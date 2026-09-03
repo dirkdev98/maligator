@@ -31,6 +31,7 @@ describe("Core debug view", () => {
 			outputs: coreArity(1),
 			effects: CORE_NO_EFFECTS,
 			discardable: true,
+			attributeRelocations: [],
 		});
 		const program = new CoreProgram(registry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

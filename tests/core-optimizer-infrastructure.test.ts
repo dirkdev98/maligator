@@ -44,6 +44,7 @@ function programWithTwoFunctions() {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	registry.define({
 		opcode: "rewritten-identity",
@@ -51,6 +52,7 @@ function programWithTwoFunctions() {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	const program = new CoreProgram(registry);
 	const functions = Array.from({ length: 2 }, () => {
@@ -149,6 +151,21 @@ describe("Core optimizer infrastructure", () => {
 		expect(finished.analyses).toMatchObject([
 			{ queries: 5, hits: 2, recomputations: 3, invalidations: 1 },
 		]);
+	});
+
+	it("rejects every analysis manager from the construction generation", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses } = analysisHarness(program);
+		const analysis = cfgAnalysis([]);
+		expect(
+			analyses.get(analysis, { scope: "function", function: functions[0]!.id }),
+		).toBe(1);
+
+		program.finalizeConstructionGeneration();
+
+		expect(() =>
+			analyses.get(analysis, { scope: "function", function: functions[0]!.id }),
+		).toThrow("analysis manager belongs to retired generation 0");
 	});
 
 	it("checks program analysis function dependencies without scanning functions", () => {

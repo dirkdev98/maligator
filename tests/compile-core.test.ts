@@ -90,8 +90,8 @@ describe("compileSemanticProgramToProgramImage", () => {
 		});
 		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
 		expect(phases.report.instrumentation).toBe("phases");
-		expect(phases.report.phases.length).toBe(14);
-		expect(phases.report.checkpoints.length).toBe(7);
+		expect(phases.report.phases.length).toBe(15);
+		expect(phases.report.checkpoints.length).toBe(8);
 		expect(phases.report.passes).toEqual([]);
 		expect(phases.report.analyses).toEqual([]);
 		expect(Object.values(phases.report.counters).every((value) => value === 0)).toBe(
@@ -99,7 +99,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		);
 		expect(counters.report.instrumentation).toBe("counters");
 		expect(counters.report.phases).toEqual([]);
-		expect(counters.report.checkpoints.length).toBe(7);
+		expect(counters.report.checkpoints.length).toBe(8);
 		expect(counters.report.passes).toEqual([]);
 		expect(counters.report.analyses).toEqual([]);
 		expect(counters.report.counters.localRulesConsidered).toBeGreaterThan(0);
@@ -202,6 +202,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"construction-cleanup",
 			"initial-local-optimization",
 			"structural-cfg-optimization",
+			"dense-generation-barrier",
 			"proof-and-representation-optimization",
 			"memory-and-provenance-optimization",
 			"late-local-cleanup",
@@ -216,6 +217,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(report.checkpoints.map(({ checkpoint }) => checkpoint)).toEqual([
 			"after-core-construction",
 			"after-initial-local-structural-optimization",
+			"after-construction-generation-finalization",
 			"before-memory-and-provenance",
 			"before-program-flow",
 			"after-cross-call-transforms",

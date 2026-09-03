@@ -111,12 +111,16 @@ describe("Core local canonicalization", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect([...fn.blockIds()]).toEqual([entry]);
-		expect(fn.isInstructionLive(call!)).toBe(true);
-		expect(fn.instructionBlock(call!)).toBe(entry);
-		expect(fn.instructionEffectRefinement(call!)).toEqual({
+		expect([...fn.blockIds()]).toEqual([fn.entry]);
+		const finalCall = [...fn.bodyInstructionIds(fn.entry)].find(
+			(instruction) => fn.instructionOpcodeName(instruction) === "call",
+		)!;
+		const finalProof = [...fn.factIds()]
+			.map((factId) => fn.fact(factId))
+			.find(({ kind }) => kind === "test-call-effects")!;
+		expect(fn.instructionEffectRefinement(finalCall)).toEqual({
 			effects: CORE_NO_EFFECTS,
-			proof,
+			proof: finalProof.id,
 		});
 	});
 
@@ -1081,10 +1085,10 @@ describe("Core local canonicalization", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		const properties = [...fn.instructionIds()].filter(
-			(instruction) =>
-				fn.instructionKind(instruction) === "operation" &&
+		const properties = [...fn.blockIds()].flatMap((block) =>
+			[...fn.bodyInstructionIds(block)].filter((instruction) =>
 				fn.instructionOpcodeName(instruction).includes("Property"),
+			),
 		);
 		expect(
 			properties.map((instruction) => fn.instructionOpcodeName(instruction)),
@@ -1092,7 +1096,13 @@ describe("Core local canonicalization", () => {
 		for (const instruction of properties) {
 			expect(fn.instructionAttributes(instruction).stringIndex).toBe(0);
 		}
-		expect(fn.isValueLive(key!)).toBe(false);
+		expect(
+			[...fn.instructionIds()].some(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "createString",
+			),
+		).toBe(false);
 	});
 
 	it("lowers chained sole explicit throws into ordinary local flow", () => {

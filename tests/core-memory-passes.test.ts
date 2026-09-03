@@ -316,17 +316,39 @@ describe("Core local memory, provenance, and escape optimization", () => {
 					),
 			),
 		).toHaveLength(0);
-		const merged = inspectCoreBlockParameters(fn, merge)[0]!.value;
-		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(merge))).toEqual({
+		const incomingCounts = new Map<number, number>();
+		for (const block of fn.blockIds()) {
+			for (const edge of coreTerminatorEdges(
+				inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
+			)) {
+				incomingCounts.set(edge.block, (incomingCounts.get(edge.block) ?? 0) + 1);
+			}
+		}
+		const finalMerge = [...fn.blockIds()].find(
+			(block) =>
+				incomingCounts.get(block) === 2 &&
+				inspectCoreBlockParameters(fn, block).length === 1,
+		)!;
+		const merged = inspectCoreBlockParameters(fn, finalMerge)[0]!.value;
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(finalMerge))).toEqual({
 			kind: "return",
 			value: merged,
 		});
 		const incoming = [...fn.blockIds()].flatMap((block) =>
 			coreTerminatorEdges(inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)))
-				.filter((edge) => edge.block === merge)
+				.filter((edge) => edge.block === finalMerge)
 				.map((edge) => edge.arguments[0]),
 		);
-		expect(new Set(incoming)).toEqual(new Set([one, two]));
+		const finalConstants = [...fn.instructionIds()]
+			.filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "createNumber" &&
+					(fn.instructionAttributes(instruction).value === 1 ||
+						fn.instructionAttributes(instruction).value === 2),
+			)
+			.map((instruction) => inspectCoreInstructionResults(fn, instruction)[0]!);
+		expect(new Set(incoming)).toEqual(new Set(finalConstants));
 	});
 
 	it("flattens forwarding chains before deleting their intermediate loads", () => {

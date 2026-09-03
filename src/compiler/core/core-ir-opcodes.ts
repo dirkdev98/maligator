@@ -713,6 +713,7 @@ for (const opcode of CORE_OPCODES) {
 		outputs: coreArity(outputs),
 		effects: effectsFor(opcode),
 		discardable: DISCARDABLE.has(opcode),
+		attributeRelocations: [],
 		...(accesses.length === 0 ? {} : { accesses }),
 		...(allocation === undefined ? {} : { allocation }),
 		...(callTransfer === undefined ? {} : { callTransfer }),

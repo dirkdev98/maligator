@@ -6,6 +6,7 @@ import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
+	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 import type {
 	CoreBlockId,
@@ -37,6 +38,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	registry.define({
 		opcode: "identity",
@@ -44,6 +46,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [{ path: ["anchor"], kind: "value", cardinality: "one" }],
 	});
 	registry.define({
 		opcode: "sink",
@@ -51,6 +54,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(0),
 		effects: CORE_NO_EFFECTS,
 		discardable: false,
+		attributeRelocations: [],
 	});
 	return registry;
 }
@@ -597,6 +601,217 @@ describe("Core store", () => {
 		);
 	});
 
+	it("densely finalizes construction storage exactly once", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [condition, argument] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		) as [CoreValueId, CoreValueId];
+		const removed = builder.createBlock([{ representation: "i32" }]);
+		const success = builder.createBlock([{ representation: "boxed" }]);
+		const fallback = builder.createBlock([{ representation: "boxed" }]);
+		const handler = builder.createBlock([
+			{ representation: "boxed", role: "exception" },
+			{ representation: "boxed" },
+		]);
+		const successParameter = inspectCoreBlockParameters(builder, success)[0]!.value;
+		const fallbackParameter = inspectCoreBlockParameters(builder, fallback)[0]!.value;
+		const handlerParameter = inspectCoreBlockParameters(builder, handler)[1]!.value;
+		const removedFact = builder.addFact({
+			kind: "removed",
+			value: null,
+			claims: [],
+			validity: { kind: "asserted", source: "test" },
+			obligations: [],
+			origin: "test",
+		});
+		const proof = builder.addFact({
+			kind: "relocated",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "relocated" },
+			obligations: [],
+			origin: "test",
+		});
+		const [result] = builder.appendInstruction(success, "identity", [successParameter], {
+			attributes: { anchor: successParameter },
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+		});
+		builder.setHandler(success, handler, [successParameter]);
+		const guard = builder.setTerminator(entry, {
+			kind: "guard",
+			condition,
+			fact: proof,
+			success: { block: success, arguments: [argument] },
+			fallback: { block: fallback, arguments: [argument] },
+		});
+		builder.setTerminator(removed, { kind: "unreachable" });
+		builder.setTerminator(success, { kind: "return", value: result! });
+		builder.setTerminator(fallback, { kind: "return", value: fallbackParameter });
+		builder.setTerminator(handler, { kind: "return", value: handlerParameter });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const operation = [...fn.bodyInstructionIds(success)][0]!;
+		const mutate = CoreEditor.open(program, fn.id);
+		mutate.replaceFact(proof, {
+			kind: "relocated",
+			value: true,
+			claims: [
+				{ kind: "identity", subject: successParameter, identities: ["argument"] },
+				{ kind: "effect", instruction: operation, effects: CORE_NO_EFFECTS },
+			],
+			validity: { kind: "guard", instruction: guard },
+			obligations: [{ kind: "guard", instruction: guard }],
+			origin: "test",
+		});
+		mutate.removeFact(removedFact);
+		mutate.removeBlock(removed);
+		mutate.appendBlockParameter(success, { representation: "i32" });
+		mutate.removeBlockParameter(success, 1);
+		mutate.commit();
+		verifyCoreProgram(program);
+
+		const oldFunction = fn;
+		const oldCapacities = {
+			blocks: fn.blockCapacity,
+			instructions: fn.instructionCapacity,
+			values: fn.valueCapacity,
+			facts: fn.factCapacity,
+			blockParameters: fn.blockParameterCapacity,
+		};
+		expect(program.finalizeConstructionGeneration()).toBe(true);
+		const dense = program.function(finished.function);
+		const live = dense.liveStorageCounts();
+
+		expect(program.generation).toBe(1);
+		expect(oldFunction.generation).toBe(0);
+		expect(dense.generation).toBe(1);
+		expect(dense.id).toBe(oldFunction.id);
+		expect(dense).not.toBe(oldFunction);
+		expect(() => oldFunction.instructionKind(operation)).toThrow("retired generation 0");
+		expect([...dense.blockIds()]).toEqual(
+			Array.from({ length: live.blocks }, (_, id) => id),
+		);
+		expect([...dense.instructionIds()]).toEqual(
+			Array.from({ length: live.instructions }, (_, id) => id),
+		);
+		expect([...dense.valueIds()]).toEqual(
+			Array.from({ length: live.values }, (_, id) => id),
+		);
+		expect([...dense.factIds()]).toEqual(
+			Array.from({ length: live.facts }, (_, id) => id),
+		);
+		expect({
+			blocks: dense.blockCapacity,
+			instructions: dense.instructionCapacity,
+			values: dense.valueCapacity,
+			uses: dense.useCapacity,
+			operands: dense.operandCapacity,
+			blockParameters: dense.blockParameterCapacity,
+			terminatorEdges: dense.terminatorEdgeCapacity,
+			handlerArguments: dense.handlerArgumentCapacity,
+			facts: dense.factCapacity,
+			effectRefinements: dense.effectRefinementCapacity,
+		}).toEqual({
+			blocks: live.blocks,
+			instructions: live.instructions,
+			values: live.values,
+			uses: live.uses,
+			operands: live.operands,
+			blockParameters: live.blockParameters,
+			terminatorEdges: live.terminatorEdges,
+			handlerArguments: live.handlerArguments,
+			facts: live.facts,
+			effectRefinements: live.effectRefinements,
+		});
+		expect(dense.storageStatistics()).toEqual({
+			abandonedOperands: 0,
+			abandonedParameters: 0,
+		});
+		expect(oldCapacities.blocks).toBeGreaterThan(dense.blockCapacity);
+		expect(oldCapacities.instructions).toBeGreaterThan(dense.instructionCapacity);
+		expect(oldCapacities.values).toBeGreaterThan(dense.valueCapacity);
+		expect(oldCapacities.facts).toBeGreaterThan(dense.factCapacity);
+		expect(oldCapacities.blockParameters).toBeGreaterThan(dense.blockParameterCapacity);
+		expect(inspectCoreBlockHandler(dense, 1 as CoreBlockId)).toEqual({
+			block: 3,
+			arguments: [2],
+		});
+		const denseProof = dense.fact(0 as never);
+		expect(denseProof).toMatchObject({
+			claims: [
+				{ kind: "identity", subject: 2 },
+				{ kind: "effect", instruction: 0 },
+			],
+			validity: { kind: "guard", instruction: 1 },
+			obligations: [{ kind: "guard", instruction: 1 }],
+		});
+		expect(dense.instructionEffectRefinement(0 as never)?.proof).toBe(0);
+		expect(dense.instructionAttributes(0 as never).anchor).toBe(2);
+		expect([...inspectCoreUses(dense, 2 as never)]).toEqual([
+			{ instruction: 0, operand: 0 },
+		]);
+		expect(program.finalizeConstructionGeneration()).toBe(false);
+		expect(program.function(finished.function)).toBe(dense);
+		verifyCoreProgram(program);
+		const sealed = program.seal();
+		expect(program.seal()).toBe(sealed);
+		expect(program.finalizeConstructionGeneration()).toBe(false);
+	});
+
+	it("produces the same dense IR regardless of construction tombstone layout", () => {
+		const build = (withTombstones: boolean): string => {
+			const program = new CoreProgram(registry());
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const removed = withTombstones ? builder.createBlock() : undefined;
+			const removedFact = withTombstones
+				? builder.addFact({
+						kind: "removed",
+						value: null,
+						claims: [],
+						validity: { kind: "asserted", source: "test" },
+						obligations: [],
+						origin: "test",
+					})
+				: undefined;
+			if (removed !== undefined) {
+				builder.appendInstruction(removed, "constant", [], {
+					attributes: { value: 999 },
+					outputRepresentations: ["i32"],
+				});
+				builder.setTerminator(removed, { kind: "unreachable" });
+			}
+			const target = builder.createBlock([{ representation: "boxed" }]);
+			const targetParameter = inspectCoreBlockParameters(builder, target)[0]!.value;
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: target, arguments: [parameter] },
+			});
+			const [result] = builder.appendInstruction(target, "identity", [targetParameter], {
+				attributes: { anchor: targetParameter },
+			});
+			builder.setTerminator(target, { kind: "return", value: result! });
+			const functionId = builder.finish(entry).function;
+			if (removed !== undefined && removedFact !== undefined) {
+				const editor = CoreEditor.open(program, functionId);
+				editor.removeBlock(removed);
+				editor.removeFact(removedFact);
+				editor.commit();
+			}
+			program.finalizeConstructionGeneration();
+			verifyCoreProgram(program);
+			return formatCoreFunction(program, functionId);
+		};
+
+		expect(build(true)).toBe(build(false));
+	});
+
 	it("moves an operation without changing its instruction or result identity", () => {
 		const { program, fn, entry, constant, copied } = oneFunction();
 		const editor = CoreEditor.open(program, fn.id);
@@ -1117,6 +1332,7 @@ describe("Core store", () => {
 				callsUserCode: true,
 			},
 			discardable: false,
+			attributeRelocations: [],
 			callTransfer: {
 				calleeOperand: 0,
 				result: "construct-completion",

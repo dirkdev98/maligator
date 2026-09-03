@@ -225,6 +225,7 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	readonly effects: CoreInstructionEffects;
 	/** Removing an unused result cannot change observable JavaScript behavior. */
 	readonly discardable: boolean;
+	readonly attributeRelocations: ReadonlyArray<CoreAttributeRelocation>;
 	/**
 	 * Memory this opcode names. The registry checks every access against
 	 * `effects`, so a descriptor cannot name memory it does not declare an effect
@@ -253,6 +254,12 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	 * for anything else, reachability is observable program behaviour.
 	 */
 	readonly resultCannotBeHeldWeakly?: boolean;
+}
+
+export interface CoreAttributeRelocation {
+	readonly path: ReadonlyArray<string>;
+	readonly kind: "block" | "instruction" | "value" | "fact";
+	readonly cardinality: "one" | "many";
 }
 
 export type CoreOpcodeDefinition<Name extends string = string> = Omit<
@@ -420,6 +427,28 @@ function validateAllocation(descriptor: CoreOpcodeDefinition): void {
 	}
 }
 
+function validateAttributeRelocations(descriptor: CoreOpcodeDefinition): void {
+	if (!Array.isArray(descriptor.attributeRelocations)) {
+		throw new Error(`${descriptor.opcode} must declare attribute relocation contracts`);
+	}
+	const contracts =
+		descriptor.attributeRelocations as ReadonlyArray<CoreAttributeRelocation>;
+	const seen = new Set<string>();
+	for (const relocation of contracts) {
+		if (
+			relocation.path.length === 0 ||
+			relocation.path.some((part) => part.length === 0)
+		) {
+			throw new Error(`${descriptor.opcode} declares an empty attribute relocation path`);
+		}
+		const key = relocation.path.join(".");
+		if (seen.has(key)) {
+			throw new Error(`${descriptor.opcode} repeats attribute relocation path ${key}`);
+		}
+		seen.add(key);
+	}
+}
+
 export class CoreOpcodeRegistry {
 	readonly #descriptors = new Map<string, CoreOpcodeDescriptor>();
 	readonly #descriptorsById: Array<CoreOpcodeDescriptor> = [];
@@ -436,6 +465,7 @@ export class CoreOpcodeRegistry {
 		validateAccesses(descriptor);
 		validateAllocation(descriptor);
 		validateCallTransfer(descriptor);
+		validateAttributeRelocations(descriptor);
 		const frozen: CoreOpcodeDescriptor<Name> = Object.freeze({
 			...descriptor,
 			id: coreOpcodeId(this.#descriptorsById.length),
@@ -446,6 +476,14 @@ export class CoreOpcodeRegistry {
 				reads: Object.freeze([...descriptor.effects.reads]),
 				writes: Object.freeze([...descriptor.effects.writes]),
 			}),
+			attributeRelocations: Object.freeze(
+				descriptor.attributeRelocations.map((relocation) =>
+					Object.freeze({
+						...relocation,
+						path: Object.freeze([...relocation.path]),
+					}),
+				),
+			),
 			...(descriptor.allocation === undefined
 				? {}
 				: { allocation: Object.freeze({ ...descriptor.allocation }) }),

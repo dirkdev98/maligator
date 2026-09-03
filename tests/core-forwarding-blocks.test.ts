@@ -517,7 +517,7 @@ describe("Core empty forwarding blocks", () => {
 		)!;
 		expect(blocks(result_.fn)).toHaveLength(1);
 		expect(inspectCoreInstructionOperands(result_.fn, call)).toEqual([value, value]);
-		expect(result_.fn.isValueLive(parameter)).toBe(false);
+		expect(inspectCoreBlockParameters(result_.fn, result_.fn.entry)).toHaveLength(1);
 	});
 
 	it("leaves no forwarding candidates at the optimizer boundary", () => {
@@ -612,8 +612,11 @@ describe("Core SSA and CFG cleanup", () => {
 			first,
 			second,
 		]);
-		expect(optimizedResult.fn.isValueLive(firstParameter!)).toBe(false);
-		expect(optimizedResult.fn.isValueLive(secondParameter!)).toBe(false);
+		expect(
+			[...optimizedResult.fn.blockIds()].flatMap((block) =>
+				inspectCoreBlockParameters(optimizedResult.fn, block),
+			),
+		).toHaveLength(1);
 	});
 
 	it("materializes equivalent join constants before their first use", () => {
@@ -654,7 +657,11 @@ describe("Core SSA and CFG cleanup", () => {
 		const [first, second] = inspectCoreInstructionOperands(result.fn, call);
 		expect(first).toBe(second);
 		expect(inspectCoreValueDefinition(result.fn, first!).kind).toBe("instruction");
-		expect(result.fn.isValueLive(parameter)).toBe(false);
+		const cfg = buildCoreControlFlow(result.program, result.fn.id);
+		const finalJoin = [...result.fn.blockIds()].find(
+			(block) => (cfg.predecessors[block] ?? []).length === 2,
+		)!;
+		expect(inspectCoreBlockParameters(result.fn, finalJoin)).toEqual([]);
 	});
 
 	it("removes unused parameters and their mismatched incoming arguments", () => {

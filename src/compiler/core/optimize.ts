@@ -108,12 +108,12 @@ export function optimizeCore(
 			compilation.program.function(functionId).configureUseTraversalStatistics(true);
 		}
 	}
-	const analyses = new CoreAnalysisManager(
+	let analyses = new CoreAnalysisManager(
 		compilation.program,
 		compilation.context,
 		reportBuilder,
 	);
-	const passes = new CorePassManager(
+	let passes = new CorePassManager(
 		compilation.program,
 		compilation.context,
 		analyses,
@@ -147,11 +147,41 @@ export function optimizeCore(
 							: CORE_MEMORY_PASSES,
 			),
 		);
-		if (stage !== "canonicalize") lateCanonicalizationChanges.push(...changes);
+		if (stage === "proofs" || stage === "memory") {
+			lateCanonicalizationChanges.push(...changes);
+		}
 		if (stage === "control-flow") {
 			reportBuilder.recordCheckpoint(
 				"after-initial-local-structural-optimization",
 				compilation.program,
+			);
+			measurePhase("dense-generation-barrier", () =>
+				compilation.program.finalizeConstructionGeneration(),
+			);
+			reportBuilder.recordCheckpoint(
+				"after-construction-generation-finalization",
+				compilation.program,
+			);
+			if (reportBuilder.collectsCounters) {
+				for (const functionId of compilation.program.functionIds()) {
+					compilation.program.function(functionId).configureUseTraversalStatistics(true);
+				}
+			}
+			analyses = new CoreAnalysisManager(
+				compilation.program,
+				compilation.context,
+				reportBuilder,
+			);
+			passes = new CorePassManager(
+				compilation.program,
+				compilation.context,
+				analyses,
+				reportBuilder,
+				{
+					verification: options.verification,
+					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+					localOptimization: true,
+				},
 			);
 		}
 		if (stage === "proofs") {

@@ -46,6 +46,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	registry.define({
 		opcode: "add",
@@ -53,6 +54,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	registry.define({
 		opcode: "move",
@@ -60,6 +62,7 @@ function registry(): CoreOpcodeRegistry {
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
+		attributeRelocations: [],
 	});
 	registry.define({
 		opcode: "call",
@@ -74,6 +77,7 @@ function registry(): CoreOpcodeRegistry {
 			callsUserCode: true,
 		},
 		discardable: false,
+		attributeRelocations: [],
 	});
 	return registry;
 }
@@ -154,6 +158,7 @@ describe("Core IR", () => {
 				outputs: coreArity(0),
 				effects: CORE_NO_EFFECTS,
 				discardable: false,
+				attributeRelocations: [],
 				accesses: [{ family: "global-slot", mode: "write", valueOperand: 0 }],
 			}),
 		).toThrow(/without declaring the global-slot effect domain/);
@@ -164,6 +169,7 @@ describe("Core IR", () => {
 				outputs: coreArity(0),
 				effects: { ...CORE_NO_EFFECTS, writes: ["global-slot"] },
 				discardable: false,
+				attributeRelocations: [],
 				accesses: [{ family: "global-slot", mode: "write", valueOperand: 3 }],
 			}),
 		).toThrow(/value operand 3 outside its 1\.\.1 inputs/);
@@ -174,9 +180,36 @@ describe("Core IR", () => {
 				outputs: coreArity(1),
 				effects: { ...CORE_NO_EFFECTS, reads: ["captured-slot"] },
 				discardable: true,
+				attributeRelocations: [],
 				accesses: [{ family: "captured-slot", mode: "read", baseOperand: 0 }],
 			}),
 		).toThrow(/base or key for the activation-local family captured-slot/);
+	});
+
+	it("requires an explicit local-ID relocation contract for every opcode", () => {
+		const opcodes = new CoreOpcodeRegistry();
+		expect(() =>
+			opcodes.define({
+				opcode: "missingRelocations",
+				inputs: coreArity(0),
+				outputs: coreArity(0),
+				effects: CORE_NO_EFFECTS,
+				discardable: true,
+			} as never),
+		).toThrow("must declare attribute relocation contracts");
+		expect(() =>
+			opcodes.define({
+				opcode: "duplicateRelocations",
+				inputs: coreArity(0),
+				outputs: coreArity(0),
+				effects: CORE_NO_EFFECTS,
+				discardable: true,
+				attributeRelocations: [
+					{ path: ["owner"], kind: "block", cardinality: "one" },
+					{ path: ["owner"], kind: "value", cardinality: "one" },
+				],
+			}),
+		).toThrow("repeats attribute relocation path owner");
 	});
 
 	it("resolves exact compiler-slot locations and degrades heap accesses to a family", () => {
@@ -358,6 +391,7 @@ describe("Core IR", () => {
 				outputs: coreArity(1),
 				effects: CORE_NO_EFFECTS,
 				discardable: false,
+				attributeRelocations: [],
 				allocation: {
 					kind: "named-slots",
 					keysAttribute: "",
@@ -372,6 +406,7 @@ describe("Core IR", () => {
 				outputs: coreArity(0),
 				effects: CORE_NO_EFFECTS,
 				discardable: false,
+				attributeRelocations: [],
 				allocation: {
 					kind: "named-slots",
 					keysAttribute: "keys",

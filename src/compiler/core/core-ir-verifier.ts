@@ -9,6 +9,7 @@ import {
 } from "./core-ir-fact-implication.ts";
 import type {
 	CoreAttributeValue,
+	CoreAttributeRelocation,
 	CoreBlockId,
 	CoreChangeSet,
 	CoreFact,
@@ -126,6 +127,57 @@ function verifyAttributeValue(
 	}
 	for (const [key, entry] of Object.entries(value)) {
 		verifyAttributeValue(entry, `${path}.${key}`, nextAncestors);
+	}
+}
+
+function attributeAtPath(
+	attributes: CoreAttributeValue,
+	path: ReadonlyArray<string>,
+): CoreAttributeValue {
+	let value = attributes;
+	for (const part of path) {
+		if (value === undefined) return undefined;
+		if (value === null || typeof value !== "object" || Array.isArray(value)) {
+			fail(`attribute relocation ${path.join(".")} crosses non-object data`);
+		}
+		value = (value as Readonly<Record<string, CoreAttributeValue>>)[part];
+	}
+	return value;
+}
+
+function verifyAttributeRelocations(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	attributes: CoreAttributeValue,
+	contracts: ReadonlyArray<CoreAttributeRelocation>,
+): void {
+	for (const contract of contracts) {
+		const path = contract.path.join(".");
+		const value = attributeAtPath(attributes, contract.path);
+		if (value === undefined) continue;
+		const ids = contract.cardinality === "many" ? value : [value];
+		if (!Array.isArray(ids) || !ids.every(Number.isSafeInteger)) {
+			fail(`instruction @${instruction} attribute ${path} has invalid local IDs`);
+		}
+		for (const rawId of ids) {
+			const id = rawId as number;
+			if (id < 0) {
+				fail(`instruction @${instruction} attribute ${path} has invalid local ID ${id}`);
+			}
+			const live =
+				contract.kind === "block"
+					? fn.isBlockLive(coreBlockId(id))
+					: contract.kind === "instruction"
+						? fn.isInstructionLive(coreInstructionId(id))
+						: contract.kind === "value"
+							? fn.isValueLive(coreValueId(id))
+							: fn.isFactLive(coreFactId(id));
+			if (!live) {
+				fail(
+					`instruction @${instruction} attribute ${path} references deleted ${contract.kind} ${id}`,
+				);
+			}
+		}
 	}
 }
 
@@ -325,6 +377,12 @@ function verifyInstructionRows(
 			}
 			const attributes = fn.instructionAttributes(instruction);
 			verifyAttributeValue(attributes, `instruction @${instruction} attributes`);
+			verifyAttributeRelocations(
+				fn,
+				instruction,
+				attributes,
+				descriptor.attributeRelocations,
+			);
 			for (const [key, value] of Object.entries(attributes)) {
 				if (
 					typeof value === "number" &&
