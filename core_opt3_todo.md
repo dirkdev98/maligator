@@ -15,35 +15,31 @@ This plan supersedes earlier unfinished Core performance plans. Preserve older p
 
 Measured starting point
 
-The accepted measurement at a8835ad852c9d31d84c15f0c345c0fe02abf537b, immediately before the final documentation-only commits on current main, is:
+The accepted Slice 0 measurement at `cfb13ff301bc38c1f327c881e50d592d8a282505` is:
 
 Metric	Starting value
-Warm Node self-compile median	22,076.087 ms
-Cold Node self-compile median	22,936.826 ms
-Warm optimizeCore median	14,532.934 ms
-Warm constructCore median	2,922.033 ms
-Input functions	3,602
-Input blocks	134,842
-Input instructions	425,284
-Input values	1,672,902
-Output blocks	73,796
-Output instructions	255,281
-Output values	177,850
+Warm Node self-compile median	22,349.685 ms
+Cold Node self-compile median	23,385.125 ms
+Warm optimizeCore median	14,731.747 ms
+Warm constructCore median	2,911.483 ms
+Input functions	3,622
+Input blocks	135,139
+Input instructions	426,905
+Input values	1,677,769
+Output blocks	73,965
+Output instructions	256,291
+Output values	178,581
 Selected recipes	185
 Generated translation units	9
-Generated code units	63,018,333
-Peak managed heap	2,703,220,032 bytes
-Peak RSS	3,592,765,440 bytes
+Generated code units	63,272,125
+Peak managed heap	2,533,673,992 bytes
+Peak RSS	3,639,558,144 bytes
 
-Slice 0 must reproduce and replace this reference with a clean measurement at the actual implementation HEAD.
-
-The first reproduced Slice 0 compiler capture at source `61e09d3a` constructed
-1,683,030 values and sealed 178,509 live output values: a 9.428× construction
-amplification. Keep that ratio visible beside the raw counts in every replacement
-baseline. It is a primary Slice 1 target, because lowering spare capacity without
-reducing the number of values constructed would leave the dominant excess intact.
-This capture remains diagnostic until it is repeated after later semantic fixes at
-the clean implementation HEAD.
+The accepted compiler capture constructed 1,677,769 values and sealed 178,581 live
+output values: a 9.395× construction amplification. Keep that ratio visible beside
+the raw counts in every replacement baseline. It is a primary Slice 1 target,
+because lowering spare capacity without reducing the number of values constructed
+would leave the dominant excess intact.
 
 Preserve the completed architecture
 
