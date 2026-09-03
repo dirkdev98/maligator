@@ -11,13 +11,18 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import type { NativeBuildPhaseEvent } from "../src/native-build-context.ts";
+import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import type {
+	NativeBuildCommandResourceEvent,
+	NativeBuildPhaseEvent,
+} from "../src/native-build-context.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
@@ -167,6 +172,20 @@ interface SelfCompileMetrics {
 	arch: string;
 	nodeVersion: string;
 	nativeBuild: NativeOutputBuildMetrics;
+	cold: {
+		readonly node: SelfCompileSample;
+		readonly maligator: SelfCompileSample;
+	};
+	warm: {
+		readonly node: ReadonlyArray<SelfCompileSample>;
+		readonly maligator: ReadonlyArray<SelfCompileSample>;
+	};
+	phasesSample: {
+		readonly node: SelfCompileSample & { readonly optimizer: CoreOptimizationReport };
+		readonly maligator: SelfCompileSample & {
+			readonly optimizer: CoreOptimizationReport;
+		};
+	};
 }
 
 interface NativeOutputBuildMetrics {
@@ -178,10 +197,18 @@ interface NativeOutputBuildMetrics {
 	readonly cCompilationMs: number;
 	readonly linkMs: number;
 	readonly stripMs: number;
+	readonly peakRssBytes: number;
 }
 
 interface BenchmarkSnapshot {
 	schema: 3;
+	source?: {
+		readonly commit: string;
+		readonly dirty: boolean;
+		readonly digest: string;
+		readonly benchmarkDigest: string;
+		readonly configurationDigest: string;
+	};
 	javascript?: JavascriptMetrics;
 	http?: HttpMetrics;
 	selfCompile?: SelfCompileMetrics;
@@ -194,6 +221,48 @@ function median(values: ReadonlyArray<number>): number {
 	return sorted.length % 2 === 0
 		? (sorted[middle - 1]! + sorted[middle]!) / 2
 		: sorted[middle]!;
+}
+
+function hashBytes(value: string | Uint8Array): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
+	const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+		encoding: "utf8",
+	}).trim();
+	const dirtyPatch = execFileSync("git", ["diff", "--binary", "HEAD"], {
+		encoding: "utf8",
+	});
+	const benchmarkFiles = [
+		"bench/javascript.mjs",
+		"bench/http/express-server.cjs",
+		"bench/http/server_mal.js",
+		"bench/http/server_node.js",
+		"bench/self-compile.mts",
+		"scripts/bench.ts",
+		"package-lock.json",
+	];
+	const benchmarkDigest = createHash("sha256");
+	for (const file of benchmarkFiles) {
+		benchmarkDigest.update(file);
+		benchmarkDigest.update(readFileSync(file));
+	}
+	return Object.freeze({
+		commit,
+		dirty: dirtyPatch.length > 0,
+		digest: hashBytes(`${commit}\0${dirtyPatch}`),
+		benchmarkDigest: benchmarkDigest.digest("hex"),
+		configurationDigest: hashBytes(
+			JSON.stringify({
+				closed: CLOSED_CONFIG,
+				open: OPEN_CONFIG,
+				http: CLOSED_HTTP_CONFIG,
+				express: CLOSED_EXPRESS_CONFIG,
+				selfCompile: SELF_COMPILE_CONFIG,
+			}),
+		),
+	});
 }
 
 function medianRecord(
@@ -226,15 +295,25 @@ function fileBytes(file: string): number {
 
 function nativeBuildRecorder(): {
 	readonly observe: (event: NativeBuildPhaseEvent) => void;
+	readonly observeResource: (
+		event: NativeBuildCommandResourceEvent & { readonly subject: string },
+	) => void;
 	readonly metrics: (subject: string) => NativeOutputBuildMetrics;
 } {
 	const bySubject = new Map<string, Array<NativeBuildPhaseEvent>>();
+	const peakRssBySubject = new Map<string, number>();
 	return {
 		observe(event) {
 			if (event.subject === undefined) return;
 			const events = bySubject.get(event.subject) ?? [];
 			events.push(event);
 			bySubject.set(event.subject, events);
+		},
+		observeResource(event) {
+			peakRssBySubject.set(
+				event.subject,
+				Math.max(peakRssBySubject.get(event.subject) ?? 0, event.peakRssBytes),
+			);
 		},
 		metrics(subject) {
 			const events = bySubject.get(subject) ?? [];
@@ -255,6 +334,7 @@ function nativeBuildRecorder(): {
 				cCompilationMs: phase("generated C objects"),
 				linkMs: phase("link"),
 				stripMs: phase("strip"),
+				peakRssBytes: peakRssBySubject.get(subject) ?? 0,
 			});
 		},
 	};
@@ -425,6 +505,8 @@ function benchJavascript(
 			production: true,
 			cacheDirectory: nativeCacheDirectory,
 			onNativeBuildPhase: nativeBuild.observe,
+			measureNativeBuildResources: true,
+			onNativeCommandResource: nativeBuild.observeResource,
 		});
 		binaries["closed-compiled"] = closed.compiled;
 		binaries["closed-interpreted"] = closed.interpreted;
@@ -438,6 +520,8 @@ function benchJavascript(
 			production: true,
 			cacheDirectory: nativeCacheDirectory,
 			onNativeBuildPhase: nativeBuild.observe,
+			measureNativeBuildResources: true,
+			onNativeCommandResource: nativeBuild.observeResource,
 		});
 		binaries["open-compiled"] = open.compiled;
 		binaries["open-interpreted"] = open.interpreted;
@@ -542,15 +626,30 @@ interface SelfCompileRun {
 	codeUnits: number;
 	digest: string;
 	phases: SelfCompilePhases;
+	optimizer: CoreOptimizationReport;
+}
+
+type SelfCompileSample = Omit<SelfCompileRun, "optimizer">;
+
+function selfCompileSample(run: SelfCompileRun): SelfCompileSample {
+	return {
+		wallMs: run.wallMs,
+		units: run.units,
+		codeUnits: run.codeUnits,
+		digest: run.digest,
+		phases: run.phases,
+	};
 }
 
 function runSelfCompile(
 	command: string,
 	args: Array<string>,
 	output: string,
+	instrumentation: "off" | "phases" = "off",
 ): SelfCompileRun {
 	const start = process.hrtime.bigint();
 	const result = spawnSync(command, [...args, output], {
+		env: { ...process.env, MAL_CORE_INSTRUMENTATION: instrumentation },
 		encoding: "utf8",
 		maxBuffer: 1024 * 1024,
 		timeout: 900_000,
@@ -566,6 +665,7 @@ function runSelfCompile(
 		units: number;
 		codeUnits: number;
 		phases: SelfCompilePhases;
+		optimizer: CoreOptimizationReport;
 	};
 	return {
 		wallMs,
@@ -573,6 +673,7 @@ function runSelfCompile(
 		codeUnits: summary.codeUnits,
 		digest: digestSelfCompileOutput(output),
 		phases: summary.phases,
+		optimizer: summary.optimizer,
 	};
 }
 
@@ -592,8 +693,11 @@ function assertComparableSelfCompile(
 	node: SelfCompileRun,
 	maligator: SelfCompileRun,
 ): void {
-	const sizeDifference = Math.abs(node.codeUnits - maligator.codeUnits) / node.codeUnits;
-	if (node.units !== maligator.units || sizeDifference > 0.01) {
+	if (
+		node.units !== maligator.units ||
+		node.codeUnits !== maligator.codeUnits ||
+		node.digest !== maligator.digest
+	) {
 		throw new Error(
 			`self-compile workloads diverged: ${JSON.stringify(maligator)} != ${JSON.stringify(node)}`,
 		);
@@ -627,12 +731,39 @@ function benchSelfCompile(
 		config: SELF_COMPILE_CONFIG,
 		cacheDirectory: nativeCacheDirectory,
 		onNativeBuildPhase: nativeBuild.observe,
+		measureNativeBuildResources: true,
+		onNativeCommandResource: nativeBuild.observeResource,
 	});
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorRuns: Array<SelfCompileRun> = [];
 	const nodeRuns: Array<SelfCompileRun> = [];
 	try {
+		progress.detail("self-compile cold samples");
+		const coldTarget = prepareSelfCompileSource(path.join(root, "cold-source"));
+		const coldMaligator = runSelfCompile(
+			binary,
+			[coldTarget],
+			path.join(root, "cold-maligator"),
+		);
+		const coldNode = runSelfCompile(
+			process.execPath,
+			[fixture, coldTarget],
+			path.join(root, "cold-node"),
+		);
+		assertComparableSelfCompile(coldNode, coldMaligator);
 		const target = prepareSelfCompileSource(path.join(root, "source"));
+		progress.detail("self-compile warmup");
+		const warmupNode = runSelfCompile(
+			process.execPath,
+			[fixture, target],
+			path.join(root, "warmup-node"),
+		);
+		const warmupMaligator = runSelfCompile(
+			binary,
+			[target],
+			path.join(root, "warmup-maligator"),
+		);
+		assertComparableSelfCompile(warmupNode, warmupMaligator);
 		for (let index = 0; index < runs; index++) {
 			progress.detail(`self-compile paired sample ${index + 1}/${runs}`);
 			const nodeOutput = path.join(root, `node-${index}`);
@@ -653,6 +784,26 @@ function benchSelfCompile(
 			nodeRuns.push(node);
 			maligatorRuns.push(maligator);
 		}
+		progress.detail("self-compile phase instrumentation sample");
+		const phasesNode = runSelfCompile(
+			process.execPath,
+			[fixture, target],
+			path.join(root, "phases-node"),
+			"phases",
+		);
+		const phasesMaligator = runSelfCompile(
+			binary,
+			[target],
+			path.join(root, "phases-maligator"),
+			"phases",
+		);
+		assertComparableSelfCompile(phasesNode, phasesMaligator);
+		if (
+			phasesNode.optimizer.instrumentation !== "phases" ||
+			phasesMaligator.optimizer.instrumentation !== "phases"
+		) {
+			throw new Error("self-compile phase sample did not enable phase instrumentation");
+		}
 		return {
 			world: "closed",
 			maligatorMs: median(maligatorRuns.map(({ wallMs }) => wallMs)),
@@ -667,6 +818,21 @@ function benchSelfCompile(
 			arch: process.arch,
 			nodeVersion: process.version,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
+			cold: {
+				node: selfCompileSample(coldNode),
+				maligator: selfCompileSample(coldMaligator),
+			},
+			warm: {
+				node: Object.freeze(nodeRuns.map(selfCompileSample)),
+				maligator: Object.freeze(maligatorRuns.map(selfCompileSample)),
+			},
+			phasesSample: {
+				node: { ...selfCompileSample(phasesNode), optimizer: phasesNode.optimizer },
+				maligator: {
+					...selfCompileSample(phasesMaligator),
+					optimizer: phasesMaligator.optimizer,
+				},
+			},
 		};
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -768,6 +934,8 @@ function benchHttp(
 		config: CLOSED_HTTP_CONFIG,
 		cacheDirectory: nativeCacheDirectory,
 		onNativeBuildPhase: nativeBuild.observe,
+		measureNativeBuildResources: true,
+		onNativeCommandResource: nativeBuild.observeResource,
 	});
 	const expressBinary = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
@@ -776,6 +944,8 @@ function benchHttp(
 		config: CLOSED_EXPRESS_CONFIG,
 		cacheDirectory: nativeCacheDirectory,
 		onNativeBuildPhase: nativeBuild.observe,
+		measureNativeBuildResources: true,
+		onNativeCommandResource: nativeBuild.observeResource,
 	});
 	const bareMal = spawn(bareBinary, [], { stdio: ["ignore", "ignore", "inherit"] });
 	const bareNode = spawn(process.execPath, ["bench/http/server_node.js"], {
@@ -1110,7 +1280,7 @@ if (savedBaseline !== undefined && savedBaseline.schema !== BENCHMARK_SCHEMA) {
 }
 const baseline = savedBaseline as BenchmarkSnapshot | undefined;
 
-const entry: BenchmarkSnapshot = { schema: BENCHMARK_SCHEMA };
+const entry: BenchmarkSnapshot = { schema: BENCHMARK_SCHEMA, source: benchmarkSource() };
 const implementations: Record<string, () => void> = {
 	javascript: () => {
 		entry.javascript = benchJavascript(

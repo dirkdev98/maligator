@@ -46,6 +46,10 @@ export interface NativeBuildCommandEvent {
 	cwd?: string;
 }
 
+export interface NativeBuildCommandResourceEvent extends NativeBuildCommandEvent {
+	peakRssBytes: number;
+}
+
 /** Every resolved input shared by the C archive, Rust archive, and final linker. */
 export interface NativeBuildContext {
 	readonly runtimeDirectory: string;
@@ -59,6 +63,8 @@ export interface NativeBuildContext {
 	readonly onCacheEvent?: (event: BuildCacheEvent) => void;
 	readonly onBuildPhase?: (event: NativeBuildPhaseEvent) => void;
 	readonly onCommand?: (event: NativeBuildCommandEvent) => void;
+	readonly measureCommandResources: boolean;
+	readonly onCommandResource?: (event: NativeBuildCommandResourceEvent) => void;
 }
 
 export interface NativeBuildContextOptions {
@@ -77,6 +83,8 @@ export interface NativeBuildContextOptions {
 	onCacheEvent?: (event: BuildCacheEvent) => void;
 	onBuildPhase?: (event: NativeBuildPhaseEvent) => void;
 	onCommand?: (event: NativeBuildCommandEvent) => void;
+	measureCommandResources?: boolean;
+	onCommandResource?: (event: NativeBuildCommandResourceEvent) => void;
 }
 
 const BUILD_ENVIRONMENT_NAMES = new Set([
@@ -194,5 +202,7 @@ export function resolveNativeBuildContext(
 		onCacheEvent: options.onCacheEvent,
 		onBuildPhase: options.onBuildPhase,
 		onCommand: options.onCommand,
+		measureCommandResources: options.measureCommandResources ?? false,
+		onCommandResource: options.onCommandResource,
 	});
 }

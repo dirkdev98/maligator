@@ -47,6 +47,7 @@ import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type {
 	BuildCacheEvent,
 	NativeBuildContext,
+	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
 } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
@@ -179,6 +180,12 @@ export interface BuildOptions {
 	onNativeCacheEvent?: (event: BuildCacheEvent) => void;
 	/** Observe native build phase time, unit, and byte attribution. */
 	onNativeBuildPhase?: (event: NativeBuildPhaseEvent) => void;
+	/** Measure peak RSS for native tool invocations. Benchmark-only due to wrapper cost. */
+	measureNativeBuildResources?: boolean;
+	/** Observe measured native command peak RSS, attributed to the built subject. */
+	onNativeCommandResource?: (
+		event: NativeBuildCommandResourceEvent & { readonly subject: string },
+	) => void;
 }
 
 export interface BuildNativeBinaryResult extends LocalBuildResult {
@@ -364,6 +371,7 @@ function resolveHarnessNativeContext(
 			environment: options.environment,
 			compilerBake: options.compilerBake ?? defaultCompilerBake(),
 			production: options.production,
+			measureCommandResources: options.measureNativeBuildResources,
 			onCacheEvent: (event) => {
 				recordTestTelemetry({
 					phase: `${event.artifact} cache`,
@@ -387,6 +395,8 @@ function resolveHarnessNativeContext(
 				});
 				options.onNativeBuildPhase?.({ ...event, subject });
 			},
+			onCommandResource: (event) =>
+				options.onNativeCommandResource?.({ ...event, subject }),
 		}),
 		cacheSuffix: derivation.cacheSuffix,
 	};

@@ -1,6 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
+import type {
+	CoreInstrumentationMode,
+	CoreOptimizationReport,
+} from "../src/compiler/core/core-optimization-report.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 
@@ -10,6 +14,17 @@ const outputDirectory = process.argv[3];
 if (inputPath === undefined || outputDirectory === undefined) {
 	throw new Error("usage: self-compile <input> <output-directory>");
 }
+
+const instrumentationValue = process.env.MAL_CORE_INSTRUMENTATION ?? "off";
+if (
+	instrumentationValue !== "off" &&
+	instrumentationValue !== "phases" &&
+	instrumentationValue !== "counters" &&
+	instrumentationValue !== "full"
+) {
+	throw new Error(`unknown Core instrumentation mode ${instrumentationValue}`);
+}
+const instrumentation: CoreInstrumentationMode = instrumentationValue;
 
 const config: ResolvedBuildConfig = {
 	entry: undefined,
@@ -53,11 +68,17 @@ const compilePhases = {
 	"core to execution": "coreToExecutionMs",
 	"execution to image": "executionToImageMs",
 } as const;
+let optimizationReport: CoreOptimizationReport | undefined;
 const image = compileEntrypoint(path.resolve(inputPath), {
 	stripTypes: (source) => source,
 	buildConfig: config,
+	coreInstrumentation: instrumentation,
+	afterCoreOptimization(_program, _context, report) {
+		optimizationReport = report;
+	},
 	runPhase: (phase, run) => measure(compilePhases[phase], run),
 });
+if (optimizationReport === undefined) throw new Error("missing Core optimization report");
 
 const emitStartedAt = Date.now();
 const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
@@ -75,5 +96,6 @@ console.log(
 		units: units.length,
 		codeUnits: units.reduce((total, source) => total + source.length, 0),
 		phases,
+		optimizer: optimizationReport,
 	}),
 );

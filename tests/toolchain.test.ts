@@ -501,6 +501,7 @@ exit 7
 			cache?: "hit" | "miss";
 		}> = [];
 		const commands: Array<{ tool: string; args: ReadonlyArray<string> }> = [];
+		const commandResources: Array<{ tool: string; peakRssBytes: number }> = [];
 		const binaryEvents: Array<{ hit: boolean; path: string }> = [];
 		const context = resolveNativeBuildContext({
 			toolchain,
@@ -511,6 +512,8 @@ exit 7
 			},
 			onBuildPhase: (event) => phases.push(event),
 			onCommand: (event) => commands.push(event),
+			measureCommandResources: true,
+			onCommandResource: (event) => commandResources.push(event),
 			onCacheEvent: (event) => {
 				if (event.artifact === "binary") binaryEvents.push(event);
 			},
@@ -566,6 +569,8 @@ exit 7
 					command.tool === toolchain.tools.cc.path && command.args.includes("-c"),
 			),
 		).toBe(true);
+		expect(commandResources.length).toBeGreaterThan(0);
+		expect(commandResources.every((event) => event.peakRssBytes > 0)).toBe(true);
 		expect(binaryEvents.map((event) => event.hit)).toEqual([false]);
 
 		phases.length = 0;

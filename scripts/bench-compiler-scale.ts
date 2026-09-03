@@ -136,6 +136,7 @@ interface DriverOptions {
 	readonly profile: boolean;
 	readonly includeTestCheck: boolean;
 	readonly quick: boolean;
+	readonly coreOpt3Start: boolean;
 	readonly output: string;
 }
 
@@ -160,6 +161,7 @@ tier 14 requires --include-test-check.
   --no-profile                 omit the separate V8 allocation/GC sample
   --include-test-check         include tier 14 (npm run test:check)
   --quick                      one warm and one cold sample per case
+  --core-opt3-start            exact Slice 0 self-compile measurement protocol
   --output PATH                baseline JSON destination
 
 Completed cases are checkpointed beside the output and resumed automatically.
@@ -197,6 +199,7 @@ function parseOptions(
 	let profile = true;
 	let includeTestCheck = false;
 	let quick = false;
+	let coreOpt3Start = false;
 	let output = DEFAULT_OUTPUT;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
@@ -238,6 +241,8 @@ function parseOptions(
 			includeTestCheck = true;
 		} else if (option === "--quick") {
 			quick = true;
+		} else if (option === "--core-opt3-start") {
+			coreOpt3Start = true;
 		} else if (option === "--output") {
 			output = path.resolve(args[++index] ?? "");
 		} else {
@@ -252,6 +257,19 @@ function parseOptions(
 			throw new Error(`tier ${tier} is not in the manifest`);
 		}
 	}
+	if (
+		coreOpt3Start &&
+		(quick ||
+			warmRuns !== undefined ||
+			coldRuns !== undefined ||
+			instrumentation !== "counters" ||
+			compareInstrumentation ||
+			!profile)
+	) {
+		throw new Error(
+			"--core-opt3-start fixes warm, cold, instrumentation, and profile sampling",
+		);
+	}
 	return {
 		tiers,
 		...(warmRuns === undefined ? {} : { warmRuns }),
@@ -261,6 +279,7 @@ function parseOptions(
 		profile,
 		includeTestCheck,
 		quick,
+		coreOpt3Start,
 		output,
 	};
 }
@@ -827,6 +846,61 @@ function commandOutput(command: ReadonlyArray<string>) {
 	};
 }
 
+function syntheticScalingSummary(
+	manifest: CompilerScaleManifest,
+	results: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> {
+	type Result = {
+		readonly id: string;
+		readonly warm: {
+			readonly samples: ReadonlyArray<CompilerScaleSample>;
+		};
+	};
+	const byId = new Map(
+		results.map((raw) => {
+			const result = raw as Result;
+			return [result.id, result] as const;
+		}),
+	);
+	return manifest.tiers
+		.filter((tier) => tier.kind === "synthetic")
+		.map((tier) => {
+			const samples = manifest.syntheticScales.map((scale) => {
+				const result = byId.get(`${tier.id}-${scale}x`);
+				const sample = result?.warm.samples[0];
+				if (sample === undefined) {
+					throw new Error(`missing synthetic scaling result ${tier.id}-${scale}x`);
+				}
+				return {
+					scale,
+					wallMs: sample.wallMs,
+					optimizeCoreMs: sample.phases.optimizeCoreMs,
+					inputInstructions: sample.optimizer.input.instructions,
+					outputCodeUnits: sample.output.codeUnits,
+				};
+			});
+			const base = samples[0]!;
+			return {
+				id: tier.id,
+				samples: samples.map((sample) => ({
+					...sample,
+					normalized: {
+						wallMsPerScale: sample.wallMs / sample.scale,
+						optimizeCoreMsPerScale: sample.optimizeCoreMs / sample.scale,
+						inputInstructionsPerScale: sample.inputInstructions / sample.scale,
+						outputCodeUnitsPerScale: sample.outputCodeUnits / sample.scale,
+					},
+					relativeTo1x: {
+						wall: sample.wallMs / base.wallMs,
+						optimizeCore: sample.optimizeCoreMs / base.optimizeCoreMs,
+						inputInstructions: sample.inputInstructions / base.inputInstructions,
+						outputCodeUnits: sample.outputCodeUnits / base.outputCodeUnits,
+					},
+				})),
+			};
+		});
+}
+
 function gitOutput(args: ReadonlyArray<string>): string {
 	const result = spawnSync("git", args, { cwd: REPOSITORY_ROOT, encoding: "utf8" });
 	if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`);
@@ -843,6 +917,12 @@ function writeJsonAtomic(destination: string, value: unknown): void {
 function runCoordinator(args: ReadonlyArray<string>): void {
 	const manifest = readManifest();
 	const options = parseOptions(args, manifest);
+	if (
+		options.coreOpt3Start &&
+		gitOutput(["status", "--porcelain=v1", "--untracked-files=no"]).length > 0
+	) {
+		throw new Error("--core-opt3-start requires a clean tracked working tree");
+	}
 	const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-scale-"));
 	const requestRoot = path.join(temporaryRoot, "requests");
 	const checkpointPath = `${options.output}.partial`;
@@ -859,6 +939,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			profile: options.profile,
 			includeTestCheck: options.includeTestCheck,
 			quick: options.quick,
+			coreOpt3Start: options.coreOpt3Start,
 		}),
 	);
 	const checkpoint = existsSync(checkpointPath)
@@ -917,15 +998,26 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			for (const benchmarkCase of selectedCases) {
 				const resultKey = `${tier.tier}:${benchmarkCase.id}`;
 				if (completed.has(resultKey)) continue;
+				const exactOpt3SelfCompile = options.coreOpt3Start && tier.tier === 13;
 				const warmRuns = options.quick
 					? 1
-					: (options.warmRuns ?? (tier.tier === 13 ? 5 : 1));
+					: exactOpt3SelfCompile
+						? 5
+						: (options.warmRuns ?? (tier.tier === 13 ? 5 : 1));
 				const coldRuns = options.quick
 					? 1
-					: (options.coldRuns ?? (tier.tier === 13 ? 3 : 1));
+					: exactOpt3SelfCompile
+						? 3
+						: (options.coldRuns ?? (tier.tier === 13 ? 3 : 1));
 				const compare = options.compareInstrumentation;
 				const sequence: Array<CoreInstrumentationMode> = [];
-				if (compare) {
+				if (exactOpt3SelfCompile) {
+					for (let index = 0; index < warmRuns; index++) {
+						if (index % 2 === 0) sequence.push("off", "phases");
+						else sequence.push("phases", "off");
+					}
+					sequence.push("counters");
+				} else if (compare) {
 					for (let index = 0; index < warmRuns; index++) {
 						if (index % 2 === 0) sequence.push("off", "phases", "counters");
 						else sequence.push("counters", "phases", "off");
@@ -958,7 +1050,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						...workerSamples(
 							{
 								benchmarkCase: coldCases.get(benchmarkCase.id)!,
-								sequence: [options.instrumentation],
+								sequence: [exactOpt3SelfCompile ? "off" : options.instrumentation],
 								discardFirst: false,
 								profileLast: false,
 							},
@@ -970,7 +1062,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					? workerSamples(
 							{
 								benchmarkCase,
-								sequence: [options.instrumentation],
+								sequence: [exactOpt3SelfCompile ? "full" : options.instrumentation],
 								discardFirst: true,
 								profileLast: true,
 							},
@@ -1054,7 +1146,9 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			configuration: {
 				optimizerMode: "full",
 				verification: "boundary",
-				instrumentation: options.instrumentation,
+				instrumentation: options.coreOpt3Start
+					? "core-opt3-start"
+					: options.instrumentation,
 				selfCompileConfig: SELF_COMPILE_CONFIG,
 				selfCompileConfigDigest: hashBytes(JSON.stringify(SELF_COMPILE_CONFIG)),
 				heapSamplingIntervalBytes: HEAP_SAMPLING_INTERVAL,
@@ -1068,6 +1162,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					readFileSync(path.join(REPOSITORY_ROOT, "package-lock.json")),
 				),
 			},
+			syntheticScaling: syntheticScalingSummary(manifest, results),
 			results,
 		};
 		writeJsonAtomic(options.output, baseline);

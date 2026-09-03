@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import type { NativeBuildContext } from "./native-build-context.ts";
 
 const DEFAULT_NATIVE_BUILD_JOBS = 8;
@@ -48,6 +48,49 @@ function parallelShellScript(
 	return `${starts.join("\n")}\nstatus=0\n${waits.join("\n")}\nexit "$status"\n`;
 }
 
+function measuredCommand(
+	context: NativeBuildContext,
+	tool: string,
+	args: ReadonlyArray<string>,
+	options: NativeCommandOptions & { input?: string },
+): Buffer {
+	const timeArguments =
+		process.platform === "darwin" ? ["-l", tool, ...args] : ["-v", tool, ...args];
+	const result = spawnSync("/usr/bin/time", timeArguments, {
+		cwd: options.cwd,
+		env: options.env ?? context.environment,
+		input: options.input,
+		maxBuffer: 64 * 1024 * 1024,
+	});
+	if (result.error !== undefined) throw result.error;
+	const stdout = result.stdout ?? Buffer.alloc(0);
+	const stderr = (result.stderr ?? Buffer.alloc(0)).toString();
+	const match =
+		process.platform === "darwin"
+			? stderr.match(/(^|\n)\s*([0-9]+)\s+maximum resident set size(?:\n|$)/)
+			: stderr.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
+	const raw = Number(match?.[process.platform === "darwin" ? 2 : 1]);
+	if (!Number.isSafeInteger(raw) || raw <= 0) {
+		throw new Error(`native resource measurement omitted peak RSS for ${tool}`);
+	}
+	context.onCommandResource?.({
+		tool,
+		args,
+		cwd: options.cwd,
+		peakRssBytes: process.platform === "darwin" ? raw : raw * 1024,
+	});
+	if (result.status !== 0) {
+		throw new Error(
+			`${tool} failed (${String(result.status)}):\n${stdout.toString()}\n${stderr}`,
+		);
+	}
+	if (options.verbose) {
+		if (stdout.length > 0) process.stderr.write(stdout);
+		if (stderr.length > 0) process.stderr.write(stderr);
+	}
+	return stdout;
+}
+
 /** Execute independent commands concurrently through one synchronous coordinator. */
 export function runIndependentCommands(
 	commands: ReadonlyArray<NativeCommand>,
@@ -81,6 +124,10 @@ export function runNativeCommand(
 	options: NativeCommandOptions,
 ): void {
 	context.onCommand?.({ tool, args, cwd: options.cwd });
+	if (context.measureCommandResources) {
+		measuredCommand(context, tool, args, options);
+		return;
+	}
 	const stdout = execFileSync(tool, [...args], {
 		cwd: options.cwd,
 		env: options.env ?? context.environment,
@@ -109,6 +156,13 @@ export function runNativeCommands(
 
 	for (const command of commands) {
 		context.onCommand?.({ tool: command.tool, args: command.args, cwd: options.cwd });
+	}
+	if (context.measureCommandResources) {
+		measuredCommand(context, "/bin/sh", [], {
+			...options,
+			input: parallelShellScript(commands, jobs),
+		});
+		return;
 	}
 	const stdout = execFileSync("/bin/sh", [], {
 		cwd: options.cwd,
