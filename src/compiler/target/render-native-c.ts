@@ -3002,19 +3002,6 @@ function emitInstruction(
 				"}",
 			];
 		}
-		if (instruction.opcode === "STORE_PROPERTY") {
-			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
-			if (reps[instruction.key] === "number") return [exactStore, throwCheck];
-			return [
-				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
-				`  ${exactStore}`,
-				`  ${throwCheck}`,
-				"} else {",
-				`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
-				"}",
-			];
-		}
 	}
 
 	switch (instruction.opcode) {

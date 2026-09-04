@@ -507,7 +507,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(fn.fact(refinement!.proof).kind).toBe("exact-collection-builtin-effects");
 	});
 
-	it("publishes an exact numeric TypedArray brand on local dynamic accesses", () => {
+	it("publishes an exact numeric TypedArray brand on local dynamic loads", () => {
 		const build = (compilationContext: CoreCompilationContext) => {
 			const core = program();
 			const builder = new CoreFunctionBuilder(core);
@@ -523,7 +523,6 @@ describe("Core local memory, provenance, and escape optimization", () => {
 				constructor!,
 				length!,
 			]);
-			builder.appendInstruction(entry, "storeProperty", [array!, key, length!]);
 			const [loaded] = builder.appendInstruction(entry, "loadProperty", [array!, key]);
 			builder.setTerminator(entry, { kind: "return", value: loaded! });
 			const finished = builder.finish(entry);
@@ -531,20 +530,17 @@ describe("Core local memory, provenance, and escape optimization", () => {
 				program: core,
 				context: compilationContext,
 			}).compilation.program.function(finished.function);
-			const accesses = [...fn.instructionIds()].filter(
+			const load = [...fn.instructionIds()].find(
 				(instruction) =>
 					fn.instructionKind(instruction) === "operation" &&
-					(fn.instructionOpcodeName(instruction) === "loadProperty" ||
-						fn.instructionOpcodeName(instruction) === "storeProperty"),
+					fn.instructionOpcodeName(instruction) === "loadProperty",
 			);
-			expect(accesses).toHaveLength(2);
-			return accesses.map(
-				(instruction) => fn.instructionAttributes(instruction).exactTypedArrayKind,
-			);
+			expect(load).toBeDefined();
+			return fn.instructionAttributes(load!).exactTypedArrayKind;
 		};
 
-		expect(build(lockedContext)).toEqual(["Uint32Array", "Uint32Array"]);
-		expect(build(context)).toEqual([undefined, undefined]);
+		expect(build(lockedContext)).toBe("Uint32Array");
+		expect(build(context)).toBeUndefined();
 	});
 
 	it("publishes Map.set and Map.get consequences before cleanup", () => {

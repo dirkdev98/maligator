@@ -1445,7 +1445,7 @@ describe("program-image-codec", () => {
 		).toThrow(/invalid exact Array length operation/);
 	});
 
-	it("round-trips and rejects operation-local specialization facts", () => {
+	it("rejects malformed operation-local specialization facts", () => {
 		const withInstruction = (
 			instruction: BytecodeInstruction,
 			nativeInstruction: NativeInstructionPlan,
@@ -1463,19 +1463,6 @@ describe("program-image-codec", () => {
 				0,
 				(plan) => ({ ...plan, instructions: [nativeInstruction] }),
 			);
-		const exactTypedArrayStore = withInstruction(
-			{
-				opcode: "STORE_PROPERTY",
-				object: 0,
-				key: 1,
-				value: 2,
-				icIndex: 0,
-			},
-			{ kind: "exact-typed-array-element", elementKind: "Uint16Array" },
-		);
-		expect(
-			deserializeCompilerArtifact(serializeCompilerArtifact(exactTypedArrayStore)),
-		).toEqual(exactTypedArrayStore);
 
 		expect(() =>
 			serializeCompilerArtifact(
