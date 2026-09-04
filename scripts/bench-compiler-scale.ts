@@ -126,6 +126,14 @@ interface CompilerScaleSample {
 		readonly peakManagedHeap: number;
 		readonly rssAfter: number;
 		readonly peakRss: number;
+		readonly checkpoints: ReadonlyArray<{
+			readonly checkpoint: string;
+			readonly heapUsed: number;
+			readonly managedHeap: number;
+			readonly external: number;
+			readonly arrayBuffers: number;
+			readonly rss: number;
+		}>;
 	};
 	readonly output: {
 		readonly units: number;
@@ -570,11 +578,30 @@ async function compileSample(
 	const phases = emptyPhases();
 	let optimizeStart = 0;
 	let optimizeEnd = 0;
-	let peakManagedHeap = getHeapStatistics().used_heap_size;
-	const heapUsedBefore = process.memoryUsage().heapUsed;
-	const sampleHeap = (): void => {
-		peakManagedHeap = Math.max(peakManagedHeap, getHeapStatistics().used_heap_size);
+	let peakManagedHeap = 0;
+	const memoryCheckpoints: Array<{
+		checkpoint: string;
+		heapUsed: number;
+		managedHeap: number;
+		external: number;
+		arrayBuffers: number;
+		rss: number;
+	}> = [];
+	const recordMemory = (checkpoint: string): NodeJS.MemoryUsage => {
+		const memory = process.memoryUsage();
+		const managedHeap = getHeapStatistics().used_heap_size;
+		peakManagedHeap = Math.max(peakManagedHeap, managedHeap);
+		memoryCheckpoints.push({
+			checkpoint,
+			heapUsed: memory.heapUsed,
+			managedHeap,
+			external: memory.external,
+			arrayBuffers: memory.arrayBuffers,
+			rss: memory.rss,
+		});
+		return memory;
 	};
+	const heapUsedBefore = recordMemory("before-compile").heapUsed;
 	const gcEntries: Array<{ startTime: number; duration: number }> = [];
 	const gcObserver = new PerformanceObserver((list) => {
 		for (const entry of list.getEntries()) {
@@ -617,7 +644,7 @@ async function compileSample(
 				const endedAt = performance.now();
 				if (phaseName !== undefined) phases[phaseName] += endedAt - startedAt;
 				if (phase === "optimize core ir") optimizeEnd = endedAt;
-				sampleHeap();
+				recordMemory(`after-${phase}`);
 			}
 		},
 	});
@@ -625,10 +652,13 @@ async function compileSample(
 	const emitStartedAt = performance.now();
 	const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
 	phases.emitMs = performance.now() - emitStartedAt;
+	recordMemory("after-emit");
 	const serializeStartedAt = performance.now();
 	const runtimeWire = serializeRuntimeImage(image.runtime, { debugInfo: false });
 	phases.serializeMs = performance.now() - serializeStartedAt;
 	const wallMs = performance.now() - wallStartedAt;
+	const memoryAfterWork = recordMemory("after-serialize");
+	const resourceAfterWork = process.resourceUsage();
 	const cpuProfile = session === undefined ? undefined : await stopCpuSampling(session);
 	const allocationProfile =
 		session === undefined ? undefined : await stopHeapSampling(session);
@@ -648,9 +678,6 @@ async function compileSample(
 		cpuProfile === undefined
 			? undefined
 			: sampledCpuSummary(cpuProfile, cpuStartedAt, optimizeStart, optimizeEnd);
-	sampleHeap();
-	const memory = process.memoryUsage();
-	const resource = process.resourceUsage();
 	const normalizedUnits = units.map((source) =>
 		source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
 	);
@@ -677,10 +704,11 @@ async function compileSample(
 		},
 		memory: {
 			heapUsedBefore,
-			heapUsedAfter: memory.heapUsed,
+			heapUsedAfter: memoryAfterWork.heapUsed,
 			peakManagedHeap,
-			rssAfter: memory.rss,
-			peakRss: resource.maxRSS * 1024,
+			rssAfter: memoryAfterWork.rss,
+			peakRss: resourceAfterWork.maxRSS * 1024,
+			checkpoints: Object.freeze(memoryCheckpoints),
 		},
 		output: {
 			units: units.length,
