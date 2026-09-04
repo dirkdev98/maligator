@@ -841,6 +841,28 @@ synchronization and loop-frequency weights. Calibrate them against the permanent
 output lanes; do not retain or change a multiplier solely because it appears
 plausible on one compiler workload.
 
+Recorded implementation contract (2026-09-04)
+
+The canonical values live in `src/compiler/core/core-ir-generated-cost.ts`; the
+matching test intentionally snapshots every number and unit. These are estimating
+units, not measured bytes or milliseconds.
+
+Estimate group | Multiplier values and units
+--- | ---
+Estimated C statements | instruction 1, helper call 2, guard 2, boxing operation 1, duplicated generic fallback 1, admission check 2, materialization path 4, state synchronization 2; each value is estimated C statements per named event
+Estimated binary bytes | C statement 8, input operand 2, duplicated instruction 4; each value is estimated binary bytes per named event
+Compiler work | C statement 1, helper call 3, guard 2, boxing operation 1, root slot 1, safepoint 2, duplicated instruction 1, duplicated generic fallback 1, admission check 2, materialization path 4, state synchronization 2; each is compiler-work score per named event; 32 estimated binary bytes add one compiler-work score
+Runtime benefit | instruction 1, helper call 6, guard 1, boxing operation 2, root slot 1, safepoint 2, admission check 1, materialization path 6, state synchronization 2; each is runtime-benefit score per named event
+Loop and admission | loop nesting multiplies benefit by 4 per level through depth 3; a region is capped at 16,384 estimated binary bytes; base admission work is 128 compiler-work score and benefit is scaled by 16 compiler-work score per runtime-benefit/frequency score
+
+The O3 ledger is shared across cross-call and late specialization. Its program caps
+are 4,096 generated-code units and 32,768 compiler-work units. Cross-call retains a
+tighter family cap of 1,024 generated-code units and 16,384 compiler-work units,
+with per-caller caps of 64 expansions, 192 generated-code units and 768
+compiler-work units. Late specialization retains at most 4 expansive regions per
+function inside the shared per-caller caps of 512 generated-code units and 2,048
+compiler-work units.
+
 Required emitted-program work
 
 Use the current JavaScript and HTTP profiles to identify output bottlenecks.

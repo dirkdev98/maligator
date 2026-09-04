@@ -38,14 +38,11 @@ import {
 	coreBlockId,
 	coreInstructionId,
 } from "./core-ir.ts";
-import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
+import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
+import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-const CONTROL_FLOW_BUDGET: CorePassBudget = Object.freeze({
-	maxWorkItems: 1_000_000,
-	maxEdits: 500_000,
-	exhaustion: "stop",
-});
+const CONTROL_FLOW_BUDGET = CORE_O2_PASS_BUDGETS["cfg-loop-licm-pre"];
 
 const CONTROL_FLOW_CHANGES = Object.freeze({
 	cfg: true,

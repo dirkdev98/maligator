@@ -50,24 +50,16 @@ import type {
 } from "./core-ir.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
-import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
+import {
+	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
+	CoreTransformCandidateService,
+	DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+} from "./core-transform-candidates.ts";
 import type {
 	CoreTransformBudgetLimits,
 	CoreTransformCandidate,
 	CoreTransformDeclineReason,
 } from "./core-transform-candidates.ts";
-
-export const DEFAULT_CORE_SPECIALIZATION_BUDGETS: CoreTransformBudgetLimits =
-	Object.freeze({
-		perSiteExpansions: 1,
-		perCallerExpansions: 64,
-		perCallerGeneratedCode: 512,
-		perCallerCompilerWork: 2_048,
-		programGeneratedCode: 4_096,
-		programCompilerWork: 32_768,
-	});
-
-export const CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION = 4;
 
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;

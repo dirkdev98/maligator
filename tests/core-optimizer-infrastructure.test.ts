@@ -17,7 +17,16 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import { CORE_CONSTRUCTION_NORMALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
-import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
+import {
+	CORE_MEMORY_PASSES,
+	CORE_MEMORY_SSA_PASSES,
+	CORE_PROVENANCE_PASSES,
+} from "../src/compiler/core/core-memory-passes.ts";
+import {
+	CORE_O2_PASS_BUDGETS,
+	CORE_OPTIMIZATION_FAMILIES,
+	CORE_OPTIMIZATION_PROFITABILITY_CONTRACTS,
+} from "../src/compiler/core/core-optimization-families.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
@@ -573,6 +582,31 @@ describe("Core optimizer infrastructure", () => {
 			if (pass.requiredAnalyses.length === 0) continue;
 			expect(pass.admission, pass.name).toBeDefined();
 			expect(pass.admission?.predicate.trim().length, pass.name).toBeGreaterThan(0);
+		}
+	});
+
+	it("binds every non-O1 family to its profitability contract", () => {
+		expect(Object.keys(CORE_OPTIMIZATION_PROFITABILITY_CONTRACTS)).toEqual(
+			CORE_OPTIMIZATION_FAMILIES.slice(1),
+		);
+		for (const contract of Object.values(CORE_OPTIMIZATION_PROFITABILITY_CONTRACTS)) {
+			expect(Object.values(contract).every((value) => value.trim().length > 0)).toBe(
+				true,
+			);
+		}
+		for (const pass of CORE_CONTROL_FLOW_PASSES) {
+			expect(pass.budget).toBe(CORE_O2_PASS_BUDGETS["cfg-loop-licm-pre"]);
+		}
+		for (const pass of CORE_PROOF_PASSES) {
+			expect(pass.budget).toBe(CORE_O2_PASS_BUDGETS["proof-value-kind-representation"]);
+		}
+		for (const pass of CORE_PROVENANCE_PASSES) {
+			expect(pass.budget).toBe(
+				CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
+			);
+		}
+		for (const pass of CORE_MEMORY_SSA_PASSES) {
+			expect(pass.budget).toBe(CORE_O2_PASS_BUDGETS["memory-ssa-load-store"]);
 		}
 	});
 

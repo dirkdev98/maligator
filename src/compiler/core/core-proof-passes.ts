@@ -28,14 +28,11 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
-import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
+import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
+import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-const PROOF_BUDGET: CorePassBudget = Object.freeze({
-	maxWorkItems: 2_000_000,
-	maxEdits: 1_000_000,
-	exhaustion: "stop",
-});
+const PROOF_BUDGET = CORE_O2_PASS_BUDGETS["proof-value-kind-representation"];
 
 const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,

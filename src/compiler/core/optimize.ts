@@ -9,11 +9,7 @@ import {
 	CoreFunctionOptimizationSession,
 } from "./core-function-optimization-session.ts";
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
-import {
-	buildCoreOptimizationPlan,
-	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
-	DEFAULT_CORE_SPECIALIZATION_BUDGETS,
-} from "./core-ir-region-selection.ts";
+import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -31,7 +27,11 @@ import type {
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
-import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
+import {
+	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
+	CoreTransformCandidateService,
+	DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+} from "./core-transform-candidates.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";

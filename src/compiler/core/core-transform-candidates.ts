@@ -70,6 +70,18 @@ export const DEFAULT_CORE_TRANSFORM_BUDGETS: CoreTransformBudgetLimits = Object.
 	programCompilerWork: 16_384,
 });
 
+export const DEFAULT_CORE_SPECIALIZATION_BUDGETS: CoreTransformBudgetLimits =
+	Object.freeze({
+		perSiteExpansions: 1,
+		perCallerExpansions: 64,
+		perCallerGeneratedCode: 512,
+		perCallerCompilerWork: 2_048,
+		programGeneratedCode: 4_096,
+		programCompilerWork: 32_768,
+	});
+
+export const CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION = 4;
+
 export interface CoreTransformBudgetStatistics {
 	readonly considered: number;
 	readonly applied: number;

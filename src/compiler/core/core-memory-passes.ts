@@ -48,7 +48,8 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
+import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
+import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
@@ -56,11 +57,8 @@ const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
 	"Array.prototype.pop",
 ]);
 
-const MEMORY_BUDGET: CorePassBudget = Object.freeze({
-	maxWorkItems: 2_000_000,
-	maxEdits: 1_000_000,
-	exhaustion: "stop",
-});
+const PROVENANCE_BUDGET = CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"];
+const MEMORY_BUDGET = CORE_O2_PASS_BUDGETS["memory-ssa-load-store"];
 
 function exactAccessEffects(mode: "read" | "write"): CoreInstructionEffects {
 	const effects: CoreInstructionEffects = {
@@ -401,7 +399,7 @@ const foldExactAllocationObservations: CoreFunctionPass = {
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -480,7 +478,7 @@ const forwardFreshOwnSlotPrefix: CoreFunctionPass = {
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -560,7 +558,7 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	changes: { cfg: false, calls: false, facts: false, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -635,7 +633,7 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 	],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -881,7 +879,7 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -952,7 +950,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
 		if (compilationContext.facts.world.primordialPolicy !== "locked") return undefined;
@@ -1580,7 +1578,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -1647,7 +1645,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	],
 	wakesOn: ["body", "facts", "representations", "specializationInputs"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
@@ -1780,7 +1778,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
-	budget: MEMORY_BUDGET,
+	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
