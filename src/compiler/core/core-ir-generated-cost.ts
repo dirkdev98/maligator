@@ -10,6 +10,55 @@ const LOWERED_HELPER_OPCODES = new Set([
 	"selectShapeCase",
 ]);
 
+export const CORE_GENERATED_CODE_COST_WEIGHTS = Object.freeze({
+	estimatedCStatements: Object.freeze({
+		instruction: 1,
+		helperCall: 2,
+		guard: 2,
+		boxingOperation: 1,
+		genericTwin: 1,
+		admissionCheck: 2,
+		materializationPath: 4,
+		stateSynchronization: 2,
+	}),
+	estimatedBinaryBytes: Object.freeze({
+		cStatement: 8,
+		inputOperand: 2,
+		duplicatedInstruction: 4,
+	}),
+	compilerWork: Object.freeze({
+		cStatement: 1,
+		helperCall: 3,
+		guard: 2,
+		boxingOperation: 1,
+		rootSlot: 1,
+		safepoint: 2,
+		duplicatedInstruction: 1,
+		genericTwin: 1,
+		admissionCheck: 2,
+		materializationPath: 4,
+		stateSynchronization: 2,
+		binaryByteDivisor: 32,
+	}),
+	runtime: Object.freeze({
+		instruction: 1,
+		helperCall: 6,
+		guard: 1,
+		boxingOperation: 2,
+		rootSlot: 1,
+		safepoint: 2,
+		admissionCheck: 1,
+		materializationPath: 6,
+		stateSynchronization: 2,
+	}),
+	loopFrequency: Object.freeze({ base: 4, maximumDepth: 3 }),
+	admission: Object.freeze({
+		maximumEstimatedBinaryBytes: 16_384,
+		baseCompilerWork: 128,
+		benefitLoopScale: 16,
+	}),
+});
+
 export interface CoreGeneratedCodeCost {
 	readonly instructions: number;
 	readonly helperCalls: number;
@@ -90,41 +139,47 @@ function generatedCodeCost(
 	const admissionChecks = overhead.admissionChecks ?? 0;
 	const materializationPaths = overhead.materializationPaths ?? 0;
 	const stateSynchronizations = overhead.stateSynchronizations ?? 0;
+	const statementWeights = CORE_GENERATED_CODE_COST_WEIGHTS.estimatedCStatements;
 	const estimatedCStatements =
-		instructions +
-		helperCalls * 2 +
-		guards * 2 +
-		boxingOperations +
-		genericTwins +
-		admissionChecks * 2 +
-		materializationPaths * 4 +
-		stateSynchronizations * 2;
+		instructions * statementWeights.instruction +
+		helperCalls * statementWeights.helperCall +
+		guards * statementWeights.guard +
+		boxingOperations * statementWeights.boxingOperation +
+		genericTwins * statementWeights.genericTwin +
+		admissionChecks * statementWeights.admissionCheck +
+		materializationPaths * statementWeights.materializationPath +
+		stateSynchronizations * statementWeights.stateSynchronization;
+	const binaryWeights = CORE_GENERATED_CODE_COST_WEIGHTS.estimatedBinaryBytes;
 	const estimatedBinaryBytes =
-		estimatedCStatements * 8 + inputOperands * 2 + duplicatedInstructions * 4;
+		estimatedCStatements * binaryWeights.cStatement +
+		inputOperands * binaryWeights.inputOperand +
+		duplicatedInstructions * binaryWeights.duplicatedInstruction;
+	const compilerWeights = CORE_GENERATED_CODE_COST_WEIGHTS.compilerWork;
 	const compileScore =
-		estimatedCStatements +
-		helperCalls * 3 +
-		guards * 2 +
-		boxingOperations +
-		rootSlots +
-		safepoints * 2 +
-		duplicatedInstructions +
-		genericTwins +
-		admissionChecks * 2 +
-		materializationPaths * 4 +
-		stateSynchronizations * 2 +
-		Math.ceil(estimatedBinaryBytes / 32);
+		estimatedCStatements * compilerWeights.cStatement +
+		helperCalls * compilerWeights.helperCall +
+		guards * compilerWeights.guard +
+		boxingOperations * compilerWeights.boxingOperation +
+		rootSlots * compilerWeights.rootSlot +
+		safepoints * compilerWeights.safepoint +
+		duplicatedInstructions * compilerWeights.duplicatedInstruction +
+		genericTwins * compilerWeights.genericTwin +
+		admissionChecks * compilerWeights.admissionCheck +
+		materializationPaths * compilerWeights.materializationPath +
+		stateSynchronizations * compilerWeights.stateSynchronization +
+		Math.ceil(estimatedBinaryBytes / compilerWeights.binaryByteDivisor);
+	const runtimeWeights = CORE_GENERATED_CODE_COST_WEIGHTS.runtime;
 	const runtimeScore =
 		loopFrequency *
-		(instructions +
-			helperCalls * 6 +
-			guards +
-			boxingOperations * 2 +
-			rootSlots +
-			safepoints * 2 +
-			admissionChecks +
-			materializationPaths * 6 +
-			stateSynchronizations * 2);
+		(instructions * runtimeWeights.instruction +
+			helperCalls * runtimeWeights.helperCall +
+			guards * runtimeWeights.guard +
+			boxingOperations * runtimeWeights.boxingOperation +
+			rootSlots * runtimeWeights.rootSlot +
+			safepoints * runtimeWeights.safepoint +
+			admissionChecks * runtimeWeights.admissionCheck +
+			materializationPaths * runtimeWeights.materializationPath +
+			stateSynchronizations * runtimeWeights.stateSynchronization);
 	return Object.freeze({
 		instructions,
 		helperCalls,
@@ -197,7 +252,8 @@ export function coreBlockLoopFrequency(cfg: CoreControlFlow, block: CoreBlockId)
 	for (const loop of cfg.loops) {
 		if (loop.blocks.has(block)) depth++;
 	}
-	return 4 ** Math.min(depth, 3);
+	const weights = CORE_GENERATED_CODE_COST_WEIGHTS.loopFrequency;
+	return weights.base ** Math.min(depth, weights.maximumDepth);
 }
 
 export function coreGeneratedCodeCostForInstructions(
@@ -227,8 +283,11 @@ export function coreGeneratedCodeAdmitsRegion(
 	cost: CoreGeneratedCodeCost,
 	benefitScore: number,
 ): boolean {
+	const weights = CORE_GENERATED_CODE_COST_WEIGHTS.admission;
 	return (
-		cost.estimatedBinaryBytes <= 16_384 &&
-		cost.compileScore <= 128 + benefitScore * cost.loopFrequency * 16
+		cost.estimatedBinaryBytes <= weights.maximumEstimatedBinaryBytes &&
+		cost.compileScore <=
+			weights.baseCompilerWork +
+				benefitScore * cost.loopFrequency * weights.benefitLoopScale
 	);
 }
