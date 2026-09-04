@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 49;
+export const COMPILER_ARTIFACT_VERSION = 50;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -786,6 +786,27 @@ function writeCompilerArtifact(
 			) {
 				w.u8(16);
 				w.u8(taggedNumericTypedArrayKind(plan.elementKind));
+			} else if (
+				plan.kind === "contained-fixed-typed-array-element" &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
+				w.u8(17);
+				w.u8(taggedNumericTypedArrayKind(plan.elementKind));
+			} else if (
+				plan.kind === "contained-fixed-typed-array-length" &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			) {
+				if (
+					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid contained TypedArray length hint",
+					);
+				}
+				w.u8(18);
 			} else if (
 				plan.kind === "primitive-string-length" &&
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
@@ -2911,6 +2932,31 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-typed-array-element",
 					elementKind: numericTypedArrayKindFromTag(r.u8()),
+				};
+			} else if (
+				tag === 17 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
+				nativeInstructions[instructionIndex] = {
+					kind: "contained-fixed-typed-array-element",
+					elementKind: numericTypedArrayKindFromTag(r.u8()),
+				};
+			} else if (
+				tag === 18 &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			) {
+				if (
+					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid contained TypedArray length hint",
+					);
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "contained-fixed-typed-array-length",
 				};
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				if (

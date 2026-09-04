@@ -1306,6 +1306,37 @@ describe("native update-expression representation", () => {
 		).toBe(false);
 	});
 
+	it("emits direct fixed-storage access for an unexposed literal-length TypedArray", () => {
+		const definition = lockedDefinition(`
+			function sum() {
+				const values = new Uint32Array(4);
+				let total = 0;
+				for (let index = 0; index < values.length; index++) {
+					values[index] = index + 1;
+					total += values[index];
+				}
+				return total;
+			}
+			globalThis.result = sum();
+		`);
+		const plans = definition.native.functions.flatMap((fn) => fn.instructions);
+		expect(
+			plans.filter((plan) => plan?.kind === "contained-fixed-typed-array-element"),
+		).toHaveLength(2);
+		expect(
+			plans.filter((plan) => plan?.kind === "contained-fixed-typed-array-length"),
+		).toHaveLength(1);
+		expect(
+			definition.native.functions
+				.flatMap((fn) => fn.specializations)
+				.some((region) => region.kind === "indexed-length-loop"),
+		).toBe(false);
+
+		const emitted = emitProgramImage(definition, { compiled: true });
+		expect(emitted).toContain("mal_vm_contained_fixed_numeric_typed_array_load(");
+		expect(emitted).toContain("mal_value_to_typed_array_object(");
+	});
+
 	it("consumes scalarized and sunk object plans in emitted C", () => {
 		const scalarized = emitLocked(`
 			function read(value) {
