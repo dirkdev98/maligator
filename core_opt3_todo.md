@@ -1104,6 +1104,44 @@ After reaching full self-compile, optimize the top three independent algorithmic
 
 Do not optimize only the full self-compile case when a smaller tier reproduces the same behavior.
 
+Recorded ladder checkpoint (2026-09-04)
+
+These artifacts are retained discovery evidence, not final acceptance measurements. The host was interactive and moved between battery and AC power during the real tiers; repeat the complete production campaign on a quiet host before applying the final thresholds.
+
+Tier | Workload | Recorded result
+--- | --- | ---
+1 | Local arithmetic at 1x, 3x and 10x | `bench/core-opt3-slice5-tier1.json`; 10x input grew 9.19x while optimizeCore grew 3.00x, ending at 9.87 ms per 1,000 input instructions.
+2 | Straight-line Core at 1x, 3x and 10x | `bench/core-opt3-slice5-tier2.json`; 10x input grew 9.96x and optimizeCore grew 9.28x, ending at 6.61 ms per 1,000 input instructions.
+3 | CFG and phi-heavy Core at 1x, 3x and 10x | `bench/core-opt3-slice5-tier3.json`; 10x input grew 9.44x and optimizeCore grew 3.46x, ending at 12.85 ms per 1,000 input instructions with six CFG recomputations.
+4 | Nested loops, LICM and PRE at 1x, 3x and 10x | `bench/core-opt3-slice5-tier4.json`; 10x input grew 8.71x and optimizeCore grew 4.90x, ending at 14.93 ms per 1,000 input instructions.
+5 | Memory, provenance and allocation at 1x, 3x and 10x | `bench/core-opt3-slice5-tier5.json`; 10x input grew 8.77x and optimizeCore grew 4.66x, ending at 9.46 ms per 1,000 input instructions.
+6 | Exact call graphs and recursive SCCs at 1x, 3x and 10x | `bench/core-opt3-slice5-tier6.json`; 10x input grew 9.66x and optimizeCore grew 6.04x, with about 13.9 transfers per exact edge at 10x.
+7 | Wildcard and opaque calls at 1x, 3x and 10x | `bench/core-opt3-slice5-tier7.json`; 10x input grew 8.51x and optimizeCore grew 5.00x, ending at 21.86 ms per 1,000 input instructions.
+8 | Transform candidates | `bench/core-opt3-slice5-tier8.json`; 35.65 ms wall and 18.20 ms optimizeCore per 1,000 input instructions, with 32 admitted candidates.
+9 | Pass and optimizer infrastructure | `bench/core-opt3-slice5-tier9.json`; 30.30 ms wall and 17.42 ms optimizeCore per 1,000 input instructions.
+10 | Shape provenance | `bench/core-opt3-slice5-tier10.json`; 36.67 ms wall and 22.49 ms optimizeCore per 1,000 input instructions. The adjacent wall ratio was 1.210x and triggered the focused algorithm survey despite remaining below the 1.25x gate.
+11 | Memory analysis | `bench/core-opt3-slice5-tier11.json`; 40.20 ms wall and 24.66 ms optimizeCore per 1,000 input instructions, adjacent ratios 1.096x wall and 1.096x optimizeCore.
+12 | Summaries | `bench/core-opt3-slice5-tier12.json`; 33.03 ms wall and 19.43 ms optimizeCore per 1,000 input instructions.
+13 | Value kinds | `bench/core-opt3-slice5-tier13.json`; 32.34 ms wall and 19.40 ms optimizeCore per 1,000 input instructions.
+14 | `optimize.ts` | `bench/core-opt3-slice5-tier14.json`; 35.40 ms wall and 21.46 ms optimizeCore per 1,000 input instructions, with 1.295 GB sampled peak RSS.
+15 | `compile-program.ts` | `bench/core-opt3-slice5-tier15.json`; 40.47 ms wall and 24.20 ms optimizeCore per 1,000 input instructions, adjacent ratios 1.143x wall and 1.128x optimizeCore, with 1.786 GB sampled peak RSS.
+16 | Complete Core subtree | `bench/core-opt3-slice5-tier16.json`; 33.90 ms wall and 20.21 ms optimizeCore per 1,000 input instructions, both about 0.84x tier 15.
+17 | Full Node-hosted self-compile | `bench/core-opt3-slice5-tier17.json`; five warm median 16.003 s, three cold median 17.130 s, normalized adjacent ratios 1.058x wall and 1.051x optimizeCore, and one observable checksum across every sample. This misses the 15.0 s warm and 8.0 s optimizeCore final gates and requires a quiet rerun.
+18 | Full Maligator-hosted self-compile | `bench/core-opt3-slice5-tier18.json`; five-pair medians were 18.966 s under Node and 194.213 s under Maligator with matching digests. The repository comparison reported Maligator 54.0% faster than the saved baseline. The native build took 236.567 s and peaked at 3.838 GB RSS; the runtime resource sample recorded 2.106 GB Maligator RSS and 2.031 GB Node RSS. Treat these active-device measurements as provisional.
+19 | Cold `test:check` | Pending until the algorithm and RSS loops stop changing the compiler.
+
+Tier 18 initially ran all build, cold, warmup, five paired, phase and resource work under one 600-second parent and timed out. The retained result used the repository's resumable checkpoint protocol: ten independent stages, each with its own 600-second fuse. No stage exceeded 3m59s and the final artifact was emitted only after all stages and parity checks completed.
+
+Recorded algorithm experiments
+
+Experiment | Result | Decision
+--- | --- | ---
+Batch equivalent exact-load forwarding in one function editor session | The tier-10 target improved about 2.2% and reduced memory-version recomputations from 992 to 971 and memory transfers from 73,598 to 61,233, but tier 9 regressed 6.0% optimizeCore and 8.0% wall and smaller tiers exceeded the 5% guardrail. | Rejected and reverted.
+Memoized natural-loop parent and depth construction | Focused loop tests passed and allocation/RSS fell, but the tier-10 wall and optimizeCore medians regressed about 9%; the workload did not sample `naturalLoops` as a CPU hotspot. | Rejected and reverted.
+Skip general sparse-memory SSA bookkeeping for single-predecessor functions | Focused type checking and 74 memory/provenance tests passed; the target analysis fell from 511 ms to 340 ms and sampled allocation fell 25%, but an active-device tiers 1-11 campaign produced contradictory off-mode regressions while the later full-profile sample improved. | Inconclusive and reverted; repeat as a quiet paired A/B before considering it.
+
+The retained tier-17 CPU profile sampled 12,630.714 ms in optimizeCore. Hotspots at or near the 3% continuation threshold are GC at 1,115.948 ms (8.8%), `memoryVersions` at 649.213 ms (5.1%), `buildEdges` at 433.769 ms (3.4%), and `immediateDominators` at 372.630 ms (3.0% after rounding). The algorithm loop remains open.
+
 Part C — RSS and allocation loop
 
 Profile at least:
