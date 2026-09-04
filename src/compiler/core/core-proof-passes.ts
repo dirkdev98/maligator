@@ -335,6 +335,18 @@ const foldSubsumedGuards: CoreFunctionPass = {
 const refinePrimitiveEffects: CoreFunctionPass = {
 	name: "primitive-effect-refinement",
 	stage: "proofs",
+	requiredFunctionOpcodesAny: ["unary", "binary"],
+	admission: {
+		predicate: "unary or binary operation whose primitive kinds can refine effects",
+		hasOpportunity({ program, function: functionId }) {
+			const fn = program.function(functionId);
+			for (const instruction of fn.instructionIds()) {
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode === "unary" || opcode === "binary") return true;
+			}
+			return false;
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -554,9 +566,35 @@ function scalarCandidate(
 	return representation;
 }
 
+function hasLocalScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean {
+	const edgeUses = buildEdgeUseMask(fn);
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = coreValueId(valueIndex);
+		if (
+			!fn.isValueLive(value) ||
+			fn.valueRepresentation(value) !== "boxed" ||
+			fn.kernel.valueDefinitionKind(value) !== 1
+		)
+			continue;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (
+			SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition)) &&
+			scalarConsumersOnly(fn, value, edgeUses)
+		)
+			return true;
+	}
+	return false;
+}
+
 const materializeLocalScalars: CoreFunctionPass = {
 	name: "local-scalar-representation-selection",
 	stage: "proofs",
+	admission: {
+		predicate: "boxed scalar producer with only local scalar consumers",
+		hasOpportunity({ program, function: functionId }) {
+			return hasLocalScalarRepresentationOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
@@ -599,9 +637,83 @@ function flowScalarRepresentation(
 	return undefined;
 }
 
+function hasFlowScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean {
+	const pairIncludesBoxed = (left: CoreValueId, right: CoreValueId): boolean =>
+		fn.valueRepresentation(left) === "boxed" || fn.valueRepresentation(right) === "boxed";
+	for (const block of fn.blockIds()) {
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+			const edge = edgeStart + edgeOffset;
+			const target = fn.kernel.terminatorEdgeBlock(edge);
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+			const count = Math.min(
+				fn.kernel.terminatorEdgeArgumentCount(edge),
+				fn.kernel.blockParameterCount(target),
+			);
+			const parameterStart = fn.kernel.blockParameterStart(target);
+			for (let index = 0; index < count; index++) {
+				if (
+					pairIncludesBoxed(
+						fn.kernel.operandAt(argumentStart + index),
+						fn.kernel.blockParameterValue(parameterStart + index),
+					)
+				)
+					return true;
+			}
+		}
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler !== undefined) {
+			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			const count = Math.min(
+				fn.kernel.blockHandlerArgumentCount(block),
+				Math.max(0, fn.kernel.blockParameterCount(handler) - 1),
+			);
+			const parameterStart = fn.kernel.blockParameterStart(handler);
+			for (let index = 0; index < count; index++) {
+				if (
+					pairIncludesBoxed(
+						fn.kernel.handlerArgumentAt(argumentStart + index),
+						fn.kernel.blockParameterValue(parameterStart + index + 1),
+					)
+				)
+					return true;
+			}
+		}
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			if (!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))) continue;
+			let values = 0;
+			let boxed = false;
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			for (let index = 0; index < operandCount; index++) {
+				values++;
+				boxed ||=
+					fn.valueRepresentation(fn.kernel.operandAt(operandStart + index)) === "boxed";
+			}
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				values++;
+				boxed ||=
+					fn.valueRepresentation(fn.kernel.resultAt(resultStart + index)) === "boxed";
+			}
+			if (values >= 2 && boxed) return true;
+		}
+	}
+	return false;
+}
+
 const materializeFlowScalars: CoreFunctionPass = {
 	name: "flow-scalar-representation-selection",
 	stage: "proofs",
+	admission: {
+		predicate: "boxed value connected to a scalar flow component",
+		hasOpportunity({ program, function: functionId }) {
+			return hasFlowScalarRepresentationOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
