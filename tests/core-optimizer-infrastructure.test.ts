@@ -20,6 +20,7 @@ import {
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
 import {
 	CORE_MEMORY_PASSES,
@@ -706,6 +707,25 @@ describe("Core optimizer infrastructure", () => {
 		expect(
 			report.finish(program, { directEntries: [], specializations: [] }).analyses,
 		).toEqual([]);
+	});
+
+	it("skips value-kind analysis without an observation candidate", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const pass = CORE_LOCAL_CANONICALIZATION_PASSES.find(
+			({ name }) => name === "value-kind-observation-folding",
+		)!;
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		).runComponent("canonicalize", [pass]);
+
+		const result = report.finish(program, { directEntries: [], specializations: [] });
+		expect(result.analyses).toEqual([]);
+		expect(result.passes).toEqual([]);
 	});
 
 	it("bounds only optional development work and reports profile exhaustion", () => {
