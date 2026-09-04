@@ -1,8 +1,8 @@
 {
-	"schema": 1,
-	"generatedAt": "2026-09-04T15:35:27.428Z",
+	"schema": 2,
+	"generatedAt": "2026-09-04T16:17:18.312Z",
 	"source": {
-		"commit": "2a00b5f18656827561854de883ec7074ae68a43f",
+		"commit": "c12b6aadab7c4f88a3386eb2ee7b46c14ecaaf17",
 		"dirty": false,
 		"dirtyDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	},
@@ -20,7 +20,7 @@
 		"fixture": "bench/compiler-host-gap.mjs",
 		"fixtureDigest": "29471771003ae9249cdd8d42ac098e8a94cc88e8b66eb21a4274f860bc79ad46",
 		"driver": "scripts/bench-compiler-host-gap.ts",
-		"driverDigest": "6daf867746796f6a7ea4a75070bb0edefbe0e4b2084cbb875fd60d4d38a9d68c",
+		"driverDigest": "be136dfece0de986bee7bfc54599454690c8c24a4b801617a4b83efa01eff7e3",
 		"build": {
 			"assets": {},
 			"modules": {
@@ -43,7 +43,9 @@
 				"node": true,
 				"maligator": true
 			}
-		}
+		},
+		"selfCompileArtifact": "bench/core-opt4-host-gap-start.json",
+		"selfCompileArtifactDigest": "531b7b9a213dc2ba4f0a73ad44684dced6185062e5608deed58b4aea9cfd37a4"
 	},
 	"workParity": {
 		"operations": true,
@@ -63,13 +65,13 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 69
-					},
-					{
 						"elapsedMs": 68
 					},
 					{
 						"elapsedMs": 69
+					},
+					{
+						"elapsedMs": 68
 					},
 					{
 						"elapsedMs": 69
@@ -78,19 +80,19 @@
 						"elapsedMs": 68
 					}
 				],
-				"medianMs": 69,
-				"nsPerOperation": 3.45,
+				"medianMs": 68,
+				"nsPerOperation": 3.4,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 62455808,
-					"sampledAllocatedBytes": 473232,
+					"peakRssBytes": 62701568,
+					"sampledAllocatedBytes": 518840,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 325,
+						"elapsedMs": 326,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -100,7 +102,7 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 327,
+						"elapsedMs": 326,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -119,15 +121,15 @@
 				"nsPerOperation": 16.25,
 				"resource": {
 					"cpuMs": 330,
-					"peakRssBytes": 3604480,
+					"peakRssBytes": 3588096,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.7101449275362315,
-			"hostGapMs": 256
+			"ratio": 4.779411764705882,
+			"hostGapMs": 257
 		},
 		{
 			"id": "typed-array-operations",
@@ -147,43 +149,43 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 45
+						"elapsedMs": 44
 					},
 					{
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 45
+						"elapsedMs": 44
 					}
 				],
 				"medianMs": 44,
 				"nsPerOperation": 1.678466796875,
 				"resource": {
 					"cpuMs": 70,
-					"peakRssBytes": 63340544,
-					"sampledAllocatedBytes": 501640,
+					"peakRssBytes": 63569920,
+					"sampledAllocatedBytes": 504208,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 536,
+						"elapsedMs": 546,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 543,
+						"elapsedMs": 547,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 549,
+						"elapsedMs": 554,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 549,
+						"elapsedMs": 550,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
@@ -197,7 +199,7 @@
 				"nsPerOperation": 20.94268798828125,
 				"resource": {
 					"cpuMs": 560,
-					"peakRssBytes": 3637248,
+					"peakRssBytes": 3620864,
 					"allocatedBytes": 224,
 					"collections": 0,
 					"peakLiveBytes": 0,
@@ -219,71 +221,71 @@
 			"node": {
 				"samples": [
 					{
+						"elapsedMs": 68
+					},
+					{
+						"elapsedMs": 62
+					},
+					{
 						"elapsedMs": 62
 					},
 					{
 						"elapsedMs": 62
 					},
 					{
-						"elapsedMs": 63
-					},
-					{
 						"elapsedMs": 62
-					},
-					{
-						"elapsedMs": 61
 					}
 				],
 				"medianMs": 62,
 				"nsPerOperation": 2.421875,
 				"resource": {
-					"cpuMs": 150,
-					"peakRssBytes": 67895296,
-					"sampledAllocatedBytes": 496144,
+					"cpuMs": 160,
+					"peakRssBytes": 68206592,
+					"sampledAllocatedBytes": 512184,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 858,
+						"elapsedMs": 872,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					},
 					{
-						"elapsedMs": 861,
+						"elapsedMs": 876,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					},
 					{
-						"elapsedMs": 850,
+						"elapsedMs": 878,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					},
 					{
-						"elapsedMs": 859,
+						"elapsedMs": 873,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					},
 					{
-						"elapsedMs": 877,
+						"elapsedMs": 873,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					}
 				],
-				"medianMs": 859,
-				"nsPerOperation": 33.5546875,
+				"medianMs": 873,
+				"nsPerOperation": 34.1015625,
 				"resource": {
-					"cpuMs": 870,
-					"peakRssBytes": 14647296,
+					"cpuMs": 890,
+					"peakRssBytes": 14680064,
 					"allocatedBytes": 164960064,
 					"collections": 37,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.229
+					"maxPauseMs": 0.248
 				}
 			},
-			"ratio": 13.85483870967742,
-			"hostGapMs": 797
+			"ratio": 14.080645161290322,
+			"hostGapMs": 811
 		},
 		{
 			"id": "map-operations",
@@ -300,31 +302,31 @@
 						"elapsedMs": 71
 					},
 					{
+						"elapsedMs": 74
+					},
+					{
+						"elapsedMs": 71
+					},
+					{
 						"elapsedMs": 71
 					},
 					{
 						"elapsedMs": 72
-					},
-					{
-						"elapsedMs": 72
-					},
-					{
-						"elapsedMs": 71
 					}
 				],
 				"medianMs": 71,
 				"nsPerOperation": 5.4168701171875,
 				"resource": {
-					"cpuMs": 300,
-					"peakRssBytes": 73039872,
-					"sampledAllocatedBytes": 499256,
+					"cpuMs": 310,
+					"peakRssBytes": 73187328,
+					"sampledAllocatedBytes": 494656,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 358,
+						"elapsedMs": 364,
 						"allocatedBytes": 262246464,
 						"collections": 62
 					},
@@ -334,34 +336,34 @@
 						"collections": 62
 					},
 					{
-						"elapsedMs": 357,
+						"elapsedMs": 373,
 						"allocatedBytes": 262246464,
 						"collections": 62
 					},
 					{
-						"elapsedMs": 358,
+						"elapsedMs": 365,
 						"allocatedBytes": 262246464,
 						"collections": 62
 					},
 					{
-						"elapsedMs": 359,
+						"elapsedMs": 365,
 						"allocatedBytes": 262246464,
 						"collections": 62
 					}
 				],
-				"medianMs": 358,
-				"nsPerOperation": 27.313232421875,
+				"medianMs": 365,
+				"nsPerOperation": 27.8472900390625,
 				"resource": {
 					"cpuMs": 380,
-					"peakRssBytes": 14712832,
+					"peakRssBytes": 14696448,
 					"allocatedBytes": 262246464,
 					"collections": 62,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.428
+					"maxPauseMs": 0.411
 				}
 			},
-			"ratio": 5.042253521126761,
-			"hostGapMs": 287
+			"ratio": 5.140845070422535,
+			"hostGapMs": 294
 		},
 		{
 			"id": "set-operations",
@@ -375,34 +377,34 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 40
+						"elapsedMs": 43
 					},
 					{
-						"elapsedMs": 39
+						"elapsedMs": 42
 					},
 					{
-						"elapsedMs": 41
+						"elapsedMs": 42
 					},
 					{
-						"elapsedMs": 40
+						"elapsedMs": 42
 					},
 					{
-						"elapsedMs": 40
+						"elapsedMs": 42
 					}
 				],
-				"medianMs": 40,
-				"nsPerOperation": 10.850694444444445,
+				"medianMs": 42,
+				"nsPerOperation": 11.393229166666666,
 				"resource": {
 					"cpuMs": 80,
-					"peakRssBytes": 65961984,
-					"sampledAllocatedBytes": 494096,
+					"peakRssBytes": 65798144,
+					"sampledAllocatedBytes": 460784,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 132,
+						"elapsedMs": 134,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					},
@@ -412,34 +414,34 @@
 						"collections": 23
 					},
 					{
-						"elapsedMs": 130,
+						"elapsedMs": 137,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					},
 					{
-						"elapsedMs": 132,
+						"elapsedMs": 136,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					},
 					{
-						"elapsedMs": 132,
+						"elapsedMs": 138,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					}
 				],
-				"medianMs": 132,
-				"nsPerOperation": 35.807291666666664,
+				"medianMs": 136,
+				"nsPerOperation": 36.892361111111114,
 				"resource": {
 					"cpuMs": 150,
 					"peakRssBytes": 14712832,
 					"allocatedBytes": 98342464,
 					"collections": 23,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.403
+					"maxPauseMs": 0.395
 				}
 			},
-			"ratio": 3.3,
-			"hostGapMs": 92
+			"ratio": 3.238095238095238,
+			"hostGapMs": 94
 		},
 		{
 			"id": "stable-shape-properties",
@@ -456,68 +458,68 @@
 						"elapsedMs": 75
 					},
 					{
-						"elapsedMs": 76
+						"elapsedMs": 81
+					},
+					{
+						"elapsedMs": 81
 					},
 					{
 						"elapsedMs": 75
 					},
 					{
-						"elapsedMs": 79
-					},
-					{
-						"elapsedMs": 75
+						"elapsedMs": 80
 					}
 				],
-				"medianMs": 75,
-				"nsPerOperation": 0.95367431640625,
+				"medianMs": 80,
+				"nsPerOperation": 1.0172526041666667,
 				"resource": {
 					"cpuMs": 100,
-					"peakRssBytes": 65421312,
-					"sampledAllocatedBytes": 512024,
+					"peakRssBytes": 65323008,
+					"sampledAllocatedBytes": 451928,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 464,
+						"elapsedMs": 474,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 466,
+						"elapsedMs": 478,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 465,
+						"elapsedMs": 475,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 480,
+						"elapsedMs": 475,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 479,
+						"elapsedMs": 478,
 						"allocatedBytes": 948480,
 						"collections": 0
 					}
 				],
-				"medianMs": 466,
-				"nsPerOperation": 5.925496419270833,
+				"medianMs": 475,
+				"nsPerOperation": 6.039937337239583,
 				"resource": {
 					"cpuMs": 480,
-					"peakRssBytes": 4767744,
+					"peakRssBytes": 4751360,
 					"allocatedBytes": 948480,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 6.213333333333333,
-			"hostGapMs": 391
+			"ratio": 5.9375,
+			"hostGapMs": 395
 		},
 		{
 			"id": "short-lived-records",
@@ -549,21 +551,26 @@
 				"medianMs": 50,
 				"nsPerOperation": 3.5714285714285716,
 				"resource": {
-					"cpuMs": 70,
-					"peakRssBytes": 64765952,
-					"sampledAllocatedBytes": 491968,
+					"cpuMs": 80,
+					"peakRssBytes": 64356352,
+					"sampledAllocatedBytes": 492472,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 309,
+						"allocatedBytes": 64,
+						"collections": 0
+					},
+					{
 						"elapsedMs": 308,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 312,
+						"elapsedMs": 308,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -574,11 +581,6 @@
 					},
 					{
 						"elapsedMs": 309,
-						"allocatedBytes": 64,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 308,
 						"allocatedBytes": 64,
 						"collections": 0
 					}
@@ -612,13 +614,13 @@
 						"elapsedMs": 53
 					},
 					{
-						"elapsedMs": 49
-					},
-					{
-						"elapsedMs": 52
+						"elapsedMs": 51
 					},
 					{
 						"elapsedMs": 50
+					},
+					{
+						"elapsedMs": 51
 					},
 					{
 						"elapsedMs": 51
@@ -628,52 +630,52 @@
 				"nsPerOperation": 12.75,
 				"resource": {
 					"cpuMs": 450,
-					"peakRssBytes": 64503808,
-					"sampledAllocatedBytes": 496528,
+					"peakRssBytes": 65011712,
+					"sampledAllocatedBytes": 491184,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 1050,
+						"elapsedMs": 1045,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1033,
+						"elapsedMs": 1063,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1035,
+						"elapsedMs": 1060,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1036,
+						"elapsedMs": 1048,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1044,
+						"elapsedMs": 1053,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					}
 				],
-				"medianMs": 1036,
-				"nsPerOperation": 259,
+				"medianMs": 1053,
+				"nsPerOperation": 263.25,
 				"resource": {
-					"cpuMs": 1060,
-					"peakRssBytes": 36438016,
+					"cpuMs": 1070,
+					"peakRssBytes": 36421632,
 					"allocatedBytes": 192000144,
 					"collections": 44,
 					"peakLiveBytes": 88240,
-					"maxPauseMs": 5.277
+					"maxPauseMs": 5.102
 				}
 			},
-			"ratio": 20.313725490196077,
-			"hostGapMs": 985
+			"ratio": 20.647058823529413,
+			"hostGapMs": 1002
 		},
 		{
 			"id": "frozen-records",
@@ -687,39 +689,34 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 70
-					},
-					{
-						"elapsedMs": 71
-					},
-					{
-						"elapsedMs": 70
-					},
-					{
-						"elapsedMs": 71
-					},
-					{
 						"elapsedMs": 72
+					},
+					{
+						"elapsedMs": 71
+					},
+					{
+						"elapsedMs": 71
+					},
+					{
+						"elapsedMs": 71
+					},
+					{
+						"elapsedMs": 71
 					}
 				],
 				"medianMs": 71,
 				"nsPerOperation": 19.72222222222222,
 				"resource": {
 					"cpuMs": 250,
-					"peakRssBytes": 65224704,
-					"sampledAllocatedBytes": 519072,
+					"peakRssBytes": 65077248,
+					"sampledAllocatedBytes": 523176,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 143,
-						"allocatedBytes": 230400064,
-						"collections": 53
-					},
-					{
-						"elapsedMs": 153,
+						"elapsedMs": 147,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					},
@@ -729,29 +726,34 @@
 						"collections": 53
 					},
 					{
-						"elapsedMs": 141,
+						"elapsedMs": 145,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					},
 					{
-						"elapsedMs": 142,
+						"elapsedMs": 144,
+						"allocatedBytes": 230400064,
+						"collections": 53
+					},
+					{
+						"elapsedMs": 144,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					}
 				],
-				"medianMs": 143,
-				"nsPerOperation": 39.72222222222222,
+				"medianMs": 144,
+				"nsPerOperation": 40,
 				"resource": {
 					"cpuMs": 140,
-					"peakRssBytes": 20037632,
+					"peakRssBytes": 20021248,
 					"allocatedBytes": 230400064,
 					"collections": 53,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 1.554
+					"maxPauseMs": 1.503
 				}
 			},
-			"ratio": 2.0140845070422535,
-			"hostGapMs": 72
+			"ratio": 2.028169014084507,
+			"hostGapMs": 73
 		},
 		{
 			"id": "iterator-generator-traversal",
@@ -771,43 +773,38 @@
 						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 47
+						"elapsedMs": 49
 					},
 					{
 						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 46
+						"elapsedMs": 49
 					}
 				],
 				"medianMs": 46,
 				"nsPerOperation": 11.979166666666666,
 				"resource": {
 					"cpuMs": 400,
-					"peakRssBytes": 65257472,
-					"sampledAllocatedBytes": 455856,
+					"peakRssBytes": 65486848,
+					"sampledAllocatedBytes": 507872,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 329,
+						"allocatedBytes": 368640064,
+						"collections": 87
+					},
+					{
+						"elapsedMs": 325,
+						"allocatedBytes": 368640064,
+						"collections": 87
+					},
+					{
 						"elapsedMs": 327,
-						"allocatedBytes": 368640064,
-						"collections": 87
-					},
-					{
-						"elapsedMs": 352,
-						"allocatedBytes": 368640064,
-						"collections": 87
-					},
-					{
-						"elapsedMs": 334,
-						"allocatedBytes": 368640064,
-						"collections": 87
-					},
-					{
-						"elapsedMs": 335,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					},
@@ -815,21 +812,26 @@
 						"elapsedMs": 323,
 						"allocatedBytes": 368640064,
 						"collections": 87
+					},
+					{
+						"elapsedMs": 328,
+						"allocatedBytes": 368640064,
+						"collections": 87
 					}
 				],
-				"medianMs": 334,
-				"nsPerOperation": 86.97916666666667,
+				"medianMs": 327,
+				"nsPerOperation": 85.15625,
 				"resource": {
 					"cpuMs": 400,
-					"peakRssBytes": 20021248,
+					"peakRssBytes": 20037632,
 					"allocatedBytes": 368640064,
 					"collections": 87,
 					"peakLiveBytes": 89776,
-					"maxPauseMs": 1.328
+					"maxPauseMs": 1.334
 				}
 			},
-			"ratio": 7.260869565217392,
-			"hostGapMs": 288
+			"ratio": 7.108695652173913,
+			"hostGapMs": 281
 		},
 		{
 			"id": "for-of-collections",
@@ -846,36 +848,41 @@
 						"elapsedMs": 78
 					},
 					{
-						"elapsedMs": 78
+						"elapsedMs": 75
 					},
 					{
-						"elapsedMs": 77
+						"elapsedMs": 74
 					},
 					{
-						"elapsedMs": 71
+						"elapsedMs": 74
 					},
 					{
-						"elapsedMs": 72
+						"elapsedMs": 76
 					}
 				],
-				"medianMs": 77,
-				"nsPerOperation": 4.177517361111111,
+				"medianMs": 75,
+				"nsPerOperation": 4.069010416666667,
 				"resource": {
-					"cpuMs": 450,
-					"peakRssBytes": 66994176,
-					"sampledAllocatedBytes": 515064,
+					"cpuMs": 460,
+					"peakRssBytes": 67043328,
+					"sampledAllocatedBytes": 501584,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 326,
+						"elapsedMs": 350,
 						"allocatedBytes": 2979152,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 349,
+						"elapsedMs": 333,
+						"allocatedBytes": 2979152,
+						"collections": 0
+					},
+					{
+						"elapsedMs": 350,
 						"allocatedBytes": 2979152,
 						"collections": 0
 					},
@@ -888,26 +895,21 @@
 						"elapsedMs": 349,
 						"allocatedBytes": 2979152,
 						"collections": 0
-					},
-					{
-						"elapsedMs": 334,
-						"allocatedBytes": 2979152,
-						"collections": 0
 					}
 				],
-				"medianMs": 334,
-				"nsPerOperation": 18.12065972222222,
+				"medianMs": 349,
+				"nsPerOperation": 18.934461805555557,
 				"resource": {
 					"cpuMs": 350,
-					"peakRssBytes": 6799360,
+					"peakRssBytes": 6782976,
 					"allocatedBytes": 2979152,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.337662337662338,
-			"hostGapMs": 257
+			"ratio": 4.653333333333333,
+			"hostGapMs": 274
 		},
 		{
 			"id": "array-callbacks",
@@ -921,27 +923,27 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 53
-					},
-					{
-						"elapsedMs": 155
+						"elapsedMs": 153
 					},
 					{
 						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 55
+						"elapsedMs": 54
 					},
 					{
-						"elapsedMs": 156
+						"elapsedMs": 54
+					},
+					{
+						"elapsedMs": 55
 					}
 				],
 				"medianMs": 55,
 				"nsPerOperation": 1.52587890625,
 				"resource": {
 					"cpuMs": 140,
-					"peakRssBytes": 68272128,
-					"sampledAllocatedBytes": 481288,
+					"peakRssBytes": 68173824,
+					"sampledAllocatedBytes": 484064,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -953,12 +955,7 @@
 						"collections": 36
 					},
 					{
-						"elapsedMs": 390,
-						"allocatedBytes": 163029312,
-						"collections": 36
-					},
-					{
-						"elapsedMs": 389,
+						"elapsedMs": 391,
 						"allocatedBytes": 163029312,
 						"collections": 36
 					},
@@ -968,24 +965,29 @@
 						"collections": 36
 					},
 					{
-						"elapsedMs": 388,
+						"elapsedMs": 387,
+						"allocatedBytes": 163029312,
+						"collections": 36
+					},
+					{
+						"elapsedMs": 387,
 						"allocatedBytes": 163029312,
 						"collections": 36
 					}
 				],
-				"medianMs": 389,
-				"nsPerOperation": 10.792125355113637,
+				"medianMs": 388,
+				"nsPerOperation": 10.764382102272727,
 				"resource": {
-					"cpuMs": 390,
+					"cpuMs": 380,
 					"peakRssBytes": 21102592,
 					"allocatedBytes": 163029312,
 					"collections": 36,
 					"peakLiveBytes": 89632,
-					"maxPauseMs": 0.371
+					"maxPauseMs": 0.383
 				}
 			},
-			"ratio": 7.072727272727272,
-			"hostGapMs": 334
+			"ratio": 7.054545454545455,
+			"hostGapMs": 333
 		},
 		{
 			"id": "direct-calls",
@@ -999,7 +1001,7 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 47
+						"elapsedMs": 48
 					},
 					{
 						"elapsedMs": 47
@@ -1018,20 +1020,20 @@
 				"nsPerOperation": 2.7976190476190474,
 				"resource": {
 					"cpuMs": 70,
-					"peakRssBytes": 62832640,
-					"sampledAllocatedBytes": 474648,
+					"peakRssBytes": 63143936,
+					"sampledAllocatedBytes": 531056,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 260,
+						"elapsedMs": 263,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 262,
+						"elapsedMs": 279,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -1041,29 +1043,29 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 262,
+						"elapsedMs": 263,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 261,
+						"elapsedMs": 262,
 						"allocatedBytes": 64,
 						"collections": 0
 					}
 				],
-				"medianMs": 262,
-				"nsPerOperation": 15.595238095238095,
+				"medianMs": 263,
+				"nsPerOperation": 15.654761904761905,
 				"resource": {
 					"cpuMs": 280,
-					"peakRssBytes": 3620864,
+					"peakRssBytes": 3588096,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 5.574468085106383,
-			"hostGapMs": 215
+			"ratio": 5.595744680851064,
+			"hostGapMs": 216
 		},
 		{
 			"id": "indirect-calls",
@@ -1071,77 +1073,77 @@
 			"owner": "indirect function calls",
 			"category": "function-closure-dispatch",
 			"sourceSeam": "src/compiler/core/core-program-flow.ts",
-			"scale": 16,
-			"operations": 14400000,
-			"checksum": 26603315,
+			"scale": 10,
+			"operations": 9000000,
+			"checksum": 891704902,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 69
+						"elapsedMs": 42
 					},
 					{
-						"elapsedMs": 68
+						"elapsedMs": 43
 					},
 					{
-						"elapsedMs": 69
+						"elapsedMs": 43
 					},
 					{
-						"elapsedMs": 71
+						"elapsedMs": 43
 					},
 					{
-						"elapsedMs": 72
+						"elapsedMs": 42
 					}
 				],
-				"medianMs": 69,
-				"nsPerOperation": 4.791666666666667,
+				"medianMs": 43,
+				"nsPerOperation": 4.777777777777778,
 				"resource": {
-					"cpuMs": 100,
-					"peakRssBytes": 63864832,
-					"sampledAllocatedBytes": 518224,
+					"cpuMs": 70,
+					"peakRssBytes": 63356928,
+					"sampledAllocatedBytes": 470200,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 317,
+						"elapsedMs": 196,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 316,
+						"elapsedMs": 195,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 328,
+						"elapsedMs": 196,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 342,
+						"elapsedMs": 196,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 342,
+						"elapsedMs": 197,
 						"allocatedBytes": 480,
 						"collections": 0
 					}
 				],
-				"medianMs": 328,
-				"nsPerOperation": 22.77777777777778,
+				"medianMs": 196,
+				"nsPerOperation": 21.77777777777778,
 				"resource": {
-					"cpuMs": 360,
-					"peakRssBytes": 3588096,
+					"cpuMs": 210,
+					"peakRssBytes": 3604480,
 					"allocatedBytes": 480,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.753623188405797,
-			"hostGapMs": 259
+			"ratio": 4.558139534883721,
+			"hostGapMs": 153
 		},
 		{
 			"id": "closure-calls",
@@ -1149,77 +1151,77 @@
 			"owner": "closure calls and captured state",
 			"category": "function-closure-dispatch",
 			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
-			"scale": 28,
-			"operations": 25200000,
-			"checksum": 446276994,
+			"scale": 20,
+			"operations": 18000000,
+			"checksum": 175942565,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 71
+						"elapsedMs": 52
 					},
 					{
-						"elapsedMs": 74
+						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 78
+						"elapsedMs": 54
 					},
 					{
-						"elapsedMs": 72
+						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 75
+						"elapsedMs": 51
 					}
 				],
-				"medianMs": 74,
-				"nsPerOperation": 2.9365079365079363,
+				"medianMs": 54,
+				"nsPerOperation": 3,
 				"resource": {
-					"cpuMs": 100,
-					"peakRssBytes": 62783488,
-					"sampledAllocatedBytes": 506848,
+					"cpuMs": 80,
+					"peakRssBytes": 62947328,
+					"sampledAllocatedBytes": 522920,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 544,
+						"elapsedMs": 390,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 573,
+						"elapsedMs": 404,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 547,
+						"elapsedMs": 402,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 552,
+						"elapsedMs": 402,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 562,
+						"elapsedMs": 388,
 						"allocatedBytes": 7936,
 						"collections": 0
 					}
 				],
-				"medianMs": 552,
-				"nsPerOperation": 21.904761904761905,
+				"medianMs": 402,
+				"nsPerOperation": 22.333333333333332,
 				"resource": {
-					"cpuMs": 560,
-					"peakRssBytes": 3637248,
+					"cpuMs": 400,
+					"peakRssBytes": 3653632,
 					"allocatedBytes": 7936,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 7.45945945945946,
-			"hostGapMs": 478
+			"ratio": 7.444444444444445,
+			"hostGapMs": 348
 		},
 		{
 			"id": "string-keys",
@@ -1233,34 +1235,44 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 57
+						"elapsedMs": 58
 					},
 					{
 						"elapsedMs": 58
 					},
 					{
-						"elapsedMs": 56
-					},
-					{
-						"elapsedMs": 56
+						"elapsedMs": 58
 					},
 					{
 						"elapsedMs": 57
+					},
+					{
+						"elapsedMs": 58
 					}
 				],
-				"medianMs": 57,
-				"nsPerOperation": 35.18518518518518,
+				"medianMs": 58,
+				"nsPerOperation": 35.80246913580247,
 				"resource": {
 					"cpuMs": 190,
-					"peakRssBytes": 65355776,
-					"sampledAllocatedBytes": 497904,
+					"peakRssBytes": 65536000,
+					"sampledAllocatedBytes": 492008,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 113,
+						"elapsedMs": 115,
+						"allocatedBytes": 77841968,
+						"collections": 18
+					},
+					{
+						"elapsedMs": 117,
+						"allocatedBytes": 77841968,
+						"collections": 18
+					},
+					{
+						"elapsedMs": 118,
 						"allocatedBytes": 77841968,
 						"collections": 18
 					},
@@ -1270,34 +1282,24 @@
 						"collections": 18
 					},
 					{
-						"elapsedMs": 116,
-						"allocatedBytes": 77841968,
-						"collections": 18
-					},
-					{
-						"elapsedMs": 111,
-						"allocatedBytes": 77841968,
-						"collections": 18
-					},
-					{
-						"elapsedMs": 110,
+						"elapsedMs": 115,
 						"allocatedBytes": 77841968,
 						"collections": 18
 					}
 				],
-				"medianMs": 113,
-				"nsPerOperation": 69.75308641975309,
+				"medianMs": 116,
+				"nsPerOperation": 71.60493827160494,
 				"resource": {
 					"cpuMs": 150,
 					"peakRssBytes": 20103168,
 					"allocatedBytes": 77841968,
 					"collections": 18,
 					"peakLiveBytes": 186688,
-					"maxPauseMs": 1.669
+					"maxPauseMs": 1.511
 				}
 			},
-			"ratio": 1.9824561403508771,
-			"hostGapMs": 56
+			"ratio": 2,
+			"hostGapMs": 58
 		},
 		{
 			"id": "sorting",
@@ -1311,9 +1313,6 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 47
-					},
-					{
 						"elapsedMs": 48
 					},
 					{
@@ -1323,6 +1322,9 @@
 						"elapsedMs": 47
 					},
 					{
+						"elapsedMs": 49
+					},
+					{
 						"elapsedMs": 47
 					}
 				],
@@ -1330,15 +1332,20 @@
 				"nsPerOperation": 47.810872395833336,
 				"resource": {
 					"cpuMs": 120,
-					"peakRssBytes": 67747840,
-					"sampledAllocatedBytes": 512776,
+					"peakRssBytes": 67485696,
+					"sampledAllocatedBytes": 511176,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 141,
+						"elapsedMs": 143,
+						"allocatedBytes": 43423488,
+						"collections": 9
+					},
+					{
+						"elapsedMs": 142,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					},
@@ -1353,29 +1360,24 @@
 						"collections": 9
 					},
 					{
-						"elapsedMs": 142,
-						"allocatedBytes": 43423488,
-						"collections": 9
-					},
-					{
-						"elapsedMs": 142,
+						"elapsedMs": 143,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					}
 				],
-				"medianMs": 142,
-				"nsPerOperation": 144.44986979166666,
+				"medianMs": 143,
+				"nsPerOperation": 145.46712239583334,
 				"resource": {
 					"cpuMs": 170,
-					"peakRssBytes": 19595264,
+					"peakRssBytes": 19546112,
 					"allocatedBytes": 43423488,
 					"collections": 9,
 					"peakLiveBytes": 614176,
-					"maxPauseMs": 1.184
+					"maxPauseMs": 1.272
 				}
 			},
-			"ratio": 3.021276595744681,
-			"hostGapMs": 95
+			"ratio": 3.0425531914893615,
+			"hostGapMs": 96
 		},
 		{
 			"id": "low-retention-churn",
@@ -1392,24 +1394,24 @@
 						"elapsedMs": 62
 					},
 					{
-						"elapsedMs": 62
+						"elapsedMs": 61
 					},
 					{
-						"elapsedMs": 62
+						"elapsedMs": 61
 					},
 					{
-						"elapsedMs": 62
+						"elapsedMs": 61
 					},
 					{
-						"elapsedMs": 62
+						"elapsedMs": 61
 					}
 				],
-				"medianMs": 62,
-				"nsPerOperation": 3.1,
+				"medianMs": 61,
+				"nsPerOperation": 3.05,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64454656,
-					"sampledAllocatedBytes": 516072,
+					"peakRssBytes": 64307200,
+					"sampledAllocatedBytes": 505624,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -1421,17 +1423,17 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 331,
+						"elapsedMs": 333,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 331,
+						"elapsedMs": 332,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 331,
+						"elapsedMs": 332,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -1441,19 +1443,19 @@
 						"collections": 0
 					}
 				],
-				"medianMs": 331,
-				"nsPerOperation": 16.55,
+				"medianMs": 332,
+				"nsPerOperation": 16.6,
 				"resource": {
 					"cpuMs": 340,
-					"peakRssBytes": 3653632,
+					"peakRssBytes": 3620864,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 5.338709677419355,
-			"hostGapMs": 269
+			"ratio": 5.442622950819672,
+			"hostGapMs": 271
 		},
 		{
 			"id": "moderate-retention-churn",
@@ -1470,36 +1472,41 @@
 						"elapsedMs": 69
 					},
 					{
+						"elapsedMs": 69
+					},
+					{
 						"elapsedMs": 70
 					},
 					{
 						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 69
-					},
-					{
-						"elapsedMs": 69
+						"elapsedMs": 70
 					}
 				],
 				"medianMs": 69,
 				"nsPerOperation": 5.974025974025974,
 				"resource": {
-					"cpuMs": 1320,
-					"peakRssBytes": 192020480,
-					"sampledAllocatedBytes": 502448,
+					"cpuMs": 1310,
+					"peakRssBytes": 192299008,
+					"sampledAllocatedBytes": 466528,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 838,
+						"elapsedMs": 849,
 						"allocatedBytes": 1800388784,
 						"collections": 82
 					},
 					{
-						"elapsedMs": 848,
+						"elapsedMs": 849,
+						"allocatedBytes": 1800388784,
+						"collections": 82
+					},
+					{
+						"elapsedMs": 845,
 						"allocatedBytes": 1800388784,
 						"collections": 82
 					},
@@ -1509,29 +1516,24 @@
 						"collections": 82
 					},
 					{
-						"elapsedMs": 848,
-						"allocatedBytes": 1800388784,
-						"collections": 82
-					},
-					{
-						"elapsedMs": 850,
+						"elapsedMs": 856,
 						"allocatedBytes": 1800388784,
 						"collections": 82
 					}
 				],
-				"medianMs": 848,
-				"nsPerOperation": 73.41991341991341,
+				"medianMs": 849,
+				"nsPerOperation": 73.50649350649351,
 				"resource": {
-					"cpuMs": 880,
+					"cpuMs": 870,
 					"peakRssBytes": 148553728,
 					"allocatedBytes": 1800388784,
 					"collections": 82,
 					"peakLiveBytes": 43268768,
-					"maxPauseMs": 26.836
+					"maxPauseMs": 26.979
 				}
 			},
-			"ratio": 12.289855072463768,
-			"hostGapMs": 779
+			"ratio": 12.304347826086957,
+			"hostGapMs": 780
 		},
 		{
 			"id": "pruned-ssa",
@@ -1539,77 +1541,77 @@
 			"owner": "pruned SSA definition lookup and virtual phi resolution",
 			"category": "compiler-algorithms",
 			"sourceSeam": "src/compiler/core/core-frontend-construction.ts",
-			"scale": 6,
-			"operations": 5243520,
-			"checksum": 313806699,
+			"scale": 10,
+			"operations": 8739200,
+			"checksum": 222403158,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 44
+						"elapsedMs": 80
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 74
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 76
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 83
 					},
 					{
-						"elapsedMs": 47
+						"elapsedMs": 77
 					}
 				],
-				"medianMs": 44,
-				"nsPerOperation": 8.39130965458318,
+				"medianMs": 77,
+				"nsPerOperation": 8.81087513731234,
 				"resource": {
-					"cpuMs": 90,
-					"peakRssBytes": 71417856,
-					"sampledAllocatedBytes": 534504,
+					"cpuMs": 120,
+					"peakRssBytes": 71401472,
+					"sampledAllocatedBytes": 443840,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 601,
-						"allocatedBytes": 282962288,
-						"collections": 67
+						"elapsedMs": 997,
+						"allocatedBytes": 471603568,
+						"collections": 111
 					},
 					{
-						"elapsedMs": 593,
-						"allocatedBytes": 282962288,
-						"collections": 67
+						"elapsedMs": 994,
+						"allocatedBytes": 471603568,
+						"collections": 111
 					},
 					{
-						"elapsedMs": 592,
-						"allocatedBytes": 282962288,
-						"collections": 67
+						"elapsedMs": 994,
+						"allocatedBytes": 471603568,
+						"collections": 111
 					},
 					{
-						"elapsedMs": 594,
-						"allocatedBytes": 282962288,
-						"collections": 67
+						"elapsedMs": 993,
+						"allocatedBytes": 471603568,
+						"collections": 111
 					},
 					{
-						"elapsedMs": 602,
-						"allocatedBytes": 282962288,
-						"collections": 67
+						"elapsedMs": 996,
+						"allocatedBytes": 471603568,
+						"collections": 111
 					}
 				],
-				"medianMs": 594,
-				"nsPerOperation": 113.28268033687294,
+				"medianMs": 994,
+				"nsPerOperation": 113.74038813621384,
 				"resource": {
-					"cpuMs": 690,
-					"peakRssBytes": 3981312,
-					"allocatedBytes": 282962288,
-					"collections": 67,
+					"cpuMs": 1090,
+					"peakRssBytes": 3964928,
+					"allocatedBytes": 471603568,
+					"collections": 111,
 					"peakLiveBytes": 88384,
-					"maxPauseMs": 0.039
+					"maxPauseMs": 0.041
 				}
 			},
-			"ratio": 13.5,
-			"hostGapMs": 550
+			"ratio": 12.909090909090908,
+			"hostGapMs": 917
 		},
 		{
 			"id": "dense-relocation",
@@ -1623,7 +1625,7 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 47
+						"elapsedMs": 50
 					},
 					{
 						"elapsedMs": 47
@@ -1632,40 +1634,25 @@
 						"elapsedMs": 48
 					},
 					{
-						"elapsedMs": 47
+						"elapsedMs": 48
 					},
 					{
-						"elapsedMs": 47
+						"elapsedMs": 48
 					}
 				],
-				"medianMs": 47,
-				"nsPerOperation": 2.3905436197916665,
+				"medianMs": 48,
+				"nsPerOperation": 2.44140625,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64536576,
-					"sampledAllocatedBytes": 500784,
+					"peakRssBytes": 64667648,
+					"sampledAllocatedBytes": 502312,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 428,
-						"allocatedBytes": 384,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 426,
-						"allocatedBytes": 384,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 430,
-						"allocatedBytes": 384,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 424,
+						"elapsedMs": 435,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
@@ -1673,21 +1660,36 @@
 						"elapsedMs": 425,
 						"allocatedBytes": 384,
 						"collections": 0
+					},
+					{
+						"elapsedMs": 437,
+						"allocatedBytes": 384,
+						"collections": 0
+					},
+					{
+						"elapsedMs": 433,
+						"allocatedBytes": 384,
+						"collections": 0
+					},
+					{
+						"elapsedMs": 427,
+						"allocatedBytes": 384,
+						"collections": 0
 					}
 				],
-				"medianMs": 426,
-				"nsPerOperation": 21.66748046875,
+				"medianMs": 433,
+				"nsPerOperation": 22.023518880208332,
 				"resource": {
 					"cpuMs": 530,
-					"peakRssBytes": 4947968,
+					"peakRssBytes": 4931584,
 					"allocatedBytes": 384,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 9.063829787234043,
-			"hostGapMs": 379
+			"ratio": 9.020833333333334,
+			"hostGapMs": 385
 		},
 		{
 			"id": "optimizer-queue",
@@ -1701,16 +1703,16 @@
 			"node": {
 				"samples": [
 					{
+						"elapsedMs": 78
+					},
+					{
+						"elapsedMs": 83
+					},
+					{
 						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 80
-					},
-					{
-						"elapsedMs": 81
-					},
-					{
-						"elapsedMs": 78
+						"elapsedMs": 83
 					},
 					{
 						"elapsedMs": 77
@@ -1720,43 +1722,43 @@
 				"nsPerOperation": 2.125071925511325,
 				"resource": {
 					"cpuMs": 110,
-					"peakRssBytes": 63356928,
-					"sampledAllocatedBytes": 486472,
+					"peakRssBytes": 63651840,
+					"sampledAllocatedBytes": 516200,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 2378,
+						"elapsedMs": 2394,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2403,
+						"elapsedMs": 2365,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2353,
+						"elapsedMs": 2376,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2383,
+						"elapsedMs": 2391,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2375,
+						"elapsedMs": 2368,
 						"allocatedBytes": 384,
 						"collections": 0
 					}
 				],
-				"medianMs": 2378,
-				"nsPerOperation": 64.78744921622989,
+				"medianMs": 2376,
+				"nsPerOperation": 64.73296019249882,
 				"resource": {
-					"cpuMs": 2440,
+					"cpuMs": 2450,
 					"peakRssBytes": 3768320,
 					"allocatedBytes": 384,
 					"collections": 0,
@@ -1764,8 +1766,8 @@
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 30.487179487179485,
-			"hostGapMs": 2300
+			"ratio": 30.46153846153846,
+			"hostGapMs": 2298
 		},
 		{
 			"id": "block-parameters",
@@ -1779,16 +1781,16 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 47
-					},
-					{
 						"elapsedMs": 46
 					},
 					{
 						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 47
+						"elapsedMs": 46
+					},
+					{
+						"elapsedMs": 46
 					},
 					{
 						"elapsedMs": 46
@@ -1798,52 +1800,52 @@
 				"nsPerOperation": 3.7434895833333335,
 				"resource": {
 					"cpuMs": 80,
-					"peakRssBytes": 68993024,
-					"sampledAllocatedBytes": 513032,
+					"peakRssBytes": 68927488,
+					"sampledAllocatedBytes": 475024,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 449,
+						"elapsedMs": 461,
 						"allocatedBytes": 247614080,
 						"collections": 57
 					},
 					{
-						"elapsedMs": 448,
+						"elapsedMs": 437,
 						"allocatedBytes": 247614080,
 						"collections": 57
 					},
 					{
-						"elapsedMs": 455,
+						"elapsedMs": 441,
 						"allocatedBytes": 247614080,
 						"collections": 57
 					},
 					{
-						"elapsedMs": 457,
+						"elapsedMs": 459,
 						"allocatedBytes": 247614080,
 						"collections": 57
 					},
 					{
-						"elapsedMs": 454,
+						"elapsedMs": 451,
 						"allocatedBytes": 247614080,
 						"collections": 57
 					}
 				],
-				"medianMs": 454,
-				"nsPerOperation": 36.946614583333336,
+				"medianMs": 451,
+				"nsPerOperation": 36.702473958333336,
 				"resource": {
 					"cpuMs": 450,
-					"peakRssBytes": 20021248,
+					"peakRssBytes": 20054016,
 					"allocatedBytes": 247614080,
 					"collections": 57,
 					"peakLiveBytes": 482720,
-					"maxPauseMs": 1.301
+					"maxPauseMs": 1.375
 				}
 			},
-			"ratio": 9.869565217391305,
-			"hostGapMs": 408
+			"ratio": 9.804347826086957,
+			"hostGapMs": 405
 		},
 		{
 			"id": "cfg-edges",
@@ -1860,7 +1862,7 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 45
 					},
 					{
 						"elapsedMs": 44
@@ -1869,22 +1871,32 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 43
 					}
 				],
 				"medianMs": 44,
 				"nsPerOperation": 19.187162044304902,
 				"resource": {
-					"cpuMs": 340,
-					"peakRssBytes": 105414656,
-					"sampledAllocatedBytes": 515304,
+					"cpuMs": 350.00000000000006,
+					"peakRssBytes": 105250816,
+					"sampledAllocatedBytes": 516656,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 249,
+						"allocatedBytes": 212435968,
+						"collections": 29
+					},
+					{
 						"elapsedMs": 238,
+						"allocatedBytes": 212435968,
+						"collections": 29
+					},
+					{
+						"elapsedMs": 243,
 						"allocatedBytes": 212435968,
 						"collections": 29
 					},
@@ -1897,31 +1909,21 @@
 						"elapsedMs": 239,
 						"allocatedBytes": 212435968,
 						"collections": 29
-					},
-					{
-						"elapsedMs": 239,
-						"allocatedBytes": 212435968,
-						"collections": 29
-					},
-					{
-						"elapsedMs": 242,
-						"allocatedBytes": 212435968,
-						"collections": 29
 					}
 				],
-				"medianMs": 239,
-				"nsPerOperation": 104.22117564974708,
+				"medianMs": 241,
+				"nsPerOperation": 105.09331937903366,
 				"resource": {
 					"cpuMs": 290,
-					"peakRssBytes": 26460160,
+					"peakRssBytes": 26476544,
 					"allocatedBytes": 212435968,
 					"collections": 29,
 					"peakLiveBytes": 6381472,
-					"maxPauseMs": 1.834
+					"maxPauseMs": 2.047
 				}
 			},
-			"ratio": 5.431818181818182,
-			"hostGapMs": 195
+			"ratio": 5.4772727272727275,
+			"hostGapMs": 197
 		},
 		{
 			"id": "immediate-dominators",
@@ -1941,33 +1943,28 @@
 						"elapsedMs": 41
 					},
 					{
-						"elapsedMs": 41
+						"elapsedMs": 44
 					},
 					{
 						"elapsedMs": 41
 					},
 					{
-						"elapsedMs": 41
+						"elapsedMs": 42
 					}
 				],
 				"medianMs": 41,
 				"nsPerOperation": 3.574916294642857,
 				"resource": {
 					"cpuMs": 70,
-					"peakRssBytes": 63422464,
-					"sampledAllocatedBytes": 470448,
+					"peakRssBytes": 63356928,
+					"sampledAllocatedBytes": 539200,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 334,
-						"allocatedBytes": 224,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 331,
+						"elapsedMs": 338,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
@@ -1977,12 +1974,17 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 332,
+						"elapsedMs": 337,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 337,
+						"elapsedMs": 333,
+						"allocatedBytes": 224,
+						"collections": 0
+					},
+					{
+						"elapsedMs": 333,
 						"allocatedBytes": 224,
 						"collections": 0
 					}
@@ -2013,71 +2015,71 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 59
+						"elapsedMs": 60
 					},
 					{
-						"elapsedMs": 59
-					},
-					{
-						"elapsedMs": 59
-					},
-					{
-						"elapsedMs": 59
+						"elapsedMs": 60
 					},
 					{
 						"elapsedMs": 63
+					},
+					{
+						"elapsedMs": 59
+					},
+					{
+						"elapsedMs": 60
 					}
 				],
-				"medianMs": 59,
-				"nsPerOperation": 2.9229944542373016,
+				"medianMs": 60,
+				"nsPerOperation": 2.9725367331226797,
 				"resource": {
 					"cpuMs": 100,
-					"peakRssBytes": 69500928,
-					"sampledAllocatedBytes": 474824,
+					"peakRssBytes": 69615616,
+					"sampledAllocatedBytes": 493224,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 2215,
+						"elapsedMs": 2221,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2213,
+						"elapsedMs": 2239,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2220,
+						"elapsedMs": 2248,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2244,
+						"elapsedMs": 2250,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2249,
+						"elapsedMs": 2232,
 						"allocatedBytes": 544,
 						"collections": 0
 					}
 				],
-				"medianMs": 2220,
-				"nsPerOperation": 109.98385912553914,
+				"medianMs": 2239,
+				"nsPerOperation": 110.92516242436133,
 				"resource": {
-					"cpuMs": 2490,
-					"peakRssBytes": 5193728,
+					"cpuMs": 2500,
+					"peakRssBytes": 5210112,
 					"allocatedBytes": 544,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 37.6271186440678,
-			"hostGapMs": 2161
+			"ratio": 37.31666666666667,
+			"hostGapMs": 2179
 		},
 		{
 			"id": "canonical-roots",
@@ -2091,71 +2093,71 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 42
-					},
-					{
-						"elapsedMs": 45
-					},
-					{
-						"elapsedMs": 45
-					},
-					{
-						"elapsedMs": 45
-					},
-					{
 						"elapsedMs": 43
+					},
+					{
+						"elapsedMs": 44
+					},
+					{
+						"elapsedMs": 46
+					},
+					{
+						"elapsedMs": 45
+					},
+					{
+						"elapsedMs": 45
 					}
 				],
 				"medianMs": 45,
 				"nsPerOperation": 2.02550297289823,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64389120,
-					"sampledAllocatedBytes": 505544,
+					"peakRssBytes": 64028672,
+					"sampledAllocatedBytes": 481800,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 598,
+						"allocatedBytes": 352,
+						"collections": 0
+					},
+					{
 						"elapsedMs": 596,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 595,
+						"elapsedMs": 600,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 597,
+						"elapsedMs": 596,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 597,
-						"allocatedBytes": 352,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 598,
+						"elapsedMs": 596,
 						"allocatedBytes": 352,
 						"collections": 0
 					}
 				],
-				"medianMs": 597,
-				"nsPerOperation": 26.871672773783185,
+				"medianMs": 596,
+				"nsPerOperation": 26.82666159660767,
 				"resource": {
 					"cpuMs": 900,
-					"peakRssBytes": 4800512,
+					"peakRssBytes": 4784128,
 					"allocatedBytes": 352,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 13.266666666666667,
-			"hostGapMs": 552
+			"ratio": 13.244444444444444,
+			"hostGapMs": 551
 		},
 		{
 			"id": "fact-provenance",
@@ -2169,34 +2171,34 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 77
+						"elapsedMs": 76
 					},
 					{
-						"elapsedMs": 75
-					},
-					{
-						"elapsedMs": 77
+						"elapsedMs": 76
 					},
 					{
 						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 77
+						"elapsedMs": 78
+					},
+					{
+						"elapsedMs": 82
 					}
 				],
 				"medianMs": 77,
 				"nsPerOperation": 17.824074074074073,
 				"resource": {
 					"cpuMs": 150.00000000000003,
-					"peakRssBytes": 200359936,
-					"sampledAllocatedBytes": 502760,
+					"peakRssBytes": 200310784,
+					"sampledAllocatedBytes": 494560,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 179,
+						"elapsedMs": 178,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					},
@@ -2206,34 +2208,34 @@
 						"collections": 45
 					},
 					{
-						"elapsedMs": 179,
+						"elapsedMs": 177,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					},
 					{
-						"elapsedMs": 176,
+						"elapsedMs": 178,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					},
 					{
-						"elapsedMs": 179,
+						"elapsedMs": 180,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					}
 				],
-				"medianMs": 179,
-				"nsPerOperation": 41.43518518518518,
+				"medianMs": 178,
+				"nsPerOperation": 41.2037037037037,
 				"resource": {
 					"cpuMs": 260,
-					"peakRssBytes": 6864896,
+					"peakRssBytes": 6897664,
 					"allocatedBytes": 212322448,
 					"collections": 45,
 					"peakLiveBytes": 88256,
 					"maxPauseMs": 0.062
 				}
 			},
-			"ratio": 2.324675324675325,
-			"hostGapMs": 102
+			"ratio": 2.311688311688312,
+			"hostGapMs": 101
 		},
 		{
 			"id": "memory-events",
@@ -2247,71 +2249,71 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 60
+						"elapsedMs": 57
 					},
 					{
 						"elapsedMs": 58
 					},
 					{
-						"elapsedMs": 57
+						"elapsedMs": 58
 					},
 					{
-						"elapsedMs": 60
+						"elapsedMs": 59
 					},
 					{
-						"elapsedMs": 57
+						"elapsedMs": 58
 					}
 				],
 				"medianMs": 58,
 				"nsPerOperation": 4.142857142857143,
 				"resource": {
 					"cpuMs": 120,
-					"peakRssBytes": 93585408,
-					"sampledAllocatedBytes": 488960,
+					"peakRssBytes": 93749248,
+					"sampledAllocatedBytes": 515272,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 547,
+						"elapsedMs": 554,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					},
 					{
-						"elapsedMs": 541,
+						"elapsedMs": 549,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					},
 					{
-						"elapsedMs": 553,
+						"elapsedMs": 549,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					},
 					{
-						"elapsedMs": 553,
+						"elapsedMs": 551,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					},
 					{
-						"elapsedMs": 543,
+						"elapsedMs": 548,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					}
 				],
-				"medianMs": 547,
-				"nsPerOperation": 39.07142857142857,
+				"medianMs": 549,
+				"nsPerOperation": 39.214285714285715,
 				"resource": {
-					"cpuMs": 590,
-					"peakRssBytes": 17481728,
+					"cpuMs": 600,
+					"peakRssBytes": 17432576,
 					"allocatedBytes": 186448256,
 					"collections": 28,
 					"peakLiveBytes": 5209424,
-					"maxPauseMs": 0.698
+					"maxPauseMs": 0.755
 				}
 			},
-			"ratio": 9.431034482758621,
-			"hostGapMs": 489
+			"ratio": 9.46551724137931,
+			"hostGapMs": 491
 		},
 		{
 			"id": "memory-versions",
@@ -2331,65 +2333,65 @@
 						"elapsedMs": 54
 					},
 					{
-						"elapsedMs": 54
+						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 54
+						"elapsedMs": 55
 					},
 					{
 						"elapsedMs": 55
 					}
 				],
-				"medianMs": 54,
-				"nsPerOperation": 4.444444444444445,
+				"medianMs": 55,
+				"nsPerOperation": 4.526748971193416,
 				"resource": {
 					"cpuMs": 120,
-					"peakRssBytes": 67829760,
-					"sampledAllocatedBytes": 474600,
+					"peakRssBytes": 68108288,
+					"sampledAllocatedBytes": 506048,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 337,
-						"allocatedBytes": 32438944,
-						"collections": 7
-					},
-					{
-						"elapsedMs": 339,
-						"allocatedBytes": 32438944,
-						"collections": 7
-					},
-					{
-						"elapsedMs": 337,
-						"allocatedBytes": 32438944,
-						"collections": 7
-					},
-					{
-						"elapsedMs": 339,
-						"allocatedBytes": 32438944,
-						"collections": 7
-					},
-					{
 						"elapsedMs": 340,
+						"allocatedBytes": 32438944,
+						"collections": 7
+					},
+					{
+						"elapsedMs": 341,
+						"allocatedBytes": 32438944,
+						"collections": 7
+					},
+					{
+						"elapsedMs": 341,
+						"allocatedBytes": 32438944,
+						"collections": 7
+					},
+					{
+						"elapsedMs": 342,
+						"allocatedBytes": 32438944,
+						"collections": 7
+					},
+					{
+						"elapsedMs": 338,
 						"allocatedBytes": 32438944,
 						"collections": 7
 					}
 				],
-				"medianMs": 339,
-				"nsPerOperation": 27.901234567901234,
+				"medianMs": 341,
+				"nsPerOperation": 28.06584362139918,
 				"resource": {
-					"cpuMs": 440,
-					"peakRssBytes": 19087360,
+					"cpuMs": 450,
+					"peakRssBytes": 19021824,
 					"allocatedBytes": 32438944,
 					"collections": 7,
 					"peakLiveBytes": 546848,
-					"maxPauseMs": 1.021
+					"maxPauseMs": 0.876
 				}
 			},
-			"ratio": 6.277777777777778,
-			"hostGapMs": 285
+			"ratio": 6.2,
+			"hostGapMs": 286
 		},
 		{
 			"id": "program-flow-extraction",
@@ -2409,7 +2411,7 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 45
 					},
 					{
 						"elapsedMs": 44
@@ -2422,20 +2424,15 @@
 				"nsPerOperation": 8.148148148148149,
 				"resource": {
 					"cpuMs": 470.00000000000006,
-					"peakRssBytes": 239419392,
-					"sampledAllocatedBytes": 509848,
+					"peakRssBytes": 237830144,
+					"sampledAllocatedBytes": 490216,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 230,
-						"allocatedBytes": 209846944,
-						"collections": 30
-					},
-					{
-						"elapsedMs": 232,
+						"elapsedMs": 233,
 						"allocatedBytes": 209846944,
 						"collections": 30
 					},
@@ -2445,29 +2442,34 @@
 						"collections": 30
 					},
 					{
-						"elapsedMs": 231,
+						"elapsedMs": 233,
 						"allocatedBytes": 209846944,
 						"collections": 30
 					},
 					{
-						"elapsedMs": 234,
+						"elapsedMs": 237,
+						"allocatedBytes": 209846944,
+						"collections": 30
+					},
+					{
+						"elapsedMs": 235,
 						"allocatedBytes": 209846944,
 						"collections": 30
 					}
 				],
-				"medianMs": 232,
-				"nsPerOperation": 42.96296296296296,
+				"medianMs": 235,
+				"nsPerOperation": 43.51851851851852,
 				"resource": {
 					"cpuMs": 350,
-					"peakRssBytes": 25460736,
+					"peakRssBytes": 25444352,
 					"allocatedBytes": 209846944,
 					"collections": 30,
 					"peakLiveBytes": 5502400,
-					"maxPauseMs": 1.432
+					"maxPauseMs": 1.35
 				}
 			},
-			"ratio": 5.2727272727272725,
-			"hostGapMs": 188
+			"ratio": 5.340909090909091,
+			"hostGapMs": 191
 		},
 		{
 			"id": "program-flow-convergence",
@@ -2481,27 +2483,27 @@
 			"node": {
 				"samples": [
 					{
+						"elapsedMs": 45
+					},
+					{
+						"elapsedMs": 45
+					},
+					{
+						"elapsedMs": 44
+					},
+					{
 						"elapsedMs": 48
 					},
 					{
-						"elapsedMs": 45
-					},
-					{
-						"elapsedMs": 45
-					},
-					{
-						"elapsedMs": 45
-					},
-					{
-						"elapsedMs": 45
+						"elapsedMs": 48
 					}
 				],
 				"medianMs": 45,
 				"nsPerOperation": 3.265849038378008,
 				"resource": {
 					"cpuMs": 80,
-					"peakRssBytes": 64126976,
-					"sampledAllocatedBytes": 493072,
+					"peakRssBytes": 63832064,
+					"sampledAllocatedBytes": 500400,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -2513,7 +2515,7 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 780,
+						"elapsedMs": 777,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
@@ -2523,29 +2525,29 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 775,
+						"elapsedMs": 777,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 776,
+						"elapsedMs": 789,
 						"allocatedBytes": 384,
 						"collections": 0
 					}
 				],
-				"medianMs": 776,
-				"nsPerOperation": 56.317752306251876,
+				"medianMs": 777,
+				"nsPerOperation": 56.39032672932694,
 				"resource": {
 					"cpuMs": 830,
-					"peakRssBytes": 4063232,
+					"peakRssBytes": 4046848,
 					"allocatedBytes": 384,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 17.244444444444444,
-			"hostGapMs": 731
+			"ratio": 17.266666666666666,
+			"hostGapMs": 732
 		},
 		{
 			"id": "candidate-ranking",
@@ -2578,25 +2580,15 @@
 				"nsPerOperation": 53.7109375,
 				"resource": {
 					"cpuMs": 160,
-					"peakRssBytes": 80248832,
-					"sampledAllocatedBytes": 520024,
+					"peakRssBytes": 80297984,
+					"sampledAllocatedBytes": 526312,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 143,
-						"allocatedBytes": 36086528,
-						"collections": 8
-					},
-					{
-						"elapsedMs": 143,
-						"allocatedBytes": 36086528,
-						"collections": 8
-					},
-					{
-						"elapsedMs": 145,
+						"elapsedMs": 142,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					},
@@ -2607,6 +2599,16 @@
 					},
 					{
 						"elapsedMs": 143,
+						"allocatedBytes": 36086528,
+						"collections": 8
+					},
+					{
+						"elapsedMs": 143,
+						"allocatedBytes": 36086528,
+						"collections": 8
+					},
+					{
+						"elapsedMs": 142,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					}
@@ -2615,11 +2617,11 @@
 				"nsPerOperation": 174.560546875,
 				"resource": {
 					"cpuMs": 280,
-					"peakRssBytes": 19955712,
+					"peakRssBytes": 19972096,
 					"allocatedBytes": 36086528,
 					"collections": 8,
 					"peakLiveBytes": 2187072,
-					"maxPauseMs": 1.276
+					"maxPauseMs": 1.235
 				}
 			},
 			"ratio": 3.25,
@@ -2637,27 +2639,27 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 57
+						"elapsedMs": 58
+					},
+					{
+						"elapsedMs": 58
+					},
+					{
+						"elapsedMs": 58
 					},
 					{
 						"elapsedMs": 58
 					},
 					{
 						"elapsedMs": 57
-					},
-					{
-						"elapsedMs": 57
-					},
-					{
-						"elapsedMs": 58
 					}
 				],
-				"medianMs": 57,
-				"nsPerOperation": 1.5833333333333333,
+				"medianMs": 58,
+				"nsPerOperation": 1.6111111111111112,
 				"resource": {
 					"cpuMs": 140,
-					"peakRssBytes": 164184064,
-					"sampledAllocatedBytes": 474040,
+					"peakRssBytes": 164331520,
+					"sampledAllocatedBytes": 471560,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -2669,17 +2671,17 @@
 						"collections": 1
 					},
 					{
-						"elapsedMs": 590,
+						"elapsedMs": 587,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					},
 					{
-						"elapsedMs": 588,
+						"elapsedMs": 594,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					},
 					{
-						"elapsedMs": 588,
+						"elapsedMs": 589,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					},
@@ -2689,21 +2691,611 @@
 						"collections": 1
 					}
 				],
-				"medianMs": 588,
-				"nsPerOperation": 16.333333333333332,
+				"medianMs": 589,
+				"nsPerOperation": 16.36111111111111,
 				"resource": {
-					"cpuMs": 660,
-					"peakRssBytes": 144998400,
+					"cpuMs": 650,
+					"peakRssBytes": 144965632,
 					"allocatedBytes": 10160256,
 					"collections": 1,
 					"peakLiveBytes": 4657120,
-					"maxPauseMs": 1.809
+					"maxPauseMs": 1.839
 				}
 			},
-			"ratio": 10.31578947368421,
+			"ratio": 10.155172413793103,
 			"hostGapMs": 531
 		}
 	],
+	"fullCompiler": {
+		"artifact": "bench/core-opt4-host-gap-start.json",
+		"source": {
+			"commit": "78d78f6a51a4c5d241839688d903317c28690df2",
+			"dirty": false,
+			"digest": "11c14dd97ff381f172cdf3d2df97aa671c5d24ba39a49bfdbbd31e4e246e6e14",
+			"benchmarkDigest": "427d7ef335c3934116ef753857d46514ab5178e3ce6d395412f19f64c6d9b775",
+			"configurationDigest": "1509e8d492d351fcfb6821fda64cada15f933cc8591ba1c871f812c9728a051a"
+		},
+		"nodeMs": 17159.010917,
+		"maligatorMs": 188055.193125,
+		"ratio": 10.959559034879305,
+		"nodePhases": {
+			"graphMs": 201,
+			"semanticMs": 252,
+			"constructCoreMs": 1958,
+			"optimizeCoreMs": 9999,
+			"coreToExecutionMs": 1509,
+			"executionToImageMs": 1730,
+			"emitMs": 1308,
+			"writeMs": 14
+		},
+		"maligatorPhases": {
+			"graphMs": 769,
+			"semanticMs": 1875,
+			"constructCoreMs": 21948,
+			"optimizeCoreMs": 133902,
+			"coreToExecutionMs": 12196,
+			"executionToImageMs": 7007,
+			"emitMs": 10263,
+			"writeMs": 61
+		},
+		"runtime": {
+			"maligator": {
+				"collections": 374,
+				"allocatedBytes": 61522693492,
+				"peakLiveBytes": 258045632,
+				"maxPauseMs": 471.143,
+				"rssBytes": 2192474112
+			},
+			"nodePeakRssBytes": 1867857920
+		},
+		"nativeBuild": {
+			"phasesMs": {
+				"runtime C projection": 890.8216249999969,
+				"runtime C object reuse": 0,
+				"runtime C object compile": 2342.3518750000003,
+				"runtime C · engine": 34.299041999998735,
+				"runtime C · host": 22.47979199999827,
+				"runtime C · runtime": 26.150291999998444,
+				"runtime": 3426.0767080000005,
+				"rust": 24.43291600000157,
+				"write generated C": 92.41133300000001,
+				"generated C objects": 205261.54245799998,
+				"link": 269.15312499998254,
+				"publish binary": 92.52879100001883
+			},
+			"totalMs": 212482.24795699999,
+			"translationUnits": 1,
+			"generatedCBytes": 57008292,
+			"objectBytes": 36149864,
+			"cCompilationMs": 205261.54245799998,
+			"linkMs": 269.15312499998254,
+			"stripMs": 0,
+			"peakRssBytes": 4646797312
+		},
+		"coverage": {
+			"nodeOptimizeCore": 1,
+			"maligatorOptimizeCore": 0.9999778754535532,
+			"hostGap": 1.0010920040166489,
+			"allocation": 1
+		},
+		"owners": [
+			{
+				"id": 0,
+				"name": "unattributed",
+				"nodeMs": 0,
+				"maligatorMs": 0,
+				"hostRatio": null,
+				"hostGapMs": 0,
+				"workUnits": 0,
+				"nodeNsPerWorkUnit": null,
+				"maligatorNsPerWorkUnit": null,
+				"allocatedBytes": 0,
+				"collections": 0,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 1,
+				"name": "semantic-to-Core construction",
+				"nodeMs": 1964,
+				"maligatorMs": 21870,
+				"hostRatio": 11.135437881873727,
+				"hostGapMs": 19906,
+				"workUnits": 449353,
+				"nodeNsPerWorkUnit": 4370.728580870718,
+				"maligatorNsPerWorkUnit": 48669.976610816,
+				"allocatedBytes": 6920920336,
+				"collections": 24,
+				"representativeKernels": ["pruned-ssa", "short-lived-records"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 2,
+				"name": "construction structural cleanup",
+				"nodeMs": 153,
+				"maligatorMs": 3279,
+				"hostRatio": 21.431372549019606,
+				"hostGapMs": 3126,
+				"workUnits": 3824,
+				"nodeNsPerWorkUnit": 40010.460251046024,
+				"maligatorNsPerWorkUnit": 857479.0794979079,
+				"allocatedBytes": 107145456,
+				"collections": 2,
+				"representativeKernels": ["pruned-ssa", "moderate-retention-churn"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 3,
+				"name": "dense generation barrier",
+				"nodeMs": 274,
+				"maligatorMs": 2692,
+				"hostRatio": 9.824817518248175,
+				"hostGapMs": 2418,
+				"workUnits": 3824,
+				"nodeNsPerWorkUnit": 71652.71966527197,
+				"maligatorNsPerWorkUnit": 703974.8953974895,
+				"allocatedBytes": 1130855312,
+				"collections": 15,
+				"representativeKernels": ["dense-relocation"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 4,
+				"name": "fused local optimization",
+				"nodeMs": 519,
+				"maligatorMs": 11353,
+				"hostRatio": 21.8747591522158,
+				"hostGapMs": 10834,
+				"workUnits": 1459063,
+				"nodeNsPerWorkUnit": 355.7077384595456,
+				"maligatorNsPerWorkUnit": 7781.021107381929,
+				"allocatedBytes": 688429912,
+				"collections": 10,
+				"representativeKernels": ["optimizer-queue"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 5,
+				"name": "block-parameter simplification",
+				"nodeMs": 523,
+				"maligatorMs": 6359,
+				"hostRatio": 12.158699808795411,
+				"hostGapMs": 5836,
+				"workUnits": 11991,
+				"nodeNsPerWorkUnit": 43616.04536735885,
+				"maligatorNsPerWorkUnit": 530314.402468518,
+				"allocatedBytes": 2404563128,
+				"collections": 33,
+				"representativeKernels": ["block-parameters"],
+				"category": "runtime-collections-properties"
+			},
+			{
+				"id": 6,
+				"name": "forwarding and linear block normalization",
+				"nodeMs": 460,
+				"maligatorMs": 5371,
+				"hostRatio": 11.67608695652174,
+				"hostGapMs": 4911,
+				"workUnits": 29047,
+				"nodeNsPerWorkUnit": 15836.403070885117,
+				"maligatorNsPerWorkUnit": 184907.21933418253,
+				"allocatedBytes": 2092197784,
+				"collections": 19,
+				"representativeKernels": ["optimizer-queue", "candidate-ranking"],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 7,
+				"name": "CFG edge construction",
+				"nodeMs": 494,
+				"maligatorMs": 4392,
+				"hostRatio": 8.890688259109313,
+				"hostGapMs": 3898,
+				"workUnits": 28484,
+				"nodeNsPerWorkUnit": 17343.06979356832,
+				"maligatorNsPerWorkUnit": 154191.82699059122,
+				"allocatedBytes": 1897221848,
+				"collections": 24,
+				"representativeKernels": ["cfg-edges"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 8,
+				"name": "control-flow traversal",
+				"nodeMs": 222,
+				"maligatorMs": 1709,
+				"hostRatio": 7.698198198198198,
+				"hostGapMs": 1487,
+				"workUnits": 31478,
+				"nodeNsPerWorkUnit": 7052.544634347799,
+				"maligatorNsPerWorkUnit": 54291.88639684859,
+				"allocatedBytes": 613442496,
+				"collections": 3,
+				"representativeKernels": ["cfg-edges"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 9,
+				"name": "immediate dominators",
+				"nodeMs": 246,
+				"maligatorMs": 2556,
+				"hostRatio": 10.390243902439025,
+				"hostGapMs": 2310,
+				"workUnits": 13809,
+				"nodeNsPerWorkUnit": 17814.468824679556,
+				"maligatorNsPerWorkUnit": 185096.67608081686,
+				"allocatedBytes": 790751440,
+				"collections": 6,
+				"representativeKernels": ["immediate-dominators"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 10,
+				"name": "loops and dominance frontiers",
+				"nodeMs": 163,
+				"maligatorMs": 1421,
+				"hostRatio": 8.717791411042946,
+				"hostGapMs": 1258,
+				"workUnits": 10815,
+				"nodeNsPerWorkUnit": 15071.659731853906,
+				"maligatorNsPerWorkUnit": 131391.5857605178,
+				"allocatedBytes": 467697936,
+				"collections": 1,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 11,
+				"name": "local value kinds",
+				"nodeMs": 521,
+				"maligatorMs": 12208,
+				"hostRatio": 23.43186180422265,
+				"hostGapMs": 11687,
+				"workUnits": 11374,
+				"nodeNsPerWorkUnit": 45806.224723052575,
+				"maligatorNsPerWorkUnit": 1073325.1274837349,
+				"allocatedBytes": 1054306184,
+				"collections": 8,
+				"representativeKernels": ["value-kinds"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 12,
+				"name": "canonical value roots",
+				"nodeMs": 232,
+				"maligatorMs": 3053,
+				"hostRatio": 13.15948275862069,
+				"hostGapMs": 2821,
+				"workUnits": 10445,
+				"nodeNsPerWorkUnit": 22211.58449018669,
+				"maligatorNsPerWorkUnit": 292292.9631402585,
+				"allocatedBytes": 721443288,
+				"collections": 4,
+				"representativeKernels": ["canonical-roots"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 13,
+				"name": "local fact and provenance construction",
+				"nodeMs": 320,
+				"maligatorMs": 4352,
+				"hostRatio": 13.6,
+				"hostGapMs": 4032,
+				"workUnits": 11378,
+				"nodeNsPerWorkUnit": 28124.450694322375,
+				"maligatorNsPerWorkUnit": 382492.5294427843,
+				"allocatedBytes": 1455604584,
+				"collections": 14,
+				"representativeKernels": ["fact-provenance"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 14,
+				"name": "memory event extraction",
+				"nodeMs": 103,
+				"maligatorMs": 1456,
+				"hostRatio": 14.135922330097088,
+				"hostGapMs": 1353,
+				"workUnits": 243970,
+				"nodeNsPerWorkUnit": 422.18305529368365,
+				"maligatorNsPerWorkUnit": 5967.946878714596,
+				"allocatedBytes": 328892624,
+				"collections": 3,
+				"representativeKernels": ["memory-events"],
+				"category": "runtime-collections-properties"
+			},
+			{
+				"id": 15,
+				"name": "memoryVersions / MemorySSA",
+				"nodeMs": 897,
+				"maligatorMs": 5359,
+				"hostRatio": 5.9743589743589745,
+				"hostGapMs": 4462,
+				"workUnits": 256490,
+				"nodeNsPerWorkUnit": 3497.2123669538773,
+				"maligatorNsPerWorkUnit": 20893.60208975009,
+				"allocatedBytes": 2209401552,
+				"collections": 19,
+				"representativeKernels": ["memory-versions"],
+				"category": "runtime-collections-properties"
+			},
+			{
+				"id": 16,
+				"name": "program-flow local extraction",
+				"nodeMs": 56,
+				"maligatorMs": 667,
+				"hostRatio": 11.910714285714286,
+				"hostGapMs": 611,
+				"workUnits": 496408,
+				"nodeNsPerWorkUnit": 112.81043013005431,
+				"maligatorNsPerWorkUnit": 1343.6528017276112,
+				"allocatedBytes": 169859568,
+				"collections": 0,
+				"representativeKernels": ["program-flow-extraction", "indirect-calls"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 17,
+				"name": "program-flow convergence",
+				"nodeMs": 1269,
+				"maligatorMs": 15795,
+				"hostRatio": 12.446808510638299,
+				"hostGapMs": 14526,
+				"workUnits": 17596,
+				"nodeNsPerWorkUnit": 72118.66333257558,
+				"maligatorNsPerWorkUnit": 897647.19254376,
+				"allocatedBytes": 2527256424,
+				"collections": 9,
+				"representativeKernels": ["program-flow-convergence"],
+				"category": "typed-arrays-numeric-loops"
+			},
+			{
+				"id": 18,
+				"name": "cross-call transforms",
+				"nodeMs": 56,
+				"maligatorMs": 1231,
+				"hostRatio": 21.982142857142858,
+				"hostGapMs": 1175,
+				"workUnits": 7356,
+				"nodeNsPerWorkUnit": 7612.8330614464385,
+				"maligatorNsPerWorkUnit": 167346.3839042958,
+				"allocatedBytes": 440402088,
+				"collections": 1,
+				"representativeKernels": ["candidate-ranking", "closure-calls"],
+				"category": "function-closure-dispatch"
+			},
+			{
+				"id": 19,
+				"name": "specialization discovery",
+				"nodeMs": 272,
+				"maligatorMs": 2562,
+				"hostRatio": 9.419117647058824,
+				"hostGapMs": 2290,
+				"workUnits": 18071,
+				"nodeNsPerWorkUnit": 15051.740357478833,
+				"maligatorNsPerWorkUnit": 141774.11322007637,
+				"allocatedBytes": 418377296,
+				"collections": 2,
+				"representativeKernels": ["candidate-ranking", "closure-calls"],
+				"category": "function-closure-dispatch"
+			},
+			{
+				"id": 20,
+				"name": "specialization selection",
+				"nodeMs": 14,
+				"maligatorMs": 66,
+				"hostRatio": 4.714285714285714,
+				"hostGapMs": 52,
+				"workUnits": 18071,
+				"nodeNsPerWorkUnit": 774.7219301643518,
+				"maligatorNsPerWorkUnit": 3652.2605279176582,
+				"allocatedBytes": 0,
+				"collections": 0,
+				"representativeKernels": ["candidate-ranking", "closure-calls"],
+				"category": "function-closure-dispatch"
+			},
+			{
+				"id": 21,
+				"name": "Core verification",
+				"nodeMs": 1225,
+				"maligatorMs": 18560,
+				"hostRatio": 15.151020408163266,
+				"hostGapMs": 17335,
+				"workUnits": 7648,
+				"nodeNsPerWorkUnit": 160172.59414225942,
+				"maligatorNsPerWorkUnit": 2426778.242677824,
+				"allocatedBytes": 4246260538,
+				"collections": 13,
+				"representativeKernels": ["set-operations", "stable-shape-properties"],
+				"category": "runtime-collections-properties"
+			},
+			{
+				"id": 22,
+				"name": "Core-to-Execution lowering",
+				"nodeMs": 1506,
+				"maligatorMs": 12351,
+				"hostRatio": 8.201195219123505,
+				"hostGapMs": 10845,
+				"workUnits": 266366,
+				"nodeNsPerWorkUnit": 5653.874743773605,
+				"maligatorNsPerWorkUnit": 46368.53051815923,
+				"allocatedBytes": 6386427424,
+				"collections": 18,
+				"representativeKernels": ["core-to-execution"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 23,
+				"name": "Execution-to-Image lowering",
+				"nodeMs": 1702,
+				"maligatorMs": 7100,
+				"hostRatio": 4.171562867215041,
+				"hostGapMs": 5398,
+				"workUnits": 266366,
+				"nodeNsPerWorkUnit": 6389.7043917016435,
+				"maligatorNsPerWorkUnit": 26655.05357290345,
+				"allocatedBytes": 4681672082,
+				"collections": 10,
+				"representativeKernels": ["core-to-execution"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 24,
+				"name": "emission",
+				"nodeMs": 1315,
+				"maligatorMs": 10275,
+				"hostRatio": 7.813688212927756,
+				"hostGapMs": 8960,
+				"workUnits": 60012507,
+				"nodeNsPerWorkUnit": 21.912099089611438,
+				"maligatorNsPerWorkUnit": 171.2143103770019,
+				"allocatedBytes": 12474674304,
+				"collections": 81,
+				"representativeKernels": ["string-keys", "spread-copies"],
+				"category": "allocation-gc"
+			},
+			{
+				"id": 25,
+				"name": "other function optimization passes",
+				"nodeMs": 1564,
+				"maligatorMs": 22785,
+				"hostRatio": 14.56841432225064,
+				"hostGapMs": 21221,
+				"workUnits": 94378,
+				"nodeNsPerWorkUnit": 16571.65864926148,
+				"maligatorNsPerWorkUnit": 241422.78920934963,
+				"allocatedBytes": 4745028064,
+				"collections": 37,
+				"representativeKernels": ["optimizer-queue", "candidate-ranking"],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 26,
+				"name": "optimizer instrumentation",
+				"nodeMs": 11,
+				"maligatorMs": 61,
+				"hostRatio": 5.545454545454546,
+				"hostGapMs": 50,
+				"workUnits": 8,
+				"nodeNsPerWorkUnit": 1375000,
+				"maligatorNsPerWorkUnit": 7625000,
+				"allocatedBytes": 5884224,
+				"collections": 0,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 27,
+				"name": "optimizer orchestration",
+				"nodeMs": 376,
+				"maligatorMs": 8306,
+				"hostRatio": 22.090425531914892,
+				"hostGapMs": 7930,
+				"workUnits": 0,
+				"nodeNsPerWorkUnit": null,
+				"maligatorNsPerWorkUnit": null,
+				"allocatedBytes": 1170371874,
+				"collections": 9,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 28,
+				"name": "module graph",
+				"nodeMs": 165,
+				"maligatorMs": 770,
+				"hostRatio": 4.666666666666667,
+				"hostGapMs": 605,
+				"workUnits": 0,
+				"nodeNsPerWorkUnit": null,
+				"maligatorNsPerWorkUnit": null,
+				"allocatedBytes": 260240390,
+				"collections": 5,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 29,
+				"name": "semantic analysis",
+				"nodeMs": 274,
+				"maligatorMs": 1894,
+				"hostRatio": 6.912408759124087,
+				"hostGapMs": 1620,
+				"workUnits": 449353,
+				"nodeNsPerWorkUnit": 609.765596312921,
+				"maligatorNsPerWorkUnit": 4214.949048965957,
+				"allocatedBytes": 1117110736,
+				"collections": 5,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 30,
+				"name": "output serialization",
+				"nodeMs": 0,
+				"maligatorMs": 0,
+				"hostRatio": null,
+				"hostGapMs": 0,
+				"workUnits": 60012507,
+				"nodeNsPerWorkUnit": 0,
+				"maligatorNsPerWorkUnit": 0,
+				"allocatedBytes": 0,
+				"collections": 0,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			},
+			{
+				"id": 31,
+				"name": "output writing",
+				"nodeMs": 23,
+				"maligatorMs": 72,
+				"hostRatio": 3.130434782608696,
+				"hostGapMs": 49,
+				"workUnits": 60012507,
+				"nodeNsPerWorkUnit": 0.38325344415289964,
+				"maligatorNsPerWorkUnit": 1.1997499121308164,
+				"allocatedBytes": 9968,
+				"collections": 0,
+				"representativeKernels": [],
+				"category": "compiler-algorithms"
+			}
+		],
+		"topHostGap": [
+			"other function optimization passes",
+			"semantic-to-Core construction",
+			"Core verification",
+			"program-flow convergence",
+			"local value kinds"
+		],
+		"topAllocation": [
+			"emission",
+			"semantic-to-Core construction",
+			"Core-to-Execution lowering",
+			"other function optimization passes",
+			"Execution-to-Image lowering"
+		],
+		"categoryFractions": {
+			"runtime-collections-properties": 0.16754332219691803,
+			"function-closure-dispatch": 0.020328774724576025,
+			"iterators-callbacks": 0,
+			"allocation-gc": 0.32464191993341274,
+			"typed-arrays-numeric-loops": 0.26989815382125476,
+			"compiler-algorithms": 0.21758782932383847,
+			"unattributed-execution": 0
+		},
+		"actionableOwners": [
+			"other function optimization passes",
+			"semantic-to-Core construction",
+			"Core verification",
+			"program-flow convergence",
+			"local value kinds",
+			"Core-to-Execution lowering",
+			"fused local optimization",
+			"emission",
+			"optimizer orchestration",
+			"block-parameter simplification"
+		]
+	},
 	"diagnosis": {
 		"firstPrimitiveAboveSeven": "typed-array-operations",
 		"firstAlgorithmAboveSeven": "pruned-ssa",
@@ -2711,23 +3303,23 @@
 			"optimizer-queue",
 			"value-kinds",
 			"spread-copies",
-			"dynamic-array-operations",
-			"moderate-retention-churn"
+			"pruned-ssa",
+			"dynamic-array-operations"
 		],
 		"topAllocation": [
 			"moderate-retention-churn",
-			"iterator-generator-traversal",
 			"pruned-ssa",
+			"iterator-generator-traversal",
 			"map-operations",
 			"block-parameters"
 		],
 		"categoryFractions": {
-			"runtime-collections-properties": 0.1517414496391591,
-			"function-closure-dispatch": 0.059742704737998115,
-			"iterators-callbacks": 0.06733605271415125,
-			"allocation-gc": 0.23633511139002197,
-			"typed-arrays-numeric-loops": 0.4503294634452463,
-			"compiler-algorithms": 0.03451521807342328,
+			"runtime-collections-properties": 0.15129379720193142,
+			"function-closure-dispatch": 0.04438529156865173,
+			"iterators-callbacks": 0.06704221864553671,
+			"allocation-gc": 0.23486442986257275,
+			"typed-arrays-numeric-loops": 0.44564813668441255,
+			"compiler-algorithms": 0.05676612603689489,
 			"unattributed-execution": 0
 		}
 	}
