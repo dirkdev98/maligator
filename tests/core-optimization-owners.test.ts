@@ -60,9 +60,27 @@ describe("compiler optimization owners", () => {
 			collections: 4,
 		});
 		expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]).toMatchObject({
-			elapsedMs: 20,
-			allocatedBytes: 200,
-			collections: 20,
+			elapsedMs: 0,
+			allocatedBytes: 0,
+			collections: 0,
+		});
+		expect(owners[CORE_OPTIMIZATION_OWNER.moduleGraph]).toMatchObject({
+			elapsedMs: 1,
+			workUnits: 0,
+			allocatedBytes: 10,
+			collections: 1,
+		});
+		expect(owners[CORE_OPTIMIZATION_OWNER.semanticAnalysis]).toMatchObject({
+			elapsedMs: 2,
+			workUnits: 100,
+			allocatedBytes: 20,
+			collections: 2,
+		});
+		expect(owners[CORE_OPTIMIZATION_OWNER.outputWriting]).toMatchObject({
+			elapsedMs: 9,
+			workUnits: 60,
+			allocatedBytes: 90,
+			collections: 9,
 		});
 	});
 

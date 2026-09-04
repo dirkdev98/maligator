@@ -27,6 +27,10 @@ export const CORE_OPTIMIZATION_OWNER = Object.freeze({
 	otherFunctionOptimizationPasses: 25,
 	optimizerInstrumentation: 26,
 	optimizerOrchestration: 27,
+	moduleGraph: 28,
+	semanticAnalysis: 29,
+	outputSerialization: 30,
+	outputWriting: 31,
 } as const);
 
 export type CoreOptimizationOwnerId =
@@ -67,6 +71,10 @@ export const CORE_OPTIMIZATION_OWNERS: ReadonlyArray<CoreOptimizationOwnerDefini
 		{ id: 25, name: "other function optimization passes" },
 		{ id: 26, name: "optimizer instrumentation" },
 		{ id: 27, name: "optimizer orchestration" },
+		{ id: 28, name: "module graph" },
+		{ id: 29, name: "semantic analysis" },
+		{ id: 30, name: "output serialization" },
+		{ id: 31, name: "output writing" },
 	]);
 
 export function coreOptimizationOwnerIsOptimizeCore(owner: number): boolean {
@@ -179,12 +187,23 @@ export function completeCompilerOptimizationOwners(
 			CORE_OPTIMIZATION_OWNER.emission,
 			{ elapsedMs: phases.emitMs, workUnits: work.generatedCodeUnits },
 		],
+		[
+			CORE_OPTIMIZATION_OWNER.moduleGraph,
+			{ elapsedMs: phases.graphMs ?? 0, workUnits: 0 },
+		],
+		[
+			CORE_OPTIMIZATION_OWNER.semanticAnalysis,
+			{ elapsedMs: phases.semanticMs ?? 0, workUnits: work.inputInstructions },
+		],
+		[
+			CORE_OPTIMIZATION_OWNER.outputSerialization,
+			{ elapsedMs: phases.serializeMs ?? 0, workUnits: work.generatedCodeUnits },
+		],
+		[
+			CORE_OPTIMIZATION_OWNER.outputWriting,
+			{ elapsedMs: phases.writeMs ?? 0, workUnits: work.generatedCodeUnits },
+		],
 	]);
-	const outsideRequiredOwners =
-		(phases.graphMs ?? 0) +
-		(phases.semanticMs ?? 0) +
-		(phases.serializeMs ?? 0) +
-		(phases.writeMs ?? 0);
 	const runtimeForOwner = new Map<
 		CoreOptimizationOwnerId,
 		CoreOptimizationRuntimeCounters
@@ -216,39 +235,36 @@ export function completeCompilerOptimizationOwners(
 		...(runtimePhases.emitMs === undefined
 			? []
 			: [[CORE_OPTIMIZATION_OWNER.emission, runtimePhases.emitMs] as const]),
+		...(runtimePhases.graphMs === undefined
+			? []
+			: [[CORE_OPTIMIZATION_OWNER.moduleGraph, runtimePhases.graphMs] as const]),
+		...(runtimePhases.semanticMs === undefined
+			? []
+			: [[CORE_OPTIMIZATION_OWNER.semanticAnalysis, runtimePhases.semanticMs] as const]),
+		...(runtimePhases.serializeMs === undefined
+			? []
+			: [
+					[
+						CORE_OPTIMIZATION_OWNER.outputSerialization,
+						runtimePhases.serializeMs,
+					] as const,
+				]),
+		...(runtimePhases.writeMs === undefined
+			? []
+			: [[CORE_OPTIMIZATION_OWNER.outputWriting, runtimePhases.writeMs] as const]),
 	]);
-	const unattributedRuntime = [
-		runtimePhases.graphMs,
-		runtimePhases.semanticMs,
-		runtimePhases.serializeMs,
-		runtimePhases.writeMs,
-	].reduce<CoreOptimizationRuntimeCounters | undefined>((sum, value) => {
-		if (value === undefined) return sum;
-		return {
-			allocatedBytes: (sum?.allocatedBytes ?? 0) + value.allocatedBytes,
-			collections: (sum?.collections ?? 0) + value.collections,
-		};
-	}, undefined);
 	return Object.freeze(
 		CORE_OPTIMIZATION_OWNERS.map(({ id, name }) => {
 			const measured = explicit.get(id) ?? core.get(id);
 			const runtime = runtimeForOwner.get(id) ?? core.get(id);
-			const extraRuntime =
-				id === CORE_OPTIMIZATION_OWNER.unattributed ? unattributedRuntime : undefined;
 			const allocatedBytes =
-				runtime?.allocatedBytes === undefined && extraRuntime === undefined
-					? undefined
-					: (runtime?.allocatedBytes ?? 0) + (extraRuntime?.allocatedBytes ?? 0);
+				runtime?.allocatedBytes === undefined ? undefined : runtime.allocatedBytes;
 			const collections =
-				runtime?.collections === undefined && extraRuntime === undefined
-					? undefined
-					: (runtime?.collections ?? 0) + (extraRuntime?.collections ?? 0);
+				runtime?.collections === undefined ? undefined : runtime.collections;
 			return Object.freeze({
 				id,
 				name,
-				elapsedMs:
-					(measured?.elapsedMs ?? 0) +
-					(id === CORE_OPTIMIZATION_OWNER.unattributed ? outsideRequiredOwners : 0),
+				elapsedMs: measured?.elapsedMs ?? 0,
 				workUnits: measured?.workUnits ?? 0,
 				...(allocatedBytes === undefined ? {} : { allocatedBytes }),
 				...(collections === undefined ? {} : { collections }),
