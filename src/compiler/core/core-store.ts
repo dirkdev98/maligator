@@ -1520,55 +1520,34 @@ export class CoreFunctionStore {
 		block: CoreBlockId,
 		index: number,
 	): CoreValueId {
-		return this._removeBlockParameters(mutation, block, [index])[0]!;
-	}
-
-	_removeBlockParameters(
-		mutation: CoreStoreMutation,
-		block: CoreBlockId,
-		indexes: ReadonlyArray<number>,
-	): ReadonlyArray<CoreValueId> {
 		this.#assertEditing(mutation);
 		this.#requireBlock(block);
-		if (indexes.length === 0) return [];
 		const start = this.#blockParameterStart[block]!;
 		const count = this.#blockParameterCount[block]!;
-		const removed = new Uint8Array(count);
-		const removedValues = new Array<CoreValueId>(indexes.length);
-		for (let offset = 0; offset < indexes.length; offset++) {
-			const index = indexes[offset]!;
-			if (!Number.isSafeInteger(index) || index < 0 || index >= count) {
-				throw new Error(`Unknown Core block ${block} parameter ${index}`);
-			}
-			if (removed[index] !== 0) {
-				throw new Error(`Duplicate Core block ${block} parameter ${index}`);
-			}
-			removed[index] = 1;
-			const value = this.#blockParameterValues[start + index]!;
-			if (this.#valueUseCount[value] !== 0) {
-				throw new Error(
-					`Cannot remove Core block ${block} parameter ${index}; value ${value} is used`,
-				);
-			}
-			removedValues[offset] = value;
+		if (!Number.isSafeInteger(index) || index < 0 || index >= count) {
+			throw new Error(`Unknown Core block ${block} parameter ${index}`);
 		}
-		const values = new Array<CoreValueId>(count - indexes.length);
-		const roles = new Array<"value" | "exception">(count - indexes.length);
+		const value = this.#blockParameterValues[start + index]!;
+		if (this.#valueUseCount[value] !== 0) {
+			throw new Error(
+				`Cannot remove Core block ${block} parameter ${index}; value ${value} is used`,
+			);
+		}
+		const values = new Array<CoreValueId>(count - 1);
+		const roles = new Array<"value" | "exception">(count - 1);
 		let destination = 0;
 		for (let source = 0; source < count; source++) {
+			if (source === index) continue;
 			const parameterValue = this.#blockParameterValues[start + source]!;
-			if (removed[source] !== 0) {
-				this.#valueLive[parameterValue] = 0;
-				continue;
-			}
 			values[destination] = parameterValue;
 			roles[destination] =
 				BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + source]!]!;
 			this.#valueDefinitionIndex[parameterValue] = destination;
 			destination++;
 		}
+		this.#valueLive[value] = 0;
 		this.#replaceBlockParameterRange(block, values, roles);
-		return removedValues;
+		return value;
 	}
 
 	_insertOperation(

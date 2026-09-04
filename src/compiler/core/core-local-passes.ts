@@ -1947,10 +1947,7 @@ const simplifyBlockParameters: CoreFunctionPass = {
 					),
 				);
 			}
-			editor.removeBlockParameters(
-				block,
-				removable.map(({ index }) => index),
-			);
+			for (const { index } of removable) editor.removeBlockParameter(block, index);
 		}
 		return editor?.commit();
 	},
@@ -2050,10 +2047,7 @@ const canonicalizeBlockParameters: CoreFunctionPass = {
 					),
 				);
 			}
-			editor.removeBlockParameters(
-				block,
-				replacements.map(({ index }) => index),
-			);
+			for (const { index } of replacements) editor.removeBlockParameter(block, index);
 		}
 		return editor.commit();
 	},

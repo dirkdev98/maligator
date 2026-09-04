@@ -601,43 +601,6 @@ describe("Core store", () => {
 		);
 	});
 
-	it("removes several block parameters in one stable batch", () => {
-		const program = new CoreProgram(registry());
-		const builder = new CoreFunctionBuilder(program, { parameterCount: 4 });
-		const entry = builder.createBlock(Array.from({ length: 4 }, () => ({})));
-		const arguments_ = inspectCoreBlockParameters(builder, entry).map(
-			({ value }) => value,
-		);
-		const target = builder.createBlock(Array.from({ length: 4 }, () => ({})));
-		const parameters = inspectCoreBlockParameters(builder, target).map(
-			({ value }) => value,
-		);
-		builder.setTerminator(entry, {
-			kind: "jump",
-			edge: { block: target, arguments: arguments_ },
-		});
-		builder.setTerminator(target, { kind: "return", value: parameters[0]! });
-		const finished = builder.finish(entry);
-		const fn = program.function(finished.function);
-		const editor = CoreEditor.open(program, fn.id);
-		editor.replaceTerminator(entry, {
-			kind: "jump",
-			edge: { block: target, arguments: [arguments_[0]!, arguments_[2]!] },
-		});
-		editor.removeBlockParameters(target, [3, 1]);
-		expect(editor.pendingEdits).toBe(3);
-		editor.commit();
-		verifyCoreProgram(program);
-
-		expect(inspectCoreBlockParameters(fn, target).map(({ value }) => value)).toEqual([
-			parameters[0],
-			parameters[2],
-		]);
-		expect(fn.isValueLive(parameters[1]!)).toBe(false);
-		expect(fn.isValueLive(parameters[3]!)).toBe(false);
-		expect(inspectCoreValueDefinition(fn, parameters[2]!)).toMatchObject({ index: 1 });
-	});
-
 	it("densely finalizes construction storage exactly once", () => {
 		const program = new CoreProgram(registry());
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
