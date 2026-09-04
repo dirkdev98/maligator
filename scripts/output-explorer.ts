@@ -10,6 +10,7 @@ import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.
 import { formatCoreProgram } from "../src/compiler/core/core-ir.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import { buildCoreSpecializationRecipeTable } from "../src/compiler/core/core-specialization-recipes.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
@@ -650,7 +651,7 @@ function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	return Object.freeze({
 		...plan,
 		directEntries: Object.freeze([]),
-		specializations: Object.freeze([]),
+		recipes: buildCoreSpecializationRecipeTable([]),
 		statistics: Object.freeze({
 			considered: discovered,
 			applied: 0,
