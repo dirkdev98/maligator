@@ -757,16 +757,11 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	run(context) {
 		const { program, compilationContext, item } = context;
 		const fn = program.function(item.function);
-		const callOpcode = fn.registry.require("call").id;
-		const calls: Array<CoreInstructionId> = [];
-		for (const instruction of fn.instructionIds()) {
-			if (
+		const calls = [...fn.instructionIds()].filter(
+			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcode(instruction) === callOpcode
-			) {
-				calls.push(instruction);
-			}
-		}
+				fn.instructionOpcodeName(instruction) === "call",
+		);
 		if (calls.length === 0) return undefined;
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
 		let kinds: CoreValueKindAnalysis | undefined;
