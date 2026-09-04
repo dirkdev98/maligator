@@ -1486,7 +1486,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						? undefined
 						: instrumentationRatio(offSamples, phasesSamples);
 				const countersReference =
-					(exactOpt3SelfCompile || exactOpt4) && countersSamples.length === 1
+					exactOpt3SelfCompile && countersSamples.length === 1
 						? [offSamples[Math.floor(offSamples.length / 2)]!]
 						: offSamples;
 				const countersRatio =
