@@ -1,6 +1,9 @@
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
-import { runCoreCrossCallTransforms } from "./core-cross-call-transforms.ts";
+import {
+	emptyCoreCrossCallTransformResult,
+	runCoreCrossCallTransforms,
+} from "./core-cross-call-transforms.ts";
 import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
@@ -15,6 +18,7 @@ import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 } from "./core-local-passes.ts";
+import type { CoreOptimizationBenchmarkAblation } from "./core-optimization-families.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type {
 	CoreInstrumentationMode,
@@ -31,6 +35,7 @@ export interface OptimizeCoreOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly mode?: "development" | "full";
 	readonly instrumentation?: CoreInstrumentationMode;
+	readonly benchmarkAblation?: CoreOptimizationBenchmarkAblation;
 }
 
 interface CoreOptimizerWorkProfile {
@@ -69,6 +74,7 @@ export function optimizeCore(
 	options: OptimizeCoreOptions = {},
 ): OptimizedCoreResult {
 	const instrumentation = options.instrumentation ?? "off";
+	const ablatedFamily = options.benchmarkAblation?.family;
 	const profile =
 		CORE_OPTIMIZER_WORK_PROFILES[
 			options.mode ?? compilation.context.facts.compilationMode
@@ -149,7 +155,7 @@ export function optimizeCore(
 				{
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					localOptimization: true,
+					localOptimization: ablatedFamily !== "o1-scalar-structural",
 					featureIndex: resources.featureIndex,
 					localRules: resources.localRules,
 				},
@@ -210,6 +216,7 @@ export function optimizeCore(
 				{
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+					benchmarkAblation: ablatedFamily,
 				},
 			).optimizePrimary(runFunctionPhase),
 		);
@@ -235,25 +242,28 @@ export function optimizeCore(
 		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
 	);
 	const crossCall = measurePhase("cross-call-transforms", () =>
-		runCoreCrossCallTransforms(
-			compilation.program,
-			analyses,
-			(wave, functionId, editor) =>
-				new CoreFunctionOptimizationSession(
+		ablatedFamily === "inlining-cross-call"
+			? emptyCoreCrossCallTransformResult(initialFlow)
+			: runCoreCrossCallTransforms(
 					compilation.program,
-					compilation.context,
-					reportBuilder,
-					functionResources,
-					functionId,
-					{
-						verification: options.verification,
-						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-						crossCallWave: wave,
-					},
-				).optimizeCrossCall(editor),
-			profile.crossCallBudgets,
-			initialFlow,
-		),
+					analyses,
+					(wave, functionId, editor) =>
+						new CoreFunctionOptimizationSession(
+							compilation.program,
+							compilation.context,
+							reportBuilder,
+							functionResources,
+							functionId,
+							{
+								verification: options.verification,
+								optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+								crossCallWave: wave,
+								benchmarkAblation: ablatedFamily,
+							},
+						).optimizeCrossCall(editor),
+					profile.crossCallBudgets,
+					initialFlow,
+				),
 	);
 	reportBuilder.recordTransformWork(crossCall.statistics);
 	reportBuilder.recordCheckpoint("after-cross-call-transforms", compilation.program);
@@ -276,11 +286,14 @@ export function optimizeCore(
 		compilation.program,
 		analyses,
 		summaries,
-		reachability.liveFunctions,
+		ablatedFamily === "program-flow"
+			? [...compilation.program.functionIds()]
+			: reachability.liveFunctions,
 		{
 			context: compilation.context,
 			budgets: profile.specializationBudgets,
 			localInputs: [...finalLocalPlanInputs.values()],
+			discoverCandidates: ablatedFamily !== "late-specialization-direct-entry",
 			...(reportBuilder.collectsPhases
 				? {
 						onPhase(phase: "discovery" | "selection", elapsedMs: number) {

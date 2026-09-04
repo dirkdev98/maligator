@@ -708,6 +708,42 @@ export type CoreCrossCallCallerOptimizer = (
 	editor: CoreEditor,
 ) => CoreCrossCallFunctionOptimizationResult;
 
+export interface CoreCrossCallTransformResult {
+	readonly summaries: CoreProgramSummaries;
+	readonly statistics: CoreCrossCallTransformStatistics;
+	readonly localPlanInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>;
+}
+
+export function emptyCoreCrossCallTransformResult(
+	flow: CoreProgramFlowState,
+): CoreCrossCallTransformResult {
+	const budget = new CoreTransformCandidateService().statistics();
+	return Object.freeze({
+		summaries: flow.summaries,
+		localPlanInputs: Object.freeze([]),
+		statistics: Object.freeze({
+			...budget,
+			waves: 0,
+			callerEditSessions: 0,
+			callerLocalOptimizations: 0,
+			programFlowResolves: 0,
+			instructionsIntroduced: 0,
+			blocksIntroduced: 0,
+			callGraphFunctionsAnalyzed: 0,
+			summaryFunctionsAnalyzed: 0,
+			sccNodesAnalyzed: 0,
+			sccEdgeVisits: 0,
+			sccTransfers: 0,
+			callerWakeups: 0,
+			valueKindFunctionEvaluations: 0,
+			valueKindFolds: 0,
+			wildcardAggregateRecomputations: 0,
+			exactReverseCallerVisits: 0,
+			wildcardReverseCallerVisits: 0,
+		}),
+	});
+}
+
 function discoverProgramValueKindObservations(
 	program: CoreProgram,
 	kinds: CoreProgramValueKinds,
@@ -736,11 +772,7 @@ export function runCoreCrossCallTransforms(
 	optimizeCaller: CoreCrossCallCallerOptimizer,
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
-): {
-	readonly summaries: CoreProgramSummaries;
-	readonly statistics: CoreCrossCallTransformStatistics;
-	readonly localPlanInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>;
-} {
+): CoreCrossCallTransformResult {
 	const service = new CoreTransformCandidateService(limits);
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });

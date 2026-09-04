@@ -17,7 +17,12 @@ import {
 	CORE_LATE_CANONICALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
-import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
+import {
+	CORE_MEMORY_PASSES,
+	CORE_MEMORY_SSA_PASSES,
+	CORE_PROVENANCE_PASSES,
+} from "./core-memory-passes.ts";
+import type { CoreOptimizationFamily } from "./core-optimization-families.ts";
 import type {
 	CoreOptimizationPhase,
 	CoreOptimizationReportBuilder,
@@ -35,6 +40,7 @@ export interface CoreFunctionOptimizationSessionOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly crossCallWave?: number;
+	readonly benchmarkAblation?: CoreOptimizationFamily;
 }
 
 export interface CoreCrossCallFunctionOptimizationResult {
@@ -87,6 +93,7 @@ export class CoreFunctionOptimizationSession {
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #verification: CoreVerificationProfile;
 	readonly #crossCall: boolean;
+	readonly #benchmarkAblation: CoreOptimizationFamily | undefined;
 	#optimized = false;
 
 	constructor(
@@ -109,6 +116,7 @@ export class CoreFunctionOptimizationSession {
 		this.#report = report;
 		this.#verification = options.verification ?? "boundary";
 		this.#crossCall = options.crossCallWave !== undefined;
+		this.#benchmarkAblation = options.benchmarkAblation;
 		this.#passes = new CoreFunctionPassScheduler(
 			program,
 			context,
@@ -118,7 +126,7 @@ export class CoreFunctionOptimizationSession {
 			{
 				verification: options.verification,
 				optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
-				localOptimization: true,
+				localOptimization: !this.#ablates("o1-scalar-structural"),
 				featureIndex: resources.featureIndex,
 				localRules: resources.localRules,
 			},
@@ -136,20 +144,35 @@ export class CoreFunctionOptimizationSession {
 		}
 		this.#optimized = true;
 		runPhase("post-barrier-local-optimization", () =>
-			this.#passes.runComponent("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
+			this.#ablates("o1-scalar-structural")
+				? []
+				: this.#passes.runComponent("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
 		);
 		runPhase("advanced-cfg-optimization", () =>
-			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES),
+			this.#ablates("cfg-loop-licm-pre")
+				? []
+				: this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES),
 		);
 		const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
 		lateCanonicalizationChanges.push(
 			...runPhase("proof-and-representation-optimization", () =>
-				this.#passes.runComponent("proofs", CORE_PROOF_PASSES),
+				this.#ablates("proof-value-kind-representation")
+					? []
+					: this.#passes.runComponent("proofs", CORE_PROOF_PASSES),
 			),
+		);
+		const memoryPasses = CORE_MEMORY_PASSES.filter(
+			(pass) =>
+				(!this.#ablates("provenance-escape-scalar-replacement") ||
+					!CORE_PROVENANCE_PASSES.includes(pass)) &&
+				(!this.#ablates("memory-ssa-load-store") ||
+					!CORE_MEMORY_SSA_PASSES.includes(pass)),
 		);
 		lateCanonicalizationChanges.push(
 			...runPhase("memory-and-provenance-optimization", () =>
-				this.#passes.runComponent("memory", CORE_MEMORY_PASSES),
+				memoryPasses.length === 0
+					? []
+					: this.#passes.runComponent("memory", memoryPasses),
 			),
 		);
 		runPhase("late-local-cleanup", () => {
@@ -168,6 +191,7 @@ export class CoreFunctionOptimizationSession {
 				this.#specializationFeatureIndex,
 				this.functionId,
 				this.#context,
+				!this.#ablates("late-specialization-direct-entry"),
 			),
 		);
 	}
@@ -212,7 +236,12 @@ export class CoreFunctionOptimizationSession {
 				this.#specializationFeatureIndex,
 				this.functionId,
 				this.#context,
+				!this.#ablates("late-specialization-direct-entry"),
 			),
 		});
+	}
+
+	#ablates(family: CoreOptimizationFamily): boolean {
+		return this.#benchmarkAblation === family;
 	}
 }

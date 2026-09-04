@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
-import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
+import {
+	CORE_MEMORY_PASSES,
+	CORE_MEMORY_SSA_PASSES,
+	CORE_PROVENANCE_PASSES,
+} from "../src/compiler/core/core-memory-passes.ts";
 import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 
@@ -106,6 +110,17 @@ describe("Core local optimizer migration matrix", () => {
 		expect(matrixByName.get("local-dead-instruction-elimination")?.owner).toBe(
 			"deleted as redundant",
 		);
+	});
+
+	it("partitions provenance and MemorySSA without changing production pass order", () => {
+		const provenance = new Set(CORE_PROVENANCE_PASSES);
+		const memory = new Set(CORE_MEMORY_SSA_PASSES);
+
+		expect([...provenance].some((pass) => memory.has(pass))).toBe(false);
+		expect(new Set([...provenance, ...memory])).toEqual(new Set(CORE_MEMORY_PASSES));
+		expect(CORE_MEMORY_SSA_PASSES.map(({ name }) => name)).toEqual([
+			"forward-exact-memory-loads",
+		]);
 	});
 
 	it("records all five finalization aliases for deletion", () => {

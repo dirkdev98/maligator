@@ -1,6 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
+import {
+	CORE_OPTIMIZATION_FAMILIES,
+	type CoreOptimizationFamily,
+} from "../src/compiler/core/core-optimization-families.ts";
 import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
@@ -25,6 +29,17 @@ if (
 	throw new Error(`unknown Core instrumentation mode ${instrumentationValue}`);
 }
 const instrumentation: CoreInstrumentationMode = instrumentationValue;
+const ablationValue = process.env.MAL_CORE_BENCHMARK_ABLATION;
+if (
+	ablationValue !== undefined &&
+	!CORE_OPTIMIZATION_FAMILIES.includes(ablationValue as CoreOptimizationFamily)
+) {
+	throw new Error(`unknown Core benchmark ablation ${ablationValue}`);
+}
+const coreOptimizationBenchmarkAblation =
+	ablationValue === undefined
+		? undefined
+		: { family: ablationValue as CoreOptimizationFamily };
 
 const config: ResolvedBuildConfig = {
 	entry: undefined,
@@ -73,6 +88,7 @@ const image = compileEntrypoint(path.resolve(inputPath), {
 	stripTypes: (source) => source,
 	buildConfig: config,
 	coreInstrumentation: instrumentation,
+	coreOptimizationBenchmarkAblation,
 	afterCoreOptimization(_program, _context, report) {
 		optimizationReport = report;
 	},

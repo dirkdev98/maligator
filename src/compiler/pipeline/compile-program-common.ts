@@ -21,6 +21,7 @@ export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
 	coreInstrumentation?: CompileCoreOptions["coreInstrumentation"];
+	coreOptimizationBenchmarkAblation?: CompileCoreOptions["coreOptimizationBenchmarkAblation"];
 	afterCoreOptimization?: CompileCoreOptions["afterCoreOptimization"];
 	runPhase?: <T>(phase: CompileEntrypointPhase, run: () => T) => T;
 	onDiagnostic?: (diagnostic: CompilerDiagnostic) => void;

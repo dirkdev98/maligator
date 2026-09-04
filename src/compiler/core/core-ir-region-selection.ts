@@ -979,9 +979,11 @@ export function buildCoreLocalOptimizationPlanInput(
 	features: CoreFunctionFeatureIndex,
 	functionId: CoreFunctionId,
 	context?: CoreCompilationContext,
+	discoverCandidates = true,
 ): CoreLocalOptimizationPlanInput {
 	const fn = program.function(functionId);
-	const scanned = hasLocalSpecializationFeatures(features, functionId);
+	const scanned =
+		discoverCandidates && hasLocalSpecializationFeatures(features, functionId);
 	const candidates = scanned
 		? analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
 				scope: "function",
@@ -1217,6 +1219,7 @@ export interface BuildCoreOptimizationPlanOptions {
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly context?: CoreCompilationContext;
 	readonly localInputs?: ReadonlyArray<CoreLocalOptimizationPlanInput>;
+	readonly discoverCandidates?: boolean;
 	readonly onPhase?: (phase: "discovery" | "selection", elapsedMs: number) => void;
 	readonly onLocalCandidates?: (
 		functionId: CoreFunctionId,
@@ -1256,13 +1259,16 @@ export function buildCoreOptimizationPlan(
 						(features ??= coreLocalSpecializationFeatureIndex(program)),
 						functionId,
 						options.context,
+						options.discoverCandidates !== false,
 					);
 		resolvedLocalInputs.push(input);
 		if (input.scanned) options.onLocalCandidates?.(functionId, input.candidateSummaries);
-		pending.push(...input.pending);
+		if (options.discoverCandidates !== false) pending.push(...input.pending);
 	}
-	pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
-	pending.push(...directEntryCandidates(program, summaries, live));
+	if (options.discoverCandidates !== false) {
+		pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
+		pending.push(...directEntryCandidates(program, summaries, live));
+	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
 

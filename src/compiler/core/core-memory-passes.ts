@@ -1834,6 +1834,22 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	},
 };
 
+export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	foldExactAllocationObservations,
+	forwardFreshOwnSlotPrefix,
+	annotateKnownOwnSlots,
+	refineContainedOwnSlotAccesses,
+	rewriteContainedFreshArrayBuiltins,
+	refineExactCollectionAccesses,
+	refineStackObjectCellRepresentations,
+	scalarizeRootedContainedObjects,
+	scalarReplaceContainedAggregates,
+];
+
+export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	forwardExactMemoryLoads,
+];
+
 export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,

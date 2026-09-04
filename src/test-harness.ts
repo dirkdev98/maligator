@@ -22,6 +22,7 @@ import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
+import type { CoreOptimizationBenchmarkAblation } from "./compiler/core/core-optimization-families.ts";
 import {
 	stripCompactTypes,
 	TYPE_STRIPPER_IDENTITY,
@@ -174,6 +175,8 @@ export interface BuildOptions {
 	environment?: NodeJS.ProcessEnv;
 	/** Observe persistent frontend-cache reuse in focused harness tests. */
 	onFrontendCacheEvent?: (event: { cache: "hit" | "miss"; entrypoint: string }) => void;
+	/** Benchmark-only omission of one optimizer family; never exposed by the product CLI. */
+	coreOptimizationBenchmarkAblation?: CoreOptimizationBenchmarkAblation;
 	/** Override the native artifact root for isolated build-cost measurements. */
 	cacheDirectory?: string;
 	/** Observe native artifact reuse without suppressing harness telemetry. */
@@ -274,7 +277,9 @@ function compileFixtureProgramImage(
 	let cache: "hit" | "miss" = "miss";
 	try {
 		const canReuseFrontend =
-			options.entryGoal === undefined && options.profileEnabled !== true;
+			options.entryGoal === undefined &&
+			options.profileEnabled !== true &&
+			options.coreOptimizationBenchmarkAblation === undefined;
 		if (canReuseFrontend) {
 			const frontend = compileBuildFrontend({
 				entrypoint,
@@ -297,6 +302,7 @@ function compileFixtureProgramImage(
 		return compileSemanticProgramToProgramImage(semanticProgram, {
 			facts: compilerProgramFactsFromConfig(config),
 			profile: options.profileEnabled,
+			coreOptimizationBenchmarkAblation: options.coreOptimizationBenchmarkAblation,
 		});
 	} finally {
 		recordTestTelemetry({

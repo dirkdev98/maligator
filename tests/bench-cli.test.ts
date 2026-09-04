@@ -16,6 +16,7 @@ describe("benchmark CLI", () => {
 			expect(result.stdout).toContain("self-compile");
 			expect(result.stdout).toContain("--runs N");
 			expect(result.stdout).toContain("--checkpoint PATH");
+			expect(result.stdout).toContain("--ablate-core-family FAMILY");
 			expect(result.stdout).not.toContain("[bench]");
 			expect(result.stderr).toBe("");
 		},
@@ -30,6 +31,18 @@ describe("benchmark CLI", () => {
 		expect(result.status).not.toBe(0);
 		expect(result.stdout).not.toContain("[bench]");
 		expect(result.stderr).toContain("unknown benchmark family: language");
+	});
+
+	it("rejects unknown Core optimization-family ablations before benchmarking", () => {
+		const result = spawnSync(
+			process.execPath,
+			["scripts/bench.ts", "javascript", "--ablate-core-family", "invented"],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+
+		expect(result.status).not.toBe(0);
+		expect(result.stdout).not.toContain("[bench]");
+		expect(result.stderr).toContain("unknown Core optimization family: invented");
 	});
 
 	it("limits resumable checkpoints to a self-compile snapshot", () => {

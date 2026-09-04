@@ -8,6 +8,7 @@ import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import type { CoreOptimizationPlan } from "../core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "../core/core-ir.ts";
+import type { CoreOptimizationBenchmarkAblation } from "../core/core-optimization-families.ts";
 import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
@@ -35,6 +36,7 @@ export interface CompileCoreOptions {
 	 */
 	coreVerification?: CoreVerificationProfile;
 	coreInstrumentation?: CoreInstrumentationMode;
+	coreOptimizationBenchmarkAblation?: CoreOptimizationBenchmarkAblation;
 	semanticLowering?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -75,6 +77,7 @@ export function optimizeConstructedCore(
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
 			instrumentation: options.coreInstrumentation ?? "off",
+			benchmarkAblation: options.coreOptimizationBenchmarkAblation,
 		}),
 	);
 	const optimized =

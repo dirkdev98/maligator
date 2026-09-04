@@ -27,6 +27,8 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { CORE_OPTIMIZATION_FAMILIES } from "../src/compiler/core/core-optimization-families.ts";
+import type { CoreOptimizationFamily } from "../src/compiler/core/core-optimization-families.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import type {
 	NativeBuildCommandResourceEvent,
@@ -208,6 +210,7 @@ interface SelfCompileCheckpoint {
 	readonly source: NonNullable<BenchmarkSnapshot["source"]>;
 	readonly runs: number;
 	readonly nativeCacheDirectory?: string;
+	readonly coreOptimizationAblation?: CoreOptimizationFamily;
 	readonly root: string;
 	readonly binary: string;
 	readonly nativeBuild: NativeOutputBuildMetrics;
@@ -250,6 +253,7 @@ interface NativeRuntimeMetrics {
 
 interface BenchmarkSnapshot {
 	schema: 3;
+	coreOptimizationAblation?: CoreOptimizationFamily;
 	source?: {
 		readonly commit: string;
 		readonly dirty: boolean;
@@ -545,6 +549,7 @@ function benchJavascript(
 	runs: number,
 	selectedModes: ReadonlyArray<JavascriptMode>,
 	nativeCacheDirectory?: string,
+	coreOptimizationAblation?: CoreOptimizationFamily,
 ): JavascriptMetrics {
 	const nativeBuild = nativeBuildRecorder();
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
@@ -561,6 +566,10 @@ function benchJavascript(
 			onNativeBuildPhase: nativeBuild.observe,
 			measureNativeBuildResources: true,
 			onNativeCommandResource: nativeBuild.observeResource,
+			coreOptimizationBenchmarkAblation:
+				coreOptimizationAblation === undefined
+					? undefined
+					: { family: coreOptimizationAblation },
 		});
 		binaries["closed-compiled"] = closed.compiled;
 		binaries["closed-interpreted"] = closed.interpreted;
@@ -576,6 +585,10 @@ function benchJavascript(
 			onNativeBuildPhase: nativeBuild.observe,
 			measureNativeBuildResources: true,
 			onNativeCommandResource: nativeBuild.observeResource,
+			coreOptimizationBenchmarkAblation:
+				coreOptimizationAblation === undefined
+					? undefined
+					: { family: coreOptimizationAblation },
 		});
 		binaries["open-compiled"] = open.compiled;
 		binaries["open-interpreted"] = open.interpreted;
@@ -1080,6 +1093,7 @@ function benchSelfCompileCheckpoint(
 	nativeCacheDirectory: string | undefined,
 	checkpointPath: string,
 	source: NonNullable<BenchmarkSnapshot["source"]>,
+	coreOptimizationAblation?: CoreOptimizationFamily,
 ): SelfCompileMetrics | undefined {
 	let checkpoint: SelfCompileCheckpoint;
 	if (!existsSync(checkpointPath)) {
@@ -1102,6 +1116,7 @@ function benchSelfCompileCheckpoint(
 			root: mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-checkpoint-")),
 			binary,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
+			coreOptimizationAblation,
 			warm: { node: [], maligator: [] },
 		};
 		writeSelfCompileCheckpoint(checkpointPath, checkpoint);
@@ -1117,7 +1132,8 @@ function benchSelfCompileCheckpoint(
 	}
 	if (
 		checkpoint.runs !== runs ||
-		checkpoint.nativeCacheDirectory !== nativeCacheDirectory
+		checkpoint.nativeCacheDirectory !== nativeCacheDirectory ||
+		checkpoint.coreOptimizationAblation !== coreOptimizationAblation
 	) {
 		throw new Error("self-compile checkpoint options no longer match");
 	}
@@ -1353,6 +1369,7 @@ async function benchHttp(
 	durationSeconds: number,
 	concurrency: number,
 	nativeCacheDirectory?: string,
+	coreOptimizationAblation?: CoreOptimizationFamily,
 ): Promise<HttpMetrics> {
 	if (!ohaAvailable()) throw new Error("HTTP benchmark requires `oha`");
 	const nativeBuild = nativeBuildRecorder();
@@ -1365,6 +1382,10 @@ async function benchHttp(
 		onNativeBuildPhase: nativeBuild.observe,
 		measureNativeBuildResources: true,
 		onNativeCommandResource: nativeBuild.observeResource,
+		coreOptimizationBenchmarkAblation:
+			coreOptimizationAblation === undefined
+				? undefined
+				: { family: coreOptimizationAblation },
 	});
 	const expressBinary = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
@@ -1375,6 +1396,10 @@ async function benchHttp(
 		onNativeBuildPhase: nativeBuild.observe,
 		measureNativeBuildResources: true,
 		onNativeCommandResource: nativeBuild.observeResource,
+		coreOptimizationBenchmarkAblation:
+			coreOptimizationAblation === undefined
+				? undefined
+				: { family: coreOptimizationAblation },
 	});
 	const bareMal = startMeasuredRuntimeProcess(bareBinary, [], process.env);
 	const bareNode = spawn(process.execPath, ["bench/http/server_node.js"], {
@@ -1566,6 +1591,8 @@ Options:
   --native-cache-dir PATH
                       Isolate native artifacts for build-cost measurements
   --checkpoint PATH   Run one resumable self-compile stage and save its state
+  --ablate-core-family FAMILY
+                      Omit one Core optimization family for output attribution
   --update            Update selected sections in bench/baseline.json
   -h, --help          Show this help and exit
 `;
@@ -1581,6 +1608,7 @@ interface Options {
 	jsonOut?: string;
 	nativeCacheDirectory?: string;
 	checkpointPath?: string;
+	coreOptimizationAblation?: CoreOptimizationFamily;
 	mode?: JavascriptMode;
 	lanes: Array<string>;
 }
@@ -1640,6 +1668,13 @@ function parseOptions(args: Array<string>): Options | undefined {
 		} else if (arg === "--checkpoint") {
 			options.checkpointPath = path.resolve(requiredValue(args, index, arg));
 			index++;
+		} else if (arg === "--ablate-core-family") {
+			const family = requiredValue(args, index, arg);
+			if (!CORE_OPTIMIZATION_FAMILIES.includes(family as CoreOptimizationFamily)) {
+				throw new Error(`unknown Core optimization family: ${family}`);
+			}
+			options.coreOptimizationAblation = family as CoreOptimizationFamily;
+			index++;
 		} else if (arg === "--mode") {
 			const mode = requiredValue(args, index, arg);
 			if (!JAVASCRIPT_MODES.includes(mode as JavascriptMode)) {
@@ -1660,11 +1695,19 @@ function parseOptions(args: Array<string>): Options | undefined {
 	if (options.update && options.mode !== undefined) {
 		throw new Error("a single --mode cannot replace the complete JavaScript baseline");
 	}
+	if (options.update && options.coreOptimizationAblation !== undefined) {
+		throw new Error("a Core optimization ablation cannot replace the benchmark baseline");
+	}
 	return options;
 }
 
 const options = parseOptions(process.argv.slice(2));
 if (options === undefined) process.exit(0);
+if (options.coreOptimizationAblation === undefined) {
+	delete process.env.MAL_CORE_BENCHMARK_ABLATION;
+} else {
+	process.env.MAL_CORE_BENCHMARK_ABLATION = options.coreOptimizationAblation;
+}
 
 const allLanes = ["javascript", "http", "self-compile"];
 const changedSelection = options.changed
@@ -1716,6 +1759,9 @@ if (options.compareRef !== undefined) {
 			"--http-seconds",
 			String(options.httpSeconds),
 			...(options.mode === undefined ? [] : ["--mode", options.mode]),
+			...(options.coreOptimizationAblation === undefined
+				? []
+				: ["--ablate-core-family", options.coreOptimizationAblation]),
 		],
 	});
 	process.exit(comparison.exitCode);
@@ -1736,7 +1782,13 @@ if (savedBaseline !== undefined && savedBaseline.schema !== BENCHMARK_SCHEMA) {
 }
 const baseline = savedBaseline as BenchmarkSnapshot | undefined;
 
-const entry: BenchmarkSnapshot = { schema: BENCHMARK_SCHEMA, source: benchmarkSource() };
+const entry: BenchmarkSnapshot = {
+	schema: BENCHMARK_SCHEMA,
+	source: benchmarkSource(),
+	...(options.coreOptimizationAblation === undefined
+		? {}
+		: { coreOptimizationAblation: options.coreOptimizationAblation }),
+};
 let checkpointPending = false;
 const implementations: Record<string, () => void | Promise<void>> = {
 	javascript: () => {
@@ -1744,6 +1796,7 @@ const implementations: Record<string, () => void | Promise<void>> = {
 			options.runs,
 			options.mode === undefined ? JAVASCRIPT_MODES : [options.mode],
 			options.nativeCacheDirectory,
+			options.coreOptimizationAblation,
 		);
 	},
 	http: async () => {
@@ -1752,6 +1805,7 @@ const implementations: Record<string, () => void | Promise<void>> = {
 			options.httpSeconds,
 			50,
 			options.nativeCacheDirectory,
+			options.coreOptimizationAblation,
 		);
 	},
 	"self-compile": () => {
@@ -1763,6 +1817,7 @@ const implementations: Record<string, () => void | Promise<void>> = {
 						options.nativeCacheDirectory,
 						options.checkpointPath,
 						entry.source!,
+						options.coreOptimizationAblation,
 					);
 		if (measured === undefined) checkpointPending = true;
 		else entry.selfCompile = measured;

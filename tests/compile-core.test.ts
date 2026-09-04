@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
+import {
+	CORE_MEMORY_SSA_PASSES,
+	CORE_PROVENANCE_PASSES,
+} from "../src/compiler/core/core-memory-passes.ts";
+import { CORE_OPTIMIZATION_FAMILIES } from "../src/compiler/core/core-optimization-families.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -52,6 +60,76 @@ function scanLiveStorage(program: CoreProgram) {
 }
 
 describe("compileSemanticProgramToProgramImage", () => {
+	it("omits exactly one internal optimizer family per benchmark ablation", () => {
+		const source = `
+			function sum(values) {
+				let total = 0;
+				for (let index = 0; index < values.length; index++) total += values[index];
+				return total;
+			}
+			globalThis.answer = sum([10, 20, 12]);
+		`;
+		const compile = (family: (typeof CORE_OPTIMIZATION_FAMILIES)[number]) => {
+			let report: CoreOptimizationReport | undefined;
+			let plan: CoreOptimizationPlan | undefined;
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, `ablate-${family}.js`),
+				{
+					coreInstrumentation: "full",
+					coreOptimizationBenchmarkAblation: { family },
+					afterCoreOptimization(program, _context, optimizationReport, optimizationPlan) {
+						report = optimizationReport;
+						plan = optimizationPlan;
+						expect(program.sealed).toBe(true);
+					},
+				},
+			);
+			if (report === undefined || plan === undefined) {
+				throw new Error("missing ablated optimizer result");
+			}
+			return { image, report, plan };
+		};
+		const passNames = (passes: ReadonlyArray<{ readonly name: string }>) =>
+			new Set(passes.map(({ name }) => name));
+		const passReportNames = (report: CoreOptimizationReport) =>
+			new Set(report.passes.map(({ pass }) => pass));
+		const intersects = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
+			[...left].some((value) => right.has(value));
+
+		for (const family of CORE_OPTIMIZATION_FAMILIES) {
+			const { image, report, plan } = compile(family);
+			const reported = passReportNames(report);
+			expect(image.runtime.functions.length).toBeGreaterThan(0);
+			switch (family) {
+				case "o1-scalar-structural":
+					expect(reported.has("fused-local-optimizer")).toBe(false);
+					break;
+				case "cfg-loop-licm-pre":
+					expect(intersects(reported, passNames(CORE_CONTROL_FLOW_PASSES))).toBe(false);
+					break;
+				case "proof-value-kind-representation":
+					expect(intersects(reported, passNames(CORE_PROOF_PASSES))).toBe(false);
+					break;
+				case "provenance-escape-scalar-replacement":
+					expect(intersects(reported, passNames(CORE_PROVENANCE_PASSES))).toBe(false);
+					break;
+				case "memory-ssa-load-store":
+					expect(intersects(reported, passNames(CORE_MEMORY_SSA_PASSES))).toBe(false);
+					break;
+				case "program-flow":
+					expect(plan.liveFunctions).toHaveLength(report.output.functions);
+					break;
+				case "inlining-cross-call":
+					expect(report.transforms).toMatchObject({ considered: 0, applied: 0 });
+					break;
+				case "late-specialization-direct-entry":
+					expect(plan.statistics).toMatchObject({ considered: 0, applied: 0 });
+					expect(plan.directEntries).toEqual([]);
+					break;
+			}
+		}
+	});
+
 	it("keeps instrumentation modes output-identical", () => {
 		const source = `
 			function add(left, right) { return left + right; }
