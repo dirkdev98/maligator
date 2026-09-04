@@ -9,6 +9,8 @@ import type {
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
+import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreControlEdgeKind = "ordinary" | "exceptional";
@@ -75,6 +77,8 @@ export interface CoreControlFlowBundle {
 export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
+
+const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
 
 export function coreTerminatorEdges(
 	payload: CoreTerminatorPayload,
@@ -190,9 +194,18 @@ function traversal(
 	return { reachable, reversePostorder: postorder.reverse() };
 }
 
-function buildStructural(fn: CoreFunctionStore): CoreStructuralControlFlow {
-	const { successors, predecessors } = buildEdges(fn);
-	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+function buildStructural(
+	fn: CoreFunctionStore,
+	runOwner: CoreOptimizationOwnerRunner,
+): CoreStructuralControlFlow {
+	const { successors, predecessors } = runOwner(
+		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
+		() => buildEdges(fn),
+	);
+	const { reachable, reversePostorder } = runOwner(
+		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
+		() => traversal(fn.entry, successors),
+	);
 	return Object.freeze({
 		function: fn.id,
 		cfgVersion: fn.versions.cfg,
@@ -207,35 +220,45 @@ function buildStructural(fn: CoreFunctionStore): CoreStructuralControlFlow {
 function buildExceptionalStructural(
 	fn: CoreFunctionStore,
 	ordinary: CoreStructuralControlFlow,
+	runOwner: CoreOptimizationOwnerRunner,
 ): CoreStructuralControlFlow {
-	const successors = ordinary.successors.map((edges) => [...edges]);
-	const predecessors = ordinary.predecessors.map((edges) => [...edges]);
-	for (const block of fn.blockIds()) {
-		const handler = fn.kernel.blockHandlerBlock(block);
-		if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
-		const start = fn.kernel.blockHandlerArgumentStart(block);
-		const count = fn.kernel.blockHandlerArgumentCount(block);
-		let argumentVersion = -1;
-		let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-		const edge: CoreControlEdge = {
-			from: block,
-			to: handler,
-			kind: "exceptional",
-			get arguments() {
-				const version = fn.version("body");
-				if (argumentsCache === undefined || version !== argumentVersion) {
-					argumentVersion = version;
-					argumentsCache = Array.from({ length: count }, (_, index) =>
-						fn.kernel.handlerArgumentAt(start + index),
-					);
-				}
-				return argumentsCache;
-			},
-		};
-		successors[block]!.push(edge);
-		predecessors[handler]!.push(edge);
-	}
-	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+	const { successors, predecessors } = runOwner(
+		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
+		() => {
+			const successors = ordinary.successors.map((edges) => [...edges]);
+			const predecessors = ordinary.predecessors.map((edges) => [...edges]);
+			for (const block of fn.blockIds()) {
+				const handler = fn.kernel.blockHandlerBlock(block);
+				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
+				const start = fn.kernel.blockHandlerArgumentStart(block);
+				const count = fn.kernel.blockHandlerArgumentCount(block);
+				let argumentVersion = -1;
+				let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+				const edge: CoreControlEdge = {
+					from: block,
+					to: handler,
+					kind: "exceptional",
+					get arguments() {
+						const version = fn.version("body");
+						if (argumentsCache === undefined || version !== argumentVersion) {
+							argumentVersion = version;
+							argumentsCache = Array.from({ length: count }, (_, index) =>
+								fn.kernel.handlerArgumentAt(start + index),
+							);
+						}
+						return argumentsCache;
+					},
+				};
+				successors[block]!.push(edge);
+				predecessors[handler]!.push(edge);
+			}
+			return { successors, predecessors };
+		},
+	);
+	const { reachable, reversePostorder } = runOwner(
+		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
+		() => traversal(fn.entry, successors),
+	);
 	return Object.freeze({
 		function: fn.id,
 		cfgVersion: fn.versions.cfg,
@@ -593,9 +616,12 @@ function buildFromStructural(
 	structural: CoreStructuralControlFlow,
 	includeExceptions: boolean,
 	scratch: CoreAnalysisScratchPool,
+	runOwner: CoreOptimizationOwnerRunner,
 ): CoreControlFlow {
 	const { successors, predecessors, reachable, reversePostorder } = structural;
-	const parents = immediateDominators(fn.entry, reversePostorder, predecessors, scratch);
+	const parents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
+		immediateDominators(fn.entry, reversePostorder, predecessors, scratch),
+	);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	let instructionDominatesBlock = dominates;
 	if (
@@ -629,12 +655,16 @@ function buildFromStructural(
 			if (outgoing === undefined) continue;
 			for (const edge of outgoing) (splitPredecessors[edge.to] ??= []).push(edge);
 		}
-		const splitTraversal = traversal(entryNode(fn.entry), splitSuccessors);
-		const splitParents = immediateDominators(
-			entryNode(fn.entry),
-			splitTraversal.reversePostorder,
-			splitPredecessors,
-			scratch,
+		const splitTraversal = runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () =>
+			traversal(entryNode(fn.entry), splitSuccessors),
+		);
+		const splitParents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
+			immediateDominators(
+				entryNode(fn.entry),
+				splitTraversal.reversePostorder,
+				splitPredecessors,
+				scratch,
+			),
 		);
 		const splitDominates = dominatorPredicate(
 			entryNode(fn.entry),
@@ -661,17 +691,23 @@ function buildFromStructural(
 		uniqueEntryEdges.set(from, cache);
 		return unique;
 	};
-	const loopProducts = naturalLoops(
-		fn,
-		successors,
-		predecessors,
-		reachable,
-		reversePostorder,
-		dominates,
+	const { loopProducts, irreducibleCycles } = runOwner(
+		CORE_OPTIMIZATION_OWNER.loopsAndDominanceFrontiers,
+		() => {
+			const loopProducts = naturalLoops(
+				fn,
+				successors,
+				predecessors,
+				reachable,
+				reversePostorder,
+				dominates,
+			);
+			const irreducibleCycles = loopProducts.hasNonNaturalRetreatingEdge
+				? findIrreducibleCycles(fn.entry, successors, predecessors, reachable, dominates)
+				: [];
+			return { loopProducts, irreducibleCycles };
+		},
 	);
-	const irreducibleCycles = loopProducts.hasNonNaturalRetreatingEdge
-		? findIrreducibleCycles(fn.entry, successors, predecessors, reachable, dominates)
-		: [];
 	return Object.freeze({
 		function: fn.id,
 		cfgVersion: fn.versions.cfg,
@@ -693,6 +729,7 @@ function buildFromStructural(
 function buildControlFlowBundle(
 	fn: CoreFunctionStore,
 	scratch: CoreAnalysisScratchPool,
+	runOwner: CoreOptimizationOwnerRunner = runWithoutOwner,
 ): CoreControlFlowBundle {
 	let ordinaryStructural: CoreStructuralControlFlow | undefined;
 	let ordinary: CoreControlFlow | undefined;
@@ -704,7 +741,7 @@ function buildControlFlowBundle(
 	const currentOrdinaryStructural = (): CoreStructuralControlFlow => {
 		const cfgVersion = fn.versions.cfg;
 		if (ordinaryStructural === undefined || ordinaryCfgVersion !== cfgVersion) {
-			ordinaryStructural = buildStructural(fn);
+			ordinaryStructural = buildStructural(fn, runOwner);
 			ordinary = undefined;
 			structural = undefined;
 			exceptional = undefined;
@@ -716,7 +753,7 @@ function buildControlFlowBundle(
 	};
 	const ordinaryFlow = (): CoreControlFlow => {
 		const currentStructural = currentOrdinaryStructural();
-		ordinary ??= buildFromStructural(fn, currentStructural, false, scratch);
+		ordinary ??= buildFromStructural(fn, currentStructural, false, scratch, runOwner);
 		return ordinary;
 	};
 	const exceptionalStructural = (): CoreStructuralControlFlow => {
@@ -729,7 +766,7 @@ function buildControlFlowBundle(
 			structuralExceptionFlowVersion !== exceptionFlowVersion ||
 			structuralMemoryEffectsVersion !== memoryEffectsVersion
 		) {
-			structural = buildExceptionalStructural(fn, currentOrdinary);
+			structural = buildExceptionalStructural(fn, currentOrdinary, runOwner);
 			exceptional = undefined;
 			structuralExceptionFlowVersion = exceptionFlowVersion;
 			structuralMemoryEffectsVersion = memoryEffectsVersion;
@@ -744,7 +781,7 @@ function buildControlFlowBundle(
 		exceptional() {
 			if (fn.handlerBlockCount === 0) return ordinaryFlow();
 			const currentStructural = exceptionalStructural();
-			exceptional ??= buildFromStructural(fn, currentStructural, true, scratch);
+			exceptional ??= buildFromStructural(fn, currentStructural, true, scratch, runOwner);
 			return exceptional;
 		},
 	});
@@ -766,9 +803,13 @@ export const CORE_CONTROL_FLOW_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreContr
 		scope: "function",
 		// The stable session bundle invalidates its lazy views by function revision.
 		functionDependencies: [],
-		compute({ program, request, scratch }) {
+		compute({ program, request, scratch, runOwner }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return buildControlFlowBundle(program.function(request.function), scratch);
+			return buildControlFlowBundle(
+				program.function(request.function),
+				scratch,
+				runOwner,
+			);
 		},
 	};
 
@@ -905,6 +946,7 @@ export const CORE_CANONICAL_VALUE_ROOTS_ANALYSIS: CoreAnalysisDefinition<
 > = {
 	key: "canonical-value-roots",
 	scope: "function",
+	owner: CORE_OPTIMIZATION_OWNER.canonicalValueRoots,
 	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	compute({ program, request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");

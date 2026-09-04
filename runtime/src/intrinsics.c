@@ -916,6 +916,38 @@ static MalValue mal_intrinsic_gc_live_bytes(
     return mal_value_from_f64((f64) vm->heap.live_bytes);
 }
 
+static MalValue mal_intrinsic_gc_allocated_bytes(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_value_from_f64((f64) mal_gc_allocated_bytes(vm));
+}
+
+static MalValue mal_intrinsic_gc_collections(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_value_from_f64((f64) mal_gc_collection_count(vm));
+}
+
 static MalValue mal_intrinsic_fail_next_cell_allocation(
     MalVm *vm,
     MalValue this_value,
@@ -1050,6 +1082,12 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
         mal_intrinsic_define_method(
             vm, global_this, "__mal_fail_next_cell_allocation",
             mal_intrinsic_fail_next_cell_allocation);
+    }
+    if (getenv("MAL_GC_STATS") != nullptr && getenv("MAL_GC_CONTROL") != nullptr) {
+        mal_intrinsic_define_method(
+            vm, global_this, "__mal_gc_allocated_bytes", mal_intrinsic_gc_allocated_bytes);
+        mal_intrinsic_define_method(
+            vm, global_this, "__mal_gc_collections", mal_intrinsic_gc_collections);
     }
     // Kept behind both compile/runtime perf instrumentation and an explicit
     // control flag: production globals remain unchanged, while the HTTP profiler

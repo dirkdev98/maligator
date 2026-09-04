@@ -3,6 +3,16 @@ import type {
 	CoreOptimizationPlanStatistics,
 } from "./core-ir-regions.ts";
 import type { CoreLocalOptimizerStatistics } from "./core-local-optimizer.ts";
+import {
+	coreOptimizationRuntimeCounterReaders,
+	CORE_OPTIMIZATION_OWNER,
+	CORE_OPTIMIZATION_OWNERS,
+} from "./core-optimization-owners.ts";
+import type {
+	CoreOptimizationOwnerId,
+	CoreOptimizationOwnerReport,
+	CoreOptimizationRuntimeCounterReaders,
+} from "./core-optimization-owners.ts";
 import type { CoreConstructionStatistics, CoreProgram } from "./core-store.ts";
 
 export type CoreInstrumentationMode = "off" | "phases" | "counters" | "full";
@@ -88,6 +98,7 @@ export interface CoreOptimizationReport {
 	readonly checkpoints: ReadonlyArray<CoreOptimizationCheckpoint>;
 	readonly passes: ReadonlyArray<CorePassWorkReport>;
 	readonly analyses: ReadonlyArray<CoreAnalysisWorkReport>;
+	readonly owners: ReadonlyArray<CoreOptimizationOwnerReport>;
 	readonly discovery: CoreCandidateDiscoveryReport;
 	readonly program: CoreProgramWorkReport;
 	readonly transforms: CoreTransformWorkReport;
@@ -464,6 +475,21 @@ export class CoreOptimizationReportBuilder {
 	readonly #checkpoints: Array<CoreOptimizationCheckpoint> | undefined;
 	readonly #passes: Map<string, MutablePassWorkReport> | undefined;
 	readonly #analyses: Map<string, MutableAnalysisWorkReport> | undefined;
+	readonly #ownerStartedAt: number;
+	readonly #ownerTimes: Float64Array | undefined;
+	readonly #ownerWork: Float64Array | undefined;
+	readonly #ownerTimeStarts: Array<number> | undefined;
+	readonly #ownerNestedTimes: Array<number> | undefined;
+	readonly #ownerRuntimeReaders: CoreOptimizationRuntimeCounterReaders | undefined;
+	readonly #ownerAllocatedStartedAt: number;
+	readonly #ownerCollectionsStartedAt: number;
+	readonly #ownerAllocated: Float64Array | undefined;
+	readonly #ownerCollections: Float64Array | undefined;
+	readonly #ownerAllocatedStarts: Array<number> | undefined;
+	readonly #ownerNestedAllocated: Array<number> | undefined;
+	readonly #ownerCollectionStarts: Array<number> | undefined;
+	readonly #ownerNestedCollections: Array<number> | undefined;
+	#ownerDepth = 0;
 	readonly #exhaustedPasses: Set<string> | undefined;
 	readonly #counters = new Float64Array(COUNTER_KEYS.length);
 	#queuePushes = 0;
@@ -541,6 +567,35 @@ export class CoreOptimizationReportBuilder {
 		this.instrumentation = instrumentation;
 		this.#passes = instrumentation === "full" ? new Map() : undefined;
 		this.#analyses = instrumentation === "full" ? new Map() : undefined;
+		this.#ownerStartedAt = instrumentation === "full" ? Date.now() : 0;
+		this.#ownerTimes =
+			instrumentation === "full"
+				? new Float64Array(CORE_OPTIMIZATION_OWNERS.length)
+				: undefined;
+		this.#ownerWork =
+			instrumentation === "full"
+				? new Float64Array(CORE_OPTIMIZATION_OWNERS.length)
+				: undefined;
+		this.#ownerTimeStarts = instrumentation === "full" ? [] : undefined;
+		this.#ownerNestedTimes = instrumentation === "full" ? [] : undefined;
+		this.#ownerRuntimeReaders =
+			instrumentation === "full" ? coreOptimizationRuntimeCounterReaders() : undefined;
+		this.#ownerAllocated =
+			this.#ownerRuntimeReaders === undefined
+				? undefined
+				: new Float64Array(CORE_OPTIMIZATION_OWNERS.length);
+		this.#ownerCollections =
+			this.#ownerRuntimeReaders === undefined
+				? undefined
+				: new Float64Array(CORE_OPTIMIZATION_OWNERS.length);
+		this.#ownerAllocatedStarts = this.#ownerRuntimeReaders === undefined ? undefined : [];
+		this.#ownerNestedAllocated = this.#ownerRuntimeReaders === undefined ? undefined : [];
+		this.#ownerCollectionStarts =
+			this.#ownerRuntimeReaders === undefined ? undefined : [];
+		this.#ownerNestedCollections =
+			this.#ownerRuntimeReaders === undefined ? undefined : [];
+		this.#ownerAllocatedStartedAt = this.#ownerRuntimeReaders?.allocatedBytes() ?? 0;
+		this.#ownerCollectionsStartedAt = this.#ownerRuntimeReaders?.collections() ?? 0;
 		this.#exhaustedPasses = instrumentation === "full" ? new Set() : undefined;
 		this.#discoveredCandidatesByKind = instrumentation === "full" ? new Map() : undefined;
 		this.#detailedPhases = instrumentation === "full" ? [] : undefined;
@@ -557,6 +612,77 @@ export class CoreOptimizationReportBuilder {
 
 	get collectsDetails(): boolean {
 		return this.instrumentation === "full";
+	}
+
+	measureOwner<Result>(owner: CoreOptimizationOwnerId, run: () => Result): Result {
+		if (
+			this.#ownerTimes === undefined ||
+			this.#ownerTimeStarts === undefined ||
+			this.#ownerNestedTimes === undefined
+		)
+			return run();
+		const definition = CORE_OPTIMIZATION_OWNERS[owner];
+		if (definition?.id !== owner)
+			throw new Error(`Unknown Core optimization owner ${owner}`);
+		const depth = this.#ownerDepth++;
+		this.#ownerTimeStarts[depth] = Date.now();
+		this.#ownerNestedTimes[depth] = 0;
+		if (this.#ownerRuntimeReaders !== undefined) {
+			this.#ownerAllocatedStarts![depth] = this.#ownerRuntimeReaders.allocatedBytes();
+			this.#ownerNestedAllocated![depth] = 0;
+			this.#ownerCollectionStarts![depth] = this.#ownerRuntimeReaders.collections();
+			this.#ownerNestedCollections![depth] = 0;
+		}
+		try {
+			return run();
+		} finally {
+			if (this.#ownerRuntimeReaders !== undefined) {
+				const allocatedBytes = Math.max(
+					0,
+					this.#ownerRuntimeReaders.allocatedBytes() -
+						this.#ownerAllocatedStarts![depth]!,
+				);
+				const collections = Math.max(
+					0,
+					this.#ownerRuntimeReaders.collections() - this.#ownerCollectionStarts![depth]!,
+				);
+				this.#ownerAllocated![owner] =
+					this.#ownerAllocated![owner]! +
+					Math.max(0, allocatedBytes - this.#ownerNestedAllocated![depth]!);
+				this.#ownerCollections![owner] =
+					this.#ownerCollections![owner]! +
+					Math.max(0, collections - this.#ownerNestedCollections![depth]!);
+				if (depth > 0) {
+					this.#ownerNestedAllocated![depth - 1] =
+						this.#ownerNestedAllocated![depth - 1]! + allocatedBytes;
+					this.#ownerNestedCollections![depth - 1] =
+						this.#ownerNestedCollections![depth - 1]! + collections;
+				}
+			}
+			const totalMs = Date.now() - this.#ownerTimeStarts[depth];
+			this.#ownerDepth--;
+			this.#ownerTimes[owner] =
+				this.#ownerTimes[owner]! + Math.max(0, totalMs - this.#ownerNestedTimes[depth]);
+			if (depth > 0) {
+				this.#ownerNestedTimes[depth - 1] = this.#ownerNestedTimes[depth - 1]! + totalMs;
+			}
+		}
+	}
+
+	recordOwnerWork(owner: CoreOptimizationOwnerId, workUnits: number): void {
+		if (this.#ownerWork === undefined) return;
+		if (!Number.isFinite(workUnits) || workUnits < 0) {
+			throw new Error(`Invalid work for Core optimization owner ${owner}: ${workUnits}`);
+		}
+		this.#ownerWork[owner] = this.#ownerWork[owner]! + workUnits;
+	}
+
+	recordOwnerElapsed(owner: CoreOptimizationOwnerId, elapsedMs: number): void {
+		if (this.#ownerTimes === undefined) return;
+		if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+			throw new Error(`Invalid elapsed time for Core optimization owner ${owner}`);
+		}
+		this.#ownerTimes[owner] = this.#ownerTimes[owner]! + elapsedMs;
 	}
 
 	increment(counter: CoreCompilerWorkCounter, value = 1): void {
@@ -696,7 +822,28 @@ export class CoreOptimizationReportBuilder {
 	}
 
 	recordAnalysisResult(analysis: string, value: unknown): void {
-		if (!this.collectsCounters || analysis !== "local-memory-versions") return;
+		if (!this.collectsCounters) return;
+		if (analysis === "program-flow") {
+			const flow = value as {
+				readonly targets?: {
+					readonly statistics?: { readonly functionsAnalyzed?: number };
+				};
+				readonly summaries?: {
+					readonly statistics?: { readonly functionsAnalyzed?: number };
+				};
+				readonly reachability?: {
+					readonly statistics?: { readonly functionsScanned?: number };
+				};
+			};
+			this.recordOwnerWork(
+				CORE_OPTIMIZATION_OWNER.programFlowConvergence,
+				(flow.targets?.statistics?.functionsAnalyzed ?? 0) +
+					(flow.summaries?.statistics?.functionsAnalyzed ?? 0) +
+					(flow.reachability?.statistics?.functionsScanned ?? 0),
+			);
+			return;
+		}
+		if (analysis !== "local-memory-versions") return;
 		const statistics = (
 			value as {
 				readonly statistics?: {
@@ -719,6 +866,14 @@ export class CoreOptimizationReportBuilder {
 		this.increment("memoryPhis", statistics?.phis ?? 0);
 		this.increment("memoryTransfers", statistics?.transfers ?? 0);
 		this.increment("memoryFamilyWidens", statistics?.familyWidenings ?? 0);
+		this.recordOwnerWork(
+			CORE_OPTIMIZATION_OWNER.memoryEventExtraction,
+			statistics?.accesses ?? 0,
+		);
+		this.recordOwnerWork(
+			CORE_OPTIMIZATION_OWNER.memoryVersions,
+			statistics?.transfers ?? 0,
+		);
 	}
 
 	recordQueuePush(depth: number): void {
@@ -934,6 +1089,7 @@ export class CoreOptimizationReportBuilder {
 				checkpoints: Object.freeze([]),
 				passes: Object.freeze([]),
 				analyses: Object.freeze([]),
+				owners: Object.freeze([]),
 				discovery: Object.freeze({
 					candidates: 0,
 					byKind: Object.freeze({}),
@@ -968,6 +1124,69 @@ export class CoreOptimizationReportBuilder {
 				COUNTER_KEYS.map((key, index) => [key, this.#counters[index]]),
 			) as unknown as CoreCompilerWorkCounters,
 		);
+		const owners =
+			this.#ownerTimes === undefined || this.#ownerWork === undefined
+				? Object.freeze([])
+				: (() => {
+						const totalMs = Date.now() - this.#ownerStartedAt;
+						const totalAllocated = Math.max(
+							0,
+							(this.#ownerRuntimeReaders?.allocatedBytes() ?? 0) -
+								this.#ownerAllocatedStartedAt,
+						);
+						const totalCollections = Math.max(
+							0,
+							(this.#ownerRuntimeReaders?.collections() ?? 0) -
+								this.#ownerCollectionsStartedAt,
+						);
+						const attributedMs = this.#ownerTimes.reduce(
+							(sum, elapsedMs, id) =>
+								id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + elapsedMs,
+							0,
+						);
+						this.#ownerTimes[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
+							0,
+							totalMs - attributedMs,
+						);
+						if (this.#ownerAllocated !== undefined) {
+							const attributed = this.#ownerAllocated.reduce(
+								(sum, bytes, id) =>
+									id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + bytes,
+								0,
+							);
+							this.#ownerAllocated[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
+								0,
+								totalAllocated - attributed,
+							);
+						}
+						if (this.#ownerCollections !== undefined) {
+							const attributed = this.#ownerCollections.reduce(
+								(sum, collections, id) =>
+									id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + collections,
+								0,
+							);
+							this.#ownerCollections[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
+								0,
+								totalCollections - attributed,
+							);
+						}
+						return Object.freeze(
+							CORE_OPTIMIZATION_OWNERS.map(({ id, name }) =>
+								Object.freeze({
+									id,
+									name,
+									elapsedMs: this.#ownerTimes![id]!,
+									workUnits: this.#ownerWork![id]!,
+									...(this.#ownerAllocated === undefined
+										? {}
+										: { allocatedBytes: this.#ownerAllocated[id]! }),
+									...(this.#ownerCollections === undefined
+										? {}
+										: { collections: this.#ownerCollections[id]! }),
+								}),
+							),
+						);
+					})();
 		return Object.freeze({
 			instrumentation: this.instrumentation,
 			construction: program.constructionStatistics,
@@ -1008,6 +1227,7 @@ export class CoreOptimizationReportBuilder {
 					Object.freeze({ analysis, ...report }),
 				),
 			),
+			owners,
 			discovery: Object.freeze({
 				candidates: [...(discoveredCandidatesByKind?.values() ?? [])].reduce(
 					(total, count) => total + count,

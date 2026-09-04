@@ -36,6 +36,7 @@ import type {
 	CoreOpcodeAccess,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 function instructionOperandCount(
@@ -627,7 +628,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 		],
 		programDependencies: ["data"],
 		contextIdentity: (context) => context.facts.world.primordialPolicy,
-		compute({ program, context, request, get }) {
+		compute({ program, context, request, get, runOwner }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			const functionId = request.function;
@@ -638,29 +639,35 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 			let valueKindAnalysis: CoreValueKindAnalysis | undefined;
 			let provenanceAnalysis: CoreProvenance | undefined;
 			let valueClassAnalysis: CoreValueClassAnalysis | undefined;
+			const index = (): CoreLocalFactIndex =>
+				(localIndex ??= runOwner(
+					CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+					() => buildCoreLocalFactIndex(fn, roots),
+				));
 			return Object.freeze({
 				function: functionId,
 				control,
 				roots,
 				get index() {
-					return (localIndex ??= buildCoreLocalFactIndex(fn, roots));
+					return index();
 				},
 				get valueKinds() {
 					return (valueKindAnalysis ??= get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request));
 				},
 				get provenance() {
-					return (provenanceAnalysis ??= buildCoreProvenance(program, fn, control, {
-						canonicalRoots: roots,
-						index: (localIndex ??= buildCoreLocalFactIndex(fn, roots)),
-					}));
+					return (provenanceAnalysis ??= runOwner(
+						CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+						() =>
+							buildCoreProvenance(program, fn, control, {
+								canonicalRoots: roots,
+								index: index(),
+							}),
+					));
 				},
 				get valueClasses() {
-					return (valueClassAnalysis ??= analyzeCoreValueClasses(
-						program,
-						functionId,
-						context,
-						roots,
-						(localIndex ??= buildCoreLocalFactIndex(fn, roots)),
+					return (valueClassAnalysis ??= runOwner(
+						CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+						() => analyzeCoreValueClasses(program, functionId, context, roots, index()),
 					));
 				},
 			});

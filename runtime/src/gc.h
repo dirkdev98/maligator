@@ -121,6 +121,9 @@ i32 mal_gc_swap_stress_interval(i32 interval);
  * Invoked explicitly (the gc() host hook); never from the allocator. */
 void mal_gc_collect(MalVm *vm);
 
+u64 mal_gc_allocated_bytes(MalVm *vm);
+u64 mal_gc_collection_count(MalVm *vm);
+
 /* Allocate the per-isolate collector state (vm->gc) and read GC environment
  * configuration (MAL_GC_STRESS, MAL_GC_MODE, …). Call once at VM startup. */
 void mal_gc_init(MalVm *vm);

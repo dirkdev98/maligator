@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CoreAnalysisDefinition } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreAnalysisScratchPool } from "../src/compiler/core/core-analysis-scratch.ts";
@@ -31,6 +31,7 @@ import {
 	CORE_OPTIMIZATION_FAMILIES,
 	CORE_OPTIMIZATION_PROFITABILITY_CONTRACTS,
 } from "../src/compiler/core/core-optimization-families.ts";
+import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
@@ -124,6 +125,67 @@ function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
 }
 
 describe("Core optimizer infrastructure", () => {
+	it("charges nested owner scopes exclusively", () => {
+		const { program } = programWithTwoFunctions();
+		const allocatedBytes = vi
+			.fn<() => number>()
+			.mockReturnValueOnce(100)
+			.mockReturnValueOnce(110)
+			.mockReturnValueOnce(120)
+			.mockReturnValueOnce(150)
+			.mockReturnValueOnce(200)
+			.mockReturnValueOnce(210);
+		const collections = vi
+			.fn<() => number>()
+			.mockReturnValueOnce(0)
+			.mockReturnValueOnce(0)
+			.mockReturnValueOnce(0)
+			.mockReturnValueOnce(1)
+			.mockReturnValueOnce(2)
+			.mockReturnValueOnce(3);
+		Reflect.set(globalThis, "__mal_gc_allocated_bytes", allocatedBytes);
+		Reflect.set(globalThis, "__mal_gc_collections", collections);
+		const now = vi
+			.spyOn(Date, "now")
+			.mockReturnValueOnce(0)
+			.mockReturnValueOnce(1)
+			.mockReturnValueOnce(2)
+			.mockReturnValueOnce(5)
+			.mockReturnValueOnce(10)
+			.mockReturnValueOnce(11);
+		try {
+			const report = new CoreOptimizationReportBuilder(program, "full");
+			report.measureOwner(CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup, () =>
+				report.measureOwner(CORE_OPTIMIZATION_OWNER.denseGenerationBarrier, () => {}),
+			);
+			const owners = report.finish(program, {
+				directEntries: [],
+				specializations: [],
+			}).owners;
+
+			expect(
+				owners[CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup]!.elapsedMs,
+			).toBe(6);
+			expect(owners[CORE_OPTIMIZATION_OWNER.denseGenerationBarrier]!.elapsedMs).toBe(3);
+			expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]!.elapsedMs).toBe(2);
+			expect(owners[CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup]).toMatchObject(
+				{ allocatedBytes: 60, collections: 1 },
+			);
+			expect(owners[CORE_OPTIMIZATION_OWNER.denseGenerationBarrier]).toMatchObject({
+				allocatedBytes: 30,
+				collections: 1,
+			});
+			expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]).toMatchObject({
+				allocatedBytes: 20,
+				collections: 1,
+			});
+		} finally {
+			now.mockRestore();
+			Reflect.deleteProperty(globalThis, "__mal_gc_allocated_bytes");
+			Reflect.deleteProperty(globalThis, "__mal_gc_collections");
+		}
+	});
+
 	it("reuses bounded scratch without aliasing active leases", () => {
 		const scratch = new CoreAnalysisScratchPool(64);
 		const first = scratch.leaseInt32(4);

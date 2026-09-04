@@ -19,6 +19,8 @@ import {
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 } from "./core-local-passes.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./core-optimization-families.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
+import type { CoreOptimizationOwnerId } from "./core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type {
 	CoreInstrumentationMode,
@@ -89,22 +91,32 @@ export function optimizeCore(
 	const measurePhase = <Result>(
 		phase: CoreOptimizationPhase,
 		run: () => Result,
+		owner?: CoreOptimizationOwnerId,
 	): Result => {
-		if (!reportBuilder.collectsPhases) return run();
+		const runOwned =
+			owner === undefined ? run : () => reportBuilder.measureOwner(owner, run);
+		if (!reportBuilder.collectsPhases) return runOwned();
 		const startedAt = Date.now();
 		try {
-			return run();
+			return runOwned();
 		} finally {
 			reportBuilder.recordPhase(phase, Date.now() - startedAt);
 		}
 	};
 	reportBuilder.recordCheckpoint("after-core-construction", compilation.program);
-	measurePhase("pre-optimization-verification", () =>
-		verifyCoreProgram(
-			compilation.program,
-			{ stage: "pre-optimization" },
-			compilation.context,
-		),
+	measurePhase(
+		"pre-optimization-verification",
+		() =>
+			verifyCoreProgram(
+				compilation.program,
+				{ stage: "pre-optimization" },
+				compilation.context,
+			),
+		CORE_OPTIMIZATION_OWNER.coreVerification,
+	);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.coreVerification,
+		compilation.program.functionCapacity,
 	);
 	if (reportBuilder.collectsCounters) {
 		for (const functionId of compilation.program.functionIds()) {
@@ -112,85 +124,98 @@ export function optimizeCore(
 		}
 	}
 	measurePhase("construction-cleanup", () => undefined);
-	{
-		const resources = new CoreFunctionOptimizationResources(compilation.program);
-		const ablateLocalOptimization = ablatedFamily === "o1-scalar-structural";
-		const phaseTimes = new Map<CoreOptimizationPhase, number>();
-		const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
-			if (!reportBuilder.collectsPhases) return run();
-			const startedAt = Date.now();
-			try {
-				return run();
-			} finally {
-				phaseTimes.set(phase, (phaseTimes.get(phase) ?? 0) + Date.now() - startedAt);
+	reportBuilder.measureOwner(
+		CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup,
+		() => {
+			const resources = new CoreFunctionOptimizationResources(compilation.program);
+			const ablateLocalOptimization = ablatedFamily === "o1-scalar-structural";
+			const phaseTimes = new Map<CoreOptimizationPhase, number>();
+			const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
+				if (!reportBuilder.collectsPhases) return run();
+				const startedAt = Date.now();
+				try {
+					return run();
+				} finally {
+					phaseTimes.set(phase, (phaseTimes.get(phase) ?? 0) + Date.now() - startedAt);
+				}
+			};
+			for (const functionId of compilation.program.functionIds()) {
+				const analyses = new CoreAnalysisManager(
+					compilation.program,
+					compilation.context,
+					reportBuilder,
+					resources.scratch,
+				);
+				const annotationPasses = new CoreFunctionPassScheduler(
+					compilation.program,
+					compilation.context,
+					analyses,
+					reportBuilder,
+					functionId,
+					{
+						verification: options.verification,
+						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+						featureIndex: resources.featureIndex,
+					},
+				);
+				runFunctionPhase("initial-local-optimization", () =>
+					annotationPasses.runComponent(
+						"canonicalize",
+						CORE_CONSTRUCTION_ANNOTATION_PASSES,
+					),
+				);
+				const normalizationPasses = new CoreFunctionPassScheduler(
+					compilation.program,
+					compilation.context,
+					analyses,
+					reportBuilder,
+					functionId,
+					{
+						verification: options.verification,
+						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+						localOptimization: true,
+						localOptimizationReportName: ablateLocalOptimization
+							? "mandatory-local-cleanup"
+							: undefined,
+						featureIndex: ablateLocalOptimization
+							? resources.mandatoryFeatureIndex
+							: resources.featureIndex,
+						localRules: ablateLocalOptimization
+							? resources.mandatoryLocalRules
+							: resources.localRules,
+					},
+				);
+				runFunctionPhase("structural-cfg-optimization", () =>
+					normalizationPasses.runComponent(
+						"canonicalize",
+						CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+					),
+				);
 			}
-		};
-		for (const functionId of compilation.program.functionIds()) {
-			const analyses = new CoreAnalysisManager(
-				compilation.program,
-				compilation.context,
-				reportBuilder,
-				resources.scratch,
-			);
-			const annotationPasses = new CoreFunctionPassScheduler(
-				compilation.program,
-				compilation.context,
-				analyses,
-				reportBuilder,
-				functionId,
-				{
-					verification: options.verification,
-					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					featureIndex: resources.featureIndex,
-				},
-			);
-			runFunctionPhase("initial-local-optimization", () =>
-				annotationPasses.runComponent(
-					"canonicalize",
-					CORE_CONSTRUCTION_ANNOTATION_PASSES,
-				),
-			);
-			const normalizationPasses = new CoreFunctionPassScheduler(
-				compilation.program,
-				compilation.context,
-				analyses,
-				reportBuilder,
-				functionId,
-				{
-					verification: options.verification,
-					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					localOptimization: true,
-					localOptimizationReportName: ablateLocalOptimization
-						? "mandatory-local-cleanup"
-						: undefined,
-					featureIndex: ablateLocalOptimization
-						? resources.mandatoryFeatureIndex
-						: resources.featureIndex,
-					localRules: ablateLocalOptimization
-						? resources.mandatoryLocalRules
-						: resources.localRules,
-				},
-			);
-			runFunctionPhase("structural-cfg-optimization", () =>
-				normalizationPasses.runComponent(
-					"canonicalize",
-					CORE_CONSTRUCTION_NORMALIZATION_PASSES,
-				),
-			);
-		}
-		for (const phase of [
-			"initial-local-optimization",
-			"structural-cfg-optimization",
-		] as const) {
-			reportBuilder.recordPhase(phase, phaseTimes.get(phase) ?? 0);
-		}
-	}
+			for (const phase of [
+				"initial-local-optimization",
+				"structural-cfg-optimization",
+			] as const) {
+				reportBuilder.recordPhase(phase, phaseTimes.get(phase) ?? 0);
+			}
+		},
+	);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup,
+		compilation.program.functionCapacity,
+	);
 	reportBuilder.recordCheckpoint(
 		"after-initial-local-structural-optimization",
 		compilation.program,
 	);
-	measurePhase("dense-generation-barrier", () =>
-		compilation.program.finalizeConstructionGeneration(),
+	measurePhase(
+		"dense-generation-barrier",
+		() => compilation.program.finalizeConstructionGeneration(),
+		CORE_OPTIMIZATION_OWNER.denseGenerationBarrier,
+	);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.denseGenerationBarrier,
+		compilation.program.functionCapacity,
 	);
 	reportBuilder.recordCheckpoint(
 		"after-construction-generation-finalization",
@@ -255,32 +280,39 @@ export function optimizeCore(
 	const o3Candidates = new CoreTransformCandidateService(
 		profile.o3Budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
 	);
-	const crossCall = measurePhase("cross-call-transforms", () =>
-		ablatedFamily === "inlining-cross-call"
-			? emptyCoreCrossCallTransformResult(initialFlow)
-			: runCoreCrossCallTransforms(
-					compilation.program,
-					analyses,
-					(wave, functionId, editor) =>
-						new CoreFunctionOptimizationSession(
-							compilation.program,
-							compilation.context,
-							reportBuilder,
-							functionResources,
-							functionId,
-							{
-								verification: options.verification,
-								optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-								crossCallWave: wave,
-								benchmarkAblation: ablatedFamily,
-							},
-						).optimizeCrossCall(editor),
-					profile.o3Budgets,
-					initialFlow,
-					o3Candidates,
-				),
+	const crossCall = measurePhase(
+		"cross-call-transforms",
+		() =>
+			ablatedFamily === "inlining-cross-call"
+				? emptyCoreCrossCallTransformResult(initialFlow)
+				: runCoreCrossCallTransforms(
+						compilation.program,
+						analyses,
+						(wave, functionId, editor) =>
+							new CoreFunctionOptimizationSession(
+								compilation.program,
+								compilation.context,
+								reportBuilder,
+								functionResources,
+								functionId,
+								{
+									verification: options.verification,
+									optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+									crossCallWave: wave,
+									benchmarkAblation: ablatedFamily,
+								},
+							).optimizeCrossCall(editor),
+						profile.o3Budgets,
+						initialFlow,
+						o3Candidates,
+					),
+		CORE_OPTIMIZATION_OWNER.crossCallTransforms,
 	);
 	reportBuilder.recordTransformWork(crossCall.statistics);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.crossCallTransforms,
+		crossCall.statistics.considered,
+	);
 	reportBuilder.recordCheckpoint("after-cross-call-transforms", compilation.program);
 	const summaries = crossCall.summaries;
 	const reachability = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
@@ -313,6 +345,12 @@ export function optimizeCore(
 			...(reportBuilder.collectsPhases
 				? {
 						onPhase(phase: "discovery" | "selection", elapsedMs: number) {
+							reportBuilder.recordOwnerElapsed(
+								phase === "discovery"
+									? CORE_OPTIMIZATION_OWNER.specializationDiscovery
+									: CORE_OPTIMIZATION_OWNER.specializationSelection,
+								elapsedMs,
+							);
 							reportBuilder.recordPhase(
 								phase === "discovery"
 									? "specialization-discovery"
@@ -333,12 +371,28 @@ export function optimizeCore(
 	reportBuilder.recordCheckpoint("before-sealing", compilation.program);
 	const program = measurePhase("sealing", () => compilation.program.seal());
 	reportBuilder.recordCheckpoint("after-sealing", program);
-	const verifiedPlan = measurePhase("plan-verification", () =>
-		verifyCoreOptimizationPlan(program, plan),
+	const verifiedPlan = measurePhase(
+		"plan-verification",
+		() => verifyCoreOptimizationPlan(program, plan),
+		CORE_OPTIMIZATION_OWNER.coreVerification,
 	);
 	reportBuilder.recordPlanWork(verifiedPlan.statistics);
-	measurePhase("final-core-verification", () =>
-		verifyCoreProgram(program, { stage: "pre-target" }, compilation.context),
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.specializationDiscovery,
+		verifiedPlan.statistics.considered,
+	);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.specializationSelection,
+		verifiedPlan.statistics.applied + verifiedPlan.statistics.declined,
+	);
+	measurePhase(
+		"final-core-verification",
+		() => verifyCoreProgram(program, { stage: "pre-target" }, compilation.context),
+		CORE_OPTIMIZATION_OWNER.coreVerification,
+	);
+	reportBuilder.recordOwnerWork(
+		CORE_OPTIMIZATION_OWNER.coreVerification,
+		program.functionCapacity,
 	);
 	const optimized = Object.freeze({
 		program,

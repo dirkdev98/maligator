@@ -10,6 +10,8 @@ import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
+import type { CoreOptimizationOwnerId } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { CoreFunctionPassContextDriver } from "./core-pass.ts";
 import type {
@@ -45,6 +47,19 @@ function wakesForChanges(pass: CoreFunctionPass, changes: CoreChangeSet): boolea
 		if (changes.programDomains.includes(wake as never)) return true;
 	}
 	return false;
+}
+
+function passOwner(pass: CoreFunctionPass): CoreOptimizationOwnerId | undefined {
+	switch (pass.name) {
+		case "block-parameter-simplification":
+		case "canonical-block-parameter-elimination":
+			return CORE_OPTIMIZATION_OWNER.blockParameterSimplification;
+		case "forwarding-block-elimination":
+		case "linear-block-merging":
+			return CORE_OPTIMIZATION_OWNER.forwardingAndLinearBlockNormalization;
+		default:
+			return undefined;
+	}
 }
 
 export class CoreFunctionPassScheduler {
@@ -204,9 +219,17 @@ export class CoreFunctionPassScheduler {
 				const pending = pendingLocal;
 				pendingLocal = undefined;
 				if (pending === undefined) continue;
-				const result = new CoreLocalOptimizer(this.#program, this.#functionId, {
-					ruleRegistry: this.#localRules!,
-				}).run(pending.full ? undefined : pending.changes);
+				const result = this.#report.measureOwner(
+					CORE_OPTIMIZATION_OWNER.fusedLocalOptimization,
+					() =>
+						new CoreLocalOptimizer(this.#program, this.#functionId, {
+							ruleRegistry: this.#localRules!,
+						}).run(pending.full ? undefined : pending.changes),
+				);
+				this.#report.recordOwnerWork(
+					CORE_OPTIMIZATION_OWNER.fusedLocalOptimization,
+					result.statistics.rulesConsidered,
+				);
 				this.#report.recordLocalOptimizerWork(
 					this.#localOptimizationReportName,
 					result.statistics,
@@ -253,7 +276,11 @@ export class CoreFunctionPassScheduler {
 				this.#passContexts.set(pass, passContext);
 			}
 			const remainingEdits = pass.budget.maxEdits - used.edits;
-			const changes = pass.run(passContext.prepare(remainingEdits));
+			const owner = passOwner(pass);
+			const runPass = () => pass.run(passContext.prepare(remainingEdits));
+			const changes =
+				owner === undefined ? runPass() : this.#report.measureOwner(owner, runPass);
+			if (owner !== undefined) this.#report.recordOwnerWork(owner, 1);
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;
 			used.workItems++;

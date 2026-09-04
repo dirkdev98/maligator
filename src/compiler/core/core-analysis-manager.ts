@@ -1,6 +1,10 @@
 import { CoreAnalysisScratchPool } from "./core-analysis-scratch.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
+import type {
+	CoreOptimizationOwnerId,
+	CoreOptimizationOwnerRunner,
+} from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
@@ -28,6 +32,7 @@ export interface CoreAnalysisComputation {
 	readonly previous?: unknown;
 	readonly programFlow: CoreProgramFlowEngine;
 	readonly scratch: CoreAnalysisScratchPool;
+	readonly runOwner: CoreOptimizationOwnerRunner;
 	readonly get: <Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
@@ -37,6 +42,7 @@ export interface CoreAnalysisComputation {
 export interface CoreAnalysisDefinition<Result> {
 	readonly key: string;
 	readonly scope: CoreAnalysisScope;
+	readonly owner?: CoreOptimizationOwnerId;
 	readonly functionDependencies?: ReadonlyArray<CoreChangeDomain>;
 	readonly programDependencies?: ReadonlyArray<CoreProgramChangeDomain>;
 	readonly contextIdentity?: (context: CoreCompilationContext) => unknown;
@@ -142,15 +148,24 @@ export class CoreAnalysisManager {
 		let value: Result;
 		let elapsedMs = 0;
 		try {
-			value = definition.compute({
-				program: this.#program,
-				context: this.#context,
-				request,
-				programFlow: this.#programFlow,
-				scratch: this.#scratch,
-				get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
-				...(cached === undefined ? {} : { previous: cached.value }),
-			});
+			const compute = () =>
+				definition.compute({
+					program: this.#program,
+					context: this.#context,
+					request,
+					programFlow: this.#programFlow,
+					scratch: this.#scratch,
+					runOwner: (owner, run) => {
+						this.#report.recordOwnerWork(owner, 1);
+						return this.#report.measureOwner(owner, run);
+					},
+					get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
+					...(cached === undefined ? {} : { previous: cached.value }),
+				});
+			value =
+				definition.owner === undefined
+					? compute()
+					: this.#report.measureOwner(definition.owner, compute);
 		} finally {
 			if (timesAnalysis) {
 				const totalMs = Date.now() - this.#timingStarts[timingDepth]!;
@@ -168,6 +183,9 @@ export class CoreAnalysisManager {
 			definitionCache.functions[request.function] = next;
 		} else definitionCache.sccs[request.index] = next;
 		this.#report.recordAnalysisResult(definition.key, value);
+		if (definition.owner !== undefined) {
+			this.#report.recordOwnerWork(definition.owner, 1);
+		}
 		this.#report.recordAnalysis(
 			definition.key,
 			"recompute",

@@ -27,6 +27,8 @@ import type {
 	CoreOpcodeAccess,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
+import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreMemoryLocation =
@@ -300,6 +302,8 @@ interface PartitionInfo {
 	readonly protectedLocalHeap: boolean;
 }
 
+const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
+
 function resolutionFor(provenance: CoreProvenance): CoreMemoryResolution {
 	const resolution: CoreMemoryResolution = {
 		ownCell(base, key, mode) {
@@ -317,6 +321,7 @@ function memoryVersions(
 	cfg: CoreControlFlow,
 	provenance: CoreProvenance,
 	memoryInstructions?: ReadonlyArray<CoreInstructionId>,
+	runOwner: CoreOptimizationOwnerRunner = runWithoutOwner,
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
 	const accessesByInstruction = new Map<
@@ -328,21 +333,24 @@ function memoryVersions(
 	const exactLocations = new Map<CoreMemoryLocationId, CoreExactMemoryLocation>();
 	let accessCount = 0;
 	const relevantInstructions = memoryInstructions ?? [...fn.instructionIds()];
-	for (const instruction of relevantInstructions) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const accesses = coreMemoryAccesses(fn, instruction, resolution);
-		accessCount += accesses.length;
-		if (accesses.length > 0) accessesByInstruction.set(instruction, accesses);
-		for (const access of accesses) {
-			if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location)) continue;
-			const locationId = locationTable.id(access.location);
-			const family = coreMemoryLocationFamily(access.location);
-			const locations = exactReads.get(family) ?? new Set<CoreMemoryLocationId>();
-			locations.add(locationId);
-			exactReads.set(family, locations);
-			exactLocations.set(locationId, access.location);
+	runOwner(CORE_OPTIMIZATION_OWNER.memoryEventExtraction, () => {
+		for (const instruction of relevantInstructions) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const accesses = coreMemoryAccesses(fn, instruction, resolution);
+			accessCount += accesses.length;
+			if (accesses.length > 0) accessesByInstruction.set(instruction, accesses);
+			for (const access of accesses) {
+				if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location))
+					continue;
+				const locationId = locationTable.id(access.location);
+				const family = coreMemoryLocationFamily(access.location);
+				const locations = exactReads.get(family) ?? new Set<CoreMemoryLocationId>();
+				locations.add(locationId);
+				exactReads.set(family, locations);
+				exactLocations.set(locationId, access.location);
+			}
 		}
-	}
+	});
 	const partitions: Array<PartitionInfo> = CORE_EFFECT_DOMAINS.map(() => ({
 		protectedLocalHeap: false,
 	}));
@@ -930,9 +938,10 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 	{
 		key: "local-memory-versions",
 		scope: "function",
+		owner: CORE_OPTIMIZATION_OWNER.memoryVersions,
 		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 		programDependencies: ["data"],
-		compute({ program, request, get }) {
+		compute({ program, request, get, runOwner }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
@@ -941,6 +950,7 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 				bundle.provenance,
 				bundle.index.memoryOperations,
+				runOwner,
 			);
 		},
 	};

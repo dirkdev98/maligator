@@ -24,6 +24,7 @@ import {
 	CORE_PROVENANCE_PASSES,
 } from "./core-memory-passes.ts";
 import type { CoreOptimizationFamily } from "./core-optimization-families.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type {
 	CoreOptimizationPhase,
 	CoreOptimizationReportBuilder,
@@ -208,13 +209,15 @@ export class CoreFunctionOptimizationSession {
 			);
 		});
 		return runPhase("specialization-discovery", () =>
-			buildCoreLocalOptimizationPlanInput(
-				this.#program,
-				this.#analyses,
-				this.#specializationFeatureIndex,
-				this.functionId,
-				this.#context,
-				!this.#ablates("late-specialization-direct-entry"),
+			this.#report.measureOwner(CORE_OPTIMIZATION_OWNER.specializationDiscovery, () =>
+				buildCoreLocalOptimizationPlanInput(
+					this.#program,
+					this.#analyses,
+					this.#specializationFeatureIndex,
+					this.functionId,
+					this.#context,
+					!this.#ablates("late-specialization-direct-entry"),
+				),
 			),
 		);
 	}
@@ -230,10 +233,18 @@ export class CoreFunctionOptimizationSession {
 			throw new Error("Cross-call editor belongs to another Core function");
 		}
 		this.#optimized = true;
-		const result = new CoreLocalOptimizer(this.#program, this.functionId, {
-			ruleRegistry: this.#localRules,
-			editor,
-		}).run();
+		const result = this.#report.measureOwner(
+			CORE_OPTIMIZATION_OWNER.fusedLocalOptimization,
+			() =>
+				new CoreLocalOptimizer(this.#program, this.functionId, {
+					ruleRegistry: this.#localRules,
+					editor,
+				}).run(),
+		);
+		this.#report.recordOwnerWork(
+			CORE_OPTIMIZATION_OWNER.fusedLocalOptimization,
+			result.statistics.rulesConsidered,
+		);
 		this.#report.recordLocalOptimizerWork(
 			"cross-call-local-optimizer",
 			result.statistics,

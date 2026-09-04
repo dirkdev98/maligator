@@ -432,6 +432,14 @@ static void mal_gc_print_stats_at_exit(void) {
     mal_gc_print_stats_now();
 }
 
+u64 mal_gc_allocated_bytes(MalVm *vm) {
+    return vm->heap.bytes_allocated;
+}
+
+u64 mal_gc_collection_count(MalVm *vm) {
+    return vm->gc == nullptr ? 0 : vm->gc->collections;
+}
+
 /* Auto-collection heap-growth policy: the first collection fires once this many
  * bytes have been allocated; after each one the next trigger is set past the
  * surviving set by at least this floor (so a small live set cannot thrash). */

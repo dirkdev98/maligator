@@ -5,6 +5,15 @@ import {
 	CORE_OPTIMIZATION_FAMILIES,
 	type CoreOptimizationFamily,
 } from "../src/compiler/core/core-optimization-families.ts";
+import {
+	completeCompilerOptimizationOwners,
+	readCoreOptimizationRuntimeCounters,
+	subtractCoreOptimizationRuntimeCounters,
+} from "../src/compiler/core/core-optimization-owners.ts";
+import type {
+	CompilerOptimizationOwnerRuntimePhases,
+	CoreOptimizationRuntimeCounters,
+} from "../src/compiler/core/core-optimization-owners.ts";
 import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
@@ -68,11 +77,26 @@ const phases = {
 	writeMs: 0,
 };
 type Phase = keyof typeof phases;
+const runtimePhases: Partial<Record<Phase, CoreOptimizationRuntimeCounters>> = {};
 const measure = <T,>(phase: Phase, run: () => T): T => {
+	const runtimeBefore = readCoreOptimizationRuntimeCounters();
 	const startedAt = Date.now();
-	const result = run();
-	phases[phase] += Date.now() - startedAt;
-	return result;
+	try {
+		return run();
+	} finally {
+		phases[phase] += Date.now() - startedAt;
+		const runtime = subtractCoreOptimizationRuntimeCounters(
+			runtimeBefore,
+			readCoreOptimizationRuntimeCounters(),
+		);
+		if (runtime !== undefined) {
+			const current = runtimePhases[phase];
+			runtimePhases[phase] = Object.freeze({
+				allocatedBytes: (current?.allocatedBytes ?? 0) + runtime.allocatedBytes,
+				collections: (current?.collections ?? 0) + runtime.collections,
+			});
+		}
+	}
 };
 
 const compilePhases = {
@@ -96,16 +120,16 @@ const image = compileEntrypoint(path.resolve(inputPath), {
 });
 if (optimizationReport === undefined) throw new Error("missing Core optimization report");
 
-const emitStartedAt = Date.now();
-const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
-phases.emitMs = Date.now() - emitStartedAt;
+const units = measure("emitMs", () =>
+	emitProgramTranslationUnits(image, { maligatorSurface: true }),
+);
 
-const writeStartedAt = Date.now();
-mkdirSync(outputDirectory, { recursive: true });
-for (let index = 0; index < units.length; index++) {
-	writeFileSync(path.join(outputDirectory, `self-compile-${index}.c`), units[index]!);
-}
-phases.writeMs = Date.now() - writeStartedAt;
+measure("writeMs", () => {
+	mkdirSync(outputDirectory, { recursive: true });
+	for (let index = 0; index < units.length; index++) {
+		writeFileSync(path.join(outputDirectory, `self-compile-${index}.c`), units[index]!);
+	}
+});
 
 console.log(
 	JSON.stringify({
@@ -113,5 +137,15 @@ console.log(
 		codeUnits: units.reduce((total, source) => total + source.length, 0),
 		phases,
 		optimizer: optimizationReport,
+		owners: completeCompilerOptimizationOwners(
+			optimizationReport.owners,
+			phases,
+			{
+				inputInstructions: optimizationReport.input.instructions,
+				outputInstructions: optimizationReport.output.instructions,
+				generatedCodeUnits: units.reduce((total, source) => total + source.length, 0),
+			},
+			runtimePhases as CompilerOptimizationOwnerRuntimePhases,
+		),
 	}),
 );

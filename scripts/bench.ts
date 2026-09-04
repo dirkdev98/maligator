@@ -29,7 +29,11 @@ import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { CORE_OPTIMIZATION_FAMILIES } from "../src/compiler/core/core-optimization-families.ts";
 import type { CoreOptimizationFamily } from "../src/compiler/core/core-optimization-families.ts";
-import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import type { CoreOptimizationOwnerReport } from "../src/compiler/core/core-optimization-owners.ts";
+import type {
+	CoreInstrumentationMode,
+	CoreOptimizationReport,
+} from "../src/compiler/core/core-optimization-report.ts";
 import type {
 	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
@@ -48,6 +52,14 @@ import {
 	planExpressHttpWorkload,
 } from "./bench-http.ts";
 import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
+import {
+	compareCompilerOwnerLedgers,
+	compilerOwnerCoverage,
+} from "./compiler-owner-ledger.ts";
+import type {
+	CompilerOwnerCoverage,
+	CompilerOwnerLedgerRow,
+} from "./compiler-owner-ledger.ts";
 import {
 	digestSelfCompileOutput,
 	prepareSelfCompileSource,
@@ -193,6 +205,10 @@ interface SelfCompileMetrics {
 		readonly node: SelfCompileSample;
 		readonly maligator: SelfCompileSample;
 	};
+	coldSamples: {
+		readonly node: ReadonlyArray<SelfCompileSample>;
+		readonly maligator: ReadonlyArray<SelfCompileSample>;
+	};
 	warm: {
 		readonly node: ReadonlyArray<SelfCompileSample>;
 		readonly maligator: ReadonlyArray<SelfCompileSample>;
@@ -203,10 +219,28 @@ interface SelfCompileMetrics {
 			readonly optimizer: CoreOptimizationReport;
 		};
 	};
+	countersSample: {
+		readonly node: SelfCompileSample & { readonly optimizer: CoreOptimizationReport };
+		readonly maligator: SelfCompileSample & {
+			readonly optimizer: CoreOptimizationReport;
+		};
+	};
+	ownerSample: {
+		readonly node: SelfCompileSample & {
+			readonly optimizer: CoreOptimizationReport;
+			readonly owners: ReadonlyArray<CoreOptimizationOwnerReport>;
+		};
+		readonly maligator: SelfCompileSample & {
+			readonly optimizer: CoreOptimizationReport;
+			readonly owners: ReadonlyArray<CoreOptimizationOwnerReport>;
+		};
+		readonly owners: ReadonlyArray<CompilerOwnerLedgerRow>;
+		readonly coverage: CompilerOwnerCoverage;
+	};
 }
 
 interface SelfCompileCheckpoint {
-	readonly schema: 1;
+	readonly schema: 2;
 	readonly source: NonNullable<BenchmarkSnapshot["source"]>;
 	readonly runs: number;
 	readonly nativeCacheDirectory?: string;
@@ -214,9 +248,9 @@ interface SelfCompileCheckpoint {
 	readonly root: string;
 	readonly binary: string;
 	readonly nativeBuild: NativeOutputBuildMetrics;
-	cold?: {
-		readonly node: SelfCompileSample;
-		readonly maligator: SelfCompileSample;
+	readonly coldSamples: {
+		node: Array<SelfCompileSample>;
+		maligator: Array<SelfCompileSample>;
 	};
 	warmup?: {
 		readonly node: SelfCompileSample;
@@ -227,6 +261,8 @@ interface SelfCompileCheckpoint {
 		maligator: Array<SelfCompileSample>;
 	};
 	phasesSample?: SelfCompileMetrics["phasesSample"];
+	countersSample?: SelfCompileMetrics["countersSample"];
+	ownerSample?: SelfCompileMetrics["ownerSample"];
 	runtime?: SelfCompileMetrics["runtime"];
 	complete?: true;
 }
@@ -302,6 +338,7 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 		"bench/http/server_node.js",
 		"bench/self-compile.mts",
 		"scripts/bench.ts",
+		"scripts/compiler-owner-ledger.ts",
 		"package-lock.json",
 	];
 	const benchmarkDigest = createHash("sha256");
@@ -698,9 +735,10 @@ interface SelfCompileRun {
 	digest: string;
 	phases: SelfCompilePhases;
 	optimizer: CoreOptimizationReport;
+	owners: ReadonlyArray<CoreOptimizationOwnerReport>;
 }
 
-type SelfCompileSample = Omit<SelfCompileRun, "optimizer">;
+type SelfCompileSample = Omit<SelfCompileRun, "optimizer" | "owners">;
 
 function selfCompileSample(run: SelfCompileRun): SelfCompileSample {
 	return {
@@ -716,11 +754,15 @@ function runSelfCompile(
 	command: string,
 	args: Array<string>,
 	output: string,
-	instrumentation: "off" | "phases" = "off",
+	instrumentation: CoreInstrumentationMode = "off",
 ): SelfCompileRun {
 	const start = process.hrtime.bigint();
 	const result = spawnSync(command, [...args, output], {
-		env: { ...process.env, MAL_CORE_INSTRUMENTATION: instrumentation },
+		env: {
+			...process.env,
+			MAL_CORE_INSTRUMENTATION: instrumentation,
+			...(instrumentation === "full" ? { MAL_GC_STATS: "1", MAL_GC_CONTROL: "1" } : {}),
+		},
 		encoding: "utf8",
 		maxBuffer: 1024 * 1024,
 		timeout: 900_000,
@@ -737,6 +779,7 @@ function runSelfCompile(
 		codeUnits: number;
 		phases: SelfCompilePhases;
 		optimizer: CoreOptimizationReport;
+		owners: ReadonlyArray<CoreOptimizationOwnerReport>;
 	};
 	return {
 		wallMs,
@@ -745,6 +788,7 @@ function runSelfCompile(
 		digest: digestSelfCompileOutput(output),
 		phases: summary.phases,
 		optimizer: summary.optimizer,
+		owners: summary.owners,
 	};
 }
 
@@ -778,6 +822,7 @@ function runSelfCompileResourceSample(
 		codeUnits: number;
 		phases: SelfCompilePhases;
 		optimizer: CoreOptimizationReport;
+		owners: ReadonlyArray<CoreOptimizationOwnerReport>;
 	};
 	const rssBytes = parsePeakRssBytes(result.stderr);
 	if (rssBytes === undefined) throw new Error("self-compile resource probe omitted RSS");
@@ -789,6 +834,7 @@ function runSelfCompileResourceSample(
 			digest: digestSelfCompileOutput(output),
 			phases: summary.phases,
 			optimizer: summary.optimizer,
+			owners: summary.owners,
 		},
 		stderr: result.stderr,
 		rssBytes,
@@ -832,6 +878,50 @@ function assertComparableSelfCompile(
 	}
 }
 
+function assertComparableOptimizerWork(
+	node: CoreOptimizationReport,
+	maligator: CoreOptimizationReport,
+): void {
+	for (const [name, nodeValue] of Object.entries(node.counters)) {
+		if (name.endsWith("Ms")) continue;
+		const maligatorValue = maligator.counters[name as keyof typeof maligator.counters];
+		if (nodeValue !== maligatorValue) {
+			throw new Error(
+				`optimizer work counter ${name} differs between hosts: ${nodeValue} != ${maligatorValue}`,
+			);
+		}
+	}
+}
+
+function selfCompileOwnerSample(
+	node: SelfCompileRun,
+	maligator: SelfCompileRun,
+): SelfCompileMetrics["ownerSample"] {
+	if (
+		node.optimizer.instrumentation !== "full" ||
+		maligator.optimizer.instrumentation !== "full"
+	) {
+		throw new Error("self-compile owner sample did not enable full instrumentation");
+	}
+	assertComparableOptimizerWork(node.optimizer, maligator.optimizer);
+	const owners = compareCompilerOwnerLedgers(node.owners, maligator.owners);
+	return Object.freeze({
+		node: { ...selfCompileSample(node), optimizer: node.optimizer, owners: node.owners },
+		maligator: {
+			...selfCompileSample(maligator),
+			optimizer: maligator.optimizer,
+			owners: maligator.owners,
+		},
+		owners,
+		coverage: compilerOwnerCoverage(owners, {
+			nodeOptimizeCoreMs: node.phases.optimizeCoreMs,
+			maligatorOptimizeCoreMs: maligator.phases.optimizeCoreMs,
+			nodeWallMs: node.wallMs,
+			maligatorWallMs: maligator.wallMs,
+		}),
+	});
+}
+
 function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhases {
 	const field = (name: keyof SelfCompilePhases): number =>
 		median(values.map((value) => value[name]));
@@ -851,8 +941,11 @@ function assembleSelfCompileMetrics(input: {
 	readonly runs: number;
 	readonly nativeBuild: NativeOutputBuildMetrics;
 	readonly cold: SelfCompileMetrics["cold"];
+	readonly coldSamples: SelfCompileMetrics["coldSamples"];
 	readonly warm: SelfCompileMetrics["warm"];
 	readonly phasesSample: SelfCompileMetrics["phasesSample"];
+	readonly countersSample: SelfCompileMetrics["countersSample"];
+	readonly ownerSample: SelfCompileMetrics["ownerSample"];
 	readonly runtime: SelfCompileMetrics["runtime"];
 }): SelfCompileMetrics {
 	const firstNode = input.warm.node[0];
@@ -876,8 +969,11 @@ function assembleSelfCompileMetrics(input: {
 		nativeBuild: input.nativeBuild,
 		runtime: input.runtime,
 		cold: input.cold,
+		coldSamples: input.coldSamples,
 		warm: input.warm,
 		phasesSample: input.phasesSample,
+		countersSample: input.countersSample,
+		ownerSample: input.ownerSample,
 	};
 }
 
@@ -899,20 +995,31 @@ function benchSelfCompile(
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorRuns: Array<SelfCompileRun> = [];
 	const nodeRuns: Array<SelfCompileRun> = [];
+	const coldMaligatorRuns: Array<SelfCompileRun> = [];
+	const coldNodeRuns: Array<SelfCompileRun> = [];
 	try {
-		progress.detail("self-compile cold samples");
-		const coldTarget = prepareSelfCompileSource(path.join(root, "cold-source"));
-		const coldMaligator = runSelfCompile(
-			binary,
-			[coldTarget],
-			path.join(root, "cold-maligator"),
-		);
-		const coldNode = runSelfCompile(
-			process.execPath,
-			[fixture, coldTarget],
-			path.join(root, "cold-node"),
-		);
-		assertComparableSelfCompile(coldNode, coldMaligator);
+		for (let index = 0; index < 3; index++) {
+			progress.detail(`self-compile cold pair ${index + 1}/3`);
+			const coldTarget = prepareSelfCompileSource(
+				path.join(root, `cold-source-${index}`),
+			);
+			const nodeOutput = path.join(root, `cold-node-${index}`);
+			const maligatorOutput = path.join(root, `cold-maligator-${index}`);
+			let node: SelfCompileRun;
+			let maligator: SelfCompileRun;
+			if (index % 2 === 0) {
+				maligator = runSelfCompile(binary, [coldTarget], maligatorOutput);
+				node = runSelfCompile(process.execPath, [fixture, coldTarget], nodeOutput);
+			} else {
+				node = runSelfCompile(process.execPath, [fixture, coldTarget], nodeOutput);
+				maligator = runSelfCompile(binary, [coldTarget], maligatorOutput);
+			}
+			assertComparableSelfCompile(node, maligator);
+			coldNodeRuns.push(node);
+			coldMaligatorRuns.push(maligator);
+		}
+		const coldNode = coldNodeRuns[0]!;
+		const coldMaligator = coldMaligatorRuns[0]!;
 		const target = prepareSelfCompileSource(path.join(root, "source"));
 		progress.detail("self-compile warmup");
 		const warmupNode = runSelfCompile(
@@ -966,6 +1073,43 @@ function benchSelfCompile(
 		) {
 			throw new Error("self-compile phase sample did not enable phase instrumentation");
 		}
+		progress.detail("self-compile counter instrumentation sample");
+		const countersMaligator = runSelfCompile(
+			binary,
+			[target],
+			path.join(root, "counters-maligator"),
+			"counters",
+		);
+		const countersNode = runSelfCompile(
+			process.execPath,
+			[fixture, target],
+			path.join(root, "counters-node"),
+			"counters",
+		);
+		assertComparableSelfCompile(countersNode, countersMaligator);
+		if (
+			countersNode.optimizer.instrumentation !== "counters" ||
+			countersMaligator.optimizer.instrumentation !== "counters"
+		) {
+			throw new Error(
+				"self-compile counter sample did not enable counter instrumentation",
+			);
+		}
+		assertComparableOptimizerWork(countersNode.optimizer, countersMaligator.optimizer);
+		progress.detail("self-compile owner instrumentation sample");
+		const ownerNode = runSelfCompile(
+			process.execPath,
+			[fixture, target],
+			path.join(root, "owners-node"),
+			"full",
+		);
+		const ownerMaligator = runSelfCompile(
+			binary,
+			[target],
+			path.join(root, "owners-maligator"),
+			"full",
+		);
+		assertComparableSelfCompile(ownerNode, ownerMaligator);
 		progress.detail("self-compile runtime resource samples");
 		const resourceMaligator = runSelfCompileResourceSample(
 			binary,
@@ -987,6 +1131,10 @@ function benchSelfCompile(
 				node: selfCompileSample(coldNode),
 				maligator: selfCompileSample(coldMaligator),
 			},
+			coldSamples: {
+				node: Object.freeze(coldNodeRuns.map(selfCompileSample)),
+				maligator: Object.freeze(coldMaligatorRuns.map(selfCompileSample)),
+			},
 			warm: {
 				node: Object.freeze(nodeRuns.map(selfCompileSample)),
 				maligator: Object.freeze(maligatorRuns.map(selfCompileSample)),
@@ -998,6 +1146,17 @@ function benchSelfCompile(
 					optimizer: phasesMaligator.optimizer,
 				},
 			},
+			countersSample: {
+				node: {
+					...selfCompileSample(countersNode),
+					optimizer: countersNode.optimizer,
+				},
+				maligator: {
+					...selfCompileSample(countersMaligator),
+					optimizer: countersMaligator.optimizer,
+				},
+			},
+			ownerSample: selfCompileOwnerSample(ownerNode, ownerMaligator),
 			runtime: {
 				maligator: nativeRuntimeMetrics(
 					resourceMaligator.stderr,
@@ -1045,27 +1204,28 @@ function runCheckpointSelfCompilePair(
 	checkpoint: SelfCompileCheckpoint,
 	target: string,
 	label: string,
-	instrumentation: "off" | "phases" = "off",
+	instrumentation: CoreInstrumentationMode = "off",
+	nodeFirst = false,
 ): { readonly node: SelfCompileRun; readonly maligator: SelfCompileRun } {
 	const nodeOutput = path.join(checkpoint.root, `${label}-node`);
 	const maligatorOutput = path.join(checkpoint.root, `${label}-maligator`);
 	rmSync(nodeOutput, { recursive: true, force: true });
 	rmSync(maligatorOutput, { recursive: true, force: true });
 	try {
-		const maligator = runSelfCompile(
-			checkpoint.binary,
-			[target],
-			maligatorOutput,
-			instrumentation,
-		);
-		const node = runSelfCompile(
-			process.execPath,
-			[path.resolve("bench/self-compile.mts"), target],
-			nodeOutput,
-			instrumentation,
-		);
-		assertComparableSelfCompile(node, maligator);
-		return { node, maligator };
+		const runMaligator = () =>
+			runSelfCompile(checkpoint.binary, [target], maligatorOutput, instrumentation);
+		const runNode = () =>
+			runSelfCompile(
+				process.execPath,
+				[path.resolve("bench/self-compile.mts"), target],
+				nodeOutput,
+				instrumentation,
+			);
+		const node = nodeFirst ? runNode() : undefined;
+		const maligator = runMaligator();
+		const finalNode = node ?? runNode();
+		assertComparableSelfCompile(finalNode, maligator);
+		return { node: finalNode, maligator };
 	} finally {
 		rmSync(nodeOutput, { recursive: true, force: true });
 		rmSync(maligatorOutput, { recursive: true, force: true });
@@ -1076,8 +1236,11 @@ function checkpointSelfCompileMetrics(
 	checkpoint: SelfCompileCheckpoint,
 ): SelfCompileMetrics {
 	if (
-		checkpoint.cold === undefined ||
+		checkpoint.coldSamples.node.length !== 3 ||
+		checkpoint.coldSamples.maligator.length !== 3 ||
 		checkpoint.phasesSample === undefined ||
+		checkpoint.countersSample === undefined ||
+		checkpoint.ownerSample === undefined ||
 		checkpoint.runtime === undefined ||
 		checkpoint.warm.node.length !== checkpoint.runs ||
 		checkpoint.warm.maligator.length !== checkpoint.runs
@@ -1087,9 +1250,15 @@ function checkpointSelfCompileMetrics(
 	return assembleSelfCompileMetrics({
 		runs: checkpoint.runs,
 		nativeBuild: checkpoint.nativeBuild,
-		cold: checkpoint.cold,
+		cold: {
+			node: checkpoint.coldSamples.node[0]!,
+			maligator: checkpoint.coldSamples.maligator[0]!,
+		},
+		coldSamples: checkpoint.coldSamples,
 		warm: checkpoint.warm,
 		phasesSample: checkpoint.phasesSample,
+		countersSample: checkpoint.countersSample,
+		ownerSample: checkpoint.ownerSample,
 		runtime: checkpoint.runtime,
 	});
 }
@@ -1115,7 +1284,7 @@ function benchSelfCompileCheckpoint(
 			onNativeCommandResource: nativeBuild.observeResource,
 		});
 		checkpoint = {
-			schema: 1,
+			schema: 2,
 			source,
 			runs,
 			nativeCacheDirectory,
@@ -1123,6 +1292,7 @@ function benchSelfCompileCheckpoint(
 			binary,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
 			coreOptimizationAblation,
+			coldSamples: { node: [], maligator: [] },
 			warm: { node: [], maligator: [] },
 		};
 		writeSelfCompileCheckpoint(checkpointPath, checkpoint);
@@ -1130,7 +1300,7 @@ function benchSelfCompileCheckpoint(
 	}
 
 	checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as SelfCompileCheckpoint;
-	if (checkpoint.schema !== 1) {
+	if (checkpoint.schema !== 2) {
 		throw new Error("unsupported self-compile checkpoint schema");
 	}
 	if (JSON.stringify(checkpoint.source) !== JSON.stringify(source)) {
@@ -1148,14 +1318,19 @@ function benchSelfCompileCheckpoint(
 		throw new Error(`self-compile checkpoint binary is missing: ${checkpoint.binary}`);
 	}
 
-	if (checkpoint.cold === undefined) {
-		progress.detail("self-compile checkpoint stage: cold pair");
-		const target = preparedCheckpointTarget(checkpoint.root, "cold-source");
-		const pair = runCheckpointSelfCompilePair(checkpoint, target, "cold");
-		checkpoint.cold = {
-			node: selfCompileSample(pair.node),
-			maligator: selfCompileSample(pair.maligator),
-		};
+	if (checkpoint.coldSamples.node.length < 3) {
+		const index = checkpoint.coldSamples.node.length;
+		progress.detail(`self-compile checkpoint stage: cold pair ${index + 1}/3`);
+		const target = preparedCheckpointTarget(checkpoint.root, `cold-source-${index}`);
+		const pair = runCheckpointSelfCompilePair(
+			checkpoint,
+			target,
+			`cold-${index}`,
+			"off",
+			index % 2 === 1,
+		);
+		checkpoint.coldSamples.node.push(selfCompileSample(pair.node));
+		checkpoint.coldSamples.maligator.push(selfCompileSample(pair.maligator));
 	} else if (checkpoint.warmup === undefined) {
 		progress.detail("self-compile checkpoint stage: warmup pair");
 		const target = preparedCheckpointTarget(checkpoint.root, "source");
@@ -1168,7 +1343,13 @@ function benchSelfCompileCheckpoint(
 		const index = checkpoint.warm.node.length;
 		progress.detail(`self-compile checkpoint stage: paired sample ${index + 1}/${runs}`);
 		const target = preparedCheckpointTarget(checkpoint.root, "source");
-		const pair = runCheckpointSelfCompilePair(checkpoint, target, `sample-${index}`);
+		const pair = runCheckpointSelfCompilePair(
+			checkpoint,
+			target,
+			`sample-${index}`,
+			"off",
+			index % 2 === 1,
+		);
 		const referenceNode = checkpoint.warm.node[0];
 		const referenceMaligator = checkpoint.warm.maligator[0];
 		if (referenceNode !== undefined)
@@ -1194,6 +1375,31 @@ function benchSelfCompileCheckpoint(
 				optimizer: pair.maligator.optimizer,
 			},
 		};
+	} else if (checkpoint.countersSample === undefined) {
+		progress.detail("self-compile checkpoint stage: counter pair");
+		const target = preparedCheckpointTarget(checkpoint.root, "source");
+		const pair = runCheckpointSelfCompilePair(checkpoint, target, "counters", "counters");
+		if (
+			pair.node.optimizer.instrumentation !== "counters" ||
+			pair.maligator.optimizer.instrumentation !== "counters"
+		) {
+			throw new Error(
+				"self-compile counter sample did not enable counter instrumentation",
+			);
+		}
+		assertComparableOptimizerWork(pair.node.optimizer, pair.maligator.optimizer);
+		checkpoint.countersSample = {
+			node: { ...selfCompileSample(pair.node), optimizer: pair.node.optimizer },
+			maligator: {
+				...selfCompileSample(pair.maligator),
+				optimizer: pair.maligator.optimizer,
+			},
+		};
+	} else if (checkpoint.ownerSample === undefined) {
+		progress.detail("self-compile checkpoint stage: owner pair");
+		const target = preparedCheckpointTarget(checkpoint.root, "source");
+		const pair = runCheckpointSelfCompilePair(checkpoint, target, "owners", "full");
+		checkpoint.ownerSample = selfCompileOwnerSample(pair.node, pair.maligator);
 	} else if (checkpoint.runtime === undefined) {
 		progress.detail("self-compile checkpoint stage: runtime resource pair");
 		const target = preparedCheckpointTarget(checkpoint.root, "source");
@@ -1228,7 +1434,12 @@ function benchSelfCompileCheckpoint(
 	if (
 		checkpoint.runtime !== undefined &&
 		checkpoint.phasesSample !== undefined &&
-		checkpoint.warm.node.length === runs
+		checkpoint.countersSample !== undefined &&
+		checkpoint.ownerSample !== undefined &&
+		checkpoint.coldSamples.node.length === 3 &&
+		checkpoint.coldSamples.maligator.length === 3 &&
+		checkpoint.warm.node.length === runs &&
+		checkpoint.warm.maligator.length === runs
 	) {
 		checkpoint.complete = true;
 		rmSync(checkpoint.root, { recursive: true, force: true });

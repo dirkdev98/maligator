@@ -17,6 +17,8 @@ import * as path from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getHeapStatistics } from "node:v8";
+import { completeCompilerOptimizationOwners } from "../src/compiler/core/core-optimization-owners.ts";
+import type { CoreOptimizationOwnerReport } from "../src/compiler/core/core-optimization-owners.ts";
 import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
@@ -134,6 +136,7 @@ interface CompilerScaleSample {
 		| "checkpoints"
 		| "passes"
 		| "analyses"
+		| "owners"
 		| "counters"
 		| "program"
 		| "transforms"
@@ -142,6 +145,7 @@ interface CompilerScaleSample {
 		| "queue"
 		| "budget"
 	>;
+	readonly owners: ReadonlyArray<CoreOptimizationOwnerReport>;
 	readonly memory: {
 		readonly heapUsedBefore: number;
 		readonly heapUsedAfter: number;
@@ -766,6 +770,7 @@ async function compileSample(
 	const normalizedUnits = units.map((source) =>
 		source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
 	);
+	const codeUnits = normalizedUnits.reduce((total, source) => total + source.length, 0);
 	return {
 		instrumentation,
 		wallMs,
@@ -779,6 +784,7 @@ async function compileSample(
 			checkpoints: report.checkpoints,
 			passes: report.passes,
 			analyses: report.analyses,
+			owners: report.owners,
 			counters: report.counters,
 			program: report.program,
 			transforms: report.transforms,
@@ -787,6 +793,11 @@ async function compileSample(
 			queue: report.queue,
 			budget: report.budget,
 		},
+		owners: completeCompilerOptimizationOwners(report.owners, phases, {
+			inputInstructions: report.input.instructions,
+			outputInstructions: report.output.instructions,
+			generatedCodeUnits: codeUnits,
+		}),
 		memory: {
 			heapUsedBefore,
 			heapUsedAfter: memoryAfterWork.heapUsed,
@@ -800,7 +811,7 @@ async function compileSample(
 		},
 		output: {
 			units: units.length,
-			codeUnits: normalizedUnits.reduce((total, source) => total + source.length, 0),
+			codeUnits,
 			digest: framedDigest(normalizedUnits, benchmarkCase.sourceRoot),
 			observableChecksum: normalizedBinaryDigest(runtimeWire, benchmarkCase.sourceRoot),
 		},

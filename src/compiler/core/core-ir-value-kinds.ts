@@ -25,6 +25,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowValueKinds,
@@ -511,6 +512,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 	{
 		key: "local-value-kinds",
 		scope: "function",
+		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
 		functionDependencies: ["body", "cfg", "representations"],
 		contextIdentity: (context) => context.data.singleAssignmentGlobalSlots,
 		compute({ program, context, request, get }) {

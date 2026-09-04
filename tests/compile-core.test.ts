@@ -14,6 +14,10 @@ import {
 	CORE_PROVENANCE_PASSES,
 } from "../src/compiler/core/core-memory-passes.ts";
 import { CORE_OPTIMIZATION_FAMILIES } from "../src/compiler/core/core-optimization-families.ts";
+import {
+	CORE_OPTIMIZATION_OWNER,
+	CORE_OPTIMIZATION_OWNERS,
+} from "../src/compiler/core/core-optimization-owners.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -184,6 +188,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			checkpoints: [],
 			passes: [],
 			analyses: [],
+			owners: [],
 			input: { functions: 0 },
 		});
 		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
@@ -192,6 +197,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(phases.report.checkpoints.length).toBe(8);
 		expect(phases.report.passes).toEqual([]);
 		expect(phases.report.analyses).toEqual([]);
+		expect(phases.report.owners).toEqual([]);
 		expect(Object.values(phases.report.counters).every((value) => value === 0)).toBe(
 			true,
 		);
@@ -200,6 +206,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(counters.report.checkpoints.length).toBe(8);
 		expect(counters.report.passes).toEqual([]);
 		expect(counters.report.analyses).toEqual([]);
+		expect(counters.report.owners).toEqual([]);
 		expect(counters.report.counters.localRulesConsidered).toBeGreaterThan(0);
 		expect(counters.report.counters.analysisQueries).toBeGreaterThan(0);
 		expect(counters.report.counters.localFactRebuilds).toBeGreaterThan(0);
@@ -216,6 +223,15 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(full.report.instrumentation).toBe("full");
 		expect(full.report.passes.length).toBeGreaterThan(0);
 		expect(full.report.analyses.length).toBeGreaterThan(0);
+		expect(full.report.owners.map(({ id, name }) => ({ id, name }))).toEqual(
+			CORE_OPTIMIZATION_OWNERS,
+		);
+		expect(
+			full.report.owners[CORE_OPTIMIZATION_OWNER.coreVerification]!.workUnits,
+		).toBeGreaterThan(0);
+		expect(
+			full.report.owners[CORE_OPTIMIZATION_OWNER.fusedLocalOptimization]!.workUnits,
+		).toBeGreaterThan(0);
 	});
 
 	it("runs phases in order and inspects optimized IR before target lowering", () => {

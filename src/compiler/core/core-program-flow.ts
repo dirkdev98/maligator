@@ -9,6 +9,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
@@ -1253,9 +1254,20 @@ export class CoreProgramFlowEngine {
 			this.#report?.increment("programFlowTransferReuses");
 			return current;
 		}
-		const next = extractCoreProgramFlowLocalTransfers(
-			this.#program,
-			this.#program.function(functionId),
+		const next =
+			this.#report?.measureOwner(CORE_OPTIMIZATION_OWNER.programFlowLocalExtraction, () =>
+				extractCoreProgramFlowLocalTransfers(
+					this.#program,
+					this.#program.function(functionId),
+				),
+			) ??
+			extractCoreProgramFlowLocalTransfers(
+				this.#program,
+				this.#program.function(functionId),
+			);
+		this.#report?.recordOwnerWork(
+			CORE_OPTIMIZATION_OWNER.programFlowLocalExtraction,
+			next.instructionVisits,
 		);
 		this.#localTransfers[functionId] = next;
 		this.#report?.increment("programFlowLocalScans");

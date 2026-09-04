@@ -8,6 +8,7 @@ import type { CoreProgramSummaryState } from "./core-ir-summaries.ts";
 import { CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS } from "./core-ir-value-kinds.ts";
 import type { CoreProgramValueKindState } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
 	CORE_PROGRAM_FLOW_REACHABILITY,
@@ -27,6 +28,7 @@ export interface CoreProgramFlowState {
 export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowState> = {
 	key: "program-flow",
 	scope: "program",
+	owner: CORE_OPTIMIZATION_OWNER.programFlowConvergence,
 	functionDependencies: [
 		"body",
 		"cfg",
