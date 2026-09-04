@@ -1645,6 +1645,7 @@ function lowerFunctionToTarget(
 	executionFunction: number,
 	functionMap: ExecutionFunctionMap,
 	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
+	directEntryTargets: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
@@ -1676,9 +1677,8 @@ function lowerFunctionToTarget(
 			coreSpecializationRecipeTargetFunctionsAt(recipeTable, row),
 		);
 	}
-	for (const entry of directEntryPlans) {
-		for (const site of entry.callSites)
-			guardedTargets.set(site.instruction, [entry.function]);
+	for (const [instruction, target] of directEntryTargets) {
+		guardedTargets.set(instruction, [target]);
 	}
 	const denseReserveLengths = new Map<CoreInstructionId, number>();
 	const plannedBuiltinCalls = new Map<CoreInstructionId, CoreAttributeValue>();
@@ -2229,6 +2229,7 @@ export function lowerCoreCompilationToExecutionProgram(
 	const functionMap = createExecutionFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
+	const directEntryTargets = new Map<number, Map<CoreInstructionId, CoreFunctionId>>();
 	const specializationRows = new Map<CoreFunctionId, Array<number>>();
 	const blockOrders = new Map(
 		compilation.plan.blockOrders.map(({ function: functionId, blocks }) => [
@@ -2251,6 +2252,11 @@ export function lowerCoreCompilationToExecutionProgram(
 				directEntryIds.get(site.caller) ?? new Map<CoreInstructionId, number>();
 			calls.set(site.instruction, entry.id);
 			directEntryIds.set(site.caller, calls);
+			const targets =
+				directEntryTargets.get(site.caller) ??
+				new Map<CoreInstructionId, CoreFunctionId>();
+			targets.set(site.instruction, entry.function);
+			directEntryTargets.set(site.caller, targets);
 		}
 	}
 	const functions = functionMap.executionToCore.map((core, execution) =>
@@ -2259,6 +2265,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			execution,
 			functionMap,
 			directEntryIds.get(core) ?? new Map(),
+			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],

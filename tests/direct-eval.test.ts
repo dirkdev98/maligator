@@ -314,6 +314,44 @@ test("strict direct eval keeps var and function declarations off the global obje
 	).toBe(false);
 });
 
+test("direct eval only probes caller scope when it can provide bindings", () => {
+	const compile = (
+		varEnvironmentIsGlobal: boolean,
+		varConflictNames: Array<string> = [],
+	) => {
+		const context: DirectEvalContext = {
+			allowSuperProperty: false,
+			allowSuperCall: false,
+			hasInstanceInitializer: false,
+			allowNewTarget: false,
+			privateNames: [],
+			varConflictNames,
+			varEnvironmentNames: [],
+			varEnvironmentIsGlobal,
+		};
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			"(function () { missing; });",
+			"eval",
+			undefined,
+			{ eval: { callerStrict: false, direct: true, directEvalContext: context } },
+		);
+		const functions = coreFunctions(
+			lowerSemanticProgramToCore(semantic, {
+				evalDirect: true,
+				directEvalContext: context,
+			}).program,
+		);
+		return coreOperations(functions.at(-1)!);
+	};
+
+	expect(compile(true).some(({ opcode }) => opcode === "withGet")).toBe(false);
+	expect(compile(true).some(({ opcode }) => opcode === "loadGlobalProperty")).toBe(true);
+	expect(compile(true, ["missing"]).some(({ opcode }) => opcode === "withGet")).toBe(
+		true,
+	);
+	expect(compile(false).some(({ opcode }) => opcode === "withGet")).toBe(true);
+});
+
 test("generated direct eval contexts model parameter and lexical conflicts", () => {
 	const parameterContext = generatedDirectEvalContext(
 		`function f(parameter = eval("ignored")) {}`,

@@ -14,6 +14,7 @@ import type {
 	CoreEdge,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -344,6 +345,18 @@ function offerFunctionCandidates(
 		}
 		const linear = linearInlineTarget(program, target);
 		const open = coreCalleeTargetsAreOpen(site.targets);
+		const resultCount = fn.kernel.instructionResultCount(site.instruction);
+		const result =
+			resultCount === 1
+				? fn.kernel.resultAt(fn.kernel.instructionResultStart(site.instruction))
+				: undefined;
+		const bridgesResult =
+			linear !== undefined &&
+			result !== undefined &&
+			canBridgeInlineResult(
+				linear.function.valueRepresentation(linear.returnValue),
+				fn.valueRepresentation(result),
+			);
 		service.offer(
 			Object.freeze({
 				kind: open ? "guarded-inline" : "inline",
@@ -363,10 +376,23 @@ function offerFunctionCandidates(
 					? { unsupportedReason: "recursive" as const }
 					: linear === undefined
 						? { unsupportedReason: "unsupported-graph" as const }
-						: {}),
+						: !bridgesResult
+							? { unsupportedReason: "representation" as const }
+							: {}),
 			}),
 		);
 	}
+}
+
+function canBridgeInlineResult(
+	source: CoreRepresentation,
+	destination: CoreRepresentation,
+): boolean {
+	return (
+		source === destination ||
+		destination === "boxed" ||
+		(source === "i32" && destination === "f64")
+	);
 }
 
 export function discoverCoreCrossCallCandidates(
@@ -404,6 +430,10 @@ function applyLinearInline(
 	const operands = materializeInstructionOperands(caller, candidate.site);
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
+	const callResult = callResults[0]!;
+	const returnRepresentation = linear.function.valueRepresentation(linear.returnValue);
+	const callRepresentation = caller.valueRepresentation(callResult);
+	if (!canBridgeInlineResult(returnRepresentation, callRepresentation)) return undefined;
 	const receiverIndex = descriptor.callTransfer.receiverOperand;
 	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
 	const firstArgument =
@@ -497,11 +527,25 @@ function applyLinearInline(
 			}
 		}
 	}
-	const replacement = values.get(linear.returnValue);
+	let replacement = values.get(linear.returnValue);
 	if (replacement === undefined) {
 		throw new Error("Validated inline return has no caller value");
 	}
-	editor.replaceValueUses(callResults[0]!, replacement);
+	if (returnRepresentation !== callRepresentation) {
+		const bridge = editor.insertInstruction(
+			block,
+			candidate.site,
+			"move",
+			[replacement],
+			{
+				outputRepresentations: [callRepresentation],
+				sourcePosition: callerPosition,
+			},
+		);
+		replacement = bridge.outputs[0]!;
+		introduced++;
+	}
+	editor.replaceValueUses(callResult, replacement);
 	editor.removeInstruction(candidate.site);
 	return {
 		instructionsIntroduced: introduced,
@@ -534,11 +578,9 @@ function applyGuardedLinearInline(
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
-	if (
-		linear.function.valueRepresentation(linear.returnValue) !==
-		caller.valueRepresentation(callResult)
-	)
-		return undefined;
+	const returnRepresentation = linear.function.valueRepresentation(linear.returnValue);
+	const callRepresentation = caller.valueRepresentation(callResult);
+	if (!canBridgeInlineResult(returnRepresentation, callRepresentation)) return undefined;
 	const receiverIndex = descriptor.callTransfer.receiverOperand;
 	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
 	const firstArgument =
@@ -675,9 +717,17 @@ function applyGuardedLinearInline(
 				values.set(output, inserted.outputs[index]!);
 		}
 	}
-	const fastResult = values.get(linear.returnValue);
+	let fastResult = values.get(linear.returnValue);
 	if (fastResult === undefined)
 		throw new Error("Validated guarded inline return has no caller value");
+	if (returnRepresentation !== callRepresentation) {
+		const bridge = editor.appendInstruction(fast, "move", [fastResult], {
+			outputRepresentations: [callRepresentation],
+			sourcePosition: callerPosition,
+		});
+		fastResult = bridge.outputs[0]!;
+		introduced++;
+	}
 	editor.setTerminator(fast, {
 		kind: "jump",
 		edge: { block: join, arguments: [fastResult] },

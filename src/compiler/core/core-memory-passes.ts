@@ -9,7 +9,10 @@ import {
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
-import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreValueControlFlowUseMask,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
 import {
@@ -1796,6 +1799,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const proofs = context.analysis(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const controlFlowUses = coreValueControlFlowUseMask(fn);
 		const refinements = new Map<CoreValueId, "i32" | "f64" | "boolean">();
 		const canRefine = (
 			value: CoreValueId,
@@ -1803,6 +1807,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 			seen: ReadonlySet<CoreValueId> = new Set(),
 		): boolean => {
 			if (fn.valueRepresentation(value) === representation) return true;
+			if (controlFlowUses[value] !== 0) return false;
 			if (seen.has(value)) return false;
 			if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));

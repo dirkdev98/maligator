@@ -1,5 +1,6 @@
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { coreValueControlFlowUseMask } from "./core-ir-control-flow.ts";
 import {
 	CORE_FACT_AVAILABILITY_ANALYSIS,
 	coreFactImplies,
@@ -27,7 +28,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import { coreInstructionId, coreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
@@ -463,28 +464,6 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"rootUse",
 ]);
 
-function buildEdgeUseMask(fn: CoreFunctionStore): Uint8Array {
-	const appearsOnEdge = new Uint8Array(fn.valueCapacity);
-	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-		const block = coreBlockId(blockIndex);
-		if (!fn.isBlockLive(block)) continue;
-		const handlerStart = fn.kernel.blockHandlerArgumentStart(block);
-		const handlerCount = fn.kernel.blockHandlerArgumentCount(block);
-		for (let index = 0; index < handlerCount; index++)
-			appearsOnEdge[fn.kernel.handlerArgumentAt(handlerStart + index)] = 1;
-		const terminator = fn.blockTerminator(block);
-		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
-		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
-			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edgeStart + edgeOffset);
-			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edgeStart + edgeOffset);
-			for (let index = 0; index < argumentCount; index++)
-				appearsOnEdge[fn.kernel.operandAt(argumentStart + index)] = 1;
-		}
-	}
-	return appearsOnEdge;
-}
-
 function scalarConsumersOnly(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -565,7 +544,7 @@ function scalarCandidate(
 }
 
 function hasLocalScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean {
-	const edgeUses = buildEdgeUseMask(fn);
+	const edgeUses = coreValueControlFlowUseMask(fn);
 	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
 		const value = coreValueId(valueIndex);
 		if (
@@ -601,7 +580,7 @@ const materializeLocalScalars: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const edgeUses = buildEdgeUseMask(fn);
+		const edgeUses = coreValueControlFlowUseMask(fn);
 		const candidates: Array<{
 			readonly value: CoreValueId;
 			readonly representation: CoreRepresentation;

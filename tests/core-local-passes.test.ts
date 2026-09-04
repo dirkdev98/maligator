@@ -1145,6 +1145,41 @@ describe("Core local canonicalization", () => {
 		).not.toContain("throw");
 	});
 
+	it("retains a shared handler referenced by a dormant exception edge", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const explicit = builder.createBlock();
+		const dormant = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception", representation: "boxed" }]);
+		const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: value,
+			consequent: { block: explicit, arguments: [] },
+			alternate: { block: dormant, arguments: [] },
+		});
+		builder.setHandler(explicit, handler);
+		builder.setTerminator(explicit, { kind: "throw", value });
+		builder.setHandler(dormant, handler);
+		builder.setTerminator(dormant, { kind: "return", value });
+		builder.setTerminator(handler, {
+			kind: "return",
+			value: inspectCoreBlockParameters(builder, handler)[0]!.value,
+		});
+		const function_ = builder.finish(entry).function;
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		expect(
+			[...fn.blockIds()].some(
+				(block) => inspectCoreBlockHandler(fn, block) !== undefined,
+			),
+		).toBe(true);
+	});
+
 	it("lowers shared explicit throws but retains potentially throwing prefixes", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const shared = new CoreFunctionBuilder(program, { parameterCount: 1 });

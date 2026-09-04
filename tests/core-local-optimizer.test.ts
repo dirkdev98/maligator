@@ -207,6 +207,35 @@ describe("CoreLocalOptimizer", () => {
 		expect(optimized.statistics.rulesApplied).toBeGreaterThanOrEqual(1);
 	});
 
+	it("keeps local value numbers separate across representations", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const merge = builder.createBlock([{ representation: "boxed" }]);
+		const [represented] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: false },
+			outputRepresentations: ["boolean"],
+		});
+		builder.appendInstruction(entry, "rootUse", [represented!]);
+		const [boxed] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: false },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: merge, arguments: [boxed!] },
+		});
+		const parameter = inspectCoreBlockParameters(builder, merge)[0]!.value;
+		builder.setTerminator(merge, { kind: "return", value: parameter });
+		const fn = program.function(builder.finish(entry).function);
+
+		new CoreLocalOptimizer(program, fn.id).run();
+
+		const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry));
+		expect(terminator).toMatchObject({ kind: "jump" });
+		if (terminator.kind !== "jump") throw new Error("Expected jump terminator");
+		expect(fn.valueRepresentation(terminator.edge.arguments[0]!)).toBe("boxed");
+	});
+
 	it("folds a constant producer-consumer chain before folding its branch", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

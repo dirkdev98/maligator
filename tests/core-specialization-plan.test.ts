@@ -36,6 +36,7 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
@@ -953,5 +954,44 @@ describe("late Core specialization plan", () => {
 		expect(() => verifyCoreOptimizationPlan(sealed, omittedCallsite)).toThrow(
 			/omitted from target lowering/,
 		);
+	});
+
+	it("keeps direct-entry call sites scoped to their caller function", () => {
+		const definition = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`if (!((function () {
+					const nested = function () { return typeof this; };
+					return nested() === "undefined" && typeof this === "undefined";
+				})())) throw new Error("unexpected this value");`,
+				"direct-entry-function-local-site.js",
+			),
+		);
+		const directTargets = definition.runtime.functions.flatMap((fn) =>
+			fn.instructions.flatMap((instruction) =>
+				instruction.opcode === "CALL" && instruction.exactFunctionIndex !== undefined
+					? [instruction.exactFunctionIndex]
+					: [],
+			),
+		);
+
+		expect(directTargets).toEqual([1, 2]);
+	});
+
+	it("keeps functions that observe the argument slice on the canonical ABI", () => {
+		let directEntryCount = -1;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function observesArguments() { return arguments.length === 0; }
+				observesArguments();`,
+				"direct-entry-arguments.js",
+			),
+			{
+				afterCoreOptimization(_program, _context, _report, plan) {
+					directEntryCount = plan.directEntries.length;
+				},
+			},
+		);
+
+		expect(directEntryCount).toBe(0);
 	});
 });

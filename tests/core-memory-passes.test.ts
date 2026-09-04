@@ -129,6 +129,29 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("storePropertyStatic");
 	});
 
+	it("preserves representation joins for destructuring defaults", () => {
+		const source = `let count = 0;
+		function fallback() { count += 1; }
+		const { w = fallback(), x = fallback(), y = fallback(), z = fallback() } = {
+			w: null,
+			x: 0,
+			y: false,
+			z: "",
+		};
+		globalThis.result = [w, x, y, z, count];`;
+		expect(() =>
+			optimizeSemanticProgramToCore(
+				analyzeSourceAndRunSemanticAnalysis(
+					source,
+					"destructuring-default.js",
+					parseScript(source, { strict: false }),
+				),
+				{},
+				(_phase, run) => run(),
+			),
+		).not.toThrow();
+	});
+
 	it("classifies exact own slots and scalar-replaces a contained shaped object", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);

@@ -608,7 +608,9 @@ function verifyEdge(
 		if (
 			fn.kernel.valueRepresentation(value) !== fn.kernel.valueRepresentation(parameter)
 		) {
-			fail(`${kind} edge b${from} -> b${target} changes value representation`);
+			fail(
+				`${kind} edge b${from} -> b${target} changes value representation: %${value} (${fn.valueRepresentation(value)}) -> %${parameter} (${fn.valueRepresentation(parameter)})`,
+			);
 		}
 	}
 }

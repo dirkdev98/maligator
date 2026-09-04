@@ -744,6 +744,12 @@ export class CoreLocalOptimizer {
 			for (let index = 0; index < operandCount; index++) {
 				hash = mixHash(hash, this.#fn.kernel.operandAt(operandStart + index));
 			}
+			hash = hashString(
+				hash,
+				this.#fn.valueRepresentation(
+					this.#fn.kernel.resultAt(this.#fn.kernel.instructionResultStart(instruction)),
+				),
+			);
 			hash = hashAttribute(hash, this.#fn.instructionAttributes(instruction));
 			const bucket = available.get(hash);
 			const existing = Array.isArray(bucket)
@@ -786,11 +792,19 @@ export class CoreLocalOptimizer {
 	}
 
 	#sameValueNumber(left: CoreInstructionId, right: CoreInstructionId): boolean {
+		const leftResult = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(left),
+		);
+		const rightResult = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(right),
+		);
 		if (
 			this.#fn.kernel.instructionOpcode(left) !==
 				this.#fn.kernel.instructionOpcode(right) ||
 			this.#fn.kernel.instructionOperandCount(left) !==
 				this.#fn.kernel.instructionOperandCount(right) ||
+			this.#fn.valueRepresentation(leftResult) !==
+				this.#fn.valueRepresentation(rightResult) ||
 			!attributesEqual(
 				this.#fn.instructionAttributes(left),
 				this.#fn.instructionAttributes(right),
@@ -842,7 +856,9 @@ export class CoreLocalOptimizer {
 		if (this.#fn.kernel.blockLive(block) === 0) return;
 		for (const rule of this.#blockRules) {
 			this.#rulesConsidered++;
-			if (rule.run(this, block)) this.#rulesApplied++;
+			if (rule.run(this, block)) {
+				this.#rulesApplied++;
+			}
 		}
 	}
 

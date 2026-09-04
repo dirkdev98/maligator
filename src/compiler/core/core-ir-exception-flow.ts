@@ -70,12 +70,24 @@ export function analyzeCoreLocalExceptionFlows(
 		if (flow !== undefined) candidates.push(flow);
 	}
 	const candidateSources = new Map(candidates.map((flow) => [flow.source, flow.handler]));
+	const handlerOwners = new Map<CoreBlockId, Array<CoreBlockId>>();
+	for (const block of fn.blockIds()) {
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler === undefined) continue;
+		const owners = handlerOwners.get(handler) ?? [];
+		owners.push(block);
+		handlerOwners.set(handler, owners);
+	}
 	return Object.freeze(
-		candidates.filter(({ handler }) =>
-			(cfg.predecessors[handler] ?? []).every(
-				(edge) =>
-					edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
-			),
+		candidates.filter(
+			({ handler }) =>
+				(handlerOwners.get(handler) ?? []).every(
+					(source) => candidateSources.get(source) === handler,
+				) &&
+				(cfg.predecessors[handler] ?? []).every(
+					(edge) =>
+						edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
+				),
 		),
 	);
 }

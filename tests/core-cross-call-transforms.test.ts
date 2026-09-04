@@ -10,6 +10,7 @@ import {
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
@@ -170,6 +171,39 @@ describe("bounded Core cross-call transforms", () => {
 		expect(result.statistics.callerEditSessions).toBe(
 			result.statistics.callerLocalOptimizations,
 		);
+	});
+
+	it("preserves representation joins when inlining represented returns", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const merge = caller.createBlock([{ representation: "boxed" }]);
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		const [result] = caller.appendInstruction(entry, "call", [callee!, receiver!]);
+		caller.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: merge, arguments: [result!] },
+		});
+		const joined = inspectCoreBlockParameters(caller, merge)[0]!.value;
+		caller.setTerminator(merge, { kind: "return", value: joined });
+		const callerId = caller.finish(entry).function;
+
+		const target = new CoreFunctionBuilder(program);
+		const targetEntry = target.createBlock();
+		const [returned] = target.appendInstruction(targetEntry, "createBoolean", [], {
+			attributes: { value: false },
+			outputRepresentations: ["boolean"],
+		});
+		target.setTerminator(targetEntry, { kind: "return", value: returned! });
+		target.finish(targetEntry);
+
+		const transformed = runTransforms(program);
+		expect(callInstructions(program, callerId)).toEqual([]);
+		expect(transformed.statistics.appliedByKind.inline).toBe(1);
+		verifyCoreProgram(program, { stage: "pre-target" });
 	});
 
 	it("retains the callee source chain when inlining", () => {

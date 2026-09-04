@@ -7,7 +7,7 @@
   "code": {
     "compiledFiles": 94101,
     "functionCount": 2800010,
-    "instructionCount": 92848189
+    "instructionCount": 96579322
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",

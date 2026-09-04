@@ -1161,7 +1161,17 @@ function directEntryCandidates(
 			resultRepresentation === "boxed" ||
 			fn.isGenerator ||
 			fn.isAsync ||
-			fn.metadata.isClassConstructor
+			fn.metadata.isClassConstructor ||
+			[...fn.instructionIds()].some((instruction) => {
+				if (fn.instructionKind(instruction) !== "operation") return false;
+				const opcode = fn.instructionOpcodeName(instruction);
+				return (
+					opcode === "loadArgumentCount" ||
+					opcode === "loadArgument" ||
+					opcode === "createArgumentsObject" ||
+					opcode === "createRestArguments"
+				);
+			})
 		)
 			continue;
 		const parameterRepresentations = Object.freeze(

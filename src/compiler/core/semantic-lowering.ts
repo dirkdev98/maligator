@@ -85,10 +85,9 @@ interface CoreFrontendContext {
 
 	/**
 	 * Direct-eval mode: compiling source for a *direct* eval, where free
-	 * (undeclared) identifiers must resolve against the caller's scope. They are
-	 * routed through the `with`-dynamic path (withGet/withSet) so they probe the
-	 * caller scope object the runtime pushes, falling back to the global. Off for
-	 * indirect eval and ordinary programs.
+	 * (undeclared) identifiers may resolve against the caller's scope. Encoded
+	 * caller bindings use the `with`-dynamic path (withGet/withSet) before falling
+	 * back to the global. Off for indirect eval and ordinary programs.
 	 */
 	evalDirect: boolean;
 	/** Inherited syntax/private shape for a dynamically compiled direct eval. */
@@ -10143,7 +10142,7 @@ function compileUnaryExpression(
 		if (binding?.undeclared && !isCompilerIntrinsic(argument.name)) {
 			if (
 				fn.semanticFile.withDynamicNodes.has(argument) ||
-				(program.evalDirect && identifierIsFree(fn, argument))
+				directEvalFreeIdentifierUsesDynamicEnvironment(program, fn, argument)
 			) {
 				// With-intercepted (or a direct-eval free identifier): consult the
 				// active with-object(s)/caller scope; only if none provide it is the
@@ -12623,8 +12622,22 @@ function identifierUsesDynamicEnvironment(
 ): boolean {
 	return (
 		fn.semanticFile.withDynamicNodes.has(identifier) ||
-		(program.evalDirect && identifierIsFree(fn, identifier)) ||
+		directEvalFreeIdentifierUsesDynamicEnvironment(program, fn, identifier) ||
 		isDirectEvalVarBinding(program, fn, identifier)
+	);
+}
+
+function directEvalFreeIdentifierUsesDynamicEnvironment(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	identifier: ESTree.Identifier,
+): boolean {
+	return (
+		program.evalDirect &&
+		identifierIsFree(fn, identifier) &&
+		(!program.directEvalContext.varEnvironmentIsGlobal ||
+			program.directEvalContext.varConflictNames.includes(identifier.name) ||
+			program.directEvalContext.varEnvironmentNames.includes(identifier.name))
 	);
 }
 

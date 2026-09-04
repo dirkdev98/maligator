@@ -1833,7 +1833,7 @@ const simplifyBlockParameters: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
+		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		let editor: CoreEditor | undefined;
 		for (const block of fn.blockIds()) {
 			const incoming = control.predecessors[block] ?? [];
@@ -1889,12 +1889,24 @@ const simplifyBlockParameters: CoreFunctionPass = {
 					replacement === undefined
 						? undefined
 						: fn.kernel.valueDefinitionOwner(replacement);
+				const replacementDominates =
+					replacementDefinitionKind === 0
+						? control.dominates(coreBlockId(replacementDefinitionOwner!), block)
+						: replacementDefinitionKind === 1
+							? control.instructionDominatesBlock(
+									fn.instructionBlock(coreInstructionId(replacementDefinitionOwner!)),
+									block,
+								)
+							: false;
+				const replacementIsAvailable = sameValue
+					? replacementDominates
+					: equivalentConstants &&
+						fn.kernel.valueHandlerUseCount(parameters[index]!.value) === 0;
 				if (
 					!unused &&
 					(replacement === undefined ||
 						replacement === parameters[index]!.value ||
-						(replacementDefinitionKind === 0 && replacementDefinitionOwner === block) ||
-						(!equivalentConstants && !sameValue))
+						!replacementIsAvailable)
 				)
 					continue;
 				removable.push({

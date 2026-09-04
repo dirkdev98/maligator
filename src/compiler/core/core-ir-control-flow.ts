@@ -99,6 +99,28 @@ export function coreTerminatorEdges(
 	}
 }
 
+export function coreValueControlFlowUseMask(fn: CoreFunctionStore): Uint8Array {
+	const appearsOnEdge = new Uint8Array(fn.valueCapacity);
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = coreBlockId(blockIndex);
+		if (!fn.isBlockLive(block)) continue;
+		const handlerStart = fn.kernel.blockHandlerArgumentStart(block);
+		const handlerCount = fn.kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerCount; index++)
+			appearsOnEdge[fn.kernel.handlerArgumentAt(handlerStart + index)] = 1;
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edgeStart + edgeOffset);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edgeStart + edgeOffset);
+			for (let index = 0; index < argumentCount; index++)
+				appearsOnEdge[fn.kernel.operandAt(argumentStart + index)] = 1;
+		}
+	}
+	return appearsOnEdge;
+}
+
 function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boolean {
 	if (fn.instructionKind(fn.blockTerminator(block)) === "throw") return true;
 	for (
