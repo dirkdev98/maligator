@@ -727,7 +727,7 @@ function pendingLocalCandidate(
 											composition: "exclusive",
 											denseArray: Object.freeze({
 												allocation: candidate.allocation,
-												store: candidate.store,
+												write: candidate.write,
 												loopHeader: candidate.loopHeader,
 												length: candidate.length,
 											}),

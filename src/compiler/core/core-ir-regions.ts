@@ -104,7 +104,7 @@ export interface CorePlanStackObjectSpecialization extends CorePlanSpecializatio
 export interface CorePlanDenseArraySpecialization extends CorePlanSpecializationBase<"dense-array-plan"> {
 	readonly denseArray: {
 		readonly allocation: CoreInstructionId;
-		readonly store: CoreInstructionId;
+		readonly write: CoreInstructionId;
 		readonly loopHeader: CoreBlockId;
 		readonly length: number;
 	};

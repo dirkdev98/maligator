@@ -965,7 +965,7 @@ function verifySpecialization(
 			selection.anchors.length !== 1 ||
 			selection.anchors[0] !== dense.allocation ||
 			dense.allocation !== candidate.allocation ||
-			dense.store !== candidate.store ||
+			dense.write !== candidate.write ||
 			dense.loopHeader !== candidate.loopHeader ||
 			dense.length !== candidate.length ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
