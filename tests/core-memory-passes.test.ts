@@ -101,6 +101,40 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		).toBeUndefined();
 	});
 
+	it("skips aggregate scalar replacement for an unrelated property base", () => {
+		const core = new CoreProgram(coreOpcodeRegistry, {
+			globalCount: 1,
+			stringConstants: [[0x78]],
+		});
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [one!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [object!], {
+			attributes: { index: 0 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [one!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		builder.finish(entry);
+
+		const optimized = optimizeCore(
+			{ program: core, context },
+			{ instrumentation: "counters", mode: "full" },
+		);
+
+		expect(
+			optimized.report.passes.find(
+				({ pass }) => pass === "scalar-replace-contained-aggregates",
+			),
+		).toBeUndefined();
+	});
+
 	it("scalar-replaces operand-rooted shaped-object updates", () => {
 		const source = `globalThis.update = function update(value) {
 			const point = { x: value, y: value + 1 };
