@@ -1,7 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync } from "node:fs";
+import * as path from "node:path";
 import type { NativeBuildContext } from "./native-build-context.ts";
 
 const DEFAULT_NATIVE_BUILD_JOBS = 8;
+let resourceReportSerial = 0;
 
 export interface NativeCommandOptions {
 	cwd?: string;
@@ -54,21 +57,36 @@ function measuredCommand(
 	args: ReadonlyArray<string>,
 	options: NativeCommandOptions & { input?: string },
 ): Buffer {
+	const reportPath = path.join(
+		context.cacheDirectory,
+		`.native-resource-${process.pid}-${resourceReportSerial++}.txt`,
+	);
 	const timeArguments =
-		process.platform === "darwin" ? ["-l", tool, ...args] : ["-v", tool, ...args];
-	const result = spawnSync("/usr/bin/time", timeArguments, {
-		cwd: options.cwd,
-		env: options.env ?? context.environment,
-		input: options.input,
-		maxBuffer: 64 * 1024 * 1024,
-	});
-	if (result.error !== undefined) throw result.error;
-	const stdout = result.stdout ?? Buffer.alloc(0);
-	const stderr = (result.stderr ?? Buffer.alloc(0)).toString();
+		process.platform === "darwin"
+			? ["-l", "-o", reportPath, tool, ...args]
+			: ["-v", "-o", reportPath, tool, ...args];
+	let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+	let failure:
+		| (Error & { status?: number | null; stdout?: Buffer; stderr?: Buffer })
+		| undefined;
+	try {
+		stdout = execFileSync("/usr/bin/time", timeArguments, {
+			cwd: options.cwd,
+			env: options.env ?? context.environment,
+			input: options.input,
+			maxBuffer: 64 * 1024 * 1024,
+			stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
+		});
+	} catch (error) {
+		failure = error as typeof failure;
+		stdout = failure?.stdout ?? stdout;
+	}
+	const report = readFileSync(reportPath, "utf8");
+	rmSync(reportPath, { force: true });
 	const match =
 		process.platform === "darwin"
-			? stderr.match(/(^|\n)\s*([0-9]+)\s+maximum resident set size(?:\n|$)/)
-			: stderr.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
+			? report.match(/(^|\n)\s*([0-9]+)\s+maximum resident set size(?:\n|$)/)
+			: report.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
 	const raw = Number(match?.[process.platform === "darwin" ? 2 : 1]);
 	if (!Number.isSafeInteger(raw) || raw <= 0) {
 		throw new Error(`native resource measurement omitted peak RSS for ${tool}`);
@@ -79,14 +97,14 @@ function measuredCommand(
 		cwd: options.cwd,
 		peakRssBytes: process.platform === "darwin" ? raw : raw * 1024,
 	});
-	if (result.status !== 0) {
+	if (failure !== undefined) {
+		const stderr = (failure.stderr ?? Buffer.alloc(0)).toString();
 		throw new Error(
-			`${tool} failed (${String(result.status)}):\n${stdout.toString()}\n${stderr}`,
+			`${tool} failed (${String(failure.status)}):\n${stdout.toString()}\n${stderr}`,
 		);
 	}
 	if (options.verbose) {
 		if (stdout.length > 0) process.stderr.write(stdout);
-		if (stderr.length > 0) process.stderr.write(stderr);
 	}
 	return stdout;
 }
