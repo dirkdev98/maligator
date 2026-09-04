@@ -1392,6 +1392,7 @@ function denseArrayCandidates(
 				readonly value: CoreValueId;
 				readonly receiverPosition: number;
 				readonly property?: CoreInstructionId;
+				readonly requiresNumericValue: boolean;
 			}>((instruction) => {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (
@@ -1406,6 +1407,7 @@ function denseArrayCandidates(
 							instruction,
 							value: instructionOperand(fn, instruction, 2)!,
 							receiverPosition: 0,
+							requiresNumericValue: true,
 						},
 					];
 				}
@@ -1420,6 +1422,7 @@ function denseArrayCandidates(
 							instruction,
 							value: instructionOperand(fn, instruction, 1)!,
 							receiverPosition: 0,
+							requiresNumericValue: false,
 						},
 					];
 				}
@@ -1446,6 +1449,7 @@ function denseArrayCandidates(
 								value: instructionOperand(fn, instruction, 2)!,
 								receiverPosition: 1,
 								property,
+								requiresNumericValue: false,
 							},
 						];
 					}
@@ -1455,7 +1459,11 @@ function denseArrayCandidates(
 		);
 		if (writes.length !== 1) continue;
 		const write = writes[0]!;
-		if (!provenNumericValue(fn, write.value, roots, new Set([counterRoot]))) continue;
+		if (
+			write.requiresNumericValue &&
+			!provenNumericValue(fn, write.value, roots, new Set([counterRoot]))
+		)
+			continue;
 
 		let safe = true;
 		for (const block of control.reachable) {
