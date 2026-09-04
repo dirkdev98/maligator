@@ -212,58 +212,6 @@ bool mal_array_object_dense_append_many(
     return true;
 }
 
-bool mal_array_object_contained_dense_push(
-    MalArrayObject *array, const MalValue *values, u32 count
-) {
-    assert(!array->dense_deopted);
-    assert(array->object.extensible);
-    assert(array->length_writable);
-    assert(array->dense_count == array->length);
-    assert(array->length == 0 || array->elements != nullptr);
-
-    u32 start = array->length;
-    if (count > UINT32_MAX - start) {
-        return false;
-    }
-    if (count == 0) {
-        return true;
-    }
-    u32 end = start + count;
-    if (!mal_array_object_dense_reserve(array, end)) {
-        abort();
-    }
-    for (u32 i = 0; i < count; i++) {
-        MalValue value = values[i];
-        array->elements[start + i] = value;
-        mal_gc_card(&array->object.header, value);
-    }
-    array->dense_count = end;
-    array->length = end;
-    return true;
-}
-
-bool mal_array_object_contained_dense_pop(
-    MalArrayObject *array, MalValue *value_out
-) {
-    assert(!array->dense_deopted);
-    assert(array->object.extensible);
-    assert(array->length_writable);
-    assert(array->dense_count == array->length);
-    assert(array->length == 0 || array->elements != nullptr);
-
-    if (array->length == 0) {
-        return false;
-    }
-    u32 index = array->length - 1;
-    MalValue value = array->elements[index];
-    // Reducing dense_count removes the slot from the traced region.
-    mal_gc_write_barrier(value);
-    array->dense_count = index;
-    array->length = index;
-    *value_out = value;
-    return true;
-}
-
 static bool mal_array_object_dense_build_prepare(
     MalArrayObject *array, u32 start, u32 count
 ) {
