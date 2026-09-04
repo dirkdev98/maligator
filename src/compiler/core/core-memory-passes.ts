@@ -387,8 +387,12 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 }
 
 function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
+	let allocation = false;
+	let propertyConsumer = false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		if (descriptor.allocation !== undefined) allocation = true;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (
 			fn.kernel.instructionResultCount(instruction) === 1 &&
@@ -400,8 +404,9 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 			return true;
 		if (CONTAINED_PROPERTY_ACCESS_OPCODES.has(opcode)) {
 			const base = instructionOperandAt(fn, instruction, 0);
-			if (base !== undefined && mayResolveToAllocation(fn, base)) return true;
+			if (base !== undefined && mayResolveToAllocation(fn, base)) propertyConsumer = true;
 		}
+		if (allocation && propertyConsumer) return true;
 	}
 	return false;
 }
