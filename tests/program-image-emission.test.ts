@@ -1260,7 +1260,7 @@ describe("native update-expression representation", () => {
 		).toEqual({ kind: "exact-array-length" });
 	});
 
-	it("carries exact local TypedArray loads into native code with a boxed-key fallback", () => {
+	it("carries exact local TypedArray accesses into native code with boxed-key fallbacks", () => {
 		const source = `
 			function read(key) {
 				const values = new Uint32Array(4);
@@ -1274,18 +1274,27 @@ describe("native update-expression representation", () => {
 			fn.instructions.flatMap((instruction, instructionIndex) => {
 				const plan =
 					definition.native.functions[functionIndex]!.instructions[instructionIndex];
-				return instruction.opcode === "LOAD_PROPERTY" &&
+				return (instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
 					plan?.kind === "exact-typed-array-element"
-					? [plan]
+					? [{ opcode: instruction.opcode, plan }]
 					: [];
 			}),
 		);
 		expect(specialized).toEqual([
-			{ kind: "exact-typed-array-element", elementKind: "Uint32Array" },
+			{
+				opcode: "STORE_PROPERTY",
+				plan: { kind: "exact-typed-array-element", elementKind: "Uint32Array" },
+			},
+			{
+				opcode: "LOAD_PROPERTY",
+				plan: { kind: "exact-typed-array-element", elementKind: "Uint32Array" },
+			},
 		]);
 
 		const emitted = emitProgramImage(definition, { compiled: true });
 		expect(emitted).toContain("mal_vm_exact_numeric_typed_array_load(");
+		expect(emitted).toContain("mal_vm_numeric_typed_array_store_known_receiver(");
 		expect(emitted).toContain("if (mal_ops_is_number(");
 		expect(emitted).toContain("mal_vm_op_load_property_ic(");
 

@@ -1292,6 +1292,13 @@ function nativeInstructionPlanFromExecution(
 							kind: "exact-typed-array-element",
 							elementKind: instruction.exactTypedArrayKind,
 						};
+		case "storeProperty":
+			return instruction.exactTypedArrayKind === undefined
+				? undefined
+				: {
+						kind: "exact-typed-array-element",
+						elementKind: instruction.exactTypedArrayKind,
+					};
 		case "storePropertyStatic":
 			return instruction.exactOwnSlot === undefined
 				? undefined
