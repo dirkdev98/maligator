@@ -2068,6 +2068,10 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	foldRedundantTdzChecks,
 ];
 
+export const CORE_MANDATORY_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	canonicalizeBlockParameters,
+];
+
 export const CORE_CONSTRUCTION_ANNOTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 ];

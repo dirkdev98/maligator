@@ -16,6 +16,7 @@ import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimize
 import {
 	CORE_LATE_CANONICALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
+	CORE_MANDATORY_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
 import {
 	CORE_MEMORY_PASSES,
@@ -50,7 +51,9 @@ export interface CoreCrossCallFunctionOptimizationResult {
 
 export class CoreFunctionOptimizationResources {
 	readonly localRules: CoreLocalRuleRegistry;
+	readonly mandatoryLocalRules: CoreLocalRuleRegistry;
 	readonly featureIndex: CoreFunctionFeatureIndex;
+	readonly mandatoryFeatureIndex: CoreFunctionFeatureIndex;
 	readonly specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly scratch: CoreAnalysisScratchPool;
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
@@ -58,7 +61,16 @@ export class CoreFunctionOptimizationResources {
 
 	constructor(program: CoreProgram) {
 		this.localRules = new CoreLocalRuleRegistry(program);
+		this.mandatoryLocalRules = new CoreLocalRuleRegistry(
+			program,
+			[],
+			"mandatory-cleanup",
+		);
 		this.featureIndex = new CoreFunctionFeatureIndex(program, this.localRules.dispatch);
+		this.mandatoryFeatureIndex = new CoreFunctionFeatureIndex(
+			program,
+			this.mandatoryLocalRules.dispatch,
+		);
 		this.specializationFeatureIndex = coreLocalSpecializationFeatureIndex(program);
 		this.scratch = new CoreAnalysisScratchPool();
 	}
@@ -112,11 +124,14 @@ export class CoreFunctionOptimizationSession {
 		this.#context = context;
 		this.#analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
 		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
-		this.#localRules = resources.localRules;
+		this.#benchmarkAblation = options.benchmarkAblation;
+		const ablateLocalOptimization = this.#ablates("o1-scalar-structural");
+		this.#localRules = ablateLocalOptimization
+			? resources.mandatoryLocalRules
+			: resources.localRules;
 		this.#report = report;
 		this.#verification = options.verification ?? "boundary";
 		this.#crossCall = options.crossCallWave !== undefined;
-		this.#benchmarkAblation = options.benchmarkAblation;
 		this.#passes = new CoreFunctionPassScheduler(
 			program,
 			context,
@@ -126,9 +141,14 @@ export class CoreFunctionOptimizationSession {
 			{
 				verification: options.verification,
 				optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
-				localOptimization: !this.#ablates("o1-scalar-structural"),
-				featureIndex: resources.featureIndex,
-				localRules: resources.localRules,
+				localOptimization: true,
+				localOptimizationReportName: ablateLocalOptimization
+					? "mandatory-local-cleanup"
+					: undefined,
+				featureIndex: ablateLocalOptimization
+					? resources.mandatoryFeatureIndex
+					: resources.featureIndex,
+				localRules: this.#localRules,
 			},
 		);
 	}
@@ -145,7 +165,10 @@ export class CoreFunctionOptimizationSession {
 		this.#optimized = true;
 		runPhase("post-barrier-local-optimization", () =>
 			this.#ablates("o1-scalar-structural")
-				? []
+				? this.#passes.runComponent(
+						"canonicalize",
+						CORE_MANDATORY_CANONICALIZATION_PASSES,
+					)
 				: this.#passes.runComponent("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
 		);
 		runPhase("advanced-cfg-optimization", () =>

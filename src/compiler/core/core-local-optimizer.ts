@@ -276,10 +276,11 @@ export class CoreLocalRuleRegistry {
 	constructor(
 		program: CoreProgram,
 		additionalRules: ReadonlyArray<CoreLocalInstructionRule> = [],
+		profile: "full" | "mandatory-cleanup" = "full",
 	) {
 		this.#opcodeRegistry = program.registry;
 		this.moveOpcode = program.registry.get("move")?.id;
-		this.rules = [
+		const optimizationRules: ReadonlyArray<CoreLocalInstructionRule> = [
 			...(this.moveOpcode === undefined
 				? []
 				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.moveOpcode] }]),
@@ -315,7 +316,12 @@ export class CoreLocalRuleRegistry {
 			},
 			...additionalRules,
 		];
-		this.blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
+		this.rules =
+			profile === "full"
+				? optimizationRules
+				: optimizationRules.filter(({ name }) => name === COPY_PROPAGATION_RULE.name);
+		this.blockRules =
+			profile === "full" ? [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE] : [];
 		if (this.rules.length > 31) {
 			throw new Error("Core local optimizer supports at most 31 opcode rules");
 		}

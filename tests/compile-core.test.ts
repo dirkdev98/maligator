@@ -3,6 +3,13 @@ import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import {
+	CORE_CONSTRUCTION_ANNOTATION_PASSES,
+	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+	CORE_LATE_CANONICALIZATION_PASSES,
+	CORE_LOCAL_CANONICALIZATION_PASSES,
+	CORE_MANDATORY_CANONICALIZATION_PASSES,
+} from "../src/compiler/core/core-local-passes.ts";
+import {
 	CORE_MEMORY_SSA_PASSES,
 	CORE_PROVENANCE_PASSES,
 } from "../src/compiler/core/core-memory-passes.ts";
@@ -103,6 +110,19 @@ describe("compileSemanticProgramToProgramImage", () => {
 			switch (family) {
 				case "o1-scalar-structural":
 					expect(reported.has("fused-local-optimizer")).toBe(false);
+					expect(reported.has("mandatory-local-cleanup")).toBe(true);
+					expect(
+						[...reported].filter(
+							(name) =>
+								passNames(CORE_LOCAL_CANONICALIZATION_PASSES).has(name) &&
+								!passNames([
+									...CORE_CONSTRUCTION_ANNOTATION_PASSES,
+									...CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+									...CORE_LATE_CANONICALIZATION_PASSES,
+									...CORE_MANDATORY_CANONICALIZATION_PASSES,
+								]).has(name),
+						),
+					).toEqual([]);
 					break;
 				case "cfg-loop-licm-pre":
 					expect(intersects(reported, passNames(CORE_CONTROL_FLOW_PASSES))).toBe(false);

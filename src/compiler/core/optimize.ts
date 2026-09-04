@@ -111,6 +111,7 @@ export function optimizeCore(
 	measurePhase("construction-cleanup", () => undefined);
 	{
 		const resources = new CoreFunctionOptimizationResources(compilation.program);
+		const ablateLocalOptimization = ablatedFamily === "o1-scalar-structural";
 		const phaseTimes = new Map<CoreOptimizationPhase, number>();
 		const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
 			if (!reportBuilder.collectsPhases) return run();
@@ -155,9 +156,16 @@ export function optimizeCore(
 				{
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					localOptimization: ablatedFamily !== "o1-scalar-structural",
-					featureIndex: resources.featureIndex,
-					localRules: resources.localRules,
+					localOptimization: true,
+					localOptimizationReportName: ablateLocalOptimization
+						? "mandatory-local-cleanup"
+						: undefined,
+					featureIndex: ablateLocalOptimization
+						? resources.mandatoryFeatureIndex
+						: resources.featureIndex,
+					localRules: ablateLocalOptimization
+						? resources.mandatoryLocalRules
+						: resources.localRules,
 				},
 			);
 			runFunctionPhase("structural-cfg-optimization", () =>

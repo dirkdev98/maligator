@@ -34,6 +34,7 @@ export interface CoreFunctionPassSchedulerOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly localOptimization?: boolean;
+	readonly localOptimizationReportName?: string;
 	readonly featureIndex?: CoreFunctionFeatureIndex;
 	readonly localRules?: CoreLocalRuleRegistry;
 }
@@ -55,6 +56,7 @@ export class CoreFunctionPassScheduler {
 	readonly #verification: CoreVerificationProfile;
 	readonly #optionalMaxRunsPerWorkItem: number;
 	readonly #localOptimization: boolean;
+	readonly #localOptimizationReportName: string;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
 	readonly #passOpcodeIds = new WeakMap<CoreFunctionPass, ReadonlyArray<CoreOpcodeId>>();
@@ -85,6 +87,8 @@ export class CoreFunctionPassScheduler {
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
+		this.#localOptimizationReportName =
+			options.localOptimizationReportName ?? "fused-local-optimizer";
 		this.#localRules = this.#localOptimization
 			? (options.localRules ?? new CoreLocalRuleRegistry(program))
 			: undefined;
@@ -203,14 +207,17 @@ export class CoreFunctionPassScheduler {
 				const result = new CoreLocalOptimizer(this.#program, this.#functionId, {
 					ruleRegistry: this.#localRules!,
 				}).run(pending.full ? undefined : pending.changes);
-				this.#report.recordLocalOptimizerWork("fused-local-optimizer", result.statistics);
+				this.#report.recordLocalOptimizerWork(
+					this.#localOptimizationReportName,
+					result.statistics,
+				);
 				const changes = result.changes;
 				if (changes === undefined || changes.edits === 0) continue;
 				appliedChanges.push(changes);
 				if (this.#verification === "per-pass") {
 					verifyCoreChangeSet(this.#program, changes, {
 						stage,
-						pass: "fused-local-optimizer",
+						pass: this.#localOptimizationReportName,
 						functionIndex: changes.function,
 					});
 				}
