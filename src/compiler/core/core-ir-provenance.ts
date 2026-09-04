@@ -765,7 +765,7 @@ export interface CoreContainedDenseArrayCandidate extends CoreLocalSpecializatio
 export interface CoreFreshDenseArrayCandidate extends CoreLocalSpecializationCandidateBase<"dense-array"> {
 	readonly mode: "fresh-indexed-fill";
 	readonly allocation: CoreInstructionId;
-	readonly write: CoreInstructionId;
+	readonly store: CoreInstructionId;
 	readonly loopHeader: CoreBlockId;
 	readonly length: number;
 }
@@ -1386,32 +1386,21 @@ function denseArrayCandidates(
 		}
 		const counterRoot = roots.get(counter) ?? counter;
 		if ((roots.get(incrementInput) ?? incrementInput) !== counterRoot) continue;
-		const writes = [...loop.blocks].flatMap((block) =>
-			[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (
-					opcode === "storeProperty" &&
+		const stores = [...loop.blocks].flatMap((block) =>
+			[...fn.bodyInstructionIds(block)].filter((instruction) => {
+				if (fn.instructionOpcodeName(instruction) !== "storeProperty") return false;
+				return (
 					instructionOperandCount(fn, instruction) === 3 &&
 					aliasesAllocation(instructionOperand(fn, instruction, 0)!) &&
 					(roots.get(instructionOperand(fn, instruction, 1)!) ??
 						instructionOperand(fn, instruction, 1)!) === counterRoot
-				) {
-					return [{ instruction, value: instructionOperand(fn, instruction, 2)! }];
-				}
-				if (
-					opcode === "callBuiltin" &&
-					fn.instructionAttributes(instruction).operation === "Array.prototype.push" &&
-					instructionOperandCount(fn, instruction) === 2 &&
-					aliasesAllocation(instructionOperand(fn, instruction, 0)!)
-				) {
-					return [{ instruction, value: instructionOperand(fn, instruction, 1)! }];
-				}
-				return [];
+				);
 			}),
 		);
-		if (writes.length !== 1) continue;
-		const write = writes[0]!;
-		if (!provenNumericValue(fn, write.value, roots, new Set([counterRoot]))) continue;
+		if (stores.length !== 1) continue;
+		const store = stores[0]!;
+		const storeValue = instructionOperand(fn, store, 2)!;
+		if (!provenNumericValue(fn, storeValue, roots, new Set([counterRoot]))) continue;
 
 		let safe = true;
 		for (const block of control.reachable) {
@@ -1425,7 +1414,7 @@ function denseArrayCandidates(
 						(opcode === "move" && position === 0) ||
 						(opcode === "throwIfTdz" && position === 0) ||
 						opcode === "rootUse" ||
-						(instruction === write.instruction && position === 0) ||
+						(instruction === store && position === 0) ||
 						control.dominates(exitBlock, block)
 					) {
 						continue;
@@ -1450,17 +1439,17 @@ function denseArrayCandidates(
 		}
 		if (!safe) continue;
 		const instructions = Object.freeze(
-			[layout.instruction, write.instruction].sort((left, right) => left - right),
+			[layout.instruction, store].sort((left, right) => left - right),
 		);
 		candidates.push(
 			Object.freeze({
-				key: `dense-array:${fn.id}:${layout.instruction}:${write.instruction}:${length}`,
+				key: `dense-array:${fn.id}:${layout.instruction}:${store}:${length}`,
 				kind: "dense-array",
 				mode: "fresh-indexed-fill",
 				function: fn.id,
 				root: layout.instruction,
 				allocation: layout.instruction,
-				write: write.instruction,
+				store,
 				loopHeader: loop.header,
 				length,
 				instructions,
