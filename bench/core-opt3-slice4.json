@@ -1,0 +1,94 @@
+{
+	"schemaVersion": 1,
+	"generatedAt": "2026-09-04",
+	"source": {
+		"slice0": "cfb13ff301bc38c1f327c881e50d592d8a282505",
+		"javascriptImprovement": "95b98307",
+		"expressImprovement": "1e4f677e",
+		"generatedOutputImprovement": "de5c185c"
+	},
+	"familyAttribution": "bench/core-opt3-slice4-attribution.json",
+	"javascript": {
+		"change": "Factory-returned closures participate in guarded direct-call specialization.",
+		"pairedSamples": 7,
+		"objectsPhaseImprovementPercent": 1.296,
+		"objectsPhaseConfidenceIntervalPercent": [0.556, 1.651],
+		"binaryChangePercent": 0,
+		"observableChecksumsMatched": true,
+		"rawComparison": ".cache/bench-comparisons/2026-09-04T04-13-50-442Z.json"
+	},
+	"express": {
+		"change": "Function and callable own-shape slots use the shared out-of-line property cache while preserving generic mutation, accessor and proxy paths.",
+		"pairedSamples": 7,
+		"throughputImprovementPercent": {
+			"routes": 2.365,
+			"json": 1.26,
+			"form": 2.039
+		},
+		"p99RegressionPercent": {
+			"routes": -1.277,
+			"json": -0.384,
+			"form": -0.487
+		},
+		"bareThroughputChangePercent": 0.38,
+		"binaryChangePercent": 0,
+		"observableChecksumsMatched": true,
+		"rawComparison": ".cache/bench-comparisons/2026-09-04T04-58-13-176Z.json"
+	},
+	"generatedOutput": {
+		"change": "Repeated generated program-image initializers use C preprocessor row templates without changing the runtime layout.",
+		"slice0ToCurrent": {
+			"javascript": {
+				"generatedCBytes": [336394, 294313],
+				"generatedCImprovementPercent": 12.509,
+				"objectBytes": [298576, 295744],
+				"objectImprovementPercent": 0.949,
+				"binaryBytes": [2532632, 2532632],
+				"binaryChangePercent": 0
+			},
+			"express": {
+				"generatedCBytes": [12041504, 10745530],
+				"generatedCImprovementPercent": 10.763,
+				"objectBytes": [6419088, 6411768],
+				"objectImprovementPercent": 0.114,
+				"binaryBytes": [10442608, 10425808],
+				"binaryImprovementPercent": 0.161
+			}
+		},
+		"javascriptRuntimeGuard": {
+			"pairedSamples": 7,
+			"wallChangePercent": 0.198,
+			"wallConfidenceIntervalPercent": [-0.114, 0.524],
+			"classification": "unchanged",
+			"allPhaseClassifications": "unchanged",
+			"binaryChangePercent": 0,
+			"rawComparison": ".cache/bench-comparisons/2026-09-04T05-21-26-851Z.json"
+		},
+		"httpRuntimeGuard": {
+			"pairedSamples": 5,
+			"bareThroughputChangePercent": -0.119,
+			"routesThroughputChangePercent": -0.217,
+			"jsonThroughputChangePercent": 0.925,
+			"formThroughputChangePercent": -0.16,
+			"binaryChangePercent": 0,
+			"classifications": "inconclusive inside the 2% throughput threshold; no median exceeded 1%",
+			"expressCCompilationImprovementPercent": 16.565,
+			"rawComparison": ".cache/bench-comparisons/2026-09-04T05-29-28-878Z.json"
+		},
+		"observableChecksumsMatched": true
+	},
+	"verification": {
+		"programImageEmission": "113 passed",
+		"runtimeMechanicsAndFunctionOwnSlotCache": "4 passed",
+		"profile": "6 passed",
+		"typeCheck": "passed",
+		"lintCi": "passed",
+		"diffCheck": "passed"
+	},
+	"acceptance": {
+		"threeIndependentImprovements": "pass",
+		"generatedCOrNativeBuildAtLeastTenPercent": "pass",
+		"runtimeGuardForOutputCompaction": "pass",
+		"completeSlice0RelativeOutputGates": "pending final repeated production benchmark in Slice 5"
+	}
+}

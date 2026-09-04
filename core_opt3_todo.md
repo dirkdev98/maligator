@@ -938,6 +938,25 @@ perf(core): improve measured JavaScript output path
 perf(core): improve measured Express output path
 perf(native): reduce measured generated output cost
 bench(core): record optimizer output profitability
+
+Recorded implementation result (2026-09-04)
+
+Slice 4 produced three independently measured output changes. Factory-returned
+closures now expose guarded direct-call candidates (`95b98307`), improving the
+JavaScript objects phase by 1.296% in seven paired samples with a 0.556% to 1.651%
+improvement interval and no binary growth. Function and callable own-shape slots now
+use the shared property-cache path (`1e4f677e`), improving Express routes by 2.365%,
+JSON by 1.260% and form by 2.039% in seven paired samples, with no binary growth or
+p99 regression. Compact generated program-image row templates (`de5c185c`) reduce
+JavaScript generated C by 12.509% and Express generated C by 10.763% relative to
+Slice 0. Its isolated seven-pair JavaScript and five-pair HTTP guards found no
+runtime or binary regression; the Express C-compilation median improved 16.565%.
+
+The family ledger is `bench/core-opt3-slice4-attribution.json` and the consolidated
+implementation evidence is `bench/core-opt3-slice4.json`. Observable checksums match
+throughout. The final Slice 0-relative runtime targets remain acceptance gates for
+Slice 5 rather than claims inferred from the incremental comparisons.
+
 Slice 5 — Optimization and completion
 Goal
 
