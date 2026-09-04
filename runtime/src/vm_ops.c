@@ -4979,8 +4979,9 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
         return mal_ops_number_value((f64) ((const MalArrayObject *) mal_value_to_heap(object_value))->length);
     }
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
-        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+    MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
+    if (slot_object != nullptr) {
+        MalObject *object = slot_object;
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
         if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {

@@ -1009,6 +1009,14 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
     return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
 }
 
+/** Function objects embed MalObject and use ordinary own-property shape slots. */
+static inline MalObject *mal_vm_as_own_slot_object(MalValue v) {
+    if ((v & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
+        return (MalObject *) mal_value_to_heap(v);
+    }
+    return mal_vm_as_object(v);
+}
+
 /** Return the exact precompiled literal-shape case for a plain object, or -1. */
 static inline i32 mal_vm_select_shape_case(
     MalVm *vm, MalValue receiver, i32 candidate_count, const i32 *candidates
