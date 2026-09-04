@@ -9,7 +9,11 @@ import {
 	CoreFunctionOptimizationSession,
 } from "./core-function-optimization-session.ts";
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
-import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
+import {
+	buildCoreOptimizationPlan,
+	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
+	DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+} from "./core-ir-region-selection.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -27,6 +31,7 @@ import type {
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
+import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
@@ -40,8 +45,7 @@ export interface OptimizeCoreOptions {
 
 interface CoreOptimizerWorkProfile {
 	readonly optionalMaxRunsPerWorkItem: number;
-	readonly crossCallBudgets?: CoreTransformBudgetLimits;
-	readonly specializationBudgets?: CoreTransformBudgetLimits;
+	readonly o3Budgets?: CoreTransformBudgetLimits;
 }
 
 const DEVELOPMENT_TRANSFORM_BUDGETS: CoreTransformBudgetLimits = Object.freeze({
@@ -58,8 +62,7 @@ const CORE_OPTIMIZER_WORK_PROFILES: Readonly<
 > = Object.freeze({
 	development: Object.freeze({
 		optionalMaxRunsPerWorkItem: 1,
-		crossCallBudgets: DEVELOPMENT_TRANSFORM_BUDGETS,
-		specializationBudgets: DEVELOPMENT_TRANSFORM_BUDGETS,
+		o3Budgets: DEVELOPMENT_TRANSFORM_BUDGETS,
 	}),
 	full: Object.freeze({ optionalMaxRunsPerWorkItem: Number.MAX_SAFE_INTEGER }),
 });
@@ -249,6 +252,9 @@ export function optimizeCore(
 	const initialFlow = measurePhase("program-flow", () =>
 		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
 	);
+	const o3Candidates = new CoreTransformCandidateService(
+		profile.o3Budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+	);
 	const crossCall = measurePhase("cross-call-transforms", () =>
 		ablatedFamily === "inlining-cross-call"
 			? emptyCoreCrossCallTransformResult(initialFlow)
@@ -269,8 +275,9 @@ export function optimizeCore(
 								benchmarkAblation: ablatedFamily,
 							},
 						).optimizeCrossCall(editor),
-					profile.crossCallBudgets,
+					profile.o3Budgets,
 					initialFlow,
+					o3Candidates,
 				),
 	);
 	reportBuilder.recordTransformWork(crossCall.statistics);
@@ -299,7 +306,8 @@ export function optimizeCore(
 			: reachability.liveFunctions,
 		{
 			context: compilation.context,
-			budgets: profile.specializationBudgets,
+			candidateService: o3Candidates,
+			perFunctionExpansions: CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 			localInputs: [...finalLocalPlanInputs.values()],
 			discoverCandidates: ablatedFamily !== "late-specialization-direct-entry",
 			...(reportBuilder.collectsPhases

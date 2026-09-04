@@ -60,12 +60,14 @@ import type {
 export const DEFAULT_CORE_SPECIALIZATION_BUDGETS: CoreTransformBudgetLimits =
 	Object.freeze({
 		perSiteExpansions: 1,
-		perCallerExpansions: 4,
+		perCallerExpansions: 64,
 		perCallerGeneratedCode: 512,
 		perCallerCompilerWork: 2_048,
 		programGeneratedCode: 4_096,
 		programCompilerWork: 32_768,
 	});
+
+export const CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION = 4;
 
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
@@ -865,10 +867,16 @@ function pendingLocalCandidate(
 																			const consumer = load.consumer;
 																			if (consumer === undefined) return base;
 																			if (consumer.kind === "length") {
-																				return { ...base, consumer: { ...consumer } };
+																				return {
+																					...base,
+																					consumer: { ...consumer },
+																				};
 																			}
 																			if (consumer.kind === "number") {
-																				return { ...base, consumer: { ...consumer } };
+																				return {
+																					...base,
+																					consumer: { ...consumer },
+																				};
 																			}
 																			return {
 																				...base,
@@ -924,7 +932,9 @@ function pendingLocalCandidate(
 																				call: candidate.call,
 																				...(candidate.targetFunction === undefined
 																					? {}
-																					: { targetFunction: candidate.targetFunction }),
+																					: {
+																							targetFunction: candidate.targetFunction,
+																						}),
 																			}),
 																		}
 																	: {
@@ -940,7 +950,9 @@ function pendingLocalCandidate(
 																				operation: candidate.operation,
 																				...(candidate.exactReceiver === undefined
 																					? {}
-																					: { exactReceiver: candidate.exactReceiver }),
+																					: {
+																							exactReceiver: candidate.exactReceiver,
+																						}),
 																			}),
 																		},
 	);
@@ -1207,7 +1219,10 @@ function claim(
 	const owned =
 		claimed.get(selection.function) ?? new Map<CoreInstructionId, ClaimState>();
 	for (const instruction of selection.claimedInstructions) {
-		const state = owned.get(instruction) ?? { exclusive: false, overlays: new Set() };
+		const state = owned.get(instruction) ?? {
+			exclusive: false,
+			overlays: new Set(),
+		};
 		if (selection.composition === "exclusive") state.exclusive = true;
 		else state.overlays.add(selection.kind);
 		owned.set(instruction, state);
@@ -1217,6 +1232,8 @@ function claim(
 
 export interface BuildCoreOptimizationPlanOptions {
 	readonly budgets?: CoreTransformBudgetLimits;
+	readonly candidateService?: CoreTransformCandidateService;
+	readonly perFunctionExpansions?: number;
 	readonly context?: CoreCompilationContext;
 	readonly localInputs?: ReadonlyArray<CoreLocalOptimizationPlanInput>;
 	readonly discoverCandidates?: boolean;
@@ -1272,9 +1289,13 @@ export function buildCoreOptimizationPlan(
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
 
-	const service = new CoreTransformCandidateService(
-		options.budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
-	);
+	const service =
+		options.candidateService ??
+		new CoreTransformCandidateService(
+			options.budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+		);
+	service.beginPhase();
+	const budgetBaseline = service.statistics();
 	const byBudget = new WeakMap<CoreTransformCandidate, PendingCandidate>();
 	const discoveredByKind: Record<string, number> = {};
 	for (const candidate of pending) {
@@ -1283,12 +1304,32 @@ export function buildCoreOptimizationPlan(
 	}
 	const selectedByKind: Record<string, number> = {};
 	const declinedByPlanReason: Record<string, number> = {};
+	const selectedExpansionsByFunction = new Map<CoreFunctionId, number>();
+	const perFunctionExpansions =
+		options.perFunctionExpansions ??
+		options.budgets?.perCallerExpansions ??
+		CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION;
 	const claimed = new Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>();
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	for (let budget = service.next(); budget !== undefined; budget = service.next()) {
+		const exhausted = service.programBudgetExhaustionReason();
+		if (exhausted !== undefined) {
+			service.recordDeclined(exhausted);
+			const discarded = service.discardPending(exhausted) + 1;
+			declinedByPlanReason[exhausted] =
+				(declinedByPlanReason[exhausted] ?? 0) + discarded;
+			break;
+		}
 		const candidate = byBudget.get(budget)!;
 		let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
+		if (
+			reason === undefined &&
+			budget.expansive &&
+			(selectedExpansionsByFunction.get(budget.caller) ?? 0) >= perFunctionExpansions
+		) {
+			reason = "expansion-limit";
+		}
 		if (
 			reason === undefined &&
 			!isPendingDirectEntry(candidate) &&
@@ -1302,6 +1343,12 @@ export function buildCoreOptimizationPlan(
 			continue;
 		}
 		service.recordApplied(budget);
+		if (budget.expansive) {
+			selectedExpansionsByFunction.set(
+				budget.caller,
+				(selectedExpansionsByFunction.get(budget.caller) ?? 0) + 1,
+			);
+		}
 		increment(selectedByKind, budget.kind);
 		if (isPendingDirectEntry(candidate)) {
 			const entries = directEntriesByFunction.get(candidate.function) ?? [];
@@ -1334,7 +1381,7 @@ export function buildCoreOptimizationPlan(
 	const directEntries = [...directEntriesByFunction]
 		.sort(([left], [right]) => left - right)
 		.flatMap(([, entries]) => entries);
-	const budgetStatistics = service.statistics();
+	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,
 		discoveredByKind: Object.freeze({ ...discoveredByKind }),

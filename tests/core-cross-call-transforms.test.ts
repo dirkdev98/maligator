@@ -39,6 +39,7 @@ function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits)
 	const report = new CoreOptimizationReportBuilder(program);
 	const analyses = new CoreAnalysisManager(program, context, report);
 	const resources = new CoreFunctionOptimizationResources(program);
+	const candidates = new CoreTransformCandidateService(limits);
 	const result = runCoreCrossCallTransforms(
 		program,
 		analyses,
@@ -52,12 +53,18 @@ function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits)
 				{ crossCallWave: wave },
 			).optimizeCrossCall(editor),
 		limits,
+		undefined,
+		candidates,
 	);
 	return {
 		...result,
-		plan: buildCoreOptimizationPlan(program, analyses, result.summaries, [
-			...program.functionIds(),
-		]),
+		plan: buildCoreOptimizationPlan(
+			program,
+			analyses,
+			result.summaries,
+			[...program.functionIds()],
+			{ candidateService: candidates },
+		),
 	};
 }
 
@@ -530,10 +537,50 @@ describe("bounded Core cross-call transforms", () => {
 		expect(attributes.callParameterContainment).toBeUndefined();
 		expect(attributes.callReturnProvenance).toBeUndefined();
 		expect(attributes.callReturnRepresentation).toBeUndefined();
-		expect(result.statistics.declinedByReason["generated-code-cost"]).toBe(1);
-		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toMatchObject([
-			{ kind: "guarded-direct-call", targetFunctions: [1] },
-		]);
+		expect(result.statistics.considered).toBe(0);
+		expect(result.statistics.declinedByReason["generated-code-cost"] ?? 0).toBe(0);
+		expect(result.plan.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
+		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
+	});
+
+	it("shares the whole-program generated-code budget with late specialization", () => {
+		const program = analysisProgram();
+		const inlinedCaller = appendCaller(program, 2);
+		const specializedCaller = appendCaller(program, 3);
+		appendLeaf(program);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const consequent = builder.createBlock();
+		const alternate = builder.createBlock();
+		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: consequent, arguments: [] },
+			alternate: { block: alternate, arguments: [] },
+		});
+		for (const block of [consequent, alternate]) {
+			const [value] = builder.appendInstruction(block, "createUndefined", []);
+			builder.setTerminator(block, { kind: "return", value: value! });
+		}
+		builder.finish(entry);
+
+		const result = runTransforms(program, {
+			perSiteExpansions: 1,
+			perCallerExpansions: 8,
+			perCallerGeneratedCode: 8,
+			perCallerCompilerWork: 1_000,
+			programGeneratedCode: 1,
+			programCompilerWork: 10_000,
+		});
+		expect(callInstructions(program, inlinedCaller.function)).toEqual([]);
+		expect(callInstructions(program, specializedCaller.function)).toHaveLength(1);
+		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
+		expect(result.statistics.generatedCodeConsumed).toBe(1);
+		expect(result.plan.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
 	});
 
 	it("terminates a recursive inline candidate by identity", () => {

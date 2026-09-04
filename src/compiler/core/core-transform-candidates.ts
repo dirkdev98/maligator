@@ -236,8 +236,71 @@ export class CoreTransformCandidateService {
 		return popCandidate(this.#queue);
 	}
 
-	admit(candidate: CoreTransformCandidate): CoreTransformDeclineReason | undefined {
+	beginPhase(): void {
+		if (this.#queue.length !== 0) {
+			throw new Error("Cannot begin a Core transform phase with pending candidates");
+		}
+		this.#known.clear();
+	}
+
+	#activeLimits(limits?: CoreTransformBudgetLimits): CoreTransformBudgetLimits {
+		if (limits === undefined) return this.#limits;
+		return {
+			perSiteExpansions: Math.min(
+				this.#limits.perSiteExpansions,
+				limits.perSiteExpansions,
+			),
+			perCallerExpansions: Math.min(
+				this.#limits.perCallerExpansions,
+				limits.perCallerExpansions,
+			),
+			perCallerGeneratedCode: Math.min(
+				this.#limits.perCallerGeneratedCode,
+				limits.perCallerGeneratedCode,
+			),
+			perCallerCompilerWork: Math.min(
+				this.#limits.perCallerCompilerWork,
+				limits.perCallerCompilerWork,
+			),
+			programGeneratedCode: Math.min(
+				this.#limits.programGeneratedCode,
+				limits.programGeneratedCode,
+			),
+			programCompilerWork: Math.min(
+				this.#limits.programCompilerWork,
+				limits.programCompilerWork,
+			),
+		};
+	}
+
+	programBudgetExhaustionReason(
+		limits?: CoreTransformBudgetLimits,
+	): CoreTransformDeclineReason | undefined {
+		const active = this.#activeLimits(limits);
+		if (this.#generatedCode >= active.programGeneratedCode) {
+			return "generated-code-cost";
+		}
+		if (this.#compilerWork >= active.programCompilerWork) {
+			return "compiler-work-cost";
+		}
+		return undefined;
+	}
+
+	discardPending(reason: CoreTransformDeclineReason): number {
+		let discarded = 0;
+		while (popCandidate(this.#queue) !== undefined) {
+			this.recordDeclined(reason);
+			discarded++;
+		}
+		return discarded;
+	}
+
+	admit(
+		candidate: CoreTransformCandidate,
+		limits?: CoreTransformBudgetLimits,
+	): CoreTransformDeclineReason | undefined {
 		if (candidate.unsupportedReason !== undefined) return candidate.unsupportedReason;
+		const active = this.#activeLimits(limits);
 		const caller = this.#caller.get(candidate.caller) ?? {
 			expansions: 0,
 			generatedCode: 0,
@@ -246,22 +309,20 @@ export class CoreTransformCandidateService {
 		if (candidate.expansive) {
 			const siteExpansions = this.#siteExpansions.get(candidate.caller);
 			if (
-				(siteExpansions?.get(candidate.site) ?? 0) >= this.#limits.perSiteExpansions ||
-				caller.expansions >= this.#limits.perCallerExpansions
+				(siteExpansions?.get(candidate.site) ?? 0) >= active.perSiteExpansions ||
+				caller.expansions >= active.perCallerExpansions
 			)
 				return "expansion-limit";
 		}
 		if (
 			caller.generatedCode + candidate.generatedCodeCost >
-				this.#limits.perCallerGeneratedCode ||
-			this.#generatedCode + candidate.generatedCodeCost >
-				this.#limits.programGeneratedCode
+				active.perCallerGeneratedCode ||
+			this.#generatedCode + candidate.generatedCodeCost > active.programGeneratedCode
 		)
 			return "generated-code-cost";
 		if (
-			caller.compilerWork + candidate.compilerWorkCost >
-				this.#limits.perCallerCompilerWork ||
-			this.#compilerWork + candidate.compilerWorkCost > this.#limits.programCompilerWork
+			caller.compilerWork + candidate.compilerWorkCost > active.perCallerCompilerWork ||
+			this.#compilerWork + candidate.compilerWorkCost > active.programCompilerWork
 		)
 			return "compiler-work-cost";
 		return undefined;
@@ -304,6 +365,37 @@ export class CoreTransformCandidateService {
 			declinedByReason: Object.freeze({ ...this.#declinedByReason }),
 			generatedCodeConsumed: this.#generatedCode,
 			compilerWorkConsumed: this.#compilerWork,
+		});
+	}
+
+	statisticsSince(
+		baseline: CoreTransformBudgetStatistics,
+	): CoreTransformBudgetStatistics {
+		const subtractCounts = <Key extends string>(
+			current: Readonly<Record<Key, number>>,
+			prior: Readonly<Record<Key, number>>,
+		): Readonly<Record<Key, number>> =>
+			Object.freeze(
+				Object.fromEntries(
+					Object.entries(current).map(([key, value]) => [
+						key,
+						(value as number) - (prior[key as Key] ?? 0),
+					]),
+				) as Record<Key, number>,
+			);
+		const current = this.statistics();
+		return Object.freeze({
+			considered: current.considered - baseline.considered,
+			applied: current.applied - baseline.applied,
+			declined: current.declined - baseline.declined,
+			appliedByKind: subtractCounts(current.appliedByKind, baseline.appliedByKind),
+			declinedByReason: subtractCounts(
+				current.declinedByReason,
+				baseline.declinedByReason,
+			),
+			generatedCodeConsumed:
+				current.generatedCodeConsumed - baseline.generatedCodeConsumed,
+			compilerWorkConsumed: current.compilerWorkConsumed - baseline.compilerWorkConsumed,
 		});
 	}
 }

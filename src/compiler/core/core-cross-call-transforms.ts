@@ -17,7 +17,10 @@ import type {
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
-import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
+import {
+	CoreTransformCandidateService,
+	DEFAULT_CORE_TRANSFORM_BUDGETS,
+} from "./core-transform-candidates.ts";
 import type {
 	CoreTransformBudgetLimits,
 	CoreTransformBudgetStatistics,
@@ -772,8 +775,11 @@ export function runCoreCrossCallTransforms(
 	optimizeCaller: CoreCrossCallCallerOptimizer,
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
+	candidateService?: CoreTransformCandidateService,
 ): CoreCrossCallTransformResult {
-	const service = new CoreTransformCandidateService(limits);
+	const phaseLimits = limits ?? DEFAULT_CORE_TRANSFORM_BUDGETS;
+	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
+	const budgetBaseline = service.statistics();
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 	let summaries = flow.summaries;
@@ -796,6 +802,7 @@ export function runCoreCrossCallTransforms(
 	let valueKindFolds = 0;
 	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	for (let wave = 0; wave < 2; wave++) {
+		if (service.programBudgetExhaustionReason(phaseLimits) !== undefined) break;
 		discoverCoreCrossCallCandidates(program, summaries, service);
 		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
@@ -806,7 +813,13 @@ export function runCoreCrossCallTransforms(
 			candidate !== undefined;
 			candidate = service.next()
 		) {
-			const decline = service.admit(candidate);
+			const exhausted = service.programBudgetExhaustionReason(phaseLimits);
+			if (exhausted !== undefined) {
+				service.recordDeclined(exhausted);
+				service.discardPending(exhausted);
+				break;
+			}
+			const decline = service.admit(candidate, phaseLimits);
 			if (decline !== undefined) {
 				service.recordDeclined(decline);
 				continue;
@@ -893,7 +906,7 @@ export function runCoreCrossCallTransforms(
 		if (!publishedChanged) break;
 	}
 	const valueKinds = flow.valueKinds;
-	const budget = service.statistics();
+	const budget = service.statisticsSince(budgetBaseline);
 	return Object.freeze({
 		summaries,
 		localPlanInputs: Object.freeze([...localPlanInputs.values()]),
