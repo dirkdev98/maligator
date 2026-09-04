@@ -1476,6 +1476,43 @@ describe("program-image-codec", () => {
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(exactTypedArrayStore)),
 		).toEqual(exactTypedArrayStore);
+		const containedTypedArrayStore = withInstruction(
+			{
+				opcode: "STORE_PROPERTY",
+				object: 0,
+				key: 1,
+				value: 2,
+				icIndex: 0,
+			},
+			{ kind: "contained-fixed-typed-array-element", elementKind: "Uint16Array" },
+		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(containedTypedArrayStore)),
+		).toEqual(containedTypedArrayStore);
+		const length = Array.from("length", (unit) => unit.charCodeAt(0));
+		const containedTypedArrayLength = withRuntime(
+			withInstruction(
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 0,
+					object: 1,
+					stringIndex: 0,
+					icIndex: 0,
+				},
+				{ kind: "contained-fixed-typed-array-length" },
+			),
+			{ stringConstants: [length] },
+		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(containedTypedArrayLength)),
+		).toEqual(containedTypedArrayLength);
+		expect(() =>
+			serializeCompilerArtifact(
+				withRuntime(containedTypedArrayLength, {
+					stringConstants: [Array.from("other", (unit) => unit.charCodeAt(0))],
+				}),
+			),
+		).toThrow(/invalid contained TypedArray length hint/);
 
 		expect(() =>
 			serializeCompilerArtifact(

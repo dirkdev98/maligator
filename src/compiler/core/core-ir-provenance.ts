@@ -2370,6 +2370,7 @@ function indexedLengthLoopCandidates(
 			!staticPropertyNamed(program, fn, load, "length") ||
 			loadAttributes.knownOwnSlot !== undefined ||
 			loadAttributes.exactOwnSlot !== undefined ||
+			loadAttributes.containedFixedTypedArrayLength === true ||
 			instructionOperandCount(fn, load) !== 1 ||
 			instructionResultCount(fn, load) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(load))
