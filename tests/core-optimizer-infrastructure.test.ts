@@ -515,6 +515,54 @@ describe("Core optimizer infrastructure", () => {
 		).toBeUndefined();
 	});
 
+	it("does not build memory versions for repeated pure operations", () => {
+		const registry = new CoreOpcodeRegistry();
+		registry.define({
+			opcode: "identity",
+			inputs: coreArity(1),
+			outputs: coreArity(1),
+			effects: CORE_NO_EFFECTS,
+			discardable: true,
+			attributeRelocations: [],
+		});
+		registry.define({
+			opcode: "store",
+			inputs: coreArity(1),
+			outputs: coreArity(0),
+			effects: { ...CORE_NO_EFFECTS, writes: ["global-slot"] },
+			discardable: false,
+			attributeRelocations: [],
+			accesses: [{ family: "global-slot", mode: "write", valueOperand: 0 }],
+		});
+		const program = new CoreProgram(registry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		builder.appendInstruction(entry, "identity", [parameter]);
+		const [value] = builder.appendInstruction(entry, "identity", [parameter]);
+		builder.appendInstruction(entry, "store", [parameter]);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const functionId = builder.finish(entry).function;
+		const { analyses, report } = analysisHarness(program);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functionId,
+		).runComponent("memory", [forwarding]);
+
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.analyses.find(({ analysis }) => analysis === "local-memory-versions"),
+		).toBeUndefined();
+	});
+
 	it("does not build fact availability without a proof-rewiring consumer", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);
