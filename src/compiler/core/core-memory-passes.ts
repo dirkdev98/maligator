@@ -284,6 +284,105 @@ function hasContainedFreshArrayBuiltinOpportunity(fn: CoreFunctionStore): boolea
 	return false;
 }
 
+const CONTAINED_PROPERTY_ACCESS_OPCODES = new Set([
+	"loadProperty",
+	"loadPropertyStatic",
+	"storeProperty",
+	"storePropertyStatic",
+	"defineProperty",
+]);
+
+function hasUnannotatedStaticOwnSlotConsumer(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
+		const attributes = fn.instructionAttributes(instruction);
+		if (
+			typeof attributes.stringIndex === "number" &&
+			!coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE])
+		)
+			return true;
+	}
+	return false;
+}
+
+function hasUnrefinedContainedPropertyConsumer(fn: CoreFunctionStore): boolean {
+	let allocation = false;
+	let property = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		if (descriptor.allocation !== undefined) allocation = true;
+		if (
+			CONTAINED_PROPERTY_ACCESS_OPCODES.has(fn.instructionOpcodeName(instruction)) &&
+			fn.instructionEffectRefinement(instruction) === undefined
+		)
+			property = true;
+		if (allocation && property) return true;
+	}
+	return false;
+}
+
+function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "callBuiltin" ||
+			fn.instructionEffectRefinement(instruction) !== undefined
+		)
+			continue;
+		const operation = fn.instructionAttributes(instruction).operation;
+		if (
+			typeof operation === "string" &&
+			coreCollectionReceiverBrandForOperation(operation) !== undefined
+		)
+			return true;
+	}
+	return false;
+}
+
+function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
+	let shapedAllocation = false;
+	let scalarCell = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "createObjectShaped") shapedAllocation = true;
+		if (opcode === "storePropertyStatic") {
+			const value = instructionOperandAt(fn, instruction, 1);
+			if (value !== undefined && fn.valueRepresentation(value) === "boxed") {
+				scalarCell = true;
+			}
+		} else if (opcode === "loadPropertyStatic") {
+			const result = instructionResultAt(fn, instruction, 0);
+			if (result !== undefined && fn.valueRepresentation(result) === "boxed") {
+				scalarCell = true;
+			}
+		}
+		if (shapedAllocation && scalarCell) return true;
+	}
+	return false;
+}
+
+function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
+	let allocation = false;
+	let removableRead = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		if (descriptor.allocation !== undefined) allocation = true;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			(opcode === "loadProperty" || opcode === "loadPropertyStatic") &&
+			fn.kernel.instructionResultCount(instruction) === 1
+		)
+			removableRead = true;
+		if (allocation && removableRead) return true;
+	}
+	return false;
+}
+
 const foldExactAllocationObservations: CoreFunctionPass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
@@ -448,6 +547,12 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadPropertyStatic", "storePropertyStatic"],
+	admission: {
+		predicate: "unannotated static property access with a named slot key",
+		hasOpportunity({ program, function: functionId }) {
+			return hasUnannotatedStaticOwnSlotConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	changes: { cfg: false, calls: false, facts: false, representations: false },
@@ -513,6 +618,12 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 		"storePropertyStatic",
 		"defineProperty",
 	],
+	admission: {
+		predicate: "fresh allocation and unrefined property-access consumer",
+		hasOpportunity({ program, function: functionId }) {
+			return hasUnrefinedContainedPropertyConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
@@ -757,6 +868,12 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["callBuiltin"],
+	admission: {
+		predicate: "unrefined builtin call with a supported collection receiver brand",
+		hasOpportunity({ program, function: functionId }) {
+			return hasExactCollectionEffectConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
@@ -1514,6 +1631,12 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
+	admission: {
+		predicate: "shaped allocation with a boxed static-slot load or store consumer",
+		hasOpportunity({ program, function: functionId }) {
+			return hasStackCellRepresentationConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
@@ -1640,6 +1763,12 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	name: "scalar-replace-contained-aggregates",
 	stage: "memory",
+	admission: {
+		predicate: "fresh allocation with a property-read scalar-replacement consumer",
+		hasOpportunity({ program, function: functionId }) {
+			return hasAggregateScalarReplacementConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,

@@ -184,7 +184,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(counters.report.counters.analysisQueries).toBeGreaterThan(0);
 		expect(counters.report.counters.localFactRebuilds).toBeGreaterThan(0);
 		expect(counters.report.counters.provenanceRebuilds).toBeGreaterThan(0);
-		expect(counters.report.counters.memoryLocations).toBeGreaterThan(0);
+		expect(counters.report.counters.memoryLocations).toBe(0);
 		expect(counters.report.counters.liveUseVisits).toBeGreaterThan(0);
 		expect(counters.report.counters.storedCallGraphEntries).toBeGreaterThan(0);
 		expect(counters.report.program.summaryFunctionsAnalyzed).toBeGreaterThanOrEqual(0);
