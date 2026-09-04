@@ -481,13 +481,10 @@ export type CompilerInstruction =
 			 * is already a primitive Number. Native code may return its element or
 			 * undefined directly, with no brand, prototype, IC, or fallback edge. */
 			exactContainedArrayElement?: true;
-			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
-			 * code may skip receiver branding, the property cache, prototype lookup,
-			 * and the generic element-kind dispatch. */
+			/** COMPILE-ONLY: closed ownership proves this exact fixed-buffer numeric
+			 * TypedArray brand. Native code may skip receiver branding, the property
+			 * cache, prototype lookup, and the generic element-kind dispatch. */
 			exactTypedArrayKind?: CompilerNumericTypedArrayKind;
-			/** COMPILE-ONLY: Core additionally proved unexposed locally owned storage,
-			 * excluding detachment and resizing for this access. */
-			containedFixedTypedArrayKind?: CompilerNumericTypedArrayKind;
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -503,9 +500,6 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: Core proved this is the non-configurable Number length
 			 * cell of a fresh ordinary Array. Native code may read it unboxed. */
 			exactArrayLength?: true;
-			/** COMPILE-ONLY: Core proved unexposed locally owned TypedArray storage,
-			 * excluding detachment and resizing for this length read. */
-			containedFixedTypedArrayLength?: true;
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;
@@ -531,13 +525,10 @@ export type CompilerInstruction =
 
 			// [object, key, value]
 			registers: [number, number, number];
-			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
-			 * code may skip receiver branding, the property cache, prototype lookup,
-			 * and the generic element-kind dispatch. */
+			/** COMPILE-ONLY: closed ownership proves this exact fixed-buffer numeric
+			 * TypedArray brand. Native code may skip receiver branding, the property
+			 * cache, prototype lookup, and the generic element-kind dispatch. */
 			exactTypedArrayKind?: CompilerNumericTypedArrayKind;
-			/** COMPILE-ONLY: Core additionally proved unexposed locally owned storage,
-			 * excluding detachment and resizing for this access. */
-			containedFixedTypedArrayKind?: CompilerNumericTypedArrayKind;
 	  }
 	| {
 			type: "storePropertyStatic";

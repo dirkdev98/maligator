@@ -941,12 +941,7 @@ export type NativeInstructionPlan =
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
-	| { readonly kind: "contained-fixed-typed-array-length" }
 	| { readonly kind: "exact-contained-array-element" }
-	| {
-			readonly kind: "contained-fixed-typed-array-element";
-			readonly elementKind: CompilerNumericTypedArrayKind;
-	  }
 	| {
 			readonly kind: "exact-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
@@ -1285,37 +1280,25 @@ function nativeInstructionPlanFromExecution(
 				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
 				: instruction.exactArrayLength === true
 					? { kind: "exact-array-length" }
-					: instruction.containedFixedTypedArrayLength === true
-						? { kind: "contained-fixed-typed-array-length" }
-						: instruction.primitiveStringLength === true
-							? { kind: "primitive-string-length" }
-							: undefined;
+					: instruction.primitiveStringLength === true
+						? { kind: "primitive-string-length" }
+						: undefined;
 		case "loadProperty":
 			return instruction.exactContainedArrayElement === true
 				? { kind: "exact-contained-array-element" }
-				: instruction.containedFixedTypedArrayKind !== undefined
-					? {
-							kind: "contained-fixed-typed-array-element",
-							elementKind: instruction.containedFixedTypedArrayKind,
-						}
-					: instruction.exactTypedArrayKind === undefined
-						? undefined
-						: {
-								kind: "exact-typed-array-element",
-								elementKind: instruction.exactTypedArrayKind,
-							};
-		case "storeProperty":
-			return instruction.containedFixedTypedArrayKind !== undefined
-				? {
-						kind: "contained-fixed-typed-array-element",
-						elementKind: instruction.containedFixedTypedArrayKind,
-					}
 				: instruction.exactTypedArrayKind === undefined
 					? undefined
 					: {
 							kind: "exact-typed-array-element",
 							elementKind: instruction.exactTypedArrayKind,
 						};
+		case "storeProperty":
+			return instruction.exactTypedArrayKind === undefined
+				? undefined
+				: {
+						kind: "exact-typed-array-element",
+						elementKind: instruction.exactTypedArrayKind,
+					};
 		case "storePropertyStatic":
 			return instruction.exactOwnSlot === undefined
 				? undefined

@@ -4,8 +4,6 @@ import {
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 } from "./core-function-features.ts";
 import {
-	CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE,
-	CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
@@ -367,10 +365,7 @@ function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
 	return false;
 }
 
-function hasUnrefinedTypedArrayAccess(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-): boolean {
+function hasUnrefinedTypedArrayAccess(fn: CoreFunctionStore): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) === "operation" &&
@@ -378,19 +373,6 @@ function hasUnrefinedTypedArrayAccess(
 				fn.instructionOpcodeName(instruction) === "storeProperty") &&
 			fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] ===
 				undefined
-		)
-			return true;
-		if (
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "loadPropertyStatic" &&
-			typeof fn.instructionAttributes(instruction).stringIndex === "number" &&
-			isLengthString(
-				program,
-				fn.instructionAttributes(instruction).stringIndex as number,
-			) &&
-			fn.instructionAttributes(instruction)[
-				CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE
-			] === undefined
 		)
 			return true;
 	}
@@ -996,14 +978,14 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 const refineExactTypedArrayAccesses: CoreFunctionPass = {
 	name: "refine-exact-typed-array-accesses",
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["loadProperty", "storeProperty", "loadPropertyStatic"],
+	requiredFunctionOpcodesAny: ["loadProperty", "storeProperty"],
 	admission: {
 		predicate:
 			"unrefined dynamic property access with a locally provable TypedArray brand",
 		hasOpportunity({ program, compilationContext, function: functionId }) {
 			return (
 				compilationContext.facts.world.primordialPolicy === "locked" &&
-				hasUnrefinedTypedArrayAccess(program, program.function(functionId))
+				hasUnrefinedTypedArrayAccess(program.function(functionId))
 			);
 		},
 	},
@@ -1017,57 +999,29 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
 			if (
-				opcode !== "loadProperty" &&
-				opcode !== "storeProperty" &&
-				opcode !== "loadPropertyStatic"
+				fn.instructionKind(instruction) !== "operation" ||
+				(fn.instructionOpcodeName(instruction) !== "loadProperty" &&
+					fn.instructionOpcodeName(instruction) !== "storeProperty")
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
+			if (attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] !== undefined) continue;
 			const receiver = instructionOperandAt(fn, instruction, 0);
-			const contained =
+			const exact =
 				receiver === undefined
 					? undefined
-					: classes.containedFixedNumericTypedArray(receiver, instruction);
-			const exact =
-				opcode === "loadPropertyStatic" || receiver === undefined
-					? undefined
 					: classes.exactNumericTypedArray(receiver, instruction);
-			const containedLength =
-				opcode === "loadPropertyStatic" &&
-				contained !== undefined &&
-				typeof attributes.stringIndex === "number" &&
-				isLengthString(program, attributes.stringIndex);
-			const containedAccess = opcode === "loadPropertyStatic" ? undefined : contained;
-			if (exact === undefined && !containedLength) continue;
-			if (
-				exact === attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] &&
-				containedAccess === attributes[CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE] &&
-				containedLength ===
-					(attributes[CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE] === true)
-			)
-				continue;
+			if (exact === undefined) continue;
 			editor ??= CoreEditor.open(program, item.function);
 			editor.replaceInstruction(
 				instruction,
-				opcode,
+				fn.instructionOpcodeName(instruction),
 				materializeInstructionOperands(fn, instruction),
 				{
 					attributes: {
 						...attributes,
-						...(exact === undefined
-							? {}
-							: { [CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact }),
-						...(containedAccess === undefined
-							? {}
-							: {
-									[CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE]: containedAccess,
-								}),
-						...(containedLength
-							? { [CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE]: true }
-							: {}),
+						[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact,
 					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					effectRefinement: fn.instructionEffectRefinement(instruction),

@@ -2711,12 +2711,12 @@ interface NativeInstructionContext {
 	readonly relocation: NativeRelocationExpressions;
 }
 
-type NativeTypedArrayElementKind = Extract<
-	NativeInstructionPlan,
-	{ readonly elementKind: unknown }
->["elementKind"];
-
-function nativeTypedArrayKind(kind: NativeTypedArrayElementKind): string {
+function nativeTypedArrayKind(
+	kind: Extract<
+		NativeInstructionPlan,
+		{ kind: "exact-typed-array-element" }
+	>["elementKind"],
+): string {
 	switch (kind) {
 		case "Int8Array":
 			return "MAL_TA_INT8";
@@ -2739,7 +2739,12 @@ function nativeTypedArrayKind(kind: NativeTypedArrayElementKind): string {
 	}
 }
 
-function nativeTypedArrayElementSize(kind: NativeTypedArrayElementKind): number {
+function nativeTypedArrayElementSize(
+	kind: Extract<
+		NativeInstructionPlan,
+		{ kind: "exact-typed-array-element" }
+	>["elementKind"],
+): number {
 	switch (kind) {
 		case "Int8Array":
 		case "Uint8Array":
@@ -2966,17 +2971,6 @@ function emitInstruction(
 		];
 	}
 	if (
-		nativePlan?.kind === "contained-fixed-typed-array-length" &&
-		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-			instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
-	) {
-		return [
-			reps[instruction.dst] === "number"
-				? `r${instruction.dst} = (f64) mal_value_to_typed_array_object(${boxed(instruction.object)})->length;`
-				: `r${instruction.dst} = mal_value_from_u32(mal_value_to_typed_array_object(${boxed(instruction.object)})->length);`,
-		];
-	}
-	if (
 		nativePlan?.kind === "exact-contained-array-element" &&
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
@@ -2987,14 +2981,11 @@ function emitInstruction(
 				: `r${instruction.dst} = mal_array_object_contained_dense_get(mal_value_to_array_object(${boxed(instruction.object)}), ${num(instruction.key)});`,
 		];
 	}
-	if (
-		nativePlan?.kind === "exact-typed-array-element" ||
-		nativePlan?.kind === "contained-fixed-typed-array-element"
-	) {
+	if (nativePlan?.kind === "exact-typed-array-element") {
 		const kind = nativeTypedArrayKind(nativePlan.elementKind);
 		const elementSize = nativeTypedArrayElementSize(nativePlan.elementKind);
 		if (instruction.opcode === "LOAD_PROPERTY") {
-			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
+			const exactLoad = `mal_vm_exact_numeric_typed_array_load(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
 			if (reps[instruction.key] === "number") {
 				return [
 					"MAL_PERF_COUNT(exact_typed_array_loads);",

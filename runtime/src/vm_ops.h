@@ -13,41 +13,6 @@
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
 
-static inline MalValue mal_vm_numeric_typed_array_load_at(
-    const byte *at, MalTypedArrayKind kind
-) {
-    switch (kind) {
-        case MAL_TA_INT8:
-            return mal_value_from_i32(mal_scalar_i8_from_bits(
-                mal_scalar_load_native_u8(at)));
-        case MAL_TA_UINT8:
-        case MAL_TA_UINT8_CLAMPED:
-            return mal_value_from_i32(mal_scalar_load_native_u8(at));
-        case MAL_TA_INT16:
-            return mal_value_from_i32(mal_scalar_i16_from_bits(
-                mal_scalar_load_native_u16(at)));
-        case MAL_TA_UINT16:
-            return mal_value_from_i32(mal_scalar_load_native_u16(at));
-        case MAL_TA_INT32:
-            return mal_value_from_i32(mal_scalar_i32_from_bits(
-                mal_scalar_load_native_u32(at)));
-        case MAL_TA_UINT32: {
-            u32 value = mal_scalar_load_native_u32(at);
-            return value <= INT32_MAX
-                ? mal_value_from_i32((i32) value)
-                : mal_ops_number_value((f64) value);
-        }
-        case MAL_TA_FLOAT32:
-            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
-                mal_scalar_load_native_u32(at)));
-        case MAL_TA_FLOAT64:
-            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
-                mal_scalar_load_native_u64(at)));
-        default:
-            return MAL_VALUE_UNDEFINED;
-    }
-}
-
 /**
  * Runtime admission for compiler facts backed by semantic epochs. Generated code
  * names the dependencies it consumes; this is the one compatibility bridge from
@@ -1746,20 +1711,38 @@ static inline MalValue mal_vm_exact_numeric_typed_array_load(
         length = array->length;
     }
     if (index >= length) return MAL_VALUE_UNDEFINED;
-    return mal_vm_numeric_typed_array_load_at(
-        buffer->data + array->byte_offset + (usize) index * element_size,
-        kind);
-}
-
-static inline MalValue mal_vm_contained_fixed_numeric_typed_array_load(
-    const MalTypedArrayObject *array, u32 index, MalTypedArrayKind kind,
-    u32 element_size
-) {
-    // Core containment excludes external buffers, detachment, resizing, and escape.
-    if (index >= array->length) return MAL_VALUE_UNDEFINED;
-    return mal_vm_numeric_typed_array_load_at(
-        array->buffer->data + array->byte_offset + (usize) index * element_size,
-        kind);
+    const byte *at = buffer->data + array->byte_offset +
+        (usize) index * element_size;
+    switch (kind) {
+        case MAL_TA_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits(
+                mal_scalar_load_native_u8(at)));
+        case MAL_TA_UINT8:
+        case MAL_TA_UINT8_CLAMPED:
+            return mal_value_from_i32(mal_scalar_load_native_u8(at));
+        case MAL_TA_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits(
+                mal_scalar_load_native_u16(at)));
+        case MAL_TA_UINT16:
+            return mal_value_from_i32(mal_scalar_load_native_u16(at));
+        case MAL_TA_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits(
+                mal_scalar_load_native_u32(at)));
+        case MAL_TA_UINT32: {
+            u32 value = mal_scalar_load_native_u32(at);
+            return value <= INT32_MAX
+                ? mal_value_from_i32((i32) value)
+                : mal_ops_number_value((f64) value);
+        }
+        case MAL_TA_FLOAT32:
+            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
+                mal_scalar_load_native_u32(at)));
+        case MAL_TA_FLOAT64:
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
+                mal_scalar_load_native_u64(at)));
+        default:
+            return MAL_VALUE_UNDEFINED;
+    }
 }
 
 static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {

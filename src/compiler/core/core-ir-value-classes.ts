@@ -110,57 +110,6 @@ export interface CoreValueClassAnalysis {
 		value: CoreValueId,
 		at?: CoreInstructionId,
 	): CoreExactCollectionBrand | undefined;
-	containedFixedNumericTypedArray(
-		value: CoreValueId,
-		at?: CoreInstructionId,
-	): CoreNumericTypedArrayKind | undefined;
-}
-
-function isLengthProperty(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-) {
-	const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-	const value =
-		typeof stringIndex === "number" ? program.stringConstants[stringIndex] : undefined;
-	return (
-		value?.length === 6 &&
-		value[0] === 0x6c &&
-		value[1] === 0x65 &&
-		value[2] === 0x6e &&
-		value[3] === 0x67 &&
-		value[4] === 0x74 &&
-		value[5] === 0x68
-	);
-}
-
-function numericPropertyKey(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): boolean {
-	if (fn.kernel.instructionOperandCount(instruction) < 2) return false;
-	const key = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1);
-	const representation = fn.valueRepresentation(key);
-	return representation === "i32" || representation === "f64";
-}
-
-function constructOwnsFixedTypedArrayStorage(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-): boolean {
-	const operandCount = fn.kernel.instructionOperandCount(instruction);
-	if (operandCount === 1) return true;
-	if (operandCount !== 2) return false;
-	const argument = fn.kernel.operandAt(
-		fn.kernel.instructionOperandStart(instruction) + 1,
-	);
-	const argumentRoot = roots.get(argument) ?? argument;
-	if (fn.kernel.valueDefinitionKind(argumentRoot) !== 1) return false;
-	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(argumentRoot));
-	const opcode = fn.instructionOpcodeName(definition);
-	return opcode === "createNumber" || opcode === "createF64";
 }
 
 export function analyzeCoreValueClasses(
@@ -175,7 +124,6 @@ export function analyzeCoreValueClasses(
 		canonicalRoots ??
 		coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId));
 	const brands = new Map<CoreValueId, CoreExactHeapBrand>();
-	const ownedFixedTypedArrays = new Set<CoreValueId>();
 	const unsafe = new Set<CoreValueId>();
 	const operations =
 		index?.operations ??
@@ -209,14 +157,7 @@ export function analyzeCoreValueClasses(
 				coreNumericTypedArrayKind(fn.instructionAttributes(definition).intrinsic) ??
 				coreExactCollectionBrand(fn.instructionAttributes(definition).intrinsic);
 			if (brand !== undefined) {
-				const outputRoot = roots.get(output) ?? output;
-				brands.set(outputRoot, brand);
-				if (
-					coreNumericTypedArrayKind(brand) !== undefined &&
-					constructOwnsFixedTypedArrayStorage(fn, instruction, roots)
-				) {
-					ownedFixedTypedArrays.add(outputRoot);
-				}
+				brands.set(roots.get(output) ?? output, brand);
 				seeded++;
 			}
 		}
@@ -259,14 +200,6 @@ export function analyzeCoreValueClasses(
 		}
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode === "move" || opcode === "rootUse") return;
-		if (
-			coreNumericTypedArrayKind(brand) !== undefined &&
-			operand === 0 &&
-			((opcode === "loadPropertyStatic" && isLengthProperty(program, fn, instruction)) ||
-				((opcode === "loadProperty" || opcode === "storeProperty") &&
-					numericPropertyKey(fn, instruction)))
-		)
-			return;
 		if (opcode === "callBuiltin" && operand === 0) {
 			const operation = fn.instructionAttributes(instruction).operation;
 			const expected = coreCollectionReceiverBrandForOperation(operation);
@@ -329,12 +262,6 @@ export function analyzeCoreValueClasses(
 			const valueRoot = roots.get(value) ?? value;
 			return !unsafe.has(valueRoot)
 				? coreExactCollectionBrand(brands.get(valueRoot))
-				: undefined;
-		},
-		containedFixedNumericTypedArray(value) {
-			const valueRoot = roots.get(value) ?? value;
-			return ownedFixedTypedArrays.has(valueRoot) && !unsafe.has(valueRoot)
-				? coreNumericTypedArrayKind(brands.get(valueRoot))
 				: undefined;
 		},
 	};
