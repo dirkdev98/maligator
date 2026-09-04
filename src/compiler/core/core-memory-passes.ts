@@ -103,6 +103,52 @@ function instructionResultAt(
 	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction) + offset);
 }
 
+function hasExactMemoryLoadForwardingOpportunity(fn: CoreFunctionStore): boolean {
+	const candidatesByInputs = new Map<number, Array<CoreInstructionId>>();
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			!effectsPermitRemoval(fn, instruction)
+		)
+			continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
+			opcode !== "loadProperty" &&
+			opcode !== "loadPropertyStatic" &&
+			opcode !== "loadPropertyStaticShapeCase"
+		)
+			continue;
+		const result = instructionResultAt(fn, instruction, 0);
+		if (result === undefined) continue;
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		let inputHash = Math.imul(fn.instructionOpcode(instruction) + 1, 16_777_619);
+		for (let index = 0; index < operandCount; index++) {
+			inputHash = Math.imul(
+				inputHash ^ (fn.kernel.operandAt(operandStart + index) + 1),
+				16_777_619,
+			);
+		}
+		inputHash = Math.imul(inputHash ^ operandCount, 16_777_619);
+		const candidates = candidatesByInputs.get(inputHash) ?? [];
+		if (
+			candidates.some((candidate) => {
+				const candidateResult = instructionResultAt(fn, candidate, 0);
+				return (
+					candidateResult !== undefined &&
+					fn.valueRepresentation(candidateResult) === fn.valueRepresentation(result) &&
+					coreInstructionInputsEqual(fn, candidate, instruction)
+				);
+			})
+		)
+			return true;
+		candidates.push(instruction);
+		candidatesByInputs.set(inputHash, candidates);
+	}
+	return false;
+}
+
 function materializeInstructionOperands(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -562,6 +608,13 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 	name: "forward-exact-memory-loads",
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_MEMORY_ACCESSES,
+	admission: {
+		predicate:
+			"repeated removable read with identical opcode, attributes, operands and representation",
+		hasOpportunity({ program, function: functionId }) {
+			return hasExactMemoryLoadForwardingOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,

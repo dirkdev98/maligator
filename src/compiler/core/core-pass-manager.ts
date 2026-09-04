@@ -12,7 +12,11 @@ import type { CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { CoreFunctionPassContextDriver } from "./core-pass.ts";
-import type { CoreFunctionPass, CoreOptimizationStage } from "./core-pass.ts";
+import type {
+	CoreFunctionPass,
+	CoreFunctionPassAdmissionContext,
+	CoreOptimizationStage,
+} from "./core-pass.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 interface PendingLocalWork {
@@ -55,6 +59,7 @@ export class CoreFunctionPassScheduler {
 	readonly #features: CoreFunctionFeatureIndex;
 	readonly #passOpcodeIds = new WeakMap<CoreFunctionPass, ReadonlyArray<CoreOpcodeId>>();
 	readonly #passContexts = new WeakMap<CoreFunctionPass, CoreFunctionPassContextDriver>();
+	readonly #admissionContext: CoreFunctionPassAdmissionContext;
 	#localSeeded = false;
 
 	constructor(
@@ -71,6 +76,11 @@ export class CoreFunctionPassScheduler {
 		this.#analyses = analyses;
 		this.#report = report;
 		this.#functionId = functionId;
+		this.#admissionContext = Object.freeze({
+			program,
+			compilationContext: context,
+			function: functionId,
+		});
 		this.#verification = options.verification ?? "boundary";
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
@@ -131,6 +141,11 @@ export class CoreFunctionPassScheduler {
 			if (
 				pass.requiredFunctionOpcodesAny !== undefined &&
 				!this.#features.hasAnyOpcode(this.#functionId, this.#opcodeIds(pass))
+			)
+				return;
+			if (
+				pass.admission !== undefined &&
+				!pass.admission.hasOpportunity(this.#admissionContext)
 			)
 				return;
 			queued[passIndex] = 1;
@@ -271,6 +286,9 @@ export class CoreFunctionPassScheduler {
 			pass.requiredFunctionOpcodesAny.length === 0
 		) {
 			throw new Error(`Core pass ${pass.name} has an invalid function opcode gate`);
+		}
+		if (pass.admission !== undefined && pass.admission.predicate.length === 0) {
+			throw new Error(`Core pass ${pass.name} has an unnamed admission predicate`);
 		}
 		if (pass.requiredAnalyses.some((analysis) => analysis.scope !== "function")) {
 			throw new Error(`Core function pass ${pass.name} requires a non-function analysis`);

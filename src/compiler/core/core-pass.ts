@@ -47,11 +47,23 @@ export interface CoreFunctionPassContext {
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result;
 }
 
+export interface CoreFunctionPassAdmissionContext {
+	readonly program: CoreProgram;
+	readonly compilationContext: CoreCompilationContext;
+	readonly function: CoreFunctionId;
+}
+
+export interface CoreFunctionPassAdmission {
+	readonly predicate: string;
+	hasOpportunity(context: CoreFunctionPassAdmissionContext): boolean;
+}
+
 export interface CoreFunctionPass {
 	readonly name: string;
 	readonly stage: CoreOptimizationStage;
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredFunctionOpcodesAny?: ReadonlyArray<string>;
+	readonly admission?: CoreFunctionPassAdmission;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly changes: CorePassCapabilities;

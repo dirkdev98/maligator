@@ -493,6 +493,53 @@ describe("Core optimizer infrastructure", () => {
 		expect(run(["rewritten-identity"])).toEqual([]);
 	});
 
+	it("makes ineligible admitted passes perform zero analysis queries", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const queried: Array<number> = [];
+		const analysis: CoreAnalysisDefinition<number> = {
+			key: "test-admitted-analysis",
+			scope: "function",
+			functionDependencies: ["body"],
+			compute({ request }) {
+				if (request.scope !== "function") throw new Error("expected function scope");
+				queried.push(request.function);
+				return request.function;
+			},
+		};
+		const pass: CoreFunctionPass = {
+			name: "test-admitted-pass",
+			stage: "canonicalize",
+			admission: {
+				predicate: "function id is odd",
+				hasOpportunity: ({ function: functionId }) => functionId % 2 === 1,
+			},
+			requiredAnalyses: [analysis],
+			wakesOn: ["body"],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 10, maxEdits: 1, exhaustion: "error" },
+			run(passContext) {
+				passContext.analysis(analysis);
+				return undefined;
+			},
+		};
+		const report = new CoreOptimizationReportBuilder(program);
+		for (const { id } of functions) {
+			const analyses = new CoreAnalysisManager(program, context(), report);
+			new CoreFunctionPassScheduler(
+				program,
+				context(),
+				analyses,
+				report,
+				id,
+			).runComponent("canonicalize", [pass]);
+		}
+
+		expect(queried).toEqual([functions[1]!.id]);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).analyses,
+		).toMatchObject([{ analysis: "test-admitted-analysis", queries: 1 }]);
+	});
+
 	it("bounds only optional development work and reports profile exhaustion", () => {
 		const run = (
 			optionalMaxRunsPerWorkItem: number | undefined,
