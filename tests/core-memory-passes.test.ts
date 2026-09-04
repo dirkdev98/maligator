@@ -507,6 +507,42 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(fn.fact(refinement!.proof).kind).toBe("exact-collection-builtin-effects");
 	});
 
+	it("publishes an exact numeric TypedArray brand on local dynamic loads", () => {
+		const build = (compilationContext: CoreCompilationContext) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const key = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const [constructor] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+				attributes: { intrinsic: "Uint32Array" },
+			});
+			const [length] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 4 },
+			});
+			const [array] = builder.appendInstruction(entry, "construct", [
+				constructor!,
+				length!,
+			]);
+			const [loaded] = builder.appendInstruction(entry, "loadProperty", [array!, key]);
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const finished = builder.finish(entry);
+			const fn = optimizeCore({
+				program: core,
+				context: compilationContext,
+			}).compilation.program.function(finished.function);
+			const load = [...fn.instructionIds()].find(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "loadProperty",
+			);
+			expect(load).toBeDefined();
+			return fn.instructionAttributes(load!).exactTypedArrayKind;
+		};
+
+		expect(build(lockedContext)).toBe("Uint32Array");
+		expect(build(context)).toBeUndefined();
+	});
+
 	it("publishes Map.set and Map.get consequences before cleanup", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
