@@ -167,7 +167,8 @@ describe("Core optimizer infrastructure", () => {
 				owners[CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup]!.elapsedMs,
 			).toBe(6);
 			expect(owners[CORE_OPTIMIZATION_OWNER.denseGenerationBarrier]!.elapsedMs).toBe(3);
-			expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]!.elapsedMs).toBe(2);
+			expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]!.elapsedMs).toBe(0);
+			expect(owners[CORE_OPTIMIZATION_OWNER.optimizerOrchestration]!.elapsedMs).toBe(2);
 			expect(owners[CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup]).toMatchObject(
 				{ allocatedBytes: 60, collections: 1 },
 			);
@@ -175,7 +176,7 @@ describe("Core optimizer infrastructure", () => {
 				allocatedBytes: 30,
 				collections: 1,
 			});
-			expect(owners[CORE_OPTIMIZATION_OWNER.unattributed]).toMatchObject({
+			expect(owners[CORE_OPTIMIZATION_OWNER.optimizerOrchestration]).toMatchObject({
 				allocatedBytes: 20,
 				collections: 1,
 			});

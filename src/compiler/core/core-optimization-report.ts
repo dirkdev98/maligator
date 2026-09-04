@@ -701,18 +701,21 @@ export class CoreOptimizationReportBuilder {
 
 	recordCheckpoint(checkpoint: string, program: CoreProgram): void {
 		if (this.#checkpoints === undefined) return;
-		const report = coreOptimizationCheckpoint(program, checkpoint);
-		this.#checkpoints.push(report);
-		if (this.#checkpoints.length === 1) {
-			this.#input = Object.freeze({
-				functions: report.functions.live,
-				blocks: report.blocks.live,
-				instructions: report.instructions.live,
-				values: report.values.live,
-				facts: report.facts.live,
-				planCandidates: 0,
-			});
-		}
+		this.measureOwner(CORE_OPTIMIZATION_OWNER.optimizerInstrumentation, () => {
+			const report = coreOptimizationCheckpoint(program, checkpoint);
+			this.#checkpoints!.push(report);
+			this.recordOwnerWork(CORE_OPTIMIZATION_OWNER.optimizerInstrumentation, 1);
+			if (this.#checkpoints!.length === 1) {
+				this.#input = Object.freeze({
+					functions: report.functions.live,
+					blocks: report.blocks.live,
+					instructions: report.instructions.live,
+					values: report.values.live,
+					facts: report.facts.live,
+					planCandidates: 0,
+				});
+			}
+		});
 	}
 
 	recordPassRun(
@@ -1144,20 +1147,21 @@ export class CoreOptimizationReportBuilder {
 								id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + elapsedMs,
 							0,
 						);
-						this.#ownerTimes[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
-							0,
-							totalMs - attributedMs,
-						);
+						// The builder lifetime is optimizeCore, so its exclusive residual is orchestration.
+						this.#ownerTimes[CORE_OPTIMIZATION_OWNER.optimizerOrchestration] =
+							this.#ownerTimes[CORE_OPTIMIZATION_OWNER.optimizerOrchestration]! +
+							Math.max(0, totalMs - attributedMs);
+						this.#ownerTimes[CORE_OPTIMIZATION_OWNER.unattributed] = 0;
 						if (this.#ownerAllocated !== undefined) {
 							const attributed = this.#ownerAllocated.reduce(
 								(sum, bytes, id) =>
 									id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + bytes,
 								0,
 							);
-							this.#ownerAllocated[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
-								0,
-								totalAllocated - attributed,
-							);
+							this.#ownerAllocated[CORE_OPTIMIZATION_OWNER.optimizerOrchestration] =
+								this.#ownerAllocated[CORE_OPTIMIZATION_OWNER.optimizerOrchestration]! +
+								Math.max(0, totalAllocated - attributed);
+							this.#ownerAllocated[CORE_OPTIMIZATION_OWNER.unattributed] = 0;
 						}
 						if (this.#ownerCollections !== undefined) {
 							const attributed = this.#ownerCollections.reduce(
@@ -1165,10 +1169,10 @@ export class CoreOptimizationReportBuilder {
 									id === CORE_OPTIMIZATION_OWNER.unattributed ? sum : sum + collections,
 								0,
 							);
-							this.#ownerCollections[CORE_OPTIMIZATION_OWNER.unattributed] = Math.max(
-								0,
-								totalCollections - attributed,
-							);
+							this.#ownerCollections[CORE_OPTIMIZATION_OWNER.optimizerOrchestration] =
+								this.#ownerCollections[CORE_OPTIMIZATION_OWNER.optimizerOrchestration]! +
+								Math.max(0, totalCollections - attributed);
+							this.#ownerCollections[CORE_OPTIMIZATION_OWNER.unattributed] = 0;
 						}
 						return Object.freeze(
 							CORE_OPTIMIZATION_OWNERS.map(({ id, name }) =>

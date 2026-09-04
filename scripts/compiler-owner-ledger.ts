@@ -1,4 +1,7 @@
-import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
+import {
+	coreOptimizationOwnerIsOptimizeCore,
+	CORE_OPTIMIZATION_OWNER,
+} from "../src/compiler/core/core-optimization-owners.ts";
 import type { CoreOptimizationOwnerReport } from "../src/compiler/core/core-optimization-owners.ts";
 
 export interface CompilerOwnerLedgerRow {
@@ -81,10 +84,8 @@ export function compilerOwnerCoverage(
 		readonly maligatorWallMs: number;
 	},
 ): CompilerOwnerCoverage {
-	const optimizeOwners = owners.filter(
-		({ id }) =>
-			id >= CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup &&
-			id <= CORE_OPTIMIZATION_OWNER.coreVerification,
+	const optimizeOwners = owners.filter(({ id }) =>
+		coreOptimizationOwnerIsOptimizeCore(id),
 	);
 	const attributedOwners = owners.filter(
 		({ id }) => id !== CORE_OPTIMIZATION_OWNER.unattributed,

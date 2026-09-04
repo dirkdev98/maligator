@@ -232,6 +232,13 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(
 			full.report.owners[CORE_OPTIMIZATION_OWNER.fusedLocalOptimization]!.workUnits,
 		).toBeGreaterThan(0);
+		expect(
+			full.report.owners[CORE_OPTIMIZATION_OWNER.otherFunctionOptimizationPasses]!
+				.workUnits,
+		).toBeGreaterThan(0);
+		expect(
+			full.report.owners[CORE_OPTIMIZATION_OWNER.optimizerInstrumentation]!.workUnits,
+		).toBe(8);
 	});
 
 	it("runs phases in order and inspects optimized IR before target lowering", () => {

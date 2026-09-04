@@ -4,6 +4,7 @@ import {
 	compilerOwnerCoverage,
 } from "../scripts/compiler-owner-ledger.ts";
 import {
+	coreOptimizationOwnerIsOptimizeCore,
 	CORE_OPTIMIZATION_OWNER,
 	CORE_OPTIMIZATION_OWNERS,
 } from "../src/compiler/core/core-optimization-owners.ts";
@@ -54,11 +55,7 @@ describe("compiler owner ledger", () => {
 	it("reports optimizer, host-gap and allocation coverage", () => {
 		const owners = compareCompilerOwnerLedgers(ledger(1), ledger(2));
 		const optimizeSum = owners
-			.filter(
-				({ id }) =>
-					id >= CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup &&
-					id <= CORE_OPTIMIZATION_OWNER.coreVerification,
-			)
+			.filter(({ id }) => coreOptimizationOwnerIsOptimizeCore(id))
 			.reduce((sum, owner) => sum + owner.nodeMs, 0);
 		const attributedGap = owners
 			.filter(({ id }) => id !== CORE_OPTIMIZATION_OWNER.unattributed)

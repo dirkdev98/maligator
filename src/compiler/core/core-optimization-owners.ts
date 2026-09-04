@@ -24,6 +24,9 @@ export const CORE_OPTIMIZATION_OWNER = Object.freeze({
 	coreToExecution: 22,
 	executionToImage: 23,
 	emission: 24,
+	otherFunctionOptimizationPasses: 25,
+	optimizerInstrumentation: 26,
+	optimizerOrchestration: 27,
 } as const);
 
 export type CoreOptimizationOwnerId =
@@ -61,7 +64,20 @@ export const CORE_OPTIMIZATION_OWNERS: ReadonlyArray<CoreOptimizationOwnerDefini
 		{ id: 22, name: "Core-to-Execution lowering" },
 		{ id: 23, name: "Execution-to-Image lowering" },
 		{ id: 24, name: "emission" },
+		{ id: 25, name: "other function optimization passes" },
+		{ id: 26, name: "optimizer instrumentation" },
+		{ id: 27, name: "optimizer orchestration" },
 	]);
+
+export function coreOptimizationOwnerIsOptimizeCore(owner: number): boolean {
+	return (
+		(owner >= CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup &&
+			owner <= CORE_OPTIMIZATION_OWNER.coreVerification) ||
+		owner === CORE_OPTIMIZATION_OWNER.otherFunctionOptimizationPasses ||
+		owner === CORE_OPTIMIZATION_OWNER.optimizerInstrumentation ||
+		owner === CORE_OPTIMIZATION_OWNER.optimizerOrchestration
+	);
+}
 
 export interface CoreOptimizationOwnerReport extends CoreOptimizationOwnerDefinition {
 	readonly elapsedMs: number;

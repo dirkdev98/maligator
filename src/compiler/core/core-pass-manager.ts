@@ -49,7 +49,7 @@ function wakesForChanges(pass: CoreFunctionPass, changes: CoreChangeSet): boolea
 	return false;
 }
 
-function passOwner(pass: CoreFunctionPass): CoreOptimizationOwnerId | undefined {
+function passOwner(pass: CoreFunctionPass): CoreOptimizationOwnerId {
 	switch (pass.name) {
 		case "block-parameter-simplification":
 		case "canonical-block-parameter-elimination":
@@ -58,7 +58,7 @@ function passOwner(pass: CoreFunctionPass): CoreOptimizationOwnerId | undefined 
 		case "linear-block-merging":
 			return CORE_OPTIMIZATION_OWNER.forwardingAndLinearBlockNormalization;
 		default:
-			return undefined;
+			return CORE_OPTIMIZATION_OWNER.otherFunctionOptimizationPasses;
 	}
 }
 
@@ -278,9 +278,8 @@ export class CoreFunctionPassScheduler {
 			const remainingEdits = pass.budget.maxEdits - used.edits;
 			const owner = passOwner(pass);
 			const runPass = () => pass.run(passContext.prepare(remainingEdits));
-			const changes =
-				owner === undefined ? runPass() : this.#report.measureOwner(owner, runPass);
-			if (owner !== undefined) this.#report.recordOwnerWork(owner, 1);
+			const changes = this.#report.measureOwner(owner, runPass);
+			this.#report.recordOwnerWork(owner, 1);
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
