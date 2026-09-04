@@ -746,7 +746,7 @@ ${[...report.fullCompiler.owners]
 	.sort((left, right) => right.hostGapMs - left.hostGapMs)
 	.map(
 		(owner) =>
-			`| ${owner.name} | ${owner.nodeMs.toFixed(1)} | ${owner.maligatorMs.toFixed(1)} | ${owner.hostRatio?.toFixed(2) ?? "n/a"}x | ${owner.hostGapMs.toFixed(1)} | ${owner.allocatedBytes?.toLocaleString() ?? "n/a"} | ${owner.representativeKernels.join(", ") || "unmapped"} |`,
+			`| ${owner.name} | ${owner.nodeMs.toFixed(1)} | ${owner.maligatorMs.toFixed(1)} | ${owner.hostRatio === null ? "n/a" : `${owner.hostRatio.toFixed(2)}x`} | ${owner.hostGapMs.toFixed(1)} | ${owner.allocatedBytes?.toLocaleString() ?? "n/a"} | ${owner.representativeKernels.join(", ") || "unmapped"} |`,
 	)
 	.join("\n")}
 
