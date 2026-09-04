@@ -116,49 +116,6 @@ function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boo
 	return false;
 }
 
-class CoreControlEdgeView implements CoreControlEdge {
-	readonly from: CoreBlockId;
-	readonly to: CoreBlockId;
-	readonly kind: CoreControlEdgeKind;
-	readonly #fn: CoreFunctionStore;
-	readonly #argumentStart: number;
-	readonly #argumentCount: number;
-	readonly #handlerArguments: boolean;
-	#argumentVersion = -1;
-	#argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-
-	constructor(
-		fn: CoreFunctionStore,
-		from: CoreBlockId,
-		to: CoreBlockId,
-		kind: CoreControlEdgeKind,
-		argumentStart: number,
-		argumentCount: number,
-		handlerArguments: boolean,
-	) {
-		this.#fn = fn;
-		this.from = from;
-		this.to = to;
-		this.kind = kind;
-		this.#argumentStart = argumentStart;
-		this.#argumentCount = argumentCount;
-		this.#handlerArguments = handlerArguments;
-	}
-
-	get arguments(): ReadonlyArray<CoreValueId> {
-		const version = this.#fn.version("body");
-		if (this.#argumentsCache === undefined || version !== this.#argumentVersion) {
-			this.#argumentVersion = version;
-			this.#argumentsCache = Array.from({ length: this.#argumentCount }, (_, index) =>
-				this.#handlerArguments
-					? this.#fn.kernel.handlerArgumentAt(this.#argumentStart + index)
-					: this.#fn.kernel.operandAt(this.#argumentStart + index),
-			);
-		}
-		return this.#argumentsCache;
-	}
-}
-
 function buildEdges(fn: CoreFunctionStore): {
 	readonly successors: Array<Array<CoreControlEdge>>;
 	readonly predecessors: Array<Array<CoreControlEdge>>;
@@ -178,18 +135,24 @@ function buildEdges(fn: CoreFunctionStore): {
 			const edge = edgeStart + offset;
 			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
 			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+			let argumentVersion = -1;
+			let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
 			if (successors[block] === empty) successors[block] = [];
-			successors[block].push(
-				new CoreControlEdgeView(
-					fn,
-					block,
-					fn.kernel.terminatorEdgeBlock(edge),
-					"ordinary",
-					argumentStart,
-					argumentCount,
-					false,
-				),
-			);
+			successors[block].push({
+				from: block,
+				to: fn.kernel.terminatorEdgeBlock(edge),
+				kind: "ordinary",
+				get arguments() {
+					const version = fn.version("body");
+					if (argumentsCache === undefined || version !== argumentVersion) {
+						argumentVersion = version;
+						argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
+							fn.kernel.operandAt(argumentStart + index),
+						);
+					}
+					return argumentsCache;
+				},
+			});
 		}
 	}
 	for (const outgoing of successors) {
@@ -269,15 +232,23 @@ function buildExceptionalStructural(
 				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
 				const start = fn.kernel.blockHandlerArgumentStart(block);
 				const count = fn.kernel.blockHandlerArgumentCount(block);
-				const edge = new CoreControlEdgeView(
-					fn,
-					block,
-					handler,
-					"exceptional",
-					start,
-					count,
-					true,
-				);
+				let argumentVersion = -1;
+				let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+				const edge: CoreControlEdge = {
+					from: block,
+					to: handler,
+					kind: "exceptional",
+					get arguments() {
+						const version = fn.version("body");
+						if (argumentsCache === undefined || version !== argumentVersion) {
+							argumentVersion = version;
+							argumentsCache = Array.from({ length: count }, (_, index) =>
+								fn.kernel.handlerArgumentAt(start + index),
+							);
+						}
+						return argumentsCache;
+					},
+				};
 				successors[block]!.push(edge);
 				predecessors[handler]!.push(edge);
 			}
