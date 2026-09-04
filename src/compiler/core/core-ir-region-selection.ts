@@ -17,6 +17,7 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
+import { coreValueIsLoadedGlobalProperty } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
@@ -1058,7 +1059,17 @@ function guardedCallCandidates(
 	const candidates: Array<CorePendingOptimizationCandidate> = [];
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
-		for (const site of summaries.targets.outgoing(caller)) {
+		const outgoing = summaries.targets.outgoing(caller);
+		const globalTargetUses = new Map<CoreFunctionId, number>();
+		for (const site of outgoing) {
+			const target =
+				site.targets.functions.length === 1 ? site.targets.functions[0] : undefined;
+			if (target === undefined || !coreValueIsLoadedGlobalProperty(fn, site.callee)) {
+				continue;
+			}
+			globalTargetUses.set(target, (globalTargetUses.get(target) ?? 0) + 1);
+		}
+		for (const site of outgoing) {
 			if (
 				site.targets.functions.length === 0 ||
 				fn.instructionAttributes(site.instruction)[
@@ -1067,6 +1078,13 @@ function guardedCallCandidates(
 			)
 				continue;
 			const targetFunctions = Object.freeze([...site.targets.functions]);
+			if (
+				targetFunctions.length === 1 &&
+				coreValueIsLoadedGlobalProperty(fn, site.callee) &&
+				(globalTargetUses.get(targetFunctions[0]!) ?? 0) < 2
+			) {
+				continue;
+			}
 			const selection: CorePlanSpecialization = Object.freeze({
 				id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
 				kind: "guarded-direct-call",

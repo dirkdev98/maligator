@@ -237,6 +237,13 @@ function capturedCellId(
 	return identities.intern(1, owner, index);
 }
 
+function globalPropertyCellId(
+	identities: CoreGraphIdentityTable,
+	stringIndex: number,
+): CoreCellId {
+	return identities.intern(3, 0, stringIndex);
+}
+
 function functionPropertyId(
 	identities: CoreGraphIdentityTable,
 	functionId: CoreFunctionId,
@@ -253,6 +260,21 @@ function instructionOperand(
 	return operand < fn.kernel.instructionOperandCount(instruction)
 		? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + operand)
 		: undefined;
+}
+
+export function coreValueIsLoadedGlobalProperty(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): boolean {
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	const opcode = fn.instructionOpcodeName(definition);
+	if (opcode === "loadGlobalProperty") return true;
+	if (opcode !== "move") return false;
+	const input = instructionOperand(fn, definition, 0);
+	return input !== undefined && coreValueIsLoadedGlobalProperty(fn, input, seen);
 }
 
 function directCreatedFunction(
@@ -314,32 +336,97 @@ function collectKnownFunctionProperties(
 	localTransfers: CoreProgramFlowLocalTransfers,
 	identities: CoreGraphIdentityTable,
 ): ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets> {
+	const globalSlots = new Map<number, CoreCalleeTargets>();
+	const globalProperties = new Map<number, CoreCalleeTargets>();
+	for (let index = 0; index < localTransfers.operationCount; index++) {
+		const instruction = localTransfers.operationAt(index);
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "storeGlobal" && opcode !== "storeGlobalProperty") continue;
+		const value = instructionOperand(fn, instruction, 0);
+		if (value === undefined) continue;
+		const target = directCreatedFunction(fn, value);
+		if (target === undefined || target >= functionCapacity) continue;
+		const attributes = fn.instructionAttributes(instruction);
+		const key = opcode === "storeGlobal" ? attributes.index : attributes.nameStringIndex;
+		if (typeof key !== "number") continue;
+		const destinations = opcode === "storeGlobal" ? globalSlots : globalProperties;
+		destinations.set(
+			key,
+			joinCoreCalleeTargets(
+				destinations.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM,
+				coreCalleeTargetsFunction(target),
+			),
+		);
+	}
+	const localTargets = (
+		value: CoreValueId,
+		seen = new Set<CoreValueId>(),
+	): CoreCalleeTargets => {
+		if (seen.has(value)) return CORE_CALLEE_TARGETS_BOTTOM;
+		seen.add(value);
+		const direct = directCreatedFunction(fn, value);
+		if (direct !== undefined && direct < functionCapacity) {
+			return coreCalleeTargetsFunction(direct);
+		}
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return CORE_CALLEE_TARGETS_BOTTOM;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		const opcode = fn.instructionOpcodeName(definition);
+		if (opcode === "move") {
+			const input = instructionOperand(fn, definition, 0);
+			return input === undefined ? CORE_CALLEE_TARGETS_BOTTOM : localTargets(input, seen);
+		}
+		const attributes = fn.instructionAttributes(definition);
+		if (opcode === "loadGlobal" && typeof attributes.index === "number") {
+			return globalSlots.get(attributes.index) ?? CORE_CALLEE_TARGETS_BOTTOM;
+		}
+		if (
+			opcode === "loadGlobalProperty" &&
+			typeof attributes.nameStringIndex === "number"
+		) {
+			return (
+				globalProperties.get(attributes.nameStringIndex) ?? CORE_CALLEE_TARGETS_BOTTOM
+			);
+		}
+		return CORE_CALLEE_TARGETS_BOTTOM;
+	};
 	const properties = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 	for (let index = 0; index < localTransfers.propertyDefinitionCount; index++) {
 		const instruction = localTransfers.propertyDefinitionAt(index);
+		const opcode = fn.instructionOpcodeName(instruction);
 		const receiver = instructionOperand(fn, instruction, 0);
-		const key = instructionOperand(fn, instruction, 1);
-		const value = instructionOperand(fn, instruction, 2);
-		if (receiver === undefined || key === undefined || value === undefined) continue;
-		const receiverFunction = directCreatedFunction(fn, receiver);
-		const stringIndex = directStringIndex(fn, key);
-		const valueFunction = directCreatedFunction(fn, value);
-		if (
-			receiverFunction === undefined ||
-			stringIndex === undefined ||
-			valueFunction === undefined ||
-			receiverFunction >= functionCapacity ||
-			valueFunction >= functionCapacity
-		)
-			continue;
-		const property = functionPropertyId(identities, receiverFunction, stringIndex);
-		properties.set(
-			property,
-			joinCoreCalleeTargets(
-				properties.get(property) ?? CORE_CALLEE_TARGETS_BOTTOM,
-				coreCalleeTargetsFunction(valueFunction),
-			),
+		const key =
+			opcode === "defineProperty" ? instructionOperand(fn, instruction, 1) : undefined;
+		const value = instructionOperand(
+			fn,
+			instruction,
+			opcode === "defineProperty" ? 2 : 1,
 		);
+		const stringIndex =
+			opcode === "defineProperty"
+				? key === undefined
+					? undefined
+					: directStringIndex(fn, key)
+				: fn.instructionAttributes(instruction).stringIndex;
+		if (
+			receiver === undefined ||
+			value === undefined ||
+			typeof stringIndex !== "number"
+		) {
+			continue;
+		}
+		const receiverTargets = localTargets(receiver);
+		const valueTargets = localTargets(value);
+		if (coreCalleeTargetsIsBottom(valueTargets)) continue;
+		for (const receiverFunction of receiverTargets.functions) {
+			const property = functionPropertyId(identities, receiverFunction, stringIndex);
+			properties.set(
+				property,
+				joinCoreCalleeTargets(
+					properties.get(property) ?? CORE_CALLEE_TARGETS_BOTTOM,
+					valueTargets,
+				),
+			);
+		}
 	}
 	return properties;
 }
@@ -355,6 +442,11 @@ function rawInstructionCellId(
 	if (opcode === "loadGlobal" || opcode === "storeGlobal") {
 		const index = attributes.index;
 		if (typeof index === "number") id = globalCellId(identities, index);
+	} else if (opcode === "loadGlobalProperty" || opcode === "storeGlobalProperty") {
+		const stringIndex = attributes.nameStringIndex;
+		if (typeof stringIndex === "number") {
+			id = globalPropertyCellId(identities, stringIndex);
+		}
 	} else if (opcode === "loadCaptured" || opcode === "storeCaptured") {
 		const owner = attributes.functionIndex;
 		const index = attributes.index;
@@ -382,8 +474,13 @@ function collectFunctionCellAccesses(
 		const id = rawInstructionCellId(fn, instruction, identities);
 		if (id === undefined) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "loadGlobal" || opcode === "loadCaptured") reads.add(id);
-		else writes.add(id);
+		if (
+			opcode === "loadGlobal" ||
+			opcode === "loadGlobalProperty" ||
+			opcode === "loadCaptured"
+		) {
+			reads.add(id);
+		} else writes.add(id);
 	}
 	return Object.freeze({ reads, writes });
 }
@@ -481,7 +578,11 @@ function analyzeFunctionTargets(
 				const operand = instructionOperand(fn, instruction, 0);
 				resultTargets =
 					operand === undefined ? CORE_CALLEE_TARGETS_OPEN : values[operand]!;
-			} else if (opcode === "loadGlobal" || opcode === "loadCaptured") {
+			} else if (
+				opcode === "loadGlobal" ||
+				opcode === "loadGlobalProperty" ||
+				opcode === "loadCaptured"
+			) {
 				const key = instructionCellId(fn, instruction, trackedCells, identities);
 				resultTargets =
 					key === undefined
@@ -606,7 +707,11 @@ function analyzeFunctionTargets(
 		}
 		const key = instructionCellId(fn, instruction, trackedCells, identities);
 		if (key === undefined) continue;
-		if (opcode === "loadGlobal" || opcode === "loadCaptured") {
+		if (
+			opcode === "loadGlobal" ||
+			opcode === "loadGlobalProperty" ||
+			opcode === "loadCaptured"
+		) {
 			cellInputs.set(key, cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
 			continue;
 		}

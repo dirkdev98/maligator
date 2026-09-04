@@ -519,6 +519,88 @@ describe("incremental Core call graph", () => {
 		expect(second.graph.exactCallers(4 as never)).toEqual([callerFunction]);
 	});
 
+	it("tracks guarded global function properties through static method writes", () => {
+		const program = analysisProgram();
+		const setup = new CoreFunctionBuilder(program);
+		const setupEntry = setup.createBlock();
+		const [holder] = setup.appendInstruction(setupEntry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		const [first] = setup.appendInstruction(setupEntry, "createFunction", [], {
+			attributes: { functionIndex: 3 },
+		});
+		const [second] = setup.appendInstruction(setupEntry, "createFunction", [], {
+			attributes: { functionIndex: 4 },
+		});
+		for (const [nameStringIndex, value] of [
+			[10, holder],
+			[11, first],
+			[12, second],
+		] as const) {
+			setup.appendInstruction(setupEntry, "storeGlobalProperty", [value!], {
+				outputCount: 0,
+				attributes: { nameStringIndex },
+			});
+		}
+		const [loadedHolder] = setup.appendInstruction(setupEntry, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex: 10 },
+		});
+		const [loadedFirst] = setup.appendInstruction(setupEntry, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex: 11 },
+		});
+		const [loadedSecond] = setup.appendInstruction(setupEntry, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex: 12 },
+		});
+		setup.appendInstruction(
+			setupEntry,
+			"storePropertyStatic",
+			[loadedHolder!, loadedFirst!],
+			{ outputCount: 0, attributes: { stringIndex: 7 } },
+		);
+		setup.appendInstruction(
+			setupEntry,
+			"storePropertyStatic",
+			[loadedHolder!, loadedSecond!],
+			{ outputCount: 0, attributes: { stringIndex: 7 } },
+		);
+		const [setupResult] = setup.appendInstruction(setupEntry, "createUndefined", []);
+		setup.setTerminator(setupEntry, { kind: "return", value: setupResult! });
+		setup.finish(setupEntry);
+
+		const caller = new CoreFunctionBuilder(program);
+		const callerEntry = caller.createBlock();
+		const [receiver] = caller.appendInstruction(callerEntry, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex: 10 },
+		});
+		const [callee] = caller.appendInstruction(
+			callerEntry,
+			"loadPropertyStatic",
+			[receiver!],
+			{ attributes: { stringIndex: 7 } },
+		);
+		const [result] = caller.appendInstruction(callerEntry, "call", [callee!, receiver!]);
+		const call = caller.bodyInstructionIds(callerEntry)[2]!;
+		caller.setTerminator(callerEntry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(callerEntry).function;
+		appendLeaf(program);
+		appendLeaf(program);
+		appendLeaf(program);
+
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(graph.site(callerFunction, call)?.targets).toMatchObject({
+			functions: [3, 4],
+			anyScript: false,
+			opaque: true,
+		});
+		expect(graph.graph.exactCallers(3 as never)).toEqual([callerFunction]);
+		expect(graph.graph.exactCallers(4 as never)).toEqual([callerFunction]);
+	});
+
 	it("does not narrow an unknown static property away from script functions", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program);

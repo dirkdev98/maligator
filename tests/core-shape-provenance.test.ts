@@ -87,6 +87,41 @@ describe("Core local shape provenance", () => {
 		).toBe(CORE_SHAPE_CANDIDATES_OPAQUE);
 	});
 
+	it("carries a shaped origin through a closed global slot", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [first] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [first!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [object!], {
+			outputCount: 0,
+			attributes: { index: 0 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [result] = builder.appendInstruction(entry, "loadPropertyStatic", [loaded!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const finished = builder.finish(entry);
+		const analysis = analyzeCoreShapeProvenance(
+			core,
+			finished.function,
+			undefined,
+			new Set([0]),
+		);
+		expect(analysis.candidates(loaded!)).toMatchObject({
+			opaque: false,
+			origins: [{ function: finished.function, keys: [0] }],
+		});
+		expect(analysis.candidates(loaded!, "write")).toBe(CORE_SHAPE_CANDIDATES_OPAQUE);
+	});
+
 	it("parses target certificates without trusting malformed candidate data", () => {
 		const known = {
 			candidates: [{ shapeFunctionIndex: 0, shapeInstruction: 3, slot: 1 }],

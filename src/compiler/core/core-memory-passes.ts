@@ -575,7 +575,10 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 			const stringIndex = attributes.stringIndex;
 			const base = instructionOperandAt(fn, instruction, 0);
 			if (typeof stringIndex !== "number" || base === undefined) continue;
-			const shape = shapes.candidates(base);
+			const shape = shapes.candidates(
+				base,
+				opcode === "loadPropertyStatic" ? "read" : "write",
+			);
 			if (shape.opaque || shape.origins.length === 0) continue;
 			const candidates = shape.origins.flatMap((origin) => {
 				const slot = origin.keys.indexOf(stringIndex);

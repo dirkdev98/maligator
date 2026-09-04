@@ -619,12 +619,16 @@ export function extractCoreProgramFlowLocalTransfers(
 		if (
 			opcode === "loadGlobal" ||
 			opcode === "storeGlobal" ||
+			opcode === "loadGlobalProperty" ||
+			opcode === "storeGlobalProperty" ||
 			opcode === "loadCaptured" ||
 			opcode === "storeCaptured"
 		) {
 			cellAccesses.push(instruction);
 		}
-		if (opcode === "defineProperty") propertyDefinitions.push(instruction);
+		if (opcode === "defineProperty" || opcode === "storePropertyStatic") {
+			propertyDefinitions.push(instruction);
+		}
 		const attributes = fn.instructionAttributes(instruction);
 		for (const key of FUNCTION_INDEX_ATTRIBUTES) {
 			addStructuralTarget(

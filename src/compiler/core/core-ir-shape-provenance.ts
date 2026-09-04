@@ -14,6 +14,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 export const CORE_SHAPE_ORIGIN_CAP = 4;
@@ -191,7 +192,7 @@ export interface CoreShapeProvenanceStatistics {
 export interface CoreShapeProvenanceAnalysis {
 	readonly function: CoreFunctionId;
 	readonly statistics: CoreShapeProvenanceStatistics;
-	candidates(value: CoreValueId): CoreShapeCandidates;
+	candidates(value: CoreValueId, mode?: CoreAccessMode): CoreShapeCandidates;
 	exactOwnSlot(
 		base: CoreValueId,
 		key: CoreAccessKey,
@@ -209,7 +210,9 @@ export function analyzeCoreShapeProvenance(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	provenance: CoreProvenance = analyzeCoreProvenance(program, functionId),
+	closedGlobalSlots: ReadonlySet<number> = new Set(),
 ): CoreShapeProvenanceAnalysis {
+	const fn = program.function(functionId);
 	const origins = new Map<CoreInstructionId, CoreShapeOrigin>();
 	for (const layout of provenance.layouts) {
 		if (layout.kind !== "named-slots") continue;
@@ -222,6 +225,63 @@ export function analyzeCoreShapeProvenance(
 			}),
 		);
 	}
+	const globalOrigins = new Map<number, ReadonlyArray<CoreShapeOrigin>>();
+	const overflowGlobalSlots = new Set<number>();
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "storeGlobal"
+		) {
+			continue;
+		}
+		const slot = fn.instructionAttributes(instruction).index;
+		if (
+			typeof slot !== "number" ||
+			!closedGlobalSlots.has(slot) ||
+			fn.kernel.instructionOperandCount(instruction) === 0
+		) {
+			continue;
+		}
+		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		const layout = provenance.allocationOf(value);
+		const origin =
+			layout?.kind === "named-slots" ? origins.get(layout.instruction) : undefined;
+		if (origin === undefined || overflowGlobalSlots.has(slot)) continue;
+		const current = globalOrigins.get(slot) ?? [];
+		if (
+			current.some(
+				(candidate) =>
+					candidate.function === origin.function &&
+					candidate.instruction === origin.instruction,
+			)
+		) {
+			continue;
+		}
+		if (current.length >= CORE_SHAPE_ORIGIN_CAP) {
+			overflowGlobalSlots.add(slot);
+			globalOrigins.delete(slot);
+			continue;
+		}
+		globalOrigins.set(slot, Object.freeze([...current, origin]));
+	}
+	const closedGlobalCandidates = (
+		value: CoreValueId,
+		seen = new Set<CoreValueId>(),
+	): ReadonlyArray<CoreShapeOrigin> | undefined => {
+		if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		seen.add(value);
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		const opcode = fn.instructionOpcodeName(definition);
+		if (opcode === "move" && fn.kernel.instructionOperandCount(definition) > 0) {
+			return closedGlobalCandidates(
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)),
+				seen,
+			);
+		}
+		if (opcode !== "loadGlobal") return undefined;
+		const slot = fn.instructionAttributes(definition).index;
+		return typeof slot === "number" ? globalOrigins.get(slot) : undefined;
+	};
 	let exactSlotQueries = 0;
 	const result: CoreShapeProvenanceAnalysis = {
 		function: functionId,
@@ -234,13 +294,20 @@ export function analyzeCoreShapeProvenance(
 				return exactSlotQueries;
 			},
 		},
-		candidates(value) {
+		candidates(value, mode = "read") {
 			const layout = provenance.allocationOf(value);
-			if (layout?.kind !== "named-slots") return CORE_SHAPE_CANDIDATES_OPAQUE;
-			const origin = origins.get(layout.instruction);
-			return origin === undefined
+			if (layout?.kind === "named-slots") {
+				const origin = origins.get(layout.instruction);
+				if (origin !== undefined) {
+					return Object.freeze({ origins: Object.freeze([origin]), opaque: false });
+				}
+			}
+			// Closed-slot representatives restore portable read guards; writes retain the local store IC.
+			if (mode === "write") return CORE_SHAPE_CANDIDATES_OPAQUE;
+			const global = closedGlobalCandidates(value);
+			return global === undefined || global.length === 0
 				? CORE_SHAPE_CANDIDATES_OPAQUE
-				: Object.freeze({ origins: Object.freeze([origin]), opaque: false });
+				: Object.freeze({ origins: global, opaque: false });
 		},
 		exactOwnSlot(base, key, mode) {
 			exactSlotQueries++;
@@ -263,13 +330,14 @@ export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreSh
 		scope: "function",
 		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 		programDependencies: ["data"],
-		compute({ program, request, get }) {
+		compute({ program, context, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			return analyzeCoreShapeProvenance(
 				program,
 				request.function,
 				get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance,
+				new Set(context.data.singleAssignmentGlobalSlots),
 			);
 		},
 	};
