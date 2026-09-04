@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +92,48 @@ export interface CompilerHostGapKernelResult extends KernelDescriptor {
 	readonly hostGapMs: number;
 }
 
+interface FullCompilerOwner {
+	readonly id: number;
+	readonly name: string;
+	readonly nodeMs: number;
+	readonly maligatorMs: number;
+	readonly hostRatio: number | null;
+	readonly hostGapMs: number;
+	readonly workUnits: number;
+	readonly nodeNsPerWorkUnit: number | null;
+	readonly maligatorNsPerWorkUnit: number | null;
+	readonly allocatedBytes?: number;
+	readonly collections?: number;
+}
+
+interface FullCompilerAnalysis {
+	readonly artifact: string;
+	readonly source: unknown;
+	readonly nodeMs: number;
+	readonly maligatorMs: number;
+	readonly ratio: number;
+	readonly nodePhases: Readonly<Record<string, number>>;
+	readonly maligatorPhases: Readonly<Record<string, number>>;
+	readonly runtime: unknown;
+	readonly nativeBuild: unknown;
+	readonly coverage: {
+		readonly nodeOptimizeCore: number;
+		readonly maligatorOptimizeCore: number;
+		readonly hostGap: number;
+		readonly allocation?: number;
+	};
+	readonly owners: ReadonlyArray<
+		FullCompilerOwner & {
+			readonly representativeKernels: ReadonlyArray<string>;
+			readonly category: HostGapCategory;
+		}
+	>;
+	readonly topHostGap: ReadonlyArray<string>;
+	readonly topAllocation: ReadonlyArray<string>;
+	readonly categoryFractions: Readonly<Record<HostGapCategory, number>>;
+	readonly actionableOwners: ReadonlyArray<string>;
+}
+
 interface Options {
 	readonly samples: number;
 	readonly targetNodeMs: number;
@@ -93,6 +142,7 @@ interface Options {
 	readonly groups: ReadonlySet<KernelDescriptor["group"]>;
 	readonly cases: ReadonlySet<string>;
 	readonly skipNodeAllocation: boolean;
+	readonly selfCompile?: string;
 }
 
 const HELP = `Usage: npm run bench:compiler-host-gap -- [options]
@@ -105,6 +155,8 @@ Options:
   --output PATH              JSON report path
   --markdown PATH            Markdown report path
   --skip-node-allocation     omit V8 sampled-allocation resource probes
+  --self-compile PATH        merge a full self-compile owner artifact
+  --no-self-compile          do not merge the default owner artifact
 `;
 
 function requiredValue(args: ReadonlyArray<string>, index: number): string {
@@ -133,6 +185,11 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	const groups = new Set<KernelDescriptor["group"]>();
 	const cases = new Set<string>();
 	let skipNodeAllocation = false;
+	let selfCompile: string | undefined = existsSync(
+		path.join(REPOSITORY_ROOT, "bench/core-opt4-host-gap-start.json"),
+	)
+		? path.join(REPOSITORY_ROOT, "bench/core-opt4-host-gap-start.json")
+		: undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
 		if (option === "--samples") {
@@ -159,11 +216,25 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 			index++;
 		} else if (option === "--skip-node-allocation") {
 			skipNodeAllocation = true;
+		} else if (option === "--self-compile") {
+			selfCompile = path.resolve(requiredValue(args, index));
+			index++;
+		} else if (option === "--no-self-compile") {
+			selfCompile = undefined;
 		} else {
 			throw new Error(`unknown option: ${option}`);
 		}
 	}
-	return { samples, targetNodeMs, output, markdown, groups, cases, skipNodeAllocation };
+	return {
+		samples,
+		targetNodeMs,
+		output,
+		markdown,
+		groups,
+		cases,
+		skipNodeAllocation,
+		...(selfCompile === undefined ? {} : { selfCompile }),
+	};
 }
 
 function runProcess(
@@ -464,6 +535,172 @@ export function hostGapFractions(
 	);
 }
 
+function representativeKernelIds(owner: string): ReadonlyArray<string> {
+	const name = owner.toLowerCase();
+	if (name.includes("semantic-to-core")) return ["pruned-ssa", "short-lived-records"];
+	if (name.includes("verification")) return ["set-operations", "stable-shape-properties"];
+	if (name.includes("program-flow convergence")) return ["program-flow-convergence"];
+	if (name.includes("program-flow") || name.includes("call graph")) {
+		return ["program-flow-extraction", "indirect-calls"];
+	}
+	if (name.includes("value kind")) return ["value-kinds"];
+	if (name.includes("fused local")) return ["optimizer-queue"];
+	if (name.includes("block-parameter")) return ["block-parameters"];
+	if (name.includes("forwarding") || name.includes("other function")) {
+		return ["optimizer-queue", "candidate-ranking"];
+	}
+	if (name.includes("cfg") || name.includes("control-flow")) return ["cfg-edges"];
+	if (name.includes("dominator")) return ["immediate-dominators"];
+	if (name.includes("canonical")) return ["canonical-roots"];
+	if (name.includes("provenance") || name.includes("fact")) return ["fact-provenance"];
+	if (name.includes("memoryversions")) return ["memory-versions"];
+	if (name.includes("memory event")) return ["memory-events"];
+	if (name.includes("core-to-execution")) return ["core-to-execution"];
+	if (name.includes("execution-to-image")) return ["core-to-execution"];
+	if (name.includes("emission")) return ["string-keys", "spread-copies"];
+	if (name.includes("dense generation")) return ["dense-relocation"];
+	if (name.includes("specialization") || name.includes("cross-call")) {
+		return ["candidate-ranking", "closure-calls"];
+	}
+	if (name.includes("construction")) return ["pruned-ssa", "moderate-retention-churn"];
+	return [];
+}
+
+function ownerCategory(owner: string): HostGapCategory {
+	const name = owner.toLowerCase();
+	if (
+		name.includes("construction") ||
+		name.includes("emission") ||
+		name.includes("lowering")
+	) {
+		return "allocation-gc";
+	}
+	if (
+		name.includes("memory") ||
+		name.includes("verification") ||
+		name.includes("block-parameter")
+	) {
+		return "runtime-collections-properties";
+	}
+	if (name.includes("specialization") || name.includes("cross-call")) {
+		return "function-closure-dispatch";
+	}
+	if (
+		name.includes("value kind") ||
+		name.includes("program-flow") ||
+		name.includes("fused local") ||
+		name.includes("cfg") ||
+		name.includes("control-flow") ||
+		name.includes("dominator") ||
+		name.includes("canonical") ||
+		name.includes("dense generation")
+	) {
+		return "typed-arrays-numeric-loops";
+	}
+	return "compiler-algorithms";
+}
+
+function ownerCategoryFractions(
+	owners: ReadonlyArray<FullCompilerOwner & { readonly category: HostGapCategory }>,
+): Readonly<Record<HostGapCategory, number>> {
+	const categories: ReadonlyArray<HostGapCategory> = [
+		"runtime-collections-properties",
+		"function-closure-dispatch",
+		"iterators-callbacks",
+		"allocation-gc",
+		"typed-arrays-numeric-loops",
+		"compiler-algorithms",
+		"unattributed-execution",
+	];
+	const positiveGap = owners.reduce(
+		(sum, owner) => sum + Math.max(0, owner.hostGapMs),
+		0,
+	);
+	return Object.freeze(
+		Object.fromEntries(
+			categories.map((category) => [
+				category,
+				positiveGap === 0
+					? 0
+					: owners
+							.filter((owner) => owner.category === category)
+							.reduce((sum, owner) => sum + Math.max(0, owner.hostGapMs), 0) /
+						positiveGap,
+			]),
+		) as Record<HostGapCategory, number>,
+	);
+}
+
+function loadFullCompilerAnalysis(
+	file: string,
+	kernelIds: ReadonlySet<string>,
+): FullCompilerAnalysis {
+	const snapshot = JSON.parse(readFileSync(file, "utf8")) as {
+		readonly source?: unknown;
+		readonly selfCompile?: {
+			readonly nodeMs?: number;
+			readonly maligatorMs?: number;
+			readonly nodePhases?: Readonly<Record<string, number>>;
+			readonly maligatorPhases?: Readonly<Record<string, number>>;
+			readonly runtime?: unknown;
+			readonly nativeBuild?: unknown;
+			readonly ownerSample?: {
+				readonly owners?: ReadonlyArray<FullCompilerOwner>;
+				readonly coverage?: FullCompilerAnalysis["coverage"];
+			};
+		};
+	};
+	const selfCompile = snapshot.selfCompile;
+	const owners = selfCompile?.ownerSample?.owners;
+	const coverage = selfCompile?.ownerSample?.coverage;
+	if (
+		selfCompile === undefined ||
+		typeof selfCompile.nodeMs !== "number" ||
+		typeof selfCompile.maligatorMs !== "number" ||
+		selfCompile.nodePhases === undefined ||
+		selfCompile.maligatorPhases === undefined ||
+		owners === undefined ||
+		owners.length === 0 ||
+		coverage === undefined
+	) {
+		throw new Error(`${file} is not a completed self-compile owner artifact`);
+	}
+	const nodeMs = selfCompile.nodeMs;
+	const maligatorMs = selfCompile.maligatorMs;
+	const classified = owners.map((owner) => ({
+		...owner,
+		representativeKernels: representativeKernelIds(owner.name).filter((id) =>
+			kernelIds.has(id),
+		),
+		category: ownerCategory(owner.name),
+	}));
+	const byGap = [...classified].sort((left, right) => right.hostGapMs - left.hostGapMs);
+	const byAllocation = [...classified].sort(
+		(left, right) => (right.allocatedBytes ?? 0) - (left.allocatedBytes ?? 0),
+	);
+	return {
+		artifact: path.relative(REPOSITORY_ROOT, file),
+		source: snapshot.source,
+		nodeMs,
+		maligatorMs,
+		ratio: maligatorMs / nodeMs,
+		nodePhases: selfCompile.nodePhases,
+		maligatorPhases: selfCompile.maligatorPhases,
+		runtime: selfCompile.runtime,
+		nativeBuild: selfCompile.nativeBuild,
+		coverage,
+		owners: classified,
+		topHostGap: byGap.slice(0, 5).map(({ name }) => name),
+		topAllocation: byAllocation.slice(0, 5).map(({ name }) => name),
+		categoryFractions: ownerCategoryFractions(classified),
+		actionableOwners: byGap
+			.filter(
+				(owner) => (owner.hostRatio ?? 0) > 7 && owner.maligatorMs / maligatorMs >= 0.03,
+			)
+			.map(({ name }) => name),
+	};
+}
+
 function row(result: CompilerHostGapKernelResult): string {
 	return `| ${result.id} | ${result.node.medianMs.toFixed(1)} | ${result.maligator.medianMs.toFixed(1)} | ${result.ratio.toFixed(2)}x | ${result.hostGapMs.toFixed(1)} | ${result.maligator.resource.allocatedBytes?.toLocaleString() ?? "n/a"} |`;
 }
@@ -471,6 +708,7 @@ function row(result: CompilerHostGapKernelResult): string {
 function markdownReport(report: {
 	readonly source: { readonly commit: string; readonly dirty: boolean };
 	readonly results: ReadonlyArray<CompilerHostGapKernelResult>;
+	readonly fullCompiler?: FullCompilerAnalysis;
 	readonly diagnosis: {
 		readonly firstPrimitiveAboveSeven: string | null;
 		readonly firstAlgorithmAboveSeven: string | null;
@@ -487,6 +725,39 @@ function markdownReport(report: {
 			"| --- | ---: | ---: | ---: | ---: | ---: |",
 			...rows.map(row),
 		].join("\n");
+	const fullCompilerSection =
+		report.fullCompiler === undefined
+			? "## Full compiler owners\n\nNo full self-compile owner artifact was supplied.\n"
+			: `## Full compiler owners
+
+Artifact: \`${report.fullCompiler.artifact}\`
+
+- Warm total: ${report.fullCompiler.nodeMs.toFixed(1)} ms Node, ${report.fullCompiler.maligatorMs.toFixed(1)} ms Maligator, ${report.fullCompiler.ratio.toFixed(2)}x
+- Optimizer attribution: ${(report.fullCompiler.coverage.nodeOptimizeCore * 100).toFixed(1)}% Node, ${(report.fullCompiler.coverage.maligatorOptimizeCore * 100).toFixed(1)}% Maligator
+- Host-gap attribution: ${(report.fullCompiler.coverage.hostGap * 100).toFixed(1)}%
+- Allocation attribution: ${report.fullCompiler.coverage.allocation === undefined ? "unavailable" : `${(report.fullCompiler.coverage.allocation * 100).toFixed(1)}%`}
+- Top host-gap owners: ${report.fullCompiler.topHostGap.join(", ")}
+- Top Maligator allocation owners: ${report.fullCompiler.topAllocation.join(", ")}
+- Slice 3 ranking qualifiers: ${report.fullCompiler.actionableOwners.join(", ") || "none"}
+
+| Owner | Node ms | Maligator ms | Ratio | Gap ms | Maligator allocated bytes | Representative kernels |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+${[...report.fullCompiler.owners]
+	.sort((left, right) => right.hostGapMs - left.hostGapMs)
+	.map(
+		(owner) =>
+			`| ${owner.name} | ${owner.nodeMs.toFixed(1)} | ${owner.maligatorMs.toFixed(1)} | ${owner.hostRatio?.toFixed(2) ?? "n/a"}x | ${owner.hostGapMs.toFixed(1)} | ${owner.allocatedBytes?.toLocaleString() ?? "n/a"} | ${owner.representativeKernels.join(", ") || "unmapped"} |`,
+	)
+	.join("\n")}
+
+Associated positive full-compiler owner-gap fractions:
+
+${Object.entries(report.fullCompiler.categoryFractions)
+	.map(([category, fraction]) => `- ${category}: ${(fraction * 100).toFixed(1)}%`)
+	.join("\n")}
+
+The category association maps measured owner gaps to their representative kernels; it is a ranking model, not a claim that one primitive alone explains an owner's complete cost.
+`;
 	return `# Core opt4 compiler host-gap analysis
 
 Source: \`${report.source.commit}\`${report.source.dirty ? " with benchmark changes" : ""}
@@ -507,6 +778,8 @@ ${Object.entries(report.diagnosis.categoryFractions)
 	.join("\n")}
 
 These fractions classify the kernel ladder only. Full compiler owner coverage remains authoritative for the total self-host gap.
+
+${fullCompilerSection}
 
 ## Primitive kernels
 
@@ -568,6 +841,24 @@ function main(args: ReadonlyArray<string>): void {
 			(right.maligator.resource.allocatedBytes ?? 0) -
 			(left.maligator.resource.allocatedBytes ?? 0),
 	);
+	const fullCompiler =
+		options.selfCompile === undefined
+			? undefined
+			: loadFullCompilerAnalysis(
+					options.selfCompile,
+					new Set(results.map(({ id }) => id)),
+				);
+	const unmappedTopOwners =
+		fullCompiler?.owners.filter(
+			(owner) =>
+				fullCompiler.topHostGap.includes(owner.name) &&
+				owner.representativeKernels.length === 0,
+		) ?? [];
+	if (unmappedTopOwners.length > 0) {
+		throw new Error(
+			`top compiler owners lack representative kernels: ${unmappedTopOwners.map(({ name }) => name).join(", ")}`,
+		);
+	}
 	const diagnosis = {
 		firstPrimitiveAboveSeven:
 			results.find(({ group, ratio }) => group === "primitive" && ratio > 7)?.id ?? null,
@@ -579,7 +870,7 @@ function main(args: ReadonlyArray<string>): void {
 	};
 	const dirtyPatch = gitOutput(["diff", "--binary", "HEAD"]);
 	const report = {
-		schema: 1,
+		schema: 2,
 		generatedAt: new Date().toISOString(),
 		source: {
 			commit: gitOutput(["rev-parse", "HEAD"]),
@@ -602,6 +893,12 @@ function main(args: ReadonlyArray<string>): void {
 			driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
 			driverDigest: digest(fileURLToPath(import.meta.url)),
 			build: CONFIG,
+			...(options.selfCompile === undefined
+				? {}
+				: {
+						selfCompileArtifact: path.relative(REPOSITORY_ROOT, options.selfCompile),
+						selfCompileArtifactDigest: digest(options.selfCompile),
+					}),
 		},
 		workParity: {
 			operations: true,
@@ -609,10 +906,14 @@ function main(args: ReadonlyArray<string>): void {
 			reducedHostWork: false,
 		},
 		results,
+		...(fullCompiler === undefined ? {} : { fullCompiler }),
 		diagnosis,
 	};
 	writeFileSync(options.output, `${JSON.stringify(report, undefined, "\t")}\n`);
 	writeFileSync(options.markdown, markdownReport(report));
+	const formatter = path.join(REPOSITORY_ROOT, "node_modules/.bin/oxfmt");
+	if (existsSync(formatter))
+		runProcess(formatter, ["--write", options.output, options.markdown]);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.output)}`);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.markdown)}`);
 	progress.complete();
