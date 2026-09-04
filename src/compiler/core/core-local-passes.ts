@@ -1013,29 +1013,9 @@ function typeofObservation(
 	return actual === undefined ? undefined : actual === expected;
 }
 
-function hasValueKindObservationOpportunity(fn: CoreFunctionStore): boolean {
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		const operator = fn.instructionAttributes(instruction).operator;
-		if (opcode === "unary" && operator === "!") return true;
-		if (opcode === "binary" && (operator === "===" || operator === "!==")) {
-			return true;
-		}
-	}
-	return false;
-}
-
 const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["unary", "binary"],
-	admission: {
-		predicate: "truthiness or strict-identity observation with an exact value kind",
-		hasOpportunity({ program, function: functionId }) {
-			return hasValueKindObservationOpportunity(program.function(functionId));
-		},
-	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
