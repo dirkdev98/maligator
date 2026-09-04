@@ -33,6 +33,7 @@ import {
 	prepareSelfCompileSource,
 	SELF_COMPILE_CONFIG,
 } from "./self-compile-workload.ts";
+import { parseExternalPeakRss, summarizeV8GcTrace } from "./v8-gc-trace.ts";
 
 type TierKind =
 	| "synthetic"
@@ -72,6 +73,7 @@ interface WorkerRequest {
 	readonly sequence: ReadonlyArray<CoreInstrumentationMode>;
 	readonly discardFirst: boolean;
 	readonly profileLast: boolean;
+	readonly retainedHeapAfterGc?: boolean;
 }
 
 interface CompilerScalePhases {
@@ -94,8 +96,27 @@ interface HeapProfileSummary {
 	readonly allocationOwnerHotspots: ReadonlyArray<CompilerProfileHotspot>;
 	readonly cpuSampledOptimizeMs: number;
 	readonly cpuHotspots: ReadonlyArray<CompilerProfileHotspot>;
-	readonly gcMsDuringOptimize: number;
-	readonly gcEventsDuringOptimize: number;
+	readonly gc: {
+		readonly cpu: {
+			readonly source: "inspector-cpu-profile";
+			readonly milliseconds: number;
+		};
+		readonly wall: {
+			readonly source: "v8-trace-gc" | "performance-observer";
+			readonly milliseconds: number;
+			readonly events: number;
+			readonly maximumPauseMs: number;
+		};
+		readonly performanceObserver: {
+			readonly milliseconds: number;
+			readonly events: number;
+			readonly maximumPauseMs: number;
+		};
+	};
+	readonly optimizeIntervalMs: {
+		readonly start: number;
+		readonly end: number;
+	};
 }
 
 interface CompilerScaleSample {
@@ -126,6 +147,8 @@ interface CompilerScaleSample {
 		readonly peakManagedHeap: number;
 		readonly rssAfter: number;
 		readonly peakRss: number;
+		readonly peakRssSource: "process-resource-usage" | "external-time";
+		readonly internalPeakRss: number;
 		readonly checkpoints: ReadonlyArray<{
 			readonly checkpoint: string;
 			readonly heapUsed: number;
@@ -134,6 +157,13 @@ interface CompilerScaleSample {
 			readonly arrayBuffers: number;
 			readonly rss: number;
 		}>;
+		readonly retainedAfterGc?: {
+			readonly heapUsed: number;
+			readonly managedHeap: number;
+			readonly external: number;
+			readonly arrayBuffers: number;
+			readonly rss: number;
+		};
 	};
 	readonly output: {
 		readonly units: number;
@@ -154,6 +184,7 @@ interface DriverOptions {
 	readonly includeTestCheck: boolean;
 	readonly quick: boolean;
 	readonly coreOpt3Start: boolean;
+	readonly coreOpt4Start: boolean;
 	readonly output: string;
 }
 
@@ -162,6 +193,7 @@ const REPOSITORY_ROOT = realpathSync(path.resolve(path.dirname(SCRIPT_PATH), "..
 const REPOSITORY_URL_PREFIX = pathToFileURL(`${REPOSITORY_ROOT}${path.sep}`).href;
 const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "bench/compiler-scale-manifest.json");
 const DEFAULT_OUTPUT = path.join(REPOSITORY_ROOT, "bench/compiler-scale-baseline.json");
+const OPT4_START_OUTPUT = path.join(REPOSITORY_ROOT, "bench/core-opt4-start.json");
 const WORKER_PREFIX = "COMPILER_SCALE_WORKER=";
 const HEAP_SAMPLING_INTERVAL = 32_768;
 
@@ -180,6 +212,7 @@ tier 19 requires --include-test-check unless --core-opt3-start selects the compl
   --include-test-check         include tier 14 (npm run test:check)
   --quick                      one warm and one cold sample per case
   --core-opt3-start            exact Slice 0 self-compile measurement protocol
+  --core-opt4-start            isolated opt4 Tier 17 measurement protocol
   --output PATH                baseline JSON destination
 
 Completed cases are checkpointed beside the output and resumed automatically.
@@ -218,7 +251,9 @@ function parseOptions(
 	let includeTestCheck = false;
 	let quick = false;
 	let coreOpt3Start = false;
+	let coreOpt4Start = false;
 	let output = DEFAULT_OUTPUT;
+	let outputExplicit = false;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
 		if (option === "--help" || option === "-h") {
@@ -261,26 +296,31 @@ function parseOptions(
 			quick = true;
 		} else if (option === "--core-opt3-start") {
 			coreOpt3Start = true;
+		} else if (option === "--core-opt4-start") {
+			coreOpt4Start = true;
 		} else if (option === "--output") {
 			output = path.resolve(args[++index] ?? "");
+			outputExplicit = true;
 		} else {
 			throw new Error(`unknown option ${option}\n${HELP}`);
 		}
 	}
-	const tiers =
-		selected ??
-		new Set(
-			manifest.tiers
-				.filter(({ kind }) => coreOpt3Start || kind !== "command")
-				.map(({ tier }) => tier),
-		);
+	const tiers = selected
+		? selected
+		: coreOpt4Start
+			? new Set([17])
+			: new Set(
+					manifest.tiers
+						.filter(({ kind }) => coreOpt3Start || kind !== "command")
+						.map(({ tier }) => tier),
+				);
 	for (const tier of tiers) {
 		if (!manifest.tiers.some((entry) => entry.tier === tier)) {
 			throw new Error(`tier ${tier} is not in the manifest`);
 		}
 	}
 	if (
-		coreOpt3Start &&
+		(coreOpt3Start || coreOpt4Start) &&
 		(quick ||
 			warmRuns !== undefined ||
 			coldRuns !== undefined ||
@@ -289,8 +329,11 @@ function parseOptions(
 			!profile)
 	) {
 		throw new Error(
-			"--core-opt3-start fixes warm, cold, instrumentation, and profile sampling",
+			"the exact start protocols fix warm, cold, instrumentation, and profile sampling",
 		);
+	}
+	if (coreOpt3Start && coreOpt4Start) {
+		throw new Error("select only one exact start protocol");
 	}
 	return {
 		tiers,
@@ -302,7 +345,8 @@ function parseOptions(
 		includeTestCheck: includeTestCheck || coreOpt3Start,
 		quick,
 		coreOpt3Start,
-		output,
+		coreOpt4Start,
+		output: coreOpt4Start && !outputExplicit ? OPT4_START_OUTPUT : output,
 	};
 }
 
@@ -532,6 +576,7 @@ function sampledCpuSummary(
 ): {
 	cpuSampledOptimizeMs: number;
 	cpuHotspots: ReadonlyArray<CompilerProfileHotspot>;
+	gcCpuMsDuringOptimize: number;
 } {
 	const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
 	const weights = new Map<string, number>();
@@ -540,12 +585,16 @@ function sampledCpuSummary(
 	const upper = optimizeEnd - startedAt;
 	let elapsed = 0;
 	let sampled = 0;
+	let gcCpuMsDuringOptimize = 0;
 	for (let index = 0; index < (profile.samples?.length ?? 0); index++) {
 		const delta = (profile.timeDeltas?.[index] ?? 0) / 1_000;
 		elapsed += delta;
 		if (elapsed < lower || elapsed > upper) continue;
 		const frame = nodes.get(profile.samples![index]!);
 		if (frame === undefined) continue;
+		if (frame.functionName === "(garbage collector)") {
+			gcCpuMsDuringOptimize += delta;
+		}
 		const key = hotspotKey(frame);
 		weights.set(key, (weights.get(key) ?? 0) + delta);
 		frames.set(key, frame);
@@ -554,6 +603,7 @@ function sampledCpuSummary(
 	return {
 		cpuSampledOptimizeMs: sampled,
 		cpuHotspots: topCompilerProfileHotspots(weights, frames),
+		gcCpuMsDuringOptimize,
 	};
 }
 
@@ -574,6 +624,7 @@ async function compileSample(
 	benchmarkCase: CompilerScaleCase,
 	instrumentation: CoreInstrumentationMode,
 	profile: boolean,
+	retainedHeapAfterGc = false,
 ): Promise<CompilerScaleSample> {
 	const phases = emptyPhases();
 	let optimizeStart = 0;
@@ -670,6 +721,11 @@ async function compileSample(
 	const relevantGc = gcEntries.filter(
 		(entry) => entry.startTime >= optimizeStart && entry.startTime <= optimizeEnd,
 	);
+	const observedGcMs = relevantGc.reduce((total, entry) => total + entry.duration, 0);
+	const observedMaximumPauseMs = relevantGc.reduce(
+		(maximum, entry) => Math.max(maximum, entry.duration),
+		0,
+	);
 	const allocation =
 		allocationProfile === undefined
 			? undefined
@@ -678,6 +734,26 @@ async function compileSample(
 		cpuProfile === undefined
 			? undefined
 			: sampledCpuSummary(cpuProfile, cpuStartedAt, optimizeStart, optimizeEnd);
+	let retainedAfterGc: CompilerScaleSample["memory"]["retainedAfterGc"];
+	if (retainedHeapAfterGc) {
+		const collect = (globalThis as { gc?: () => void }).gc;
+		if (collect === undefined) {
+			throw new Error("retained heap sampling requires Node --expose-gc");
+		}
+		collect();
+		await new Promise<void>((resolve) => {
+			setImmediate(resolve);
+		});
+		const retained = recordMemory("after-explicit-gc");
+		const retainedCheckpoint = memoryCheckpoints.at(-1)!;
+		retainedAfterGc = Object.freeze({
+			heapUsed: retained.heapUsed,
+			managedHeap: retainedCheckpoint.managedHeap,
+			external: retained.external,
+			arrayBuffers: retained.arrayBuffers,
+			rss: retained.rss,
+		});
+	}
 	const normalizedUnits = units.map((source) =>
 		source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
 	);
@@ -708,7 +784,10 @@ async function compileSample(
 			peakManagedHeap,
 			rssAfter: memoryAfterWork.rss,
 			peakRss: resourceAfterWork.maxRSS * 1024,
+			peakRssSource: "process-resource-usage",
+			internalPeakRss: resourceAfterWork.maxRSS * 1024,
 			checkpoints: Object.freeze(memoryCheckpoints),
+			...(retainedAfterGc === undefined ? {} : { retainedAfterGc }),
 		},
 		output: {
 			units: units.length,
@@ -722,12 +801,29 @@ async function compileSample(
 					profile: {
 						samplingIntervalBytes: HEAP_SAMPLING_INTERVAL,
 						...allocation,
-						...cpu!,
-						gcMsDuringOptimize: relevantGc.reduce(
-							(total, entry) => total + entry.duration,
-							0,
-						),
-						gcEventsDuringOptimize: relevantGc.length,
+						cpuSampledOptimizeMs: cpu!.cpuSampledOptimizeMs,
+						cpuHotspots: cpu!.cpuHotspots,
+						gc: {
+							cpu: {
+								source: "inspector-cpu-profile",
+								milliseconds: cpu!.gcCpuMsDuringOptimize,
+							},
+							wall: {
+								source: "performance-observer",
+								milliseconds: observedGcMs,
+								events: relevantGc.length,
+								maximumPauseMs: observedMaximumPauseMs,
+							},
+							performanceObserver: {
+								milliseconds: observedGcMs,
+								events: relevantGc.length,
+								maximumPauseMs: observedMaximumPauseMs,
+							},
+						},
+						optimizeIntervalMs: {
+							start: optimizeStart,
+							end: optimizeEnd,
+						},
 					},
 				}),
 	};
@@ -745,6 +841,7 @@ async function runWorker(requestPath: string): Promise<void> {
 				request.benchmarkCase,
 				request.sequence[index]!,
 				request.profileLast && index === request.sequence.length - 1,
+				request.retainedHeapAfterGc === true && index === request.sequence.length - 1,
 			),
 		);
 	}
@@ -754,6 +851,10 @@ async function runWorker(requestPath: string): Promise<void> {
 function workerSamples(
 	request: WorkerRequest,
 	requestRoot: string,
+	options: {
+		readonly externalPeakRss?: boolean;
+		readonly traceGc?: boolean;
+	} = {},
 ): Array<CompilerScaleSample> {
 	mkdirSync(requestRoot, { recursive: true });
 	const requestPath = path.join(
@@ -761,7 +862,19 @@ function workerSamples(
 		`${request.benchmarkCase.id}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
 	);
 	writeFileSync(requestPath, `${JSON.stringify(request)}\n`);
-	const result = spawnSync(process.execPath, [SCRIPT_PATH, "--worker", requestPath], {
+	const nodeArgs = [
+		...(options.traceGc === true ? ["--trace-gc-nvp"] : []),
+		...(request.retainedHeapAfterGc === true ? ["--expose-gc"] : []),
+		SCRIPT_PATH,
+		"--worker",
+		requestPath,
+	];
+	const externalPeakRss = options.externalPeakRss === true;
+	const executable = externalPeakRss ? "/usr/bin/time" : process.execPath;
+	const args = externalPeakRss
+		? [process.platform === "darwin" ? "-l" : "-v", process.execPath, ...nodeArgs]
+		: nodeArgs;
+	const result = spawnSync(executable, args, {
 		cwd: REPOSITORY_ROOT,
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
@@ -777,7 +890,60 @@ function workerSamples(
 		.split("\n")
 		.findLast((entry) => entry.startsWith(WORKER_PREFIX));
 	if (line === undefined) throw new Error("compiler scale worker emitted no result");
-	return JSON.parse(line.slice(WORKER_PREFIX.length)) as Array<CompilerScaleSample>;
+	const samples = JSON.parse(
+		line.slice(WORKER_PREFIX.length),
+	) as Array<CompilerScaleSample>;
+	if (externalPeakRss) {
+		if (samples.length !== 1) {
+			throw new Error("external peak RSS requires one compiler sample per worker");
+		}
+		const peakRss = parseExternalPeakRss(result.stderr, process.platform);
+		if (peakRss === undefined) {
+			throw new Error("external time command emitted no peak RSS");
+		}
+		const sample = samples[0]!;
+		samples[0] = {
+			...sample,
+			memory: {
+				...sample.memory,
+				peakRss,
+				peakRssSource: "external-time",
+			},
+		};
+	}
+	if (options.traceGc === true) {
+		if (samples.length !== 1 || samples[0]!.profile === undefined) {
+			throw new Error("V8 GC tracing requires one profiled compiler sample");
+		}
+		const sample = samples[0]!;
+		const profile = sample.profile!;
+		const trace = summarizeV8GcTrace(
+			`${result.stdout}\n${result.stderr}`,
+			profile.optimizeIntervalMs.start,
+			profile.optimizeIntervalMs.end,
+		);
+		if (profile.gc.cpu.milliseconds >= 1 && trace.events === 0) {
+			throw new Error(
+				"CPU profile attributed material optimizer time to GC but the V8 trace contained no matching event",
+			);
+		}
+		samples[0] = {
+			...sample,
+			profile: {
+				...profile,
+				gc: {
+					...profile.gc,
+					wall: {
+						source: trace.source,
+						milliseconds: trace.wallMs,
+						events: trace.events,
+						maximumPauseMs: trace.maximumPauseMs,
+					},
+				},
+			},
+		};
+	}
+	return samples;
 }
 
 function median(values: ReadonlyArray<number>): number {
@@ -1036,10 +1202,10 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 	const manifest = readManifest();
 	const options = parseOptions(args, manifest);
 	if (
-		options.coreOpt3Start &&
+		(options.coreOpt3Start || options.coreOpt4Start) &&
 		gitOutput(["status", "--porcelain=v1", "--untracked-files=no"]).length > 0
 	) {
-		throw new Error("--core-opt3-start requires a clean tracked working tree");
+		throw new Error("exact start protocols require a clean tracked working tree");
 	}
 	const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-scale-"));
 	const requestRoot = path.join(temporaryRoot, "requests");
@@ -1058,6 +1224,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			includeTestCheck: options.includeTestCheck,
 			quick: options.quick,
 			coreOpt3Start: options.coreOpt3Start,
+			coreOpt4Start: options.coreOpt4Start,
 		}),
 	);
 	const checkpoint = existsSync(checkpointPath)
@@ -1140,14 +1307,15 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 				if (completed.has(resultKey)) continue;
 				const exactOpt3SelfCompile =
 					options.coreOpt3Start && tier.kind === "self-compile";
+				const exactOpt4 = options.coreOpt4Start;
 				const warmRuns = options.quick
 					? 1
-					: exactOpt3SelfCompile
+					: exactOpt3SelfCompile || exactOpt4
 						? 5
 						: (options.warmRuns ?? (tier.kind === "self-compile" ? 5 : 1));
 				const coldRuns = options.quick
 					? 1
-					: exactOpt3SelfCompile
+					: exactOpt3SelfCompile || exactOpt4
 						? 3
 						: (options.coldRuns ?? (tier.kind === "self-compile" ? 3 : 1));
 				const compare = options.compareInstrumentation;
@@ -1169,18 +1337,77 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						...Array.from({ length: warmRuns }, () => options.instrumentation),
 					);
 				}
-				console.error(
-					`[compiler-scale] tier ${tier.tier} ${benchmarkCase.id}: ${sequence.length} warm, ${coldRuns} cold`,
-				);
-				const warmed = workerSamples(
-					{
-						benchmarkCase,
-						sequence,
-						discardFirst: true,
-						profileLast: false,
-					},
-					requestRoot,
-				);
+				let warmed: Array<CompilerScaleSample>;
+				let retained: CompilerScaleSample | undefined;
+				if (exactOpt4) {
+					console.error(
+						`[compiler-scale] tier ${tier.tier} ${benchmarkCase.id}: isolated warmup`,
+					);
+					workerSamples(
+						{
+							benchmarkCase,
+							sequence: ["off"],
+							discardFirst: false,
+							profileLast: false,
+						},
+						requestRoot,
+					);
+					warmed = [];
+					for (let index = 0; index < warmRuns; index++) {
+						const pair: ReadonlyArray<CoreInstrumentationMode> =
+							index % 2 === 0 ? ["off", "phases"] : ["phases", "off"];
+						for (const mode of pair) {
+							warmed.push(
+								...workerSamples(
+									{
+										benchmarkCase,
+										sequence: [mode],
+										discardFirst: false,
+										profileLast: false,
+									},
+									requestRoot,
+									{ externalPeakRss: true },
+								),
+							);
+						}
+					}
+					warmed.push(
+						...workerSamples(
+							{
+								benchmarkCase,
+								sequence: ["counters"],
+								discardFirst: false,
+								profileLast: false,
+							},
+							requestRoot,
+							{ externalPeakRss: true },
+						),
+					);
+					retained = workerSamples(
+						{
+							benchmarkCase,
+							sequence: ["off"],
+							discardFirst: false,
+							profileLast: false,
+							retainedHeapAfterGc: true,
+						},
+						requestRoot,
+						{ externalPeakRss: true },
+					)[0];
+				} else {
+					console.error(
+						`[compiler-scale] tier ${tier.tier} ${benchmarkCase.id}: ${sequence.length} warm, ${coldRuns} cold`,
+					);
+					warmed = workerSamples(
+						{
+							benchmarkCase,
+							sequence,
+							discardFirst: true,
+							profileLast: false,
+						},
+						requestRoot,
+					);
+				}
 				const cold: Array<CompilerScaleSample> = [];
 				for (let index = 0; index < coldRuns; index++) {
 					const coldDirectory = `c${String(coldSerial++).padStart(15, "0")}`;
@@ -1192,11 +1419,14 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						...workerSamples(
 							{
 								benchmarkCase: coldCases.get(benchmarkCase.id)!,
-								sequence: [exactOpt3SelfCompile ? "off" : options.instrumentation],
+								sequence: [
+									exactOpt3SelfCompile || exactOpt4 ? "off" : options.instrumentation,
+								],
 								discardFirst: false,
 								profileLast: false,
 							},
 							requestRoot,
+							exactOpt4 ? { externalPeakRss: true } : {},
 						),
 					);
 				}
@@ -1204,17 +1434,21 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					? workerSamples(
 							{
 								benchmarkCase,
-								sequence: [exactOpt3SelfCompile ? "full" : options.instrumentation],
-								discardFirst: true,
+								sequence: [
+									exactOpt3SelfCompile || exactOpt4 ? "full" : options.instrumentation,
+								],
+								discardFirst: !exactOpt4,
 								profileLast: true,
 							},
 							requestRoot,
+							exactOpt4 ? { externalPeakRss: true, traceGc: true } : {},
 						)[0]
 					: undefined;
 				assertOutputParity([
 					...warmed,
 					...cold,
 					...(profile === undefined ? [] : [profile]),
+					...(retained === undefined ? [] : [retained]),
 				]);
 				const warmByMode = Object.fromEntries(
 					(["off", "phases", "counters", "full"] as const).flatMap((mode) => {
@@ -1234,7 +1468,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						? undefined
 						: instrumentationRatio(offSamples, phasesSamples);
 				const countersReference =
-					exactOpt3SelfCompile && countersSamples.length === 1
+					(exactOpt3SelfCompile || exactOpt4) && countersSamples.length === 1
 						? [offSamples[Math.floor(offSamples.length / 2)]!]
 						: offSamples;
 				const countersRatio =
@@ -1251,13 +1485,18 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					description: benchmarkCase.description,
 					sourceDigest: benchmarkCase.sourceDigest,
 					protocol: {
-						warmDefinition:
-							"one untimed compile then recorded samples in one Node process",
+						warmDefinition: exactOpt4
+							? "one untimed process, then one fresh process per recorded sample"
+							: "one untimed compile then recorded samples in one Node process",
 						coldDefinition: "fresh stripped source tree and fresh Node process",
+						peakRssSource: exactOpt4
+							? "external /usr/bin/time per measured process"
+							: "process.resourceUsage",
 					},
 					warm: { samples: warmed, byMode: warmByMode },
 					cold: { samples: cold, summary: sampleSummary(cold) },
 					...(profile === undefined ? {} : { profile }),
+					...(retained === undefined ? {} : { retainedHeapDiagnostic: retained }),
 					...(metricsSample === undefined
 						? {}
 						: { normalized: normalizedMetrics(timingSamples, metricsSample) }),
@@ -1275,7 +1514,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 							: {
 									counters: {
 										...countersRatio,
-										passesGate: countersRatio.medianRatio <= 1.08,
+										passesGate: countersRatio.medianRatio <= (exactOpt4 ? 1.05 : 1.08),
 									},
 								}),
 					},
@@ -1289,7 +1528,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		) as { name: string; version: string };
 		const dirtyState = gitOutput(["status", "--porcelain=v1", "--untracked-files=no"]);
 		const baseline = {
-			schemaVersion: 1,
+			schemaVersion: options.coreOpt4Start ? 2 : 1,
 			generatedAt: new Date().toISOString(),
 			source: {
 				branch: gitOutput(["branch", "--show-current"]),
@@ -1311,9 +1550,22 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			configuration: {
 				optimizerMode: "full",
 				verification: "boundary",
-				instrumentation: options.coreOpt3Start
-					? "core-opt3-start"
-					: options.instrumentation,
+				instrumentation: options.coreOpt4Start
+					? "core-opt4-start"
+					: options.coreOpt3Start
+						? "core-opt3-start"
+						: options.instrumentation,
+				...(options.coreOpt4Start
+					? {
+							measurementSources: {
+								peakRss: "external-time",
+								gcCpuTime: "inspector-cpu-profile",
+								gcWallTime: "v8-trace-gc",
+								gcEventCount: "v8-trace-gc",
+								gcMaximumPause: "v8-trace-gc",
+							},
+						}
+					: {}),
 				selfCompileConfig: SELF_COMPILE_CONFIG,
 				selfCompileConfigDigest: hashBytes(JSON.stringify(SELF_COMPILE_CONFIG)),
 				heapSamplingIntervalBytes: HEAP_SAMPLING_INTERVAL,
