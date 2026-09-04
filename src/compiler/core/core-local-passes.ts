@@ -1592,7 +1592,7 @@ const eliminateForwardingBlocks: CoreFunctionPass = {
 			) {
 				continue;
 			}
-			if (fn.kernel.blockFirstInstruction(block) !== fn.blockTerminator(block)) continue;
+			if ([...fn.bodyInstructionIds(block)].length !== 0) continue;
 			const parameterStart = fn.kernel.blockParameterStart(block);
 			const parameterCount = fn.kernel.blockParameterCount(block);
 			let hasOutsideUse = false;
