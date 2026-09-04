@@ -1142,7 +1142,25 @@ Skip general sparse-memory SSA bookkeeping for single-predecessor functions | Fo
 
 The retained tier-17 CPU profile sampled 12,630.714 ms in optimizeCore. Hotspots at or near the 3% continuation threshold are GC at 1,115.948 ms (8.8%), `memoryVersions` at 649.213 ms (5.1%), `buildEdges` at 433.769 ms (3.4%), and `immediateDominators` at 372.630 ms (3.0% after rounding). The algorithm loop remains open.
 
+The ladder driver checkpoint at `723d4b73` writes every required normalized metric
+beside its named numerator and denominator. Missing instrumentation is represented as
+`null`, not as zero. Candidate normalization now uses an exact count of distinct
+functions admitted by specialization or direct-entry plans. Pure arithmetic and plan
+tests pass; no active-device timing was accepted while adding the fields.
+
 Part C — RSS and allocation loop
+
+Recorded measurement-readiness work (2026-09-04)
+
+Allocation samples previously reported built-in leaves such as `next`, `find`, `set`
+and `push`, which did not identify an owning Core algorithm. Checkpoint `42340a90`
+retains that direct view and additionally attributes each sample to its closest
+repository frame, while recording the attributed-byte coverage. Checkpoint
+`fbd4cb92` records heap, external, array-buffer and RSS values at compiler phase
+boundaries and captures final compiler memory before V8 materializes CPU and heap
+profile payloads. The machine was active, on battery, and sharing CPU with another
+Node process, so these changes were validated by focused tests, type checking and
+linting without accepting a fresh performance sample.
 
 Profile at least:
 
