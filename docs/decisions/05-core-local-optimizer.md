@@ -60,6 +60,7 @@ cleanup belongs to fact mutation. No entry is temporary or legacy.
 | `annotate-known-own-slots`                       | `CORE_MEMORY_PASSES`                 | local opcode rule         | Dispatch from property operations with shape provenance.                               |
 | `refine-contained-own-slot-accesses`             | `CORE_MEMORY_PASSES`                 | local opcode rule         | Dispatch from contained-object property operations.                                    |
 | `forward-exact-memory-loads`                     | `CORE_MEMORY_PASSES`                 | function memory transform | Forward loads through function memory versions.                                        |
+| `refine-exact-typed-array-accesses`              | `CORE_MEMORY_PASSES`                 | local opcode rule         | Dispatch from typed-array operations with exact allocation proofs.                     |
 | `rewrite-contained-fresh-array-builtins`         | `CORE_MEMORY_PASSES`                 | function memory transform | Rewrite builtins using function containment proofs.                                    |
 | `refine-exact-collection-accesses`               | `CORE_MEMORY_PASSES`                 | local opcode rule         | Dispatch from exact collection accesses.                                               |
 | `refine-stack-object-cell-representations`       | `CORE_MEMORY_PASSES`                 | function memory transform | Reconcile stack-object cell representations.                                           |
