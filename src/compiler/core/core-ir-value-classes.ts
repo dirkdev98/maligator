@@ -267,3 +267,14 @@ export function analyzeCoreValueClasses(
 	};
 	return Object.freeze(result);
 }
+
+export interface CoreExactHeapSelection {
+	readonly program: CoreProgram;
+	readonly changed: boolean;
+}
+
+export function selectCoreExactHeapAccesses(
+	program: CoreProgram,
+): CoreExactHeapSelection {
+	return Object.freeze({ program, changed: false });
+}

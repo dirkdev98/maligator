@@ -3,10 +3,7 @@ import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 } from "./core-function-features.ts";
-import {
-	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
-	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
-} from "./core-internal-attributes.ts";
+import { CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
@@ -359,19 +356,6 @@ function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
 		if (
 			typeof operation === "string" &&
 			coreCollectionReceiverBrandForOperation(operation) !== undefined
-		)
-			return true;
-	}
-	return false;
-}
-
-function hasUnrefinedTypedArrayLoad(fn: CoreFunctionStore): boolean {
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "loadProperty" &&
-			fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] ===
-				undefined
 		)
 			return true;
 	}
@@ -967,61 +951,6 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					effectRefinement: { effects, proof },
-				},
-			);
-		}
-		return editor?.commit();
-	},
-};
-
-const refineExactTypedArrayLoads: CoreFunctionPass = {
-	name: "refine-exact-typed-array-loads",
-	stage: "memory",
-	requiredFunctionOpcodesAny: ["loadProperty"],
-	admission: {
-		predicate: "unrefined dynamic property load with a locally provable TypedArray brand",
-		hasOpportunity({ program, compilationContext, function: functionId }) {
-			return (
-				compilationContext.facts.world.primordialPolicy === "locked" &&
-				hasUnrefinedTypedArrayLoad(program.function(functionId))
-			);
-		},
-	},
-	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "facts"],
-	changes: { cfg: false, calls: false, facts: true, representations: false },
-	budget: PROVENANCE_BUDGET,
-	run(context) {
-		const { program, item } = context;
-		const fn = program.function(item.function);
-		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
-		let editor: CoreEditor | undefined;
-		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "loadProperty"
-			)
-				continue;
-			const attributes = fn.instructionAttributes(instruction);
-			if (attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] !== undefined) continue;
-			const receiver = instructionOperandAt(fn, instruction, 0);
-			const exact =
-				receiver === undefined
-					? undefined
-					: classes.exactNumericTypedArray(receiver, instruction);
-			if (exact === undefined) continue;
-			editor ??= CoreEditor.open(program, item.function);
-			editor.replaceInstruction(
-				instruction,
-				"loadProperty",
-				materializeInstructionOperands(fn, instruction),
-				{
-					attributes: {
-						...attributes,
-						[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact,
-					},
-					sourcePosition: fn.instructionSourcePosition(instruction),
-					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
 			);
 		}
@@ -2066,7 +1995,6 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
 	refineContainedOwnSlotAccesses,
-	refineExactTypedArrayLoads,
 	rewriteContainedFreshArrayBuiltins,
 	refineExactCollectionAccesses,
 	refineStackObjectCellRepresentations,
@@ -2084,7 +2012,6 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateKnownOwnSlots,
 	refineContainedOwnSlotAccesses,
 	forwardExactMemoryLoads,
-	refineExactTypedArrayLoads,
 	rewriteContainedFreshArrayBuiltins,
 	refineExactCollectionAccesses,
 	refineStackObjectCellRepresentations,
