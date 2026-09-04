@@ -392,12 +392,17 @@ export class CoreEditor {
 	}
 
 	removeBlockParameter(block: CoreBlockId, index: number): void {
+		this.removeBlockParameters(block, [index]);
+	}
+
+	removeBlockParameters(block: CoreBlockId, indexes: ReadonlyArray<number>): void {
 		this.#assertActive();
-		const value = this.function._removeBlockParameter(this.#mutation, block, index);
+		if (indexes.length === 0) return;
+		const values = this.function._removeBlockParameters(this.#mutation, block, indexes);
 		this.#touchBlock(block);
-		this.#values.add(value);
+		this.#touchValues(values);
 		this.#mark("body", "cfg", "specializationInputs");
-		this.#edits++;
+		this.#edits += indexes.length;
 	}
 
 	appendInstruction(
