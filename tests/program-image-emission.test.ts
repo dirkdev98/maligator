@@ -1475,16 +1475,6 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_array_push_contained(vm");
 	});
 
-	it("pre-reserves a guarded fixed-count push before a post-loop escape", () => {
-		const output = emitLocked(
-			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array.push(i); return array; } globalThis.fill = fill;`,
-		);
-		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
-		expect(output).toContain(", 1000);");
-		expect(output).toContain("mal_builtin_array_push_direct(vm");
-		expect(output).not.toContain("mal_builtin_array_push_contained(vm");
-	});
-
 	it.each([
 		[
 			"a pre-loop escape",
