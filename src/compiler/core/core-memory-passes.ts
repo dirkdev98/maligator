@@ -226,22 +226,44 @@ function replaceTerminatorEdges(
 }
 
 function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolean {
-	let hasAllocation = false;
-	let hasObservation = false;
+	const mayResolveToAllocation = (value: CoreValueId): boolean => {
+		const seen = new Set<CoreValueId>();
+		let current = value;
+		while (!seen.has(current)) {
+			seen.add(current);
+			if (fn.kernel.valueDefinitionKind(current) !== 1) return true;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
+			if (fn.instructionKind(definition) !== "operation") return true;
+			if (
+				fn.registry.byId(fn.instructionOpcode(definition)).allocation !== undefined &&
+				instructionResultAt(fn, definition, 0) === current
+			)
+				return true;
+			if (fn.instructionOpcodeName(definition) !== "move") return false;
+			const source = instructionOperandAt(fn, definition, 0);
+			if (source === undefined) return true;
+			current = source;
+		}
+		return true;
+	};
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
-		if (fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined) {
-			hasAllocation = true;
-		}
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
-		if (
-			(opcode === "unary" && operator === "typeof") ||
-			(opcode === "binary" && (operator === "===" || operator === "!=="))
-		) {
-			hasObservation = true;
+		if (opcode === "unary" && operator === "typeof") {
+			const operand = instructionOperandAt(fn, instruction, 0);
+			if (operand !== undefined && mayResolveToAllocation(operand)) return true;
+		} else if (opcode === "binary" && (operator === "===" || operator === "!==")) {
+			const left = instructionOperandAt(fn, instruction, 0);
+			const right = instructionOperandAt(fn, instruction, 1);
+			if (
+				left !== undefined &&
+				right !== undefined &&
+				mayResolveToAllocation(left) &&
+				mayResolveToAllocation(right)
+			)
+				return true;
 		}
-		if (hasAllocation && hasObservation) return true;
 	}
 	return false;
 }

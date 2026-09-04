@@ -64,6 +64,43 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("skips allocation-observation provenance for unrelated values", () => {
+		const core = new CoreProgram(coreOpcodeRegistry, {
+			globalCount: 2,
+			stringConstants: [[0x78]],
+		});
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [one!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [object!], {
+			attributes: { index: 0 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 1 },
+		});
+		const [observed] = builder.appendInstruction(entry, "unary", [loaded!], {
+			attributes: { operator: "typeof" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: observed! });
+		builder.finish(entry);
+
+		const optimized = optimizeCore(
+			{ program: core, context },
+			{ instrumentation: "counters", mode: "full" },
+		);
+
+		expect(
+			optimized.report.passes.find(
+				({ pass }) => pass === "fold-exact-allocation-observations",
+			),
+		).toBeUndefined();
+	});
+
 	it("scalar-replaces operand-rooted shaped-object updates", () => {
 		const source = `globalThis.update = function update(value) {
 			const point = { x: value, y: value + 1 };
