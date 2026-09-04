@@ -96,7 +96,7 @@ test("benchmark baseline writes one unattributed snapshot on update", () => {
 	expect(readFileSync(file, "utf8")).not.toMatch(/"(?:entries|commit|dirty)"/);
 });
 
-test("committed benchmark baseline uses the explicit three-family schema", () => {
+test("committed benchmark baseline records the three families and source identity", () => {
 	const baseline = readBenchmarkBaseline<Record<string, unknown>>("bench/baseline.json");
 	expect(baseline).toBeDefined();
 	expect(Object.keys(baseline!).sort()).toEqual([
@@ -104,11 +104,18 @@ test("committed benchmark baseline uses the explicit three-family schema", () =>
 		"javascript",
 		"schema",
 		"selfCompile",
+		"source",
 	]);
 	expect(baseline).toHaveProperty("schema", 3);
 	expect(baseline).not.toHaveProperty("entries");
 	expect(baseline).not.toHaveProperty("commit");
 	expect(baseline).not.toHaveProperty("dirty");
+	const source = baseline!.source as Record<string, unknown>;
+	expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
+	expect(typeof source.dirty).toBe("boolean");
+	for (const key of ["digest", "benchmarkDigest", "configurationDigest"]) {
+		expect(source[key]).toMatch(/^[0-9a-f]{64}$/);
+	}
 	for (const retired of [
 		"size",
 		"compiler",
