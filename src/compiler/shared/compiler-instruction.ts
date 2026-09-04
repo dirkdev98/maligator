@@ -525,6 +525,10 @@ export type CompilerInstruction =
 
 			// [object, key, value]
 			registers: [number, number, number];
+			/** COMPILE-ONLY: closed ownership proves this exact fixed-buffer numeric
+			 * TypedArray brand. Native code may skip receiver branding, the property
+			 * cache, prototype lookup, and the generic element-kind dispatch. */
+			exactTypedArrayKind?: CompilerNumericTypedArrayKind;
 	  }
 	| {
 			type: "storePropertyStatic";

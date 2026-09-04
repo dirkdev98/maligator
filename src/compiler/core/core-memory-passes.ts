@@ -365,11 +365,12 @@ function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
 	return false;
 }
 
-function hasUnrefinedTypedArrayLoad(fn: CoreFunctionStore): boolean {
+function hasUnrefinedTypedArrayAccess(fn: CoreFunctionStore): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "loadProperty" &&
+			(fn.instructionOpcodeName(instruction) === "loadProperty" ||
+				fn.instructionOpcodeName(instruction) === "storeProperty") &&
 			fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] ===
 				undefined
 		)
@@ -974,16 +975,17 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 	},
 };
 
-const refineExactTypedArrayLoads: CoreFunctionPass = {
-	name: "refine-exact-typed-array-loads",
+const refineExactTypedArrayAccesses: CoreFunctionPass = {
+	name: "refine-exact-typed-array-accesses",
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["loadProperty"],
+	requiredFunctionOpcodesAny: ["loadProperty", "storeProperty"],
 	admission: {
-		predicate: "unrefined dynamic property load with a locally provable TypedArray brand",
+		predicate:
+			"unrefined dynamic property access with a locally provable TypedArray brand",
 		hasOpportunity({ program, compilationContext, function: functionId }) {
 			return (
 				compilationContext.facts.world.primordialPolicy === "locked" &&
-				hasUnrefinedTypedArrayLoad(program.function(functionId))
+				hasUnrefinedTypedArrayAccess(program.function(functionId))
 			);
 		},
 	},
@@ -999,7 +1001,8 @@ const refineExactTypedArrayLoads: CoreFunctionPass = {
 		for (const instruction of fn.instructionIds()) {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "loadProperty"
+				(fn.instructionOpcodeName(instruction) !== "loadProperty" &&
+					fn.instructionOpcodeName(instruction) !== "storeProperty")
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
@@ -1013,7 +1016,7 @@ const refineExactTypedArrayLoads: CoreFunctionPass = {
 			editor ??= CoreEditor.open(program, item.function);
 			editor.replaceInstruction(
 				instruction,
-				"loadProperty",
+				fn.instructionOpcodeName(instruction),
 				materializeInstructionOperands(fn, instruction),
 				{
 					attributes: {
@@ -2066,7 +2069,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
 	refineContainedOwnSlotAccesses,
-	refineExactTypedArrayLoads,
+	refineExactTypedArrayAccesses,
 	rewriteContainedFreshArrayBuiltins,
 	refineExactCollectionAccesses,
 	refineStackObjectCellRepresentations,
@@ -2084,7 +2087,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateKnownOwnSlots,
 	refineContainedOwnSlotAccesses,
 	forwardExactMemoryLoads,
-	refineExactTypedArrayLoads,
+	refineExactTypedArrayAccesses,
 	rewriteContainedFreshArrayBuiltins,
 	refineExactCollectionAccesses,
 	refineStackObjectCellRepresentations,

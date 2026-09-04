@@ -781,7 +781,8 @@ function writeCompilerArtifact(
 				w.u8(15);
 			} else if (
 				plan.kind === "exact-typed-array-element" &&
-				instruction.opcode === "LOAD_PROPERTY"
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
 			) {
 				w.u8(16);
 				w.u8(taggedNumericTypedArrayKind(plan.elementKind));
@@ -2902,7 +2903,11 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-contained-array-element",
 				};
-			} else if (tag === 16 && instruction.opcode === "LOAD_PROPERTY") {
+			} else if (
+				tag === 16 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-typed-array-element",
 					elementKind: numericTypedArrayKindFromTag(r.u8()),
