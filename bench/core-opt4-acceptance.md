@@ -263,7 +263,7 @@ requirement also fails.
 | `npm run test:unit`           | 113 files, 1,344 tests passed                                                                                                                                                    |
 | `npm run test:smoke`          | pass in 46.1 s                                                                                                                                                                   |
 | `npm run test262:regressions` | 259/259 selected files passed in strict/sloppy combined result                                                                                                                   |
-| `npm run selfhost:frontend`   | byte-identical output passed in 2m18s                                                                                                                                            |
+| `npm run selfhost:frontend`   | byte-identical output passed; final cached rerun 13.8 s (initial native build 2m18s)                                                                                             |
 | `npm run selfhost:native`     | isolated native/eval parity passed in 4m25s                                                                                                                                      |
 | `npm run selfhost:cli`        | isolated distributed CLI passed in 3m55s                                                                                                                                         |
 | `npm run test:check`          | cold-cache 11-stage gate passed in 3m08s; 1,344 unit tests, 36 native-normal tests plus one skip, 60 UBSan tests, 252 Test262 regression files, and 106 WPT files/1,541 subtests |
