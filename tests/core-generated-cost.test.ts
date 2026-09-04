@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	CORE_GENERATED_CODE_COST_WEIGHT_UNITS,
 	CORE_GENERATED_CODE_COST_WEIGHTS,
 	coreGeneratedCodeAdmitsRegion,
 	coreGeneratedCodeOverheadCost,
@@ -55,6 +56,16 @@ describe("Core generated-code cost", () => {
 				benefitLoopScale: 16,
 			},
 		});
+		for (const group of Object.keys(CORE_GENERATED_CODE_COST_WEIGHTS) as Array<
+			keyof typeof CORE_GENERATED_CODE_COST_WEIGHTS
+		>) {
+			expect(Object.keys(CORE_GENERATED_CODE_COST_WEIGHT_UNITS[group])).toEqual(
+				Object.keys(CORE_GENERATED_CODE_COST_WEIGHTS[group]),
+			);
+			for (const unit of Object.values(CORE_GENERATED_CODE_COST_WEIGHT_UNITS[group])) {
+				expect(unit.length).toBeGreaterThan(0);
+			}
+		}
 	});
 
 	it("applies the recorded weights deterministically", () => {

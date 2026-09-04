@@ -59,6 +59,64 @@ export const CORE_GENERATED_CODE_COST_WEIGHTS = Object.freeze({
 	}),
 });
 
+type CoreGeneratedCodeCostWeightUnits = {
+	readonly [Group in keyof typeof CORE_GENERATED_CODE_COST_WEIGHTS]: {
+		readonly [Weight in keyof (typeof CORE_GENERATED_CODE_COST_WEIGHTS)[Group]]: string;
+	};
+};
+
+export const CORE_GENERATED_CODE_COST_WEIGHT_UNITS = Object.freeze({
+	estimatedCStatements: Object.freeze({
+		instruction: "estimated C statements per Core instruction",
+		helperCall: "estimated C statements per lowered helper call",
+		guard: "estimated C statements per runtime guard",
+		boxingOperation: "estimated C statements per boxing operation",
+		genericTwin: "estimated C statements per duplicated generic fallback",
+		admissionCheck: "estimated C statements per runtime admission check",
+		materializationPath: "estimated C statements per materialization path",
+		stateSynchronization: "estimated C statements per state synchronization",
+	}),
+	estimatedBinaryBytes: Object.freeze({
+		cStatement: "estimated binary bytes per estimated C statement",
+		inputOperand: "estimated binary bytes per input operand",
+		duplicatedInstruction: "estimated binary bytes per duplicated instruction",
+	}),
+	compilerWork: Object.freeze({
+		cStatement: "compiler-work score per estimated C statement",
+		helperCall: "compiler-work score per lowered helper call",
+		guard: "compiler-work score per runtime guard",
+		boxingOperation: "compiler-work score per boxing operation",
+		rootSlot: "compiler-work score per GC root slot",
+		safepoint: "compiler-work score per safepoint",
+		duplicatedInstruction: "compiler-work score per duplicated instruction",
+		genericTwin: "compiler-work score per duplicated generic fallback",
+		admissionCheck: "compiler-work score per runtime admission check",
+		materializationPath: "compiler-work score per materialization path",
+		stateSynchronization: "compiler-work score per state synchronization",
+		binaryByteDivisor: "estimated binary bytes per compiler-work score",
+	}),
+	runtime: Object.freeze({
+		instruction: "runtime-benefit score per Core instruction",
+		helperCall: "runtime-benefit score per lowered helper call",
+		guard: "runtime-benefit score per runtime guard",
+		boxingOperation: "runtime-benefit score per boxing operation",
+		rootSlot: "runtime-benefit score per GC root slot",
+		safepoint: "runtime-benefit score per safepoint",
+		admissionCheck: "runtime-benefit score per runtime admission check",
+		materializationPath: "runtime-benefit score per materialization path",
+		stateSynchronization: "runtime-benefit score per state synchronization",
+	}),
+	loopFrequency: Object.freeze({
+		base: "relative execution-frequency multiplier per loop-nesting level",
+		maximumDepth: "loop-nesting levels included in the frequency estimate",
+	}),
+	admission: Object.freeze({
+		maximumEstimatedBinaryBytes: "estimated binary bytes per region",
+		baseCompilerWork: "compiler-work score per region",
+		benefitLoopScale: "compiler-work score per runtime-benefit and loop-frequency score",
+	}),
+}) satisfies CoreGeneratedCodeCostWeightUnits;
+
 export interface CoreGeneratedCodeCost {
 	readonly instructions: number;
 	readonly helperCalls: number;
