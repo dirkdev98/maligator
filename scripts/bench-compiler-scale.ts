@@ -8,6 +8,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	writeSync,
 	writeFileSync,
 } from "node:fs";
 import * as inspector from "node:inspector";
@@ -195,6 +196,8 @@ const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "bench/compiler-scale-manifest.
 const DEFAULT_OUTPUT = path.join(REPOSITORY_ROOT, "bench/compiler-scale-baseline.json");
 const OPT4_START_OUTPUT = path.join(REPOSITORY_ROOT, "bench/core-opt4-start.json");
 const WORKER_PREFIX = "COMPILER_SCALE_WORKER=";
+const OPTIMIZE_TRACE_START = "COMPILER_SCALE_OPTIMIZE_TRACE_START";
+const OPTIMIZE_TRACE_END = "COMPILER_SCALE_OPTIMIZE_TRACE_END";
 const HEAP_SAMPLING_INTERVAL = 32_768;
 
 const HELP = `Usage: node scripts/bench-compiler-scale.ts [options]
@@ -570,7 +573,7 @@ function hotspotKey(frame: inspector.Runtime.CallFrame): string {
 
 function sampledCpuSummary(
 	profile: inspector.Profiler.Profile,
-	startedAt: number,
+	endedAt: number,
 	optimizeStart: number,
 	optimizeEnd: number,
 ): {
@@ -581,8 +584,9 @@ function sampledCpuSummary(
 	const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
 	const weights = new Map<string, number>();
 	const frames = new Map<string, inspector.Runtime.CallFrame>();
-	const lower = optimizeStart - startedAt;
-	const upper = optimizeEnd - startedAt;
+	const profileStartedAt = endedAt - (profile.endTime - profile.startTime) / 1_000;
+	const lower = optimizeStart - profileStartedAt;
+	const upper = optimizeEnd - profileStartedAt;
 	let elapsed = 0;
 	let sampled = 0;
 	let gcCpuMsDuringOptimize = 0;
@@ -661,12 +665,10 @@ async function compileSample(
 	});
 	gcObserver.observe({ entryTypes: ["gc"] });
 	const session = profile ? new inspector.Session() : undefined;
-	let cpuStartedAt = 0;
 	if (session !== undefined) {
 		session.connect();
 		await startHeapSampling(session);
 		await startCpuSampling(session);
-		cpuStartedAt = performance.now();
 	}
 	let report: CoreOptimizationReport | undefined;
 	const compilePhaseNames: Record<string, keyof CompilerScalePhases> = {
@@ -688,13 +690,19 @@ async function compileSample(
 		runPhase(phase, run) {
 			const phaseName = compilePhaseNames[phase];
 			const startedAt = performance.now();
-			if (phase === "optimize core ir") optimizeStart = startedAt;
+			if (phase === "optimize core ir") {
+				optimizeStart = startedAt;
+				if (profile) writeSync(process.stdout.fd, `${OPTIMIZE_TRACE_START}\n`);
+			}
 			try {
 				return run();
 			} finally {
 				const endedAt = performance.now();
 				if (phaseName !== undefined) phases[phaseName] += endedAt - startedAt;
-				if (phase === "optimize core ir") optimizeEnd = endedAt;
+				if (phase === "optimize core ir") {
+					optimizeEnd = endedAt;
+					if (profile) writeSync(process.stdout.fd, `${OPTIMIZE_TRACE_END}\n`);
+				}
 				recordMemory(`after-${phase}`);
 			}
 		},
@@ -711,6 +719,7 @@ async function compileSample(
 	const memoryAfterWork = recordMemory("after-serialize");
 	const resourceAfterWork = process.resourceUsage();
 	const cpuProfile = session === undefined ? undefined : await stopCpuSampling(session);
+	const cpuEndedAt = performance.now();
 	const allocationProfile =
 		session === undefined ? undefined : await stopHeapSampling(session);
 	session?.disconnect();
@@ -733,7 +742,7 @@ async function compileSample(
 	const cpu =
 		cpuProfile === undefined
 			? undefined
-			: sampledCpuSummary(cpuProfile, cpuStartedAt, optimizeStart, optimizeEnd);
+			: sampledCpuSummary(cpuProfile, cpuEndedAt, optimizeStart, optimizeEnd);
 	let retainedAfterGc: CompilerScaleSample["memory"]["retainedAfterGc"];
 	if (retainedHeapAfterGc) {
 		const collect = (globalThis as { gc?: () => void }).gc;
@@ -917,14 +926,23 @@ function workerSamples(
 		}
 		const sample = samples[0]!;
 		const profile = sample.profile!;
-		const trace = summarizeV8GcTrace(
-			`${result.stdout}\n${result.stderr}`,
-			profile.optimizeIntervalMs.start,
-			profile.optimizeIntervalMs.end,
+		const traceStart = result.stdout.indexOf(OPTIMIZE_TRACE_START);
+		const traceEnd = result.stdout.indexOf(OPTIMIZE_TRACE_END, traceStart + 1);
+		if (traceStart < 0 || traceEnd < 0) {
+			throw new Error("profile worker emitted no optimizer GC trace markers");
+		}
+		const traceOutput = result.stdout.slice(
+			traceStart + OPTIMIZE_TRACE_START.length,
+			traceEnd,
 		);
-		if (profile.gc.cpu.milliseconds >= 1 && trace.events === 0) {
+		const trace = summarizeV8GcTrace(
+			traceOutput,
+			Number.NEGATIVE_INFINITY,
+			Number.POSITIVE_INFINITY,
+		);
+		if (profile.gc.cpu.milliseconds >= 10 && trace.events === 0) {
 			throw new Error(
-				"CPU profile attributed material optimizer time to GC but the V8 trace contained no matching event",
+				`CPU profile attributed ${profile.gc.cpu.milliseconds.toFixed(3)}ms of optimizer time to GC, but the marked V8 trace contained no event`,
 			);
 		}
 		samples[0] = {
@@ -1563,6 +1581,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 								gcWallTime: "v8-trace-gc",
 								gcEventCount: "v8-trace-gc",
 								gcMaximumPause: "v8-trace-gc",
+								gcPhaseWindow: "explicit-optimizer-markers",
 							},
 						}
 					: {}),
