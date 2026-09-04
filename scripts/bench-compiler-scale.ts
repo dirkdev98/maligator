@@ -14,7 +14,7 @@ import * as inspector from "node:inspector";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getHeapStatistics } from "node:v8";
 import type {
 	CoreInstrumentationMode,
@@ -23,6 +23,11 @@ import type {
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import {
+	sampledCompilerAllocationSummary,
+	topCompilerProfileHotspots,
+} from "./compiler-profile-summary.ts";
+import type { CompilerProfileHotspot } from "./compiler-profile-summary.ts";
 import { normalizeCompilerScaleMetrics } from "./compiler-scale-normalization.ts";
 import {
 	prepareSelfCompileSource,
@@ -84,18 +89,13 @@ interface HeapProfileSummary {
 	readonly samplingIntervalBytes: number;
 	readonly sampledBytes: number;
 	readonly sampledOptimizeCoreBytes: number;
-	readonly allocationHotspots: ReadonlyArray<ProfileHotspot>;
+	readonly sampledOptimizeCoreAttributedBytes: number;
+	readonly allocationHotspots: ReadonlyArray<CompilerProfileHotspot>;
+	readonly allocationOwnerHotspots: ReadonlyArray<CompilerProfileHotspot>;
 	readonly cpuSampledOptimizeMs: number;
-	readonly cpuHotspots: ReadonlyArray<ProfileHotspot>;
+	readonly cpuHotspots: ReadonlyArray<CompilerProfileHotspot>;
 	readonly gcMsDuringOptimize: number;
 	readonly gcEventsDuringOptimize: number;
-}
-
-interface ProfileHotspot {
-	readonly function: string;
-	readonly source: string;
-	readonly line: number;
-	readonly weight: number;
 }
 
 interface CompilerScaleSample {
@@ -151,6 +151,7 @@ interface DriverOptions {
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
+const REPOSITORY_URL_PREFIX = pathToFileURL(`${REPOSITORY_ROOT}${path.sep}`).href;
 const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "bench/compiler-scale-manifest.json");
 const DEFAULT_OUTPUT = path.join(REPOSITORY_ROOT, "bench/compiler-scale-baseline.json");
 const WORKER_PREFIX = "COMPILER_SCALE_WORKER=";
@@ -515,61 +516,6 @@ function hotspotKey(frame: inspector.Runtime.CallFrame): string {
 	return `${frame.functionName}\u0000${frame.url}\u0000${frame.lineNumber}`;
 }
 
-function topHotspots(
-	weights: ReadonlyMap<string, number>,
-	frames: ReadonlyMap<string, inspector.Runtime.CallFrame>,
-): ReadonlyArray<ProfileHotspot> {
-	return Object.freeze(
-		[...weights]
-			.sort((left, right) => right[1] - left[1])
-			.slice(0, 20)
-			.map(([key, weight]) => {
-				const frame = frames.get(key)!;
-				return Object.freeze({
-					function: frame.functionName || "(anonymous)",
-					source: frame.url,
-					line: frame.lineNumber + 1,
-					weight,
-				});
-			}),
-	);
-}
-
-function collectSampledAllocation(
-	node: inspector.HeapProfiler.SamplingHeapProfileNode,
-	insideOptimizeCore: boolean,
-	weights: Map<string, number>,
-	frames: Map<string, inspector.Runtime.CallFrame>,
-): { sampledBytes: number; sampledOptimizeCoreBytes: number } {
-	const inside = insideOptimizeCore || node.callFrame.functionName === "optimizeCore";
-	let sampledBytes = node.selfSize;
-	let sampledOptimizeCoreBytes = inside ? node.selfSize : 0;
-	if (inside && node.selfSize > 0) {
-		const key = hotspotKey(node.callFrame);
-		weights.set(key, (weights.get(key) ?? 0) + node.selfSize);
-		frames.set(key, node.callFrame);
-	}
-	for (const child of node.children) {
-		const childSummary = collectSampledAllocation(child, inside, weights, frames);
-		sampledBytes += childSummary.sampledBytes;
-		sampledOptimizeCoreBytes += childSummary.sampledOptimizeCoreBytes;
-	}
-	return { sampledBytes, sampledOptimizeCoreBytes };
-}
-
-function sampledAllocationSummary(node: inspector.HeapProfiler.SamplingHeapProfileNode): {
-	sampledBytes: number;
-	sampledOptimizeCoreBytes: number;
-	allocationHotspots: ReadonlyArray<ProfileHotspot>;
-} {
-	const weights = new Map<string, number>();
-	const frames = new Map<string, inspector.Runtime.CallFrame>();
-	return {
-		...collectSampledAllocation(node, false, weights, frames),
-		allocationHotspots: topHotspots(weights, frames),
-	};
-}
-
 function sampledCpuSummary(
 	profile: inspector.Profiler.Profile,
 	startedAt: number,
@@ -577,7 +523,7 @@ function sampledCpuSummary(
 	optimizeEnd: number,
 ): {
 	cpuSampledOptimizeMs: number;
-	cpuHotspots: ReadonlyArray<ProfileHotspot>;
+	cpuHotspots: ReadonlyArray<CompilerProfileHotspot>;
 } {
 	const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
 	const weights = new Map<string, number>();
@@ -599,7 +545,7 @@ function sampledCpuSummary(
 	}
 	return {
 		cpuSampledOptimizeMs: sampled,
-		cpuHotspots: topHotspots(weights, frames),
+		cpuHotspots: topCompilerProfileHotspots(weights, frames),
 	};
 }
 
@@ -697,7 +643,7 @@ async function compileSample(
 	const allocation =
 		allocationProfile === undefined
 			? undefined
-			: sampledAllocationSummary(allocationProfile.head);
+			: sampledCompilerAllocationSummary(allocationProfile.head, REPOSITORY_URL_PREFIX);
 	const cpu =
 		cpuProfile === undefined
 			? undefined
