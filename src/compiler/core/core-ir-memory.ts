@@ -415,13 +415,10 @@ function memoryVersions(
 	const readStateVersions: Array<number> = [];
 	const pendingReadVersions = new Map<CoreInstructionId, Map<number, number>>();
 	const valueByVersion = new Map<number, CoreValueId>();
-	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
-		if (block === fn.entry) return true;
-		const incoming = (cfg.predecessors[block] ?? []).filter(({ from }) =>
-			cfg.reachable.has(from),
-		);
-		return incoming.length === 1 && incoming[0]!.kind === "ordinary";
-	});
+	const readersBySlot = Array.from(
+		{ length: slotCount },
+		() => new Array<CoreInstructionId>(),
+	);
 	const layoutByInstruction = new Map<
 		CoreInstructionId,
 		CoreProvenance["layouts"][number]
@@ -456,24 +453,18 @@ function memoryVersions(
 		readonly definitions: ReadonlyMap<number, number>;
 	}
 	const eventsByBlock = new Map<CoreBlockId, ReadonlyArray<SparseMemoryEvent>>();
-	const generalFlow = hasSinglePredecessorFlow
-		? undefined
-		: {
-				readersBySlot: Array.from(
-					{ length: slotCount },
-					() => new Array<CoreInstructionId>(),
-				),
-				definitionBlocksBySlot: Array.from(
-					{ length: slotCount },
-					() => new Set<CoreBlockId>(),
-				),
-				readBlocksBySlot: Array.from({ length: slotCount }, () => new Set<CoreBlockId>()),
-				upwardExposedReadBlocksBySlot: Array.from(
-					{ length: slotCount },
-					() => new Set<CoreBlockId>(),
-				),
-				definedByBlock: new Map<CoreBlockId, Set<number>>(),
-			};
+	const definitionBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
+	const readBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
+	const upwardExposedReadBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
 	const initializationDefinitions = (
 		instruction: CoreInstructionId,
 		definitions: Map<number, number>,
@@ -495,6 +486,7 @@ function memoryVersions(
 		}
 	};
 	const mutableEventsByBlock = new Map<CoreBlockId, Array<SparseMemoryEvent>>();
+	const definedByBlock = new Map<CoreBlockId, Set<number>>();
 	const exactWriteKillRequirements = new Map<
 		number,
 		{ readonly instruction: CoreInstructionId; readonly slot: number }
@@ -519,10 +511,7 @@ function memoryVersions(
 		const block = fn.instructionBlock(instruction);
 		if (!cfg.reachable.has(block)) continue;
 		const events = mutableEventsByBlock.get(block) ?? [];
-		const definedInBlock =
-			generalFlow === undefined
-				? undefined
-				: (generalFlow.definedByBlock.get(block) ?? new Set<number>());
+		const definedInBlock = definedByBlock.get(block) ?? new Set<number>();
 		const accesses = accessesByInstruction.get(instruction) ?? [];
 		const reads = new Set<number>();
 		for (const access of accesses) {
@@ -573,17 +562,14 @@ function memoryVersions(
 			killDomain(domain, instruction, definitions);
 		}
 		if (reads.size === 0 && definitions.size === 0) continue;
-		if (definedInBlock !== undefined && generalFlow !== undefined) {
-			for (const slot of reads) {
-				generalFlow.readersBySlot[slot]!.push(instruction);
-				generalFlow.readBlocksBySlot[slot]!.add(block);
-				if (!definedInBlock.has(slot))
-					generalFlow.upwardExposedReadBlocksBySlot[slot]!.add(block);
-			}
-			for (const slot of definitions.keys()) {
-				definedInBlock.add(slot);
-				generalFlow.definitionBlocksBySlot[slot]!.add(block);
-			}
+		for (const slot of reads) {
+			readersBySlot[slot]!.push(instruction);
+			readBlocksBySlot[slot]!.add(block);
+			if (!definedInBlock.has(slot)) upwardExposedReadBlocksBySlot[slot]!.add(block);
+		}
+		for (const slot of definitions.keys()) {
+			definedInBlock.add(slot);
+			definitionBlocksBySlot[slot]!.add(block);
 		}
 		events.push(
 			Object.freeze({
@@ -593,7 +579,7 @@ function memoryVersions(
 			}),
 		);
 		mutableEventsByBlock.set(block, events);
-		if (generalFlow !== undefined) generalFlow.definedByBlock.set(block, definedInBlock!);
+		definedByBlock.set(block, definedInBlock);
 	}
 	for (const [block, events] of mutableEventsByBlock)
 		eventsByBlock.set(block, Object.freeze(events));
@@ -625,6 +611,13 @@ function memoryVersions(
 		versions.set(slot, version);
 		pendingReadVersions.set(instruction, versions);
 	};
+	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
+		if (block === fn.entry) return true;
+		const incoming = (cfg.predecessors[block] ?? []).filter(({ from }) =>
+			cfg.reachable.has(from),
+		);
+		return incoming.length === 1 && incoming[0]!.kind === "ordinary";
+	});
 	if (hasSinglePredecessorFlow) {
 		const versions = new Map<number, number>();
 		type Frame =
@@ -674,7 +667,6 @@ function memoryVersions(
 				pending.push({ kind: "enter", block: children[index]! });
 		}
 	} else {
-		const general = generalFlow!;
 		const dominancePosition = new Map<CoreBlockId, number>();
 		for (const [position, block] of dominanceOrder.entries())
 			dominancePosition.set(block, position);
@@ -697,17 +689,17 @@ function memoryVersions(
 			(cfg.successors[block] ?? []).some(({ kind }) => kind === "exceptional"),
 		);
 		for (let slot = 0; slot < slotCount; slot++) {
-			const readBlocks = general.readBlocksBySlot[slot]!;
+			const readBlocks = readBlocksBySlot[slot]!;
 			if (readBlocks.size === 0) continue;
-			const definitions = general.definitionBlocksBySlot[slot]!;
+			const definitions = definitionBlocksBySlot[slot]!;
 			if (definitions.size === 0 && !hasExceptionalEdges) {
-				for (const instruction of general.readersBySlot[slot]!)
+				for (const instruction of readersBySlot[slot]!)
 					recordReadVersion(instruction, slot, entryIdentity(slot));
 				transfers += readBlocks.size;
 				continue;
 			}
 			const liveIn = new Set<CoreBlockId>();
-			const livePending = [...general.upwardExposedReadBlocksBySlot[slot]!];
+			const livePending = [...upwardExposedReadBlocksBySlot[slot]!];
 			while (livePending.length > 0) {
 				const block = livePending.pop()!;
 				if (liveIn.has(block)) continue;
