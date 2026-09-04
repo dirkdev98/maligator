@@ -340,6 +340,17 @@ describe("Core store", () => {
 		expect(fn.instructionNext(1 as never)).toBe(2);
 	});
 
+	it("enumerates block operations before the terminator is installed", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "constant", []);
+
+		expect(builder.bodyInstructionIds(entry)).toEqual([0]);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		expect(builder.bodyInstructionIds(entry)).toEqual([0]);
+	});
+
 	it("reuses stable function traversal snapshots between edits", () => {
 		const { program, fn } = oneFunction();
 		const blocks = fn.blockIds();

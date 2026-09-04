@@ -865,8 +865,16 @@ export class CoreFunctionStore {
 	}
 
 	*bodyInstructionIds(block: CoreBlockId): Iterable<CoreInstructionId> {
-		for (const instruction of this.instructionIds(block)) {
-			if (this.instructionKind(instruction) === "operation") yield instruction;
+		this.#requireCurrentGeneration();
+		this.#requireBlock(block);
+		for (
+			let instruction = this.#blockFirstInstruction[block] ?? -1;
+			instruction >= 0;
+			instruction = this.#instructionNext[instruction] ?? -1
+		) {
+			if (this.#instructionOpcode[instruction]! >= 0) {
+				yield coreInstructionId(instruction);
+			}
 		}
 	}
 
