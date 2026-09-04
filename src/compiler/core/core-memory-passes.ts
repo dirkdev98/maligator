@@ -110,17 +110,11 @@ function hasExactMemoryLoadForwardingOpportunity(fn: CoreFunctionStore): boolean
 		)
 			continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 		if (
-			!descriptor.discardable &&
+			!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
 			opcode !== "loadProperty" &&
 			opcode !== "loadPropertyStatic" &&
 			opcode !== "loadPropertyStaticShapeCase"
-		)
-			continue;
-		if (
-			!(descriptor.accesses ?? []).some(({ mode }) => mode === "read") ||
-			!coreMemoryAccesses(fn, instruction).some(({ mode }) => mode === "read")
 		)
 			continue;
 		const result = instructionResultAt(fn, instruction, 0);
