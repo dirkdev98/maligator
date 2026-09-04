@@ -11,12 +11,16 @@ import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
 } from "../src/compiler/core/core-function-optimization-session.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-control-flow.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
-import { CORE_CONSTRUCTION_NORMALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
+import {
+	CORE_CONSTRUCTION_ANNOTATION_PASSES,
+	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+} from "../src/compiler/core/core-local-passes.ts";
 import {
 	CORE_MEMORY_PASSES,
 	CORE_MEMORY_SSA_PASSES,
@@ -204,6 +208,17 @@ describe("Core optimizer infrastructure", () => {
 		expect(() =>
 			analyses.get(analysis, { scope: "function", function: functions[0]!.id }),
 		).toThrow("analysis manager belongs to retired generation 0");
+	});
+
+	it("permits only structural control flow before the dense generation barrier", () => {
+		expect(
+			CORE_CONSTRUCTION_ANNOTATION_PASSES.flatMap(
+				({ requiredAnalyses }) => requiredAnalyses,
+			),
+		).toEqual([]);
+		for (const pass of CORE_CONSTRUCTION_NORMALIZATION_PASSES) {
+			expect(pass.requiredAnalyses).toEqual([CORE_CONTROL_FLOW_BUNDLE_ANALYSIS]);
+		}
 	});
 
 	it("checks program analysis function dependencies without scanning functions", () => {

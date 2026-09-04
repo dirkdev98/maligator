@@ -966,6 +966,43 @@ Part A — Self-audit all slices
 
 Create a checked requirement table for Slices 0–4.
 
+Recorded requirement audit (2026-09-04)
+
+Check | Requirement | Evidence
+--- | --- | ---
+[x] Slice 0 | The four instrumentation modes, seven Core checkpoints, compiler/runtime output matrix, profiles and canonical artifacts exist. | `tests/compile-core.test.ts`, `bench/core-opt3-slice0.json` and `bench/core-opt3-slice0-output.json`; the accepted measurements remain recorded above.
+[x] Slice 0 | Off, phases, counters and full modes retain identical output while detailed ledgers remain full-only. | `tests/compile-core.test.ts` and the mode guards in `core-optimization-report.ts`.
+[x] Slice 1 | Construction uses versioned definition tables and virtual incomplete phis, resolves SCC aliases before materializing parameters, and emits only demanded edge arguments. | `core-frontend-construction.ts` and `tests/core-pruned-ssa-construction.test.ts`.
+[x] Slice 1 | Copied definition environments, backward parameter propagation and post-hoc predecessor expansion are absent; copied snapshot entries remain zero. | Production-path search plus the large-environment and instrumented-report cases in `tests/core-pruned-ssa-construction.test.ts`.
+[x] Slice 1 | Semantic and compiler gates are satisfied by the later Slice 3 checkpoint. | 495,788 constructed values, 2.769× amplification, 14,580.115 ms warm wall and 2,252,161,024-byte peak RSS in `bench/core-opt3-slice3.json`; output gates passed as recorded above.
+[x] Slice 2 | One dense generation barrier preserves function IDs, relocates registered local-ID payloads, rebuilds uses/edges, retires construction stores and rejects stale managers. | `tests/core-store.test.ts`, `tests/core-ir.test.ts`, `tests/core-optimizer-infrastructure.test.ts`.
+[x] Slice 2 | Only construction annotation and structural reachability/forwarding precede the barrier; advanced analyses and planning follow it. | `optimize.ts` ordering and the construction-pass analysis allowlist in `tests/core-optimizer-infrastructure.test.ts`.
+[x] Slice 2 | Capacity, barrier-cost, compiler-time and memory gates passed at or before Slice 3. | Zero abandoned storage and a 299 ms / 1.81% barrier in `bench/core-opt3-slice2.json`; the stronger Slice 3 time and memory results are recorded above.
+[x] Slice 3 | Initial local work is function-major, scratch is pooled, each initial function has one session, and callers reopen at most once per cross-call wave. | `core-function-optimization-session.ts` and `tests/core-optimizer-infrastructure.test.ts`.
+[x] Slice 3 | The control-flow bundle shares structural, dominance, loop and exceptional views; generic multi-function scheduling and stage replay are absent. | `core-ir-control-flow.ts`, `tests/core-local-optimizer-migration.test.ts`, and checkpoint `db65f06e`.
+[x] Slice 3 | Compiler time, analysis recomputation, memory and output guardrails pass. | `bench/core-opt3-slice3.json` and the completed Slice 3 record above.
+[x] Slice 4 | Every optimization family has an ablation ledger, O2 work has concrete admission, and O3 selection shares bounded program and per-function budgets. | `bench/core-opt3-slice4-attribution.json`, `tests/core-optimizer-infrastructure.test.ts`, and `tests/core-specialization-plan.test.ts`.
+[x] Slice 4 | Every profitability multiplier has one canonical value and declared estimating unit. | `core-ir-generated-cost.ts`, `tests/core-generated-cost.test.ts`, and the recorded multiplier table above.
+[x] Slice 4 | Three independently measured output improvements cover JavaScript, Express and generated/native build cost without semantic drift. | `bench/core-opt3-slice4.json` and checkpoints `95b98307`, `1e4f677e`, `de5c185c`.
+[ ] Slice 4 final acceptance | Repeat the complete Slice 0-relative production matrix after the Slice 5 algorithm and RSS loops. | Intentionally deferred to Parts D and E; incremental comparisons are not substituted for the final paired campaign.
+
+Recorded prohibited-leftover audit (2026-09-04)
+
+Check | Production-path finding
+--- | ---
+[x] | No copied construction definition maps or post-hoc parameter propagation remain; `DefinitionTable` retains sparse version history and edge materialization reads only demanded phis.
+[x] | Incomplete phis remain numeric virtual tokens until SCC resolution; only conflicting resolved components allocate block parameters.
+[x] | The sole pre-barrier analysis consumer is the permitted structural control-flow bundle; dominators, loops, value kinds, provenance, memory, program flow and candidates start after the barrier.
+[x] | The dense barrier replaces each live function store, retires the construction generation, clears program-flow journals and retains no relocation map in `CoreCompilation`.
+[x] | Every opcode declares `attributeRelocations`; registry construction and Core verification reject missing, duplicate or invalid local-ID payload contracts.
+[x] | Initial post-barrier optimization is function-major. `CoreFunctionPassScheduler` is single-function only and has no generic function, SCC or program scope.
+[x] | Cross-call transforms are selected in bounded waves, grouped by caller and applied through one caller editor/session; no external post-wave CFG/proof/memory replay exists.
+[x] | O2 passes declare concrete feature/opcode/admission consumers; ineligible functions perform zero corresponding analysis queries.
+[x] | Cross-call and late specialization use one bounded `CoreTransformCandidateService`; discovery and selection charge the shared O3 ledger.
+[x] | Call targets, summaries, program value kinds and reachability are dimensions of one `CoreProgramFlowEngine`; production obtains them through one incremental program-flow analysis.
+[x] | Target lowering consumes the verified numeric plan, and residual site facts derive from sealed Core plus that plan without Core analysis or optimization rediscovery.
+[x] | Off mode skips counters, phase timers, detailed ledgers, traversal statistics and checkpoints; phases, counters and full mode collect only their declared levels.
+
 Search the complete active production path for prohibited leftovers:
 
 copied construction definition maps
