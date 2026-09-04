@@ -24,9 +24,29 @@ describe("compiler scale manifest", () => {
 		expect(manifest.schemaVersion).toBe(1);
 		expect(manifest.syntheticScales).toEqual([1, 3, 10]);
 		expect(manifest.tiers.map(({ tier }) => tier)).toEqual(
-			Array.from({ length: 14 }, (_, index) => index + 1),
+			Array.from({ length: 19 }, (_, index) => index + 1),
 		);
-		expect(new Set(manifest.tiers.map(({ id }) => id)).size).toBe(14);
+		expect(manifest.tiers.map(({ id }) => id)).toEqual([
+			"local-arithmetic",
+			"straight-line",
+			"cfg-heavy",
+			"nested-loops",
+			"memory-provenance",
+			"exact-scc",
+			"wildcard-opaque",
+			"transform-candidates",
+			"pass-optimizer-infrastructure",
+			"shape-provenance",
+			"memory-analysis",
+			"summaries",
+			"value-kinds",
+			"optimize",
+			"compile-program",
+			"complete-core-subtree",
+			"node-self-compile",
+			"maligator-self-compile",
+			"cold-test-check",
+		]);
 		expect(manifest.tiers.slice(0, 7).every(({ kind }) => kind === "synthetic")).toBe(
 			true,
 		);
@@ -40,7 +60,7 @@ describe("compiler scale manifest", () => {
 			.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
 			.map((entry) => `src/compiler/core/${entry.name}`)
 			.sort();
-		const aggregate = manifest.tiers.find(({ tier }) => tier === 12);
+		const aggregate = manifest.tiers.find(({ id }) => id === "complete-core-subtree");
 
 		expect([...(aggregate?.entries ?? [])].sort()).toEqual(coreFiles);
 	});

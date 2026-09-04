@@ -28,7 +28,13 @@ import {
 	SELF_COMPILE_CONFIG,
 } from "./self-compile-workload.ts";
 
-type TierKind = "synthetic" | "real" | "aggregate" | "self-compile" | "command";
+type TierKind =
+	| "synthetic"
+	| "real"
+	| "aggregate"
+	| "self-compile"
+	| "paired-self-compile"
+	| "command";
 
 interface CompilerScaleTier {
 	readonly tier: number;
@@ -150,8 +156,8 @@ const HEAP_SAMPLING_INTERVAL = 32_768;
 
 const HELP = `Usage: node scripts/bench-compiler-scale.ts [options]
 
-Runs the permanent 14-tier compiler complexity ladder. By default tiers 1-13 run;
-tier 14 requires --include-test-check unless --core-opt3-start selects the complete gate.
+Runs the permanent 19-tier compiler complexity ladder. By default tiers 1-18 run;
+tier 19 requires --include-test-check unless --core-opt3-start selects the complete gate.
 
   --list                       print the committed fixture manifest
   --tier N[,N...]              select one or more tiers
@@ -172,9 +178,9 @@ function readManifest(): CompilerScaleManifest {
 	const manifest = JSON.parse(
 		readFileSync(MANIFEST_PATH, "utf8"),
 	) as CompilerScaleManifest;
-	if (manifest.schemaVersion !== 1 || manifest.tiers.length !== 14) {
+	if (manifest.schemaVersion !== 1 || manifest.tiers.length !== 19) {
 		throw new Error(
-			"compiler scale manifest must contain schema v1 and exactly 14 tiers",
+			"compiler scale manifest must contain schema v1 and exactly 19 tiers",
 		);
 	}
 	return manifest;
@@ -253,7 +259,9 @@ function parseOptions(
 	const tiers =
 		selected ??
 		new Set(
-			manifest.tiers.map(({ tier }) => tier).filter((tier) => coreOpt3Start || tier < 14),
+			manifest.tiers
+				.filter(({ kind }) => coreOpt3Start || kind !== "command")
+				.map(({ tier }) => tier),
 		);
 	for (const tier of tiers) {
 		if (!manifest.tiers.some((entry) => entry.tier === tier)) {
@@ -397,7 +405,7 @@ function prepareCases(
 	const selfCompileEntry = prepareSelfCompileSource(sourceRoot);
 	const cases = new Map<string, CompilerScaleCase>();
 	for (const tier of manifest.tiers) {
-		if (tier.kind === "command") continue;
+		if (tier.kind === "command" || tier.kind === "paired-self-compile") continue;
 		if (tier.kind === "synthetic") {
 			for (const scale of manifest.syntheticScales) {
 				const relative = `bench/compiler-scale-${tier.id}-${scale}.mjs`;
@@ -776,12 +784,11 @@ function workerSamples(
 		`${request.benchmarkCase.id}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
 	);
 	writeFileSync(requestPath, `${JSON.stringify(request)}\n`);
-	const processCount = request.sequence.length + (request.discardFirst ? 1 : 0);
 	const result = spawnSync(process.execPath, [SCRIPT_PATH, "--worker", requestPath], {
 		cwd: REPOSITORY_ROOT,
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
-		timeout: Math.max(900_000, processCount * 240_000),
+		timeout: 600_000,
 	});
 	if (result.error !== undefined) throw result.error;
 	if (result.status !== 0) {
@@ -856,6 +863,7 @@ function commandOutput(command: ReadonlyArray<string>) {
 		cwd: REPOSITORY_ROOT,
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
+		timeout: 600_000,
 	});
 	if (result.error !== undefined) throw result.error;
 	if (result.status !== 0) {
@@ -870,6 +878,29 @@ function commandOutput(command: ReadonlyArray<string>) {
 		stdoutDigest: hashBytes(result.stdout),
 		stderrDigest: hashBytes(result.stderr),
 	};
+}
+
+function pairedSelfCompileOutput(runs: number, output: string) {
+	const command = [
+		"npm",
+		"run",
+		"bench",
+		"--",
+		"self-compile",
+		"--runs",
+		String(runs),
+		"--json-out",
+		output,
+	];
+	const gate = commandOutput(command);
+	const snapshot = JSON.parse(readFileSync(output, "utf8")) as {
+		readonly source?: unknown;
+		readonly selfCompile?: unknown;
+	};
+	if (snapshot.selfCompile === undefined) {
+		throw new Error("paired self-compile benchmark emitted no self-compile metrics");
+	}
+	return { gate, source: snapshot.source, metrics: snapshot.selfCompile };
 }
 
 function syntheticScalingSummary(
@@ -1018,6 +1049,28 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		let coldSerial = 0;
 		for (const tier of manifest.tiers) {
 			if (!options.tiers.has(tier.tier)) continue;
+			if (tier.kind === "paired-self-compile") {
+				const resultKey = `${tier.tier}:${tier.id}`;
+				if (!completed.has(resultKey)) {
+					const runs = options.quick
+						? 1
+						: options.coreOpt3Start
+							? 5
+							: (options.warmRuns ?? 1);
+					console.error(
+						`[compiler-scale] tier ${tier.tier} ${tier.id}: ${runs} paired warm runs`,
+					);
+					results.push({
+						tier: tier.tier,
+						id: tier.id,
+						description: tier.description,
+						...pairedSelfCompileOutput(runs, path.join(temporaryRoot, `${tier.id}.json`)),
+					});
+					completed.add(resultKey);
+					saveCheckpoint();
+				}
+				continue;
+			}
 			if (tier.kind === "command") {
 				const resultKey = `${tier.tier}:${tier.id}`;
 				if (!completed.has(resultKey)) {
@@ -1045,17 +1098,18 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			for (const benchmarkCase of selectedCases) {
 				const resultKey = `${tier.tier}:${benchmarkCase.id}`;
 				if (completed.has(resultKey)) continue;
-				const exactOpt3SelfCompile = options.coreOpt3Start && tier.tier === 13;
+				const exactOpt3SelfCompile =
+					options.coreOpt3Start && tier.kind === "self-compile";
 				const warmRuns = options.quick
 					? 1
 					: exactOpt3SelfCompile
 						? 5
-						: (options.warmRuns ?? (tier.tier === 13 ? 5 : 1));
+						: (options.warmRuns ?? (tier.kind === "self-compile" ? 5 : 1));
 				const coldRuns = options.quick
 					? 1
 					: exactOpt3SelfCompile
 						? 3
-						: (options.coldRuns ?? (tier.tier === 13 ? 3 : 1));
+						: (options.coldRuns ?? (tier.kind === "self-compile" ? 3 : 1));
 				const compare = options.compareInstrumentation;
 				const sequence: Array<CoreInstrumentationMode> = [];
 				if (exactOpt3SelfCompile) {
