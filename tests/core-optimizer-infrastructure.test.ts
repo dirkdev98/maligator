@@ -20,6 +20,7 @@ import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
+import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import {
 	CORE_PROGRAM_FLOW_REPRESENTATIONS,
 	CoreProgram,
@@ -423,6 +424,28 @@ describe("Core optimizer infrastructure", () => {
 			report
 				.finish(program, { directEntries: [], specializations: [] })
 				.analyses.find(({ analysis }) => analysis === "local-memory-versions"),
+		).toBeUndefined();
+	});
+
+	it("does not build fact availability without a proof-rewiring consumer", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const rewiring = CORE_PROOF_PASSES.find(
+			({ name }) => name === "rewire-subsumed-effect-proofs",
+		)!;
+
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		).runComponent("proofs", [rewiring]);
+
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.analyses.find(({ analysis }) => analysis === "fact-availability"),
 		).toBeUndefined();
 	});
 

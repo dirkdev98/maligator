@@ -1179,9 +1179,47 @@ function constructedCollectionReceiver(
 	);
 }
 
+function hasNumericAlgebraicOpportunity(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "binary"
+		)
+			continue;
+		const left = instructionOperand(fn, instruction, 0);
+		const right = instructionOperand(fn, instruction, 1);
+		if (left === undefined || right === undefined) continue;
+		const operator = fn.instructionAttributes(instruction).operator;
+		const leftConstant = constantForValue(fn, left);
+		const rightConstant = constantForValue(fn, right);
+		if (
+			(operator === "+" &&
+				rightConstant?.kind === "number" &&
+				Object.is(rightConstant.value, -0)) ||
+			(operator === "*" &&
+				rightConstant?.kind === "number" &&
+				rightConstant.value === 1) ||
+			(operator === "&" &&
+				((leftConstant?.kind === "number" && leftConstant.value === 0) ||
+					(rightConstant?.kind === "number" && rightConstant.value === 0))) ||
+			(left === right && (operator === "<" || operator === ">")) ||
+			(flippedComparison(operator) !== undefined && leftConstant?.kind === "number")
+		)
+			return true;
+	}
+	return false;
+}
+
 const rewriteNumericIdentities: CoreFunctionPass = {
 	name: "numeric-algebraic-simplification",
 	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["binary"],
+	admission: {
+		predicate: "binary operator with a supported algebraic identity or normalization",
+		hasOpportunity({ program, function: functionId }) {
+			return hasNumericAlgebraicOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,

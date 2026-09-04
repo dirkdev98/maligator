@@ -103,6 +103,36 @@ function factIsReferenced(fn: CoreFunctionStore, fact: CoreFactId): boolean {
 	return false;
 }
 
+function hasEffectProofRewiringOpportunity(fn: CoreFunctionStore): boolean {
+	let facts = 0;
+	for (const _fact of fn.factIds()) {
+		facts++;
+		if (facts === 2) break;
+	}
+	if (facts < 2) return false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const proof = fn.instructionEffectRefinement(instruction)?.proof;
+		if (proof !== undefined && !CORE_REPROVED_FACT_KINDS.has(fn.fact(proof).kind)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function hasGuardSubsumptionOpportunity(fn: CoreFunctionStore): boolean {
+	let facts = 0;
+	for (const _fact of fn.factIds()) {
+		facts++;
+		if (facts === 2) break;
+	}
+	if (facts < 2) return false;
+	for (const block of fn.blockIds()) {
+		if (fn.instructionKind(fn.blockTerminator(block)) === "guard") return true;
+	}
+	return false;
+}
+
 const canonicalizeFacts: CoreFunctionPass = {
 	name: "canonicalize-fact-claims",
 	stage: "proofs",
@@ -155,6 +185,12 @@ const removeEmptyUnreferencedFacts: CoreFunctionPass = {
 const rewireSubsumedEffectProofs: CoreFunctionPass = {
 	name: "rewire-subsumed-effect-proofs",
 	stage: "proofs",
+	admission: {
+		predicate: "non-reproved effect refinement with another available fact candidate",
+		hasOpportunity({ program, function: functionId }) {
+			return hasEffectProofRewiringOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg", "memoryEffects"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -214,6 +250,12 @@ const rewireSubsumedEffectProofs: CoreFunctionPass = {
 const foldSubsumedGuards: CoreFunctionPass = {
 	name: "fold-subsumed-guards",
 	stage: "proofs",
+	admission: {
+		predicate: "guard with at least one alternative fact candidate",
+		hasOpportunity({ program, function: functionId }) {
+			return hasGuardSubsumptionOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg"],
 	changes: { cfg: true, calls: false, facts: true, representations: false },

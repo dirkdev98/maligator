@@ -227,10 +227,74 @@ function replaceTerminatorEdges(
 	}
 }
 
+function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolean {
+	let hasAllocation = false;
+	let hasObservation = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		if (fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined) {
+			hasAllocation = true;
+		}
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operator = fn.instructionAttributes(instruction).operator;
+		if (
+			(opcode === "unary" && operator === "typeof") ||
+			(opcode === "binary" && (operator === "===" || operator === "!=="))
+		) {
+			hasObservation = true;
+		}
+		if (hasAllocation && hasObservation) return true;
+	}
+	return false;
+}
+
+function hasShapedObjectLoadOpportunity(fn: CoreFunctionStore): boolean {
+	let hasShapedObject = false;
+	let hasStaticLoad = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "createObjectShaped") hasShapedObject = true;
+		else if (opcode === "loadPropertyStatic") hasStaticLoad = true;
+		if (hasShapedObject && hasStaticLoad) return true;
+	}
+	return false;
+}
+
+function hasContainedFreshArrayBuiltinOpportunity(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "call"
+		)
+			continue;
+		const known = fn.instructionAttributes(instruction).knownBuiltinCall as unknown as
+			| KnownBuiltinCall
+			| undefined;
+		const operation = known?.operation;
+		if (
+			known !== undefined &&
+			typeof operation === "string" &&
+			CONTAINED_FRESH_ARRAY_OPERATIONS.has(operation) &&
+			knownBuiltinCallProves(known, operation) &&
+			compilerFactIsWorldInvariant(known.identity)
+		)
+			return true;
+	}
+	return false;
+}
+
 const foldExactAllocationObservations: CoreFunctionPass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: ["unary", "binary"],
+	admission: {
+		predicate: "fresh allocation and typeof or strict-identity observation",
+		hasOpportunity({ program, function: functionId }) {
+			return hasExactAllocationObservationOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -304,6 +368,12 @@ const forwardFreshOwnSlotPrefix: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
+	admission: {
+		predicate: "shaped-object allocation followed by a static own-slot load",
+		hasOpportunity({ program, function: functionId }) {
+			return hasShapedObjectLoadOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -377,6 +447,7 @@ const forwardFreshOwnSlotPrefix: CoreFunctionPass = {
 const annotateKnownOwnSlots: CoreFunctionPass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
+	requiredFunctionOpcodesAny: ["loadPropertyStatic", "storePropertyStatic"],
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	changes: { cfg: false, calls: false, facts: false, representations: false },
@@ -435,6 +506,13 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 	name: "refine-contained-own-slot-accesses",
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: [
+		"loadProperty",
+		"loadPropertyStatic",
+		"storeProperty",
+		"storePropertyStatic",
+		"defineProperty",
+	],
 	requiredAnalyses: [
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
@@ -678,6 +756,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 const refineExactCollectionAccesses: CoreFunctionPass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
+	requiredFunctionOpcodesAny: ["callBuiltin"],
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
@@ -740,6 +819,15 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createArray"],
+	admission: {
+		predicate: "fresh array and proven push or pop call consumer in a locked world",
+		hasOpportunity({ program, compilationContext, function: functionId }) {
+			return (
+				compilationContext.facts.world.primordialPolicy === "locked" &&
+				hasContainedFreshArrayBuiltinOpportunity(program.function(functionId))
+			);
+		},
+	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -929,6 +1017,19 @@ function removeUnsharedProof(
 			fn.instructionEffectRefinement(candidate)?.proof === proof,
 	);
 	if (!shared) editor.removeFact(proof);
+}
+
+function hasShapedObjectStoreOpportunity(fn: CoreFunctionStore): boolean {
+	let hasShapedObject = false;
+	let hasStaticStore = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "createObjectShaped") hasShapedObject = true;
+		else if (opcode === "storePropertyStatic") hasStaticStore = true;
+		if (hasShapedObject && hasStaticStore) return true;
+	}
+	return false;
 }
 
 interface RootedScalarAccess {
@@ -1349,6 +1450,12 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
+	admission: {
+		predicate: "shaped-object allocation with a static own-slot store consumer",
+		hasOpportunity({ program, function: functionId }) {
+			return hasShapedObjectStoreOpportunity(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
