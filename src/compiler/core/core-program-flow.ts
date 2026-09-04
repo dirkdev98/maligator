@@ -244,7 +244,11 @@ export interface CoreProgramFlowCallTargetSemantics<
 	Identities,
 > {
 	createIdentities(previous?: Identities): Identities;
-	localIsCurrent(local: Local | undefined, fn: CoreFunctionStore): boolean;
+	localIsCurrent(
+		local: Local | undefined,
+		fn: CoreFunctionStore,
+		program: CoreProgram,
+	): boolean;
 	collectCellAccesses(
 		fn: CoreFunctionStore,
 		transfers: CoreProgramFlowLocalTransfers,
@@ -1315,7 +1319,7 @@ export class CoreProgramFlowEngine {
 			if (!functionSet.has(functionId)) continue;
 			const fn = this.#program.function(functionId);
 			const prior = previous?.local.get(functionId);
-			if (semantics.localIsCurrent(prior, fn)) continue;
+			if (semantics.localIsCurrent(prior, fn, this.#program)) continue;
 			changedFunctions.add(functionId);
 			accessFunctionsScanned++;
 			const oldAccess = cellAccesses.get(functionId);
@@ -1389,7 +1393,11 @@ export class CoreProgramFlowEngine {
 		for (const functionId of functionIds) {
 			const fn = this.#program.function(functionId);
 			const prior = previous?.local.get(functionId);
-			if (semantics.localIsCurrent(prior, fn)) local.set(functionId, prior!);
+			if (semantics.localIsCurrent(prior, fn, this.#program)) {
+				local.set(functionId, prior!);
+			} else {
+				changedFunctions.add(functionId);
+			}
 		}
 		const propertyReaders = new Map(previous?.propertyReaders ?? []);
 		for (const key of propertyKeys) {

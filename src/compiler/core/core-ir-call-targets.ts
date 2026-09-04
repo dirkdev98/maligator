@@ -163,6 +163,10 @@ interface CoreLocalCallTargets {
 	readonly cellWrites: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly propertyInputs: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>;
 	readonly globalWrites: ReadonlyMap<number, CoreCalleeTargets>;
+	readonly returnTargetDependencies: ReadonlyMap<
+		CoreFunctionId,
+		readonly [body: number, cfg: number]
+	>;
 }
 
 export type CoreCallGraphStatistics = CoreProgramFlowCallTargetStatistics;
@@ -187,12 +191,17 @@ export interface CoreCallGraphIndex {
 function localTargetsAreCurrent(
 	local: CoreLocalCallTargets | undefined,
 	fn: CoreFunctionStore,
+	program: CoreProgram,
 ): boolean {
 	return (
 		local !== undefined &&
 		local.bodyVersion === fn.version("body") &&
 		local.cfgVersion === fn.version("cfg") &&
-		local.callsVersion === fn.version("calls")
+		local.callsVersion === fn.version("calls") &&
+		[...local.returnTargetDependencies].every(([functionId, [body, cfg]]) => {
+			const target = program.function(functionId);
+			return target.version("body") === body && target.version("cfg") === cfg;
+		})
 	);
 }
 
@@ -265,6 +274,25 @@ function directCreatedFunction(
 	return typeof target === "number" && Number.isSafeInteger(target) && target >= 0
 		? (target as CoreFunctionId)
 		: undefined;
+}
+
+function directReturnedFunctionTargets(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+): CoreCalleeTargets | undefined {
+	const fn = program.function(functionId);
+	let targets = CORE_CALLEE_TARGETS_BOTTOM;
+	let returns = 0;
+	for (const block of fn.blockIds()) {
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) !== "return") continue;
+		returns++;
+		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+		const target = directCreatedFunction(fn, returned);
+		if (target === undefined || target >= program.functionCapacity) return undefined;
+		targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(target));
+	}
+	return returns === 0 || coreCalleeTargetsIsBottom(targets) ? undefined : targets;
 }
 
 function directStringIndex(
@@ -385,6 +413,10 @@ function analyzeFunctionTargets(
 	);
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
+	const returnTargetDependencies = new Map<
+		CoreFunctionId,
+		readonly [body: number, cfg: number]
+	>();
 	const enqueue = (block: CoreBlockId): void => {
 		if (queued[block] !== 0) return;
 		queued[block] = 1;
@@ -482,6 +514,46 @@ function analyzeFunctionTargets(
 							);
 					}
 				}
+			} else if (opcode === "call") {
+				const callee = instructionOperand(fn, instruction, 0);
+				const callees = callee === undefined ? CORE_CALLEE_TARGETS_OPEN : values[callee]!;
+				if (callees.functions.length > 0) {
+					let returned = CORE_CALLEE_TARGETS_BOTTOM;
+					let hasUnknownReturn = coreCalleeTargetsAreOpen(callees);
+					const dependencies: Array<
+						readonly [CoreFunctionId, readonly [body: number, cfg: number]]
+					> = [];
+					for (const target of callees.functions) {
+						const targetFunction = program.function(target);
+						dependencies.push(
+							Object.freeze([
+								target,
+								Object.freeze([
+									targetFunction.version("body"),
+									targetFunction.version("cfg"),
+								] as const),
+							] as const),
+						);
+						const targetReturns = directReturnedFunctionTargets(program, target);
+						if (targetReturns === undefined) {
+							hasUnknownReturn = true;
+							continue;
+						}
+						returned = joinCoreCalleeTargets(returned, targetReturns);
+					}
+					if (!coreCalleeTargetsIsBottom(returned)) {
+						for (const [target, versions] of dependencies) {
+							returnTargetDependencies.set(target, versions);
+						}
+						resultTargets = hasUnknownReturn
+							? Object.freeze({
+									functions: returned.functions,
+									anyScript: true,
+									opaque: true,
+								})
+							: returned;
+					}
+				}
 			} else if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode)) {
 				resultTargets = CORE_CALLEE_TARGETS_BOTTOM;
 			}
@@ -570,6 +642,7 @@ function analyzeFunctionTargets(
 		cellWrites,
 		propertyInputs,
 		globalWrites,
+		returnTargetDependencies,
 	});
 }
 

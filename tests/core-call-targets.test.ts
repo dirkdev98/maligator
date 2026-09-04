@@ -126,6 +126,74 @@ describe("incremental Core call graph", () => {
 		});
 	});
 
+	it("propagates guarded closure returns and invalidates dependent callers", () => {
+		const program = analysisProgram();
+		const factory = new CoreFunctionBuilder(program);
+		const factoryEntry = factory.createBlock();
+		const [created] = factory.appendInstruction(factoryEntry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		const [createInstruction] = factory.bodyInstructionIds(factoryEntry);
+		factory.setTerminator(factoryEntry, { kind: "return", value: created! });
+		const factoryFunction = factory.finish(factoryEntry).function;
+
+		const caller = new CoreFunctionBuilder(program);
+		const callerEntry = caller.createBlock();
+		const [factoryValue] = caller.appendInstruction(callerEntry, "createFunction", [], {
+			attributes: { functionIndex: factoryFunction },
+		});
+		caller.appendInstruction(callerEntry, "storeGlobal", [factoryValue!], {
+			attributes: { index: 0 },
+		});
+		const [loadedFactory] = caller.appendInstruction(callerEntry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [receiver] = caller.appendInstruction(callerEntry, "createUndefined", []);
+		const [returnedFunction] = caller.appendInstruction(callerEntry, "call", [
+			loadedFactory!,
+			receiver!,
+		]);
+		const [result] = caller.appendInstruction(callerEntry, "call", [
+			returnedFunction!,
+			receiver!,
+		]);
+		const [, , , , factoryCall, returnedCall] = caller.bodyInstructionIds(callerEntry);
+		caller.setTerminator(callerEntry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(callerEntry).function;
+		appendLeaf(program);
+		appendLeaf(program);
+
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(first.site(callerFunction, factoryCall!)?.targets).toMatchObject({
+			functions: [factoryFunction],
+			anyScript: false,
+			opaque: true,
+		});
+		expect(first.site(callerFunction, returnedCall!)?.targets).toEqual({
+			functions: [2],
+			anyScript: true,
+			opaque: true,
+		});
+
+		const editor = CoreEditor.open(program, factoryFunction);
+		editor.replaceInstruction(createInstruction!, "createFunction", [], {
+			attributes: { functionIndex: 3 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(second.statistics.functionsAnalyzed).toBe(2);
+		expect(second.site(callerFunction, returnedCall!)?.targets).toEqual({
+			functions: [3],
+			anyScript: true,
+			opaque: true,
+		});
+	});
+
 	it("keeps isolated target rebuild work constant as unrelated functions grow", () => {
 		const program = analysisProgram();
 		const caller = appendCaller(program, 1);
