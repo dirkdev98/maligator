@@ -882,6 +882,7 @@ function syntheticScalingSummary(
 		readonly warm: {
 			readonly samples: ReadonlyArray<CompilerScaleSample>;
 		};
+		readonly profile?: CompilerScaleSample;
 	};
 	const byId = new Map(
 		results.map((raw) => {
@@ -894,16 +895,31 @@ function syntheticScalingSummary(
 		.map((tier) => {
 			const samples = manifest.syntheticScales.map((scale) => {
 				const result = byId.get(`${tier.id}-${scale}x`);
-				const sample = result?.warm.samples[0];
-				if (sample === undefined) {
+				if (result === undefined) {
 					throw new Error(`missing synthetic scaling result ${tier.id}-${scale}x`);
 				}
+				const offSamples = result.warm.samples.filter(
+					({ instrumentation }) => instrumentation === "off",
+				);
+				const timingSamples = offSamples.length === 0 ? result.warm.samples : offSamples;
+				const metricsSample = [result.profile, ...result.warm.samples].find(
+					(sample) => sample !== undefined && sample.optimizer.input.instructions > 0,
+				);
+				if (timingSamples.length === 0 || metricsSample === undefined) {
+					throw new Error(
+						`synthetic scaling result ${tier.id}-${scale}x requires timed and instrumented samples`,
+					);
+				}
+				const wallMs = median(timingSamples.map(({ wallMs }) => wallMs));
+				const optimizeCoreMs = median(
+					timingSamples.map(({ phases }) => phases.optimizeCoreMs),
+				);
 				return {
 					scale,
-					wallMs: sample.wallMs,
-					optimizeCoreMs: sample.phases.optimizeCoreMs,
-					inputInstructions: sample.optimizer.input.instructions,
-					outputCodeUnits: sample.output.codeUnits,
+					wallMs,
+					optimizeCoreMs,
+					inputInstructions: metricsSample.optimizer.input.instructions,
+					outputCodeUnits: metricsSample.output.codeUnits,
 				};
 			});
 			const base = samples[0]!;
@@ -914,6 +930,10 @@ function syntheticScalingSummary(
 					normalized: {
 						wallMsPerScale: sample.wallMs / sample.scale,
 						optimizeCoreMsPerScale: sample.optimizeCoreMs / sample.scale,
+						wallMsPerThousandInputInstructions:
+							(sample.wallMs * 1_000) / sample.inputInstructions,
+						optimizeCoreMsPerThousandInputInstructions:
+							(sample.optimizeCoreMs * 1_000) / sample.inputInstructions,
 						inputInstructionsPerScale: sample.inputInstructions / sample.scale,
 						outputCodeUnitsPerScale: sample.outputCodeUnits / sample.scale,
 					},
