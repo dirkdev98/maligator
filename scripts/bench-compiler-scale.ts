@@ -23,6 +23,7 @@ import type {
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import { normalizeCompilerScaleMetrics } from "./compiler-scale-normalization.ts";
 import {
 	prepareSelfCompileSource,
 	SELF_COMPILE_CONFIG,
@@ -103,6 +104,7 @@ interface CompilerScaleSample {
 	readonly phases: CompilerScalePhases;
 	readonly optimizer: Pick<
 		CoreOptimizationReport,
+		| "instrumentation"
 		| "construction"
 		| "input"
 		| "output"
@@ -711,6 +713,7 @@ async function compileSample(
 		wallMs,
 		phases,
 		optimizer: {
+			instrumentation: report.instrumentation,
 			construction: report.construction,
 			input: report.input,
 			output: report.output,
@@ -836,6 +839,69 @@ function sampleSummary(samples: ReadonlyArray<CompilerScaleSample>) {
 		minimumWallMs: Math.min(...samples.map(({ wallMs }) => wallMs)),
 		maximumWallMs: Math.max(...samples.map(({ wallMs }) => wallMs)),
 	};
+}
+
+function normalizedMetrics(
+	timingSamples: ReadonlyArray<CompilerScaleSample>,
+	metricsSample: CompilerScaleSample,
+) {
+	const timing = sampleSummary(timingSamples);
+	const report = metricsSample.optimizer;
+	const finalCheckpoint =
+		report.checkpoints.findLast(({ checkpoint }) => checkpoint === "after-sealing") ??
+		report.checkpoints.at(-1);
+	const analysisRecomputations = (analysis: string): number | undefined =>
+		report.analyses.find((entry) => entry.analysis === analysis)?.recomputations;
+	return normalizeCompilerScaleMetrics({
+		medianWallMs: timing.medianWallMs,
+		medianOptimizeCoreMs: timing.medianOptimizeCoreMs,
+		inputInstructions: report.input.instructions,
+		localWorkItems:
+			report.instrumentation === "off" ? undefined : report.counters.localRulesConsidered,
+		localAppliedEdits:
+			report.passes.length === 0
+				? undefined
+				: report.passes.reduce((total, pass) => total + pass.edits, 0),
+		controlFlowRecomputations: analysisRecomputations("control-flow-bundle"),
+		liveBlocks: finalCheckpoint?.blocks.live ?? report.output.blocks,
+		liveEdges: finalCheckpoint?.terminatorEdges.live,
+		localValueKindRecomputations: analysisRecomputations("local-value-kinds"),
+		programValueKindFunctionEvaluations:
+			report.instrumentation === "off"
+				? undefined
+				: report.transforms.valueKindFunctionEvaluations,
+		liveValues: report.output.values,
+		memoryTransfers:
+			report.instrumentation === "off" ? undefined : report.counters.memoryTransfers,
+		memoryEvents:
+			report.instrumentation === "off" ? undefined : report.counters.memoryAccesses,
+		programFlowLocalInstructionVisits:
+			report.instrumentation === "off"
+				? undefined
+				: report.counters.programFlowLocalInstructionVisits,
+		programFlowTransferRecords:
+			report.instrumentation === "off"
+				? undefined
+				: report.counters.programFlowTransferRecords,
+		programFlowSccTransfers:
+			report.instrumentation === "off" ? undefined : report.counters.sccTransfers,
+		exactCallEdges:
+			report.instrumentation === "off" ? undefined : report.program.exactCallEdges,
+		programFlowSccs: report.instrumentation === "off" ? undefined : report.program.sccs,
+		candidateFunctionsScanned:
+			report.instrumentation === "off"
+				? undefined
+				: report.counters.specializationFunctionsScanned,
+		candidatesDiscovered:
+			report.instrumentation === "off"
+				? undefined
+				: report.counters.specializationCandidatesDiscovered,
+		admittedFunctions:
+			report.instrumentation === "off" ? undefined : report.plan.admittedFunctions,
+		sampledAllocatedBytes: metricsSample.profile?.sampledOptimizeCoreBytes,
+		liveInstructions: report.output.instructions,
+		peakRssBytes: metricsSample.memory.peakRss,
+	});
 }
 
 function instrumentationRatio(
@@ -1201,6 +1267,10 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					offSamples.length === 0 || countersSamples.length === 0
 						? undefined
 						: instrumentationRatio(countersReference, countersSamples);
+				const metricsSample = [profile, ...warmed].find(
+					(sample) => sample !== undefined && sample.optimizer.input.instructions > 0,
+				);
+				const timingSamples = offSamples.length === 0 ? warmed : offSamples;
 				results.push({
 					tier: tier.tier,
 					id: benchmarkCase.id,
@@ -1214,6 +1284,9 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					warm: { samples: warmed, byMode: warmByMode },
 					cold: { samples: cold, summary: sampleSummary(cold) },
 					...(profile === undefined ? {} : { profile }),
+					...(metricsSample === undefined
+						? {}
+						: { normalized: normalizedMetrics(timingSamples, metricsSample) }),
 					instrumentationOverhead: {
 						...(phasesRatio === undefined
 							? {}

@@ -377,6 +377,7 @@ export type CorePlanDeclineReason =
 	| "target-support";
 
 export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStatistics {
+	readonly admittedFunctions: number;
 	readonly discoveredByKind: Readonly<Record<string, number>>;
 	readonly selectedByKind: Readonly<Record<string, number>>;
 	readonly declinedByPlanReason: Readonly<Record<string, number>>;

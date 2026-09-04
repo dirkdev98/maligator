@@ -1394,6 +1394,10 @@ export function buildCoreOptimizationPlan(
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,
+		admittedFunctions: new Set([
+			...specializations.map(({ function: functionId }) => functionId),
+			...directEntries.map(({ function: functionId }) => functionId),
+		]).size,
 		discoveredByKind: Object.freeze({ ...discoveredByKind }),
 		selectedByKind: Object.freeze({ ...selectedByKind }),
 		declinedByPlanReason: Object.freeze({ ...declinedByPlanReason }),

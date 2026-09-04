@@ -656,6 +656,7 @@ function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			considered: discovered,
 			applied: 0,
 			declined: discovered,
+			admittedFunctions: 0,
 			appliedByKind: Object.freeze(zeroed(plan.statistics.appliedByKind)),
 			declinedByReason: Object.freeze(zeroed(plan.statistics.declinedByReason)),
 			generatedCodeConsumed: 0,

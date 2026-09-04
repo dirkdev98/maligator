@@ -289,6 +289,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		});
 		expect(compilation.plan.version.key).toMatch(/^p:/);
 		expect(compilation.plan.statistics).toMatchObject({
+			admittedFunctions: 0,
 			applied: 0,
 			declined: 0,
 		});

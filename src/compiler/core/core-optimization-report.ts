@@ -154,6 +154,7 @@ export interface CoreCompilerWorkCounters {
 }
 
 export interface CorePlanWorkReport {
+	readonly admittedFunctions: number;
 	readonly discovered: number;
 	readonly selected: number;
 	readonly declined: number;
@@ -524,6 +525,7 @@ export class CoreOptimizationReportBuilder {
 		wildcardReverseCallerVisits: 0,
 	});
 	#planWork: CorePlanWorkReport = Object.freeze({
+		admittedFunctions: 0,
 		discovered: 0,
 		selected: 0,
 		declined: 0,
@@ -867,6 +869,7 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		this.increment("specializationCandidatesSelected", report.applied);
 		this.#planWork = Object.freeze({
+			admittedFunctions: report.admittedFunctions,
 			discovered: Object.values(report.discoveredByKind).reduce(
 				(sum, count) => sum + count,
 				0,

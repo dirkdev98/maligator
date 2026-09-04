@@ -887,6 +887,7 @@ describe("late Core specialization plan", () => {
 				fallback: "canonical-core",
 			},
 		]);
+		expect(plan.statistics.admittedFunctions).toBe(2);
 		const coreCall = plan.directEntries[0]!.callSites[0]!;
 		expect(
 			program.function(caller).instructionAttributes(coreCall.instruction),
