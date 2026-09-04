@@ -110,6 +110,12 @@ function displayFilePath(filePath: string): string {
 	return `compiled://${relative}`;
 }
 
+const MAL_FUNCTION_ROW_MACRO = [
+	"#define MAL_FUNCTION_ROW(argument_snapshot_plan_value, mapped_argument_slots_value, instructions_value, instruction_data_value, gc_safepoints_value, handlers_value, compiled_value, positions_value, profile_site_ids_value, name_string_index_value, kind_value, parameter_count_value, argument_snapshot_count_value, argument_snapshot_plan_count_value, mapped_argument_count_value, length_value, register_count_value, captured_count_value, argument_retention_limit_value, property_ic_count_value, literal_shape_count_value, instruction_count_value, instruction_data_count_value, gc_safepoint_count_value, handler_count_value, file_index_value, position_count_value, strict_value, needs_arguments_value, mapped_arguments_value, gc_safepoints_trusted_value, is_derived_constructor_value, is_class_constructor_value, has_prototype_value) { ",
+	".argument_snapshot_plan = argument_snapshot_plan_value, .mapped_argument_slots = mapped_argument_slots_value, .instructions = instructions_value, .instruction_data = instruction_data_value, .gc_safepoints = gc_safepoints_value, .handlers = handlers_value, .compiled = compiled_value, .positions = positions_value, MAL_FUNCTION_PROFILE_SITE(profile_site_ids_value) ",
+	".name_string_index = name_string_index_value, .kind = kind_value, .parameter_count = parameter_count_value, .argument_snapshot_count = argument_snapshot_count_value, .argument_snapshot_plan_count = argument_snapshot_plan_count_value, .mapped_argument_count = mapped_argument_count_value, .length = length_value, .register_count = register_count_value, .captured_count = captured_count_value, .argument_retention_limit = argument_retention_limit_value, .property_ic_count = property_ic_count_value, .literal_shape_count = literal_shape_count_value, .instruction_count = instruction_count_value, .instruction_data_count = instruction_data_count_value, .gc_safepoint_count = gc_safepoint_count_value, .handler_count = handler_count_value, .file_index = file_index_value, .position_count = position_count_value, .strict = strict_value, .needs_arguments = needs_arguments_value, .mapped_arguments = mapped_arguments_value, .gc_safepoints_trusted = gc_safepoints_trusted_value, .is_derived_constructor = is_derived_constructor_value, .is_class_constructor = is_class_constructor_value, .has_prototype = has_prototype_value }",
+].join("");
+
 export const NATIVE_C_HEADER_LINES = [
 	"#include <string.h>",
 	'#include "vm.h"',
@@ -135,6 +141,15 @@ export const NATIVE_C_HEADER_LINES = [
 	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
 	"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
+	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
+	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
+	"#define MAL_SOURCE_POS(line_value, column_value, inlined_function_index_value, caller_pos_id_value) { .line = line_value, .column = column_value, .inlined_function_index = inlined_function_index_value, .caller_pos_id = caller_pos_id_value }",
+	"#if MAL_PROFILE",
+	"#define MAL_FUNCTION_PROFILE_SITE(value) .profile_site_ids = value,",
+	"#else",
+	"#define MAL_FUNCTION_PROFILE_SITE(value)",
+	"#endif",
+	MAL_FUNCTION_ROW_MACRO,
 	"",
 ];
 
@@ -173,7 +188,7 @@ function stringCodeUnitsBody(constant: Array<number>): string {
 function malStringRow(symbol: string, length: number): string {
 	// Immortal string constant. The row stays mutable because its hash is cached
 	// lazily on first use (a static initializer cannot compute it).
-	return `    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = ${length}, .code_units = ${symbol} },`;
+	return `    MAL_STRING_ROW(${symbol}, ${length}),`;
 }
 
 function malFunctionKind(fn: RuntimeImage["functions"][number]): string {
@@ -203,45 +218,43 @@ function malFunctionRow(
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
 	omitBytecode = false,
 ): Array<string> {
-	const fields = [
-		`.name_string_index = ${fn.nameStringIndex}`,
-		`.kind = ${malFunctionKind(fn)}`,
-		`.parameter_count = ${fn.parameterCount}`,
-		`.length = ${fn.length}`,
-		`.register_count = ${fn.registerCount}`,
-		`.captured_count = ${fn.capturedCount}`,
-		`.strict = ${fn.strict}`,
-		`.needs_arguments = ${fn.needsArguments}`,
-		`.gc_safepoints_trusted = ${!omitBytecode && vmSafepointRootMapsAreTrusted(fn)}`,
-		`.argument_retention_limit = ${computeArgumentRetentionLimit(fn)}`,
-		`.argument_snapshot_count = ${fn.argumentSnapshotCount}`,
-		`.argument_snapshot_plan_count = ${argumentSnapshotPlanCount}`,
-		`.argument_snapshot_plan = ${argumentSnapshotPlanSymbol}`,
-		`.mapped_arguments = ${fn.mappedArguments}`,
-		`.mapped_argument_count = ${mappedArgumentSlotsSymbol === "nullptr" ? 0 : fn.mappedArgumentSlots.length}`,
-		`.mapped_argument_slots = ${mappedArgumentSlotsSymbol}`,
-		`.is_derived_constructor = ${fn.isDerivedConstructor}`,
-		`.is_class_constructor = ${fn.isClassConstructor}`,
-		`.has_prototype = ${fn.hasPrototype}`,
-		`.property_ic_count = ${countPropertyIcSites(fn.instructions)}`,
-		`.literal_shape_count = ${fn.literalShapeCount}`,
-		`.instruction_count = ${omitBytecode ? 0 : fn.instructions.length}`,
-		`.instructions = ${omitBytecode ? "nullptr" : instructionsSymbol}`,
-		`.instruction_data_count = ${instructionDataCount}`,
-		`.instruction_data = ${instructionDataSymbol}`,
-		`.gc_safepoint_count = ${gcSafepointCount}`,
-		`.gc_safepoints = ${gcSafepointsSymbol}`,
-		`.handler_count = ${omitBytecode ? 0 : fn.handlers.length}`,
-		`.handlers = ${omitBytecode ? "nullptr" : handlersSymbol}`,
-		`.compiled = ${compiledSymbol}`,
-		`.file_index = ${debug.fileIndex}`,
-		`.position_count = ${debug.positionCount}`,
-		`.positions = ${debug.positionsSymbol}`,
+	const values = [
+		argumentSnapshotPlanSymbol,
+		mappedArgumentSlotsSymbol,
+		omitBytecode ? "nullptr" : instructionsSymbol,
+		instructionDataSymbol,
+		gcSafepointsSymbol,
+		omitBytecode ? "nullptr" : handlersSymbol,
+		compiledSymbol,
+		debug.positionsSymbol,
+		fn.profileSiteIds === undefined ? "nullptr" : profileSiteIdsSymbol,
+		fn.nameStringIndex,
+		malFunctionKind(fn),
+		fn.parameterCount,
+		fn.argumentSnapshotCount,
+		argumentSnapshotPlanCount,
+		mappedArgumentSlotsSymbol === "nullptr" ? 0 : fn.mappedArgumentSlots.length,
+		fn.length,
+		fn.registerCount,
+		fn.capturedCount,
+		computeArgumentRetentionLimit(fn),
+		countPropertyIcSites(fn.instructions),
+		fn.literalShapeCount,
+		omitBytecode ? 0 : fn.instructions.length,
+		instructionDataCount,
+		gcSafepointCount,
+		omitBytecode ? 0 : fn.handlers.length,
+		debug.fileIndex,
+		debug.positionCount,
+		fn.strict,
+		fn.needsArguments,
+		fn.mappedArguments,
+		!omitBytecode && vmSafepointRootMapsAreTrusted(fn),
+		fn.isDerivedConstructor,
+		fn.isClassConstructor,
+		fn.hasPrototype,
 	];
-	if (fn.profileSiteIds !== undefined) {
-		fields.push(`.profile_site_ids = ${profileSiteIdsSymbol}`);
-	}
-	return [`    { ${fields.join(", ")} },`];
+	return [`    MAL_FUNCTION_ROW(${values.join(", ")}),`];
 }
 
 function safepointRootData(fn: BytecodeFunction): Array<number> {
@@ -265,7 +278,7 @@ function argumentSnapshotPlanBody(fn: BytecodeFunction): string {
 /** The body (rows, no braces) of a function's MalLineEntry position table. */
 function positionArrayBody(fn: BytecodeFunction): string {
 	return compressPositions(fn.positions)
-		.map((run) => `    { .start_ip = ${run.startIp}, .pos_id = ${run.posId} },`)
+		.map((run) => `    MAL_LINE_ENTRY(${run.startIp}, ${run.posId}),`)
 		.join("\n");
 }
 
@@ -1243,7 +1256,7 @@ function malRuntimeImageStruct(
 		lines.push(`static const MalSourcePos mal_source_positions${suffix}[] = {`);
 		for (const pos of runtime.sourcePositions) {
 			lines.push(
-				`    { .line = ${pos.line}, .column = ${pos.column}, .inlined_function_index = ${pos.inlinedFunctionIndex ?? -1}, .caller_pos_id = ${pos.callerPosId ?? -1} },`,
+				`    MAL_SOURCE_POS(${pos.line}, ${pos.column}, ${pos.inlinedFunctionIndex ?? -1}, ${pos.callerPosId ?? -1}),`,
 			);
 		}
 		lines.push("};", "");

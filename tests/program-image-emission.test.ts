@@ -32,6 +32,12 @@ import type {
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
+function malFunctionRows(source: string): Array<Array<string>> {
+	return [...source.matchAll(/^\s+MAL_FUNCTION_ROW\((.*)\),$/gm)].map((match) =>
+		match[1]!.split(", "),
+	);
+}
+
 const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
 	{ opcode: "CREATE_F64", dst: 0, value: Number.POSITIVE_INFINITY },
@@ -296,11 +302,12 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x80000000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
-		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-		expect(output).toContain(".instruction_data_count = 38");
-		expect(output).toContain(".argument_snapshot_count = 0");
-		expect(output).toContain(".argument_snapshot_plan_count = 0");
-		expect(output).toContain(".argument_snapshot_plan = nullptr");
+		const [functionRow] = malFunctionRows(output);
+		expect(functionRow?.[3]).toBe("mal_function_0_instruction_data");
+		expect(functionRow?.[22]).toBe("38");
+		expect(functionRow?.[12]).toBe("0");
+		expect(functionRow?.[13]).toBe("0");
+		expect(functionRow?.[0]).toBe("nullptr");
 		expect(output).toContain(
 			".as.init_global_vars = { .data_offset = 28, .declaration_configurable = true }",
 		);
@@ -390,10 +397,11 @@ describe("emit-program-image instruction packing", () => {
 			// Compiled functions omit bytecode, but their compact seed metadata must
 			// remain in the otherwise-unused instruction-data field so the packed
 			// MalFunction row does not grow.
-			expect(output).toContain(".instruction_count = 0");
-			expect(output).toContain(".instructions = nullptr");
-			expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-			expect(output).toContain(".instruction_data_count = 13");
+			const [functionRow] = malFunctionRows(output);
+			expect(functionRow?.[21]).toBe("0");
+			expect(functionRow?.[2]).toBe("nullptr");
+			expect(functionRow?.[3]).toBe("mal_function_0_instruction_data");
+			expect(functionRow?.[22]).toBe("13");
 			expect(output).toContain("{ 2, 0, 2, 1, 0, 0, 1, 1, 2, 1, 0, 0, 1 }");
 			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
 			expect(output).toMatch(
@@ -437,7 +445,7 @@ describe("emit-program-image instruction packing", () => {
 			emitProgramImage(synthetic, { compiled: true }),
 			emitProgramImage(synthetic, { compiled: false }),
 		]) {
-			expect(output).toContain(".literal_shape_count = 1");
+			expect(malFunctionRows(output)[0]?.[20]).toBe("1");
 			expect(output).toContain(".shape_cache_index = 0");
 		}
 
@@ -522,7 +530,11 @@ describe("emit-program-image instruction packing", () => {
 	it("emits and references shared side tables in batches", () => {
 		const output = emitBatch([definition, definition], { compiled: false });
 		expect(output).toContain("static const i32 mal_shared_insn_data_");
-		expect(output.match(/\.instruction_data = mal_shared_insn_data_/g)).toHaveLength(2);
+		expect(
+			malFunctionRows(output).filter((row) =>
+				row[3]?.startsWith("mal_shared_insn_data_"),
+			),
+		).toHaveLength(2);
 	});
 
 	it("rejects malformed runtime proofs from ordinary and batch C output", () => {
@@ -627,7 +639,7 @@ describe("emit-program-image instruction packing", () => {
 	});
 
 	it("charges split units only for declarations they reference", () => {
-		const functions = Array.from({ length: 100 }, () => ({
+		const functions = Array.from({ length: 400 }, () => ({
 			...fn,
 			instructions: [
 				{ opcode: "CREATE_UNDEFINED", dst: 0 } as const,
@@ -745,7 +757,7 @@ describe("emit-program-image instruction packing", () => {
 			...fn,
 			instructions: [...fn.instructions],
 		}));
-		const sourcePositions = Array.from({ length: 800 }, (_, index) => ({
+		const sourcePositions = Array.from({ length: 3_000 }, (_, index) => ({
 			line: index + 1,
 			column: index % 80,
 		}));
@@ -773,13 +785,14 @@ describe("emit-program-image instruction packing", () => {
 
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
 		expect(definitionUnit).toContain("MalFunction mal_functions[400];");
-		expect(definitionUnit).toContain("MalString mal_strings[800];");
-		expect(definitionUnit).toContain("MalSourcePos mal_source_positions[800];");
+		expect(definitionUnit).toContain("extern MalString mal_strings[];");
+		expect(definitionUnit).toContain("MalSourcePos mal_source_positions[3000];");
 		expect(definitionUnit).toContain(
 			".initialize_generated_data = mal_initialize_generated_data",
 		);
 		expect(dataUnits).toContain("void mal_initialize_mal_functions_chunk_0(");
-		expect(dataUnits).toContain("void mal_initialize_mal_strings_chunk_0(");
+		expect(dataUnits).toContain("MalString mal_strings[] = {");
+		expect(dataUnits).not.toContain("void mal_initialize_mal_strings_chunk_0(");
 		expect(dataUnits).toContain("void mal_initialize_mal_source_positions_chunk_0(");
 		expect(dataUnits).not.toContain("const MalFunction mal_functions[] =");
 	});
@@ -823,7 +836,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).not.toContain("MalValue mal_compiled_0(MalVm *vm");
 		expect(output).toContain("MalInstruction mal_function_0_instructions[201]");
 		expect(output).toContain("void mal_initialize_mal_function_0_instructions_chunk_0(");
-		expect(output).toContain(".compiled = nullptr");
+		expect(malFunctionRows(output)[0]?.[6]).toBe("nullptr");
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
@@ -890,11 +903,11 @@ describe("emit-program-image instruction packing", () => {
 		const output = emitProgramImage(compileSemanticProgramToProgramImage(semantic), {
 			compiled: false,
 		});
-		expect(output).toContain(".gc_safepoints_trusted = true");
+		const trusted = malFunctionRows(output).find((row) => row[30] === "true");
+		expect(trusted).toBeDefined();
 		expect(output).toMatch(/mal_function_\d+_gc_safepoints\[\] = \{ \d+, \d+/);
-		expect(output).toMatch(
-			/\.gc_safepoint_count = [1-9]\d*, \.gc_safepoints = mal_function_\d+_gc_safepoints/,
-		);
+		expect(trusted?.[4]).toMatch(/mal_function_\d+_gc_safepoints/);
+		expect(Number(trusted?.[23])).toBeGreaterThan(0);
 	});
 
 	it("coalesces straight-line native root masks and republishes them at joins", () => {
@@ -1159,9 +1172,9 @@ describe("emit-program-image instruction packing", () => {
 				functions: [{ ...fn, instructions: [{ opcode: "RETURN", value: 0 } as const] }],
 			},
 		};
-		expect(emitProgramImage(simple, { compiled: false })).toContain(
-			".instruction_data_count = 0, .instruction_data = nullptr",
-		);
+		const [functionRow] = malFunctionRows(emitProgramImage(simple, { compiled: false }));
+		expect(functionRow?.[22]).toBe("0");
+		expect(functionRow?.[3]).toBe("nullptr");
 	});
 
 	it("aliases an asset to existing linked immutable bytes", () => {
