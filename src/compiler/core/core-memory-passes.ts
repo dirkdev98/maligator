@@ -225,42 +225,50 @@ function replaceTerminatorEdges(
 	}
 }
 
+function mayResolveToAllocation(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	requiredOpcode?: string,
+): boolean {
+	const seen = new Set<CoreValueId>();
+	let current = value;
+	while (!seen.has(current)) {
+		seen.add(current);
+		if (fn.kernel.valueDefinitionKind(current) !== 1) return true;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
+		if (fn.instructionKind(definition) !== "operation") return true;
+		if (
+			fn.registry.byId(fn.instructionOpcode(definition)).allocation !== undefined &&
+			instructionResultAt(fn, definition, 0) === current
+		)
+			return (
+				requiredOpcode === undefined ||
+				fn.instructionOpcodeName(definition) === requiredOpcode
+			);
+		if (fn.instructionOpcodeName(definition) !== "move") return false;
+		const source = instructionOperandAt(fn, definition, 0);
+		if (source === undefined) return true;
+		current = source;
+	}
+	return true;
+}
+
 function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolean {
-	const mayResolveToAllocation = (value: CoreValueId): boolean => {
-		const seen = new Set<CoreValueId>();
-		let current = value;
-		while (!seen.has(current)) {
-			seen.add(current);
-			if (fn.kernel.valueDefinitionKind(current) !== 1) return true;
-			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
-			if (fn.instructionKind(definition) !== "operation") return true;
-			if (
-				fn.registry.byId(fn.instructionOpcode(definition)).allocation !== undefined &&
-				instructionResultAt(fn, definition, 0) === current
-			)
-				return true;
-			if (fn.instructionOpcodeName(definition) !== "move") return false;
-			const source = instructionOperandAt(fn, definition, 0);
-			if (source === undefined) return true;
-			current = source;
-		}
-		return true;
-	};
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
 		if (opcode === "unary" && operator === "typeof") {
 			const operand = instructionOperandAt(fn, instruction, 0);
-			if (operand !== undefined && mayResolveToAllocation(operand)) return true;
+			if (operand !== undefined && mayResolveToAllocation(fn, operand)) return true;
 		} else if (opcode === "binary" && (operator === "===" || operator === "!==")) {
 			const left = instructionOperandAt(fn, instruction, 0);
 			const right = instructionOperandAt(fn, instruction, 1);
 			if (
 				left !== undefined &&
 				right !== undefined &&
-				mayResolveToAllocation(left) &&
-				mayResolveToAllocation(right)
+				mayResolveToAllocation(fn, left) &&
+				mayResolveToAllocation(fn, right)
 			)
 				return true;
 		}
@@ -269,14 +277,12 @@ function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolea
 }
 
 function hasShapedObjectLoadOpportunity(fn: CoreFunctionStore): boolean {
-	let hasShapedObject = false;
-	let hasStaticLoad = false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "createObjectShaped") hasShapedObject = true;
-		else if (opcode === "loadPropertyStatic") hasStaticLoad = true;
-		if (hasShapedObject && hasStaticLoad) return true;
+		if (fn.instructionOpcodeName(instruction) !== "loadPropertyStatic") continue;
+		const base = instructionOperandAt(fn, instruction, 0);
+		if (base !== undefined && mayResolveToAllocation(fn, base, "createObjectShaped"))
+			return true;
 	}
 	return false;
 }
