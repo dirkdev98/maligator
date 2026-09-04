@@ -1,6 +1,6 @@
 # Core opt4 compiler host-gap analysis
 
-Source: `c9e6c1d8c3807238b4a5f259345550914fb89a6d`
+Source: `2a00b5f18656827561854de883ec7074ae68a43f`
 
 The kernels replay current compiler operation shapes. They are diagnostic evidence, not product baseline lanes. Node allocation is a V8 sampled-allocation estimate; Maligator allocation and collection deltas are exact runtime counters around the measured kernel. CPU and RSS come from an isolated resource probe, separate from the paired timing samples.
 
@@ -8,17 +8,17 @@ The kernels replay current compiler operation shapes. They are diagnostic eviden
 
 - First primitive ratio above 7x: typed-array-operations
 - First algorithm ratio above 7x: pruned-ssa
-- Top host-gap kernels: optimizer-queue, value-kinds, program-flow-convergence, spread-copies, pruned-ssa
-- Top Maligator allocation kernels: moderate-retention-churn, pruned-ssa, iterator-generator-traversal, block-parameters, frozen-records
+- Top host-gap kernels: optimizer-queue, value-kinds, spread-copies, dynamic-array-operations, moderate-retention-churn
+- Top Maligator allocation kernels: moderate-retention-churn, iterator-generator-traversal, pruned-ssa, map-operations, block-parameters
 
 Modeled positive kernel-gap fractions:
 
-- runtime-collections-properties: 14.3%
-- function-closure-dispatch: 5.2%
-- iterators-callbacks: 6.1%
-- allocation-gc: 21.9%
-- typed-arrays-numeric-loops: 46.9%
-- compiler-algorithms: 5.6%
+- runtime-collections-properties: 15.2%
+- function-closure-dispatch: 6.0%
+- iterators-callbacks: 6.7%
+- allocation-gc: 23.6%
+- typed-arrays-numeric-loops: 45.0%
+- compiler-algorithms: 3.5%
 - unattributed-execution: 0.0%
 
 These fractions classify the kernel ladder only. Full compiler owner coverage remains authoritative for the total self-host gap.
@@ -27,42 +27,42 @@ These fractions classify the kernel ladder only. Full compiler owner coverage re
 
 | Kernel | Node ms | Maligator ms | Ratio | Gap ms | Maligator allocated bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| numeric-scalar-loops | 69.0 | 326.0 | 4.72x | 257.0 | 64 |
-| typed-array-operations | 44.0 | 551.0 | 12.52x | 507.0 | 224 |
-| dynamic-array-operations | 62.0 | 860.0 | 13.87x | 798.0 | 164,960,064 |
-| map-operations | 51.0 | 252.0 | 4.94x | 201.0 | 183,572,544 |
-| set-operations | 42.0 | 131.0 | 3.12x | 89.0 | 98,342,464 |
-| stable-shape-properties | 76.0 | 473.0 | 6.22x | 397.0 | 948,480 |
-| short-lived-records | 50.0 | 309.0 | 6.18x | 259.0 | 64 |
-| spread-copies | 50.0 | 1040.0 | 20.80x | 990.0 | 192,000,144 |
-| frozen-records | 71.0 | 144.0 | 2.03x | 73.0 | 230,400,064 |
-| iterator-generator-traversal | 46.0 | 322.0 | 7.00x | 276.0 | 368,640,064 |
-| for-of-collections | 52.0 | 229.0 | 4.40x | 177.0 | 2,115,152 |
-| array-callbacks | 55.0 | 388.0 | 7.05x | 333.0 | 163,029,312 |
-| direct-calls | 47.0 | 264.0 | 5.62x | 217.0 | 64 |
-| indirect-calls | 42.0 | 197.0 | 4.69x | 155.0 | 480 |
-| closure-calls | 75.0 | 548.0 | 7.31x | 473.0 | 7,936 |
-| string-keys | 57.0 | 111.0 | 1.95x | 54.0 | 77,841,968 |
-| sorting | 47.0 | 139.0 | 2.96x | 92.0 | 43,423,488 |
+| numeric-scalar-loops | 69.0 | 325.0 | 4.71x | 256.0 | 64 |
+| typed-array-operations | 44.0 | 549.0 | 12.48x | 505.0 | 224 |
+| dynamic-array-operations | 62.0 | 859.0 | 13.85x | 797.0 | 164,960,064 |
+| map-operations | 71.0 | 358.0 | 5.04x | 287.0 | 262,246,464 |
+| set-operations | 40.0 | 132.0 | 3.30x | 92.0 | 98,342,464 |
+| stable-shape-properties | 75.0 | 466.0 | 6.21x | 391.0 | 948,480 |
+| short-lived-records | 50.0 | 308.0 | 6.16x | 258.0 | 64 |
+| spread-copies | 51.0 | 1036.0 | 20.31x | 985.0 | 192,000,144 |
+| frozen-records | 71.0 | 143.0 | 2.01x | 72.0 | 230,400,064 |
+| iterator-generator-traversal | 46.0 | 334.0 | 7.26x | 288.0 | 368,640,064 |
+| for-of-collections | 77.0 | 334.0 | 4.34x | 257.0 | 2,979,152 |
+| array-callbacks | 55.0 | 389.0 | 7.07x | 334.0 | 163,029,312 |
+| direct-calls | 47.0 | 262.0 | 5.57x | 215.0 | 64 |
+| indirect-calls | 69.0 | 328.0 | 4.75x | 259.0 | 480 |
+| closure-calls | 74.0 | 552.0 | 7.46x | 478.0 | 7,936 |
+| string-keys | 57.0 | 113.0 | 1.98x | 56.0 | 77,841,968 |
+| sorting | 47.0 | 142.0 | 3.02x | 95.0 | 43,423,488 |
 | low-retention-churn | 62.0 | 331.0 | 5.34x | 269.0 | 64 |
-| moderate-retention-churn | 50.0 | 588.0 | 11.76x | 538.0 | 1,284,194,480 |
+| moderate-retention-churn | 69.0 | 848.0 | 12.29x | 779.0 | 1,800,388,784 |
 
 ## Algorithm kernels
 
 | Kernel | Node ms | Maligator ms | Ratio | Gap ms | Maligator allocated bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| pruned-ssa | 78.0 | 987.0 | 12.65x | 909.0 | 471,603,568 |
-| dense-relocation | 48.0 | 432.0 | 9.00x | 384.0 | 384 |
-| optimizer-queue | 77.0 | 2387.0 | 31.00x | 2310.0 | 384 |
-| block-parameters | 43.0 | 419.0 | 9.74x | 376.0 | 231,214,080 |
-| cfg-edges | 44.0 | 241.0 | 5.48x | 197.0 | 212,435,968 |
-| immediate-dominators | 41.0 | 337.0 | 8.22x | 296.0 | 224 |
-| value-kinds | 60.0 | 2234.0 | 37.23x | 2174.0 | 544 |
-| canonical-roots | 43.0 | 605.0 | 14.07x | 562.0 | 352 |
-| fact-provenance | 76.0 | 177.0 | 2.33x | 101.0 | 212,322,448 |
-| memory-events | 60.0 | 541.0 | 9.02x | 481.0 | 186,448,256 |
-| memory-versions | 55.0 | 337.0 | 6.13x | 282.0 | 32,438,944 |
-| program-flow-extraction | 44.0 | 233.0 | 5.30x | 189.0 | 209,846,944 |
-| program-flow-convergence | 67.0 | 1129.0 | 16.85x | 1062.0 | 384 |
-| candidate-ranking | 44.0 | 142.0 | 3.23x | 98.0 | 36,086,528 |
-| core-to-execution | 58.0 | 596.0 | 10.28x | 538.0 | 10,160,256 |
+| pruned-ssa | 44.0 | 594.0 | 13.50x | 550.0 | 282,962,288 |
+| dense-relocation | 47.0 | 426.0 | 9.06x | 379.0 | 384 |
+| optimizer-queue | 78.0 | 2378.0 | 30.49x | 2300.0 | 384 |
+| block-parameters | 46.0 | 454.0 | 9.87x | 408.0 | 247,614,080 |
+| cfg-edges | 44.0 | 239.0 | 5.43x | 195.0 | 212,435,968 |
+| immediate-dominators | 41.0 | 333.0 | 8.12x | 292.0 | 224 |
+| value-kinds | 59.0 | 2220.0 | 37.63x | 2161.0 | 544 |
+| canonical-roots | 45.0 | 597.0 | 13.27x | 552.0 | 352 |
+| fact-provenance | 77.0 | 179.0 | 2.32x | 102.0 | 212,322,448 |
+| memory-events | 58.0 | 547.0 | 9.43x | 489.0 | 186,448,256 |
+| memory-versions | 54.0 | 339.0 | 6.28x | 285.0 | 32,438,944 |
+| program-flow-extraction | 44.0 | 232.0 | 5.27x | 188.0 | 209,846,944 |
+| program-flow-convergence | 45.0 | 776.0 | 17.24x | 731.0 | 384 |
+| candidate-ranking | 44.0 | 143.0 | 3.25x | 99.0 | 36,086,528 |
+| core-to-execution | 57.0 | 588.0 | 10.32x | 531.0 | 10,160,256 |

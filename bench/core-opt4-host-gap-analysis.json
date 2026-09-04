@@ -1,8 +1,8 @@
 {
 	"schema": 1,
-	"generatedAt": "2026-09-04T15:31:38.666Z",
+	"generatedAt": "2026-09-04T15:35:27.428Z",
 	"source": {
-		"commit": "c9e6c1d8c3807238b4a5f259345550914fb89a6d",
+		"commit": "2a00b5f18656827561854de883ec7074ae68a43f",
 		"dirty": false,
 		"dirtyDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	},
@@ -18,7 +18,7 @@
 		"samples": 5,
 		"targetNodeMs": 40,
 		"fixture": "bench/compiler-host-gap.mjs",
-		"fixtureDigest": "91a1bdc49d620b3bacecce198a524cf3a07577902bf0db47f91466eef3c78a93",
+		"fixtureDigest": "29471771003ae9249cdd8d42ac098e8a94cc88e8b66eb21a4274f860bc79ad46",
 		"driver": "scripts/bench-compiler-host-gap.ts",
 		"driverDigest": "6daf867746796f6a7ea4a75070bb0edefbe0e4b2084cbb875fd60d4d38a9d68c",
 		"build": {
@@ -56,17 +56,17 @@
 			"group": "primitive",
 			"owner": "numeric scalar loops",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
 			"scale": 40,
 			"operations": 20000000,
 			"checksum": 350120449,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 70
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 70
+						"elapsedMs": 68
 					},
 					{
 						"elapsedMs": 69
@@ -75,15 +75,15 @@
 						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 69
+						"elapsedMs": 68
 					}
 				],
 				"medianMs": 69,
 				"nsPerOperation": 3.45,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 62701568,
-					"sampledAllocatedBytes": 478144,
+					"peakRssBytes": 62455808,
+					"sampledAllocatedBytes": 473232,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -95,39 +95,39 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 324,
+						"elapsedMs": 325,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 326,
+						"elapsedMs": 327,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 326,
+						"elapsedMs": 325,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 326,
+						"elapsedMs": 325,
 						"allocatedBytes": 64,
 						"collections": 0
 					}
 				],
-				"medianMs": 326,
-				"nsPerOperation": 16.3,
+				"medianMs": 325,
+				"nsPerOperation": 16.25,
 				"resource": {
 					"cpuMs": 330,
-					"peakRssBytes": 3620864,
+					"peakRssBytes": 3604480,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.72463768115942,
-			"hostGapMs": 257
+			"ratio": 4.7101449275362315,
+			"hostGapMs": 256
 		},
 		{
 			"id": "typed-array-operations",
@@ -147,65 +147,65 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 45
 					},
 					{
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 45
 					}
 				],
 				"medianMs": 44,
 				"nsPerOperation": 1.678466796875,
 				"resource": {
 					"cpuMs": 70,
-					"peakRssBytes": 63471616,
-					"sampledAllocatedBytes": 486632,
+					"peakRssBytes": 63340544,
+					"sampledAllocatedBytes": 501640,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 536,
+						"allocatedBytes": 224,
+						"collections": 0
+					},
+					{
 						"elapsedMs": 543,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 556,
+						"elapsedMs": 549,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 551,
+						"elapsedMs": 549,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 551,
-						"allocatedBytes": 224,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 544,
+						"elapsedMs": 549,
 						"allocatedBytes": 224,
 						"collections": 0
 					}
 				],
-				"medianMs": 551,
-				"nsPerOperation": 21.01898193359375,
+				"medianMs": 549,
+				"nsPerOperation": 20.94268798828125,
 				"resource": {
-					"cpuMs": 570,
-					"peakRssBytes": 3620864,
+					"cpuMs": 560,
+					"peakRssBytes": 3637248,
 					"allocatedBytes": 224,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 12.522727272727273,
-			"hostGapMs": 507
+			"ratio": 12.477272727272727,
+			"hostGapMs": 505
 		},
 		{
 			"id": "dynamic-array-operations",
@@ -222,31 +222,41 @@
 						"elapsedMs": 62
 					},
 					{
+						"elapsedMs": 62
+					},
+					{
 						"elapsedMs": 63
 					},
 					{
-						"elapsedMs": 64
-					},
-					{
 						"elapsedMs": 62
 					},
 					{
-						"elapsedMs": 62
+						"elapsedMs": 61
 					}
 				],
 				"medianMs": 62,
 				"nsPerOperation": 2.421875,
 				"resource": {
 					"cpuMs": 150,
-					"peakRssBytes": 67813376,
-					"sampledAllocatedBytes": 506384,
+					"peakRssBytes": 67895296,
+					"sampledAllocatedBytes": 496144,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 860,
+						"elapsedMs": 858,
+						"allocatedBytes": 164960064,
+						"collections": 37
+					},
+					{
+						"elapsedMs": 861,
+						"allocatedBytes": 164960064,
+						"collections": 37
+					},
+					{
+						"elapsedMs": 850,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					},
@@ -256,34 +266,24 @@
 						"collections": 37
 					},
 					{
-						"elapsedMs": 865,
-						"allocatedBytes": 164960064,
-						"collections": 37
-					},
-					{
-						"elapsedMs": 871,
-						"allocatedBytes": 164960064,
-						"collections": 37
-					},
-					{
-						"elapsedMs": 858,
+						"elapsedMs": 877,
 						"allocatedBytes": 164960064,
 						"collections": 37
 					}
 				],
-				"medianMs": 860,
-				"nsPerOperation": 33.59375,
+				"medianMs": 859,
+				"nsPerOperation": 33.5546875,
 				"resource": {
 					"cpuMs": 870,
-					"peakRssBytes": 14630912,
+					"peakRssBytes": 14647296,
 					"allocatedBytes": 164960064,
 					"collections": 37,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.253
+					"maxPauseMs": 0.229
 				}
 			},
-			"ratio": 13.870967741935484,
-			"hostGapMs": 798
+			"ratio": 13.85483870967742,
+			"hostGapMs": 797
 		},
 		{
 			"id": "map-operations",
@@ -291,118 +291,118 @@
 			"owner": "Map get, set, has and iteration",
 			"category": "runtime-collections-properties",
 			"sourceSeam": "src/compiler/core/core-ir-memory.ts",
-			"scale": 14,
-			"operations": 9175040,
-			"checksum": 42990031,
+			"scale": 20,
+			"operations": 13107200,
+			"checksum": 61414330,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 50
+						"elapsedMs": 71
 					},
 					{
-						"elapsedMs": 51
+						"elapsedMs": 71
 					},
 					{
-						"elapsedMs": 51
+						"elapsedMs": 72
 					},
 					{
-						"elapsedMs": 53
+						"elapsedMs": 72
 					},
 					{
-						"elapsedMs": 50
+						"elapsedMs": 71
 					}
 				],
-				"medianMs": 51,
-				"nsPerOperation": 5.558558872767857,
+				"medianMs": 71,
+				"nsPerOperation": 5.4168701171875,
 				"resource": {
-					"cpuMs": 230,
-					"peakRssBytes": 68730880,
-					"sampledAllocatedBytes": 485512,
+					"cpuMs": 300,
+					"peakRssBytes": 73039872,
+					"sampledAllocatedBytes": 499256,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 258,
-						"allocatedBytes": 183572544,
-						"collections": 43
+						"elapsedMs": 358,
+						"allocatedBytes": 262246464,
+						"collections": 62
 					},
 					{
-						"elapsedMs": 250,
-						"allocatedBytes": 183572544,
-						"collections": 43
+						"elapsedMs": 368,
+						"allocatedBytes": 262246464,
+						"collections": 62
 					},
 					{
-						"elapsedMs": 252,
-						"allocatedBytes": 183572544,
-						"collections": 43
+						"elapsedMs": 357,
+						"allocatedBytes": 262246464,
+						"collections": 62
 					},
 					{
-						"elapsedMs": 252,
-						"allocatedBytes": 183572544,
-						"collections": 43
+						"elapsedMs": 358,
+						"allocatedBytes": 262246464,
+						"collections": 62
 					},
 					{
-						"elapsedMs": 251,
-						"allocatedBytes": 183572544,
-						"collections": 43
+						"elapsedMs": 359,
+						"allocatedBytes": 262246464,
+						"collections": 62
 					}
 				],
-				"medianMs": 252,
-				"nsPerOperation": 27.4658203125,
+				"medianMs": 358,
+				"nsPerOperation": 27.313232421875,
 				"resource": {
-					"cpuMs": 280,
-					"peakRssBytes": 14680064,
-					"allocatedBytes": 183572544,
-					"collections": 43,
+					"cpuMs": 380,
+					"peakRssBytes": 14712832,
+					"allocatedBytes": 262246464,
+					"collections": 62,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.43
+					"maxPauseMs": 0.428
 				}
 			},
-			"ratio": 4.9411764705882355,
-			"hostGapMs": 201
+			"ratio": 5.042253521126761,
+			"hostGapMs": 287
 		},
 		{
 			"id": "set-operations",
 			"group": "primitive",
 			"owner": "Set add, has and iteration",
 			"category": "runtime-collections-properties",
-			"sourceSeam": "src/compiler/core/core-ir-verify.ts",
+			"sourceSeam": "src/compiler/core/core-ir-verifier.ts",
 			"scale": 6,
 			"operations": 3686400,
 			"checksum": 126819499,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 42
+						"elapsedMs": 40
+					},
+					{
+						"elapsedMs": 39
 					},
 					{
 						"elapsedMs": 41
 					},
 					{
-						"elapsedMs": 41
+						"elapsedMs": 40
 					},
 					{
-						"elapsedMs": 43
-					},
-					{
-						"elapsedMs": 43
+						"elapsedMs": 40
 					}
 				],
-				"medianMs": 42,
-				"nsPerOperation": 11.393229166666666,
+				"medianMs": 40,
+				"nsPerOperation": 10.850694444444445,
 				"resource": {
 					"cpuMs": 80,
-					"peakRssBytes": 65945600,
-					"sampledAllocatedBytes": 489864,
+					"peakRssBytes": 65961984,
+					"sampledAllocatedBytes": 494096,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 130,
+						"elapsedMs": 132,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					},
@@ -412,34 +412,34 @@
 						"collections": 23
 					},
 					{
-						"elapsedMs": 136,
-						"allocatedBytes": 98342464,
-						"collections": 23
-					},
-					{
 						"elapsedMs": 130,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					},
 					{
-						"elapsedMs": 131,
+						"elapsedMs": 132,
+						"allocatedBytes": 98342464,
+						"collections": 23
+					},
+					{
+						"elapsedMs": 132,
 						"allocatedBytes": 98342464,
 						"collections": 23
 					}
 				],
-				"medianMs": 131,
-				"nsPerOperation": 35.53602430555556,
+				"medianMs": 132,
+				"nsPerOperation": 35.807291666666664,
 				"resource": {
 					"cpuMs": 150,
-					"peakRssBytes": 14696448,
+					"peakRssBytes": 14712832,
 					"allocatedBytes": 98342464,
 					"collections": 23,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 0.388
+					"maxPauseMs": 0.403
 				}
 			},
-			"ratio": 3.119047619047619,
-			"hostGapMs": 89
+			"ratio": 3.3,
+			"hostGapMs": 92
 		},
 		{
 			"id": "stable-shape-properties",
@@ -453,7 +453,7 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 76
+						"elapsedMs": 75
 					},
 					{
 						"elapsedMs": 76
@@ -462,40 +462,40 @@
 						"elapsedMs": 75
 					},
 					{
-						"elapsedMs": 75
+						"elapsedMs": 79
 					},
 					{
-						"elapsedMs": 77
+						"elapsedMs": 75
 					}
 				],
-				"medianMs": 76,
-				"nsPerOperation": 0.9663899739583334,
+				"medianMs": 75,
+				"nsPerOperation": 0.95367431640625,
 				"resource": {
 					"cpuMs": 100,
-					"peakRssBytes": 65470464,
-					"sampledAllocatedBytes": 538560,
+					"peakRssBytes": 65421312,
+					"sampledAllocatedBytes": 512024,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 462,
+						"elapsedMs": 464,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 479,
+						"elapsedMs": 466,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 473,
+						"elapsedMs": 465,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 463,
+						"elapsedMs": 480,
 						"allocatedBytes": 948480,
 						"collections": 0
 					},
@@ -505,26 +505,26 @@
 						"collections": 0
 					}
 				],
-				"medianMs": 473,
-				"nsPerOperation": 6.014506022135417,
+				"medianMs": 466,
+				"nsPerOperation": 5.925496419270833,
 				"resource": {
-					"cpuMs": 460,
-					"peakRssBytes": 4702208,
+					"cpuMs": 480,
+					"peakRssBytes": 4767744,
 					"allocatedBytes": 948480,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 6.223684210526316,
-			"hostGapMs": 397
+			"ratio": 6.213333333333333,
+			"hostGapMs": 391
 		},
 		{
 			"id": "short-lived-records",
 			"group": "primitive",
 			"owner": "object allocation and short-lived records",
 			"category": "allocation-gc",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-store.ts",
 			"scale": 40,
 			"operations": 14000000,
 			"checksum": 209259728,
@@ -534,7 +534,7 @@
 						"elapsedMs": 50
 					},
 					{
-						"elapsedMs": 51
+						"elapsedMs": 50
 					},
 					{
 						"elapsedMs": 50
@@ -549,21 +549,21 @@
 				"medianMs": 50,
 				"nsPerOperation": 3.5714285714285716,
 				"resource": {
-					"cpuMs": 80,
-					"peakRssBytes": 64684032,
-					"sampledAllocatedBytes": 499080,
+					"cpuMs": 70,
+					"peakRssBytes": 64765952,
+					"sampledAllocatedBytes": 491968,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 309,
+						"elapsedMs": 308,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 330,
+						"elapsedMs": 312,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -578,24 +578,24 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 318,
+						"elapsedMs": 308,
 						"allocatedBytes": 64,
 						"collections": 0
 					}
 				],
-				"medianMs": 309,
-				"nsPerOperation": 22.071428571428573,
+				"medianMs": 308,
+				"nsPerOperation": 22,
 				"resource": {
 					"cpuMs": 310,
-					"peakRssBytes": 3571712,
+					"peakRssBytes": 3620864,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 6.18,
-			"hostGapMs": 259
+			"ratio": 6.16,
+			"hostGapMs": 258
 		},
 		{
 			"id": "spread-copies",
@@ -609,13 +609,13 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 49
-					},
-					{
-						"elapsedMs": 51
+						"elapsedMs": 53
 					},
 					{
 						"elapsedMs": 49
+					},
+					{
+						"elapsedMs": 52
 					},
 					{
 						"elapsedMs": 50
@@ -624,56 +624,56 @@
 						"elapsedMs": 51
 					}
 				],
-				"medianMs": 50,
-				"nsPerOperation": 12.5,
+				"medianMs": 51,
+				"nsPerOperation": 12.75,
 				"resource": {
 					"cpuMs": 450,
-					"peakRssBytes": 64798720,
-					"sampledAllocatedBytes": 476832,
+					"peakRssBytes": 64503808,
+					"sampledAllocatedBytes": 496528,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 1040,
+						"elapsedMs": 1050,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1014,
+						"elapsedMs": 1033,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1061,
+						"elapsedMs": 1035,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1007,
+						"elapsedMs": 1036,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					},
 					{
-						"elapsedMs": 1047,
+						"elapsedMs": 1044,
 						"allocatedBytes": 192000144,
 						"collections": 44
 					}
 				],
-				"medianMs": 1040,
-				"nsPerOperation": 260,
+				"medianMs": 1036,
+				"nsPerOperation": 259,
 				"resource": {
-					"cpuMs": 1050,
-					"peakRssBytes": 36405248,
+					"cpuMs": 1060,
+					"peakRssBytes": 36438016,
 					"allocatedBytes": 192000144,
 					"collections": 44,
 					"peakLiveBytes": 88240,
-					"maxPauseMs": 4.895
+					"maxPauseMs": 5.277
 				}
 			},
-			"ratio": 20.8,
-			"hostGapMs": 990
+			"ratio": 20.313725490196077,
+			"hostGapMs": 985
 		},
 		{
 			"id": "frozen-records",
@@ -687,10 +687,7 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 72
-					},
-					{
-						"elapsedMs": 71
+						"elapsedMs": 70
 					},
 					{
 						"elapsedMs": 71
@@ -700,65 +697,68 @@
 					},
 					{
 						"elapsedMs": 71
+					},
+					{
+						"elapsedMs": 72
 					}
 				],
 				"medianMs": 71,
 				"nsPerOperation": 19.72222222222222,
 				"resource": {
 					"cpuMs": 250,
-					"peakRssBytes": 64831488,
-					"sampledAllocatedBytes": 506240,
+					"peakRssBytes": 65224704,
+					"sampledAllocatedBytes": 519072,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 144,
-						"allocatedBytes": 230400064,
-						"collections": 53
-					},
-					{
 						"elapsedMs": 143,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					},
 					{
-						"elapsedMs": 143,
-						"allocatedBytes": 230400064,
-						"collections": 53
-					},
-					{
-						"elapsedMs": 145,
+						"elapsedMs": 153,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					},
 					{
 						"elapsedMs": 144,
+						"allocatedBytes": 230400064,
+						"collections": 53
+					},
+					{
+						"elapsedMs": 141,
+						"allocatedBytes": 230400064,
+						"collections": 53
+					},
+					{
+						"elapsedMs": 142,
 						"allocatedBytes": 230400064,
 						"collections": 53
 					}
 				],
-				"medianMs": 144,
-				"nsPerOperation": 40,
+				"medianMs": 143,
+				"nsPerOperation": 39.72222222222222,
 				"resource": {
 					"cpuMs": 140,
 					"peakRssBytes": 20037632,
 					"allocatedBytes": 230400064,
 					"collections": 53,
 					"peakLiveBytes": 88672,
-					"maxPauseMs": 1.461
+					"maxPauseMs": 1.554
 				}
 			},
-			"ratio": 2.028169014084507,
-			"hostGapMs": 73
+			"ratio": 2.0140845070422535,
+			"hostGapMs": 72
 		},
 		{
 			"id": "iterator-generator-traversal",
 			"group": "primitive",
 			"owner": "iterator and generator traversal",
 			"category": "iterators-callbacks",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
 			"scale": 4,
 			"operations": 3840000,
 			"checksum": 638393553,
@@ -774,191 +774,181 @@
 						"elapsedMs": 47
 					},
 					{
-						"elapsedMs": 48
+						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 45
+						"elapsedMs": 46
 					}
 				],
 				"medianMs": 46,
 				"nsPerOperation": 11.979166666666666,
 				"resource": {
-					"cpuMs": 390,
-					"peakRssBytes": 65355776,
-					"sampledAllocatedBytes": 491088,
+					"cpuMs": 400,
+					"peakRssBytes": 65257472,
+					"sampledAllocatedBytes": 455856,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 321,
+						"elapsedMs": 327,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					},
 					{
-						"elapsedMs": 325,
+						"elapsedMs": 352,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					},
 					{
-						"elapsedMs": 322,
+						"elapsedMs": 334,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					},
 					{
-						"elapsedMs": 324,
+						"elapsedMs": 335,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					},
 					{
-						"elapsedMs": 320,
+						"elapsedMs": 323,
 						"allocatedBytes": 368640064,
 						"collections": 87
 					}
 				],
-				"medianMs": 322,
-				"nsPerOperation": 83.85416666666667,
+				"medianMs": 334,
+				"nsPerOperation": 86.97916666666667,
 				"resource": {
 					"cpuMs": 400,
 					"peakRssBytes": 20021248,
 					"allocatedBytes": 368640064,
 					"collections": 87,
 					"peakLiveBytes": 89776,
-					"maxPauseMs": 1.395
+					"maxPauseMs": 1.328
 				}
 			},
-			"ratio": 7,
-			"hostGapMs": 276
+			"ratio": 7.260869565217392,
+			"hostGapMs": 288
 		},
 		{
 			"id": "for-of-collections",
 			"group": "primitive",
 			"owner": "for-of over arrays, maps and sets",
 			"category": "iterators-callbacks",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
-			"scale": 28,
-			"operations": 12902400,
-			"checksum": 988543930,
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
+			"scale": 40,
+			"operations": 18432000,
+			"checksum": 697919895,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 54
+						"elapsedMs": 78
 					},
 					{
-						"elapsedMs": 52
+						"elapsedMs": 78
 					},
 					{
-						"elapsedMs": 52
+						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 56
+						"elapsedMs": 71
 					},
 					{
-						"elapsedMs": 51
+						"elapsedMs": 72
 					}
 				],
-				"medianMs": 52,
-				"nsPerOperation": 4.030257936507937,
+				"medianMs": 77,
+				"nsPerOperation": 4.177517361111111,
 				"resource": {
-					"cpuMs": 320,
-					"peakRssBytes": 66912256,
-					"sampledAllocatedBytes": 508768,
+					"cpuMs": 450,
+					"peakRssBytes": 66994176,
+					"sampledAllocatedBytes": 515064,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 228,
-						"allocatedBytes": 2115152,
+						"elapsedMs": 326,
+						"allocatedBytes": 2979152,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 229,
-						"allocatedBytes": 2115152,
+						"elapsedMs": 349,
+						"allocatedBytes": 2979152,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 229,
-						"allocatedBytes": 2115152,
+						"elapsedMs": 333,
+						"allocatedBytes": 2979152,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 243,
-						"allocatedBytes": 2115152,
+						"elapsedMs": 349,
+						"allocatedBytes": 2979152,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 228,
-						"allocatedBytes": 2115152,
+						"elapsedMs": 334,
+						"allocatedBytes": 2979152,
 						"collections": 0
 					}
 				],
-				"medianMs": 229,
-				"nsPerOperation": 17.74863591269841,
+				"medianMs": 334,
+				"nsPerOperation": 18.12065972222222,
 				"resource": {
-					"cpuMs": 230,
-					"peakRssBytes": 5914624,
-					"allocatedBytes": 2115152,
+					"cpuMs": 350,
+					"peakRssBytes": 6799360,
+					"allocatedBytes": 2979152,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.403846153846154,
-			"hostGapMs": 177
+			"ratio": 4.337662337662338,
+			"hostGapMs": 257
 		},
 		{
 			"id": "array-callbacks",
 			"group": "primitive",
 			"owner": "Array map, filter, find, some and includes",
 			"category": "iterators-callbacks",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
 			"scale": 80,
 			"operations": 36044800,
 			"checksum": 82186304,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 56
+						"elapsedMs": 53
+					},
+					{
+						"elapsedMs": 155
 					},
 					{
 						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 53
+						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 153
-					},
-					{
-						"elapsedMs": 53
+						"elapsedMs": 156
 					}
 				],
 				"medianMs": 55,
 				"nsPerOperation": 1.52587890625,
 				"resource": {
-					"cpuMs": 130,
-					"peakRssBytes": 68255744,
-					"sampledAllocatedBytes": 513240,
+					"cpuMs": 140,
+					"peakRssBytes": 68272128,
+					"sampledAllocatedBytes": 481288,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 388,
-						"allocatedBytes": 163029312,
-						"collections": 36
-					},
-					{
-						"elapsedMs": 388,
-						"allocatedBytes": 163029312,
-						"collections": 36
-					},
-					{
-						"elapsedMs": 388,
+						"elapsedMs": 389,
 						"allocatedBytes": 163029312,
 						"collections": 36
 					},
@@ -968,40 +958,47 @@
 						"collections": 36
 					},
 					{
-						"elapsedMs": 390,
+						"elapsedMs": 389,
+						"allocatedBytes": 163029312,
+						"collections": 36
+					},
+					{
+						"elapsedMs": 388,
+						"allocatedBytes": 163029312,
+						"collections": 36
+					},
+					{
+						"elapsedMs": 388,
 						"allocatedBytes": 163029312,
 						"collections": 36
 					}
 				],
-				"medianMs": 388,
-				"nsPerOperation": 10.764382102272727,
+				"medianMs": 389,
+				"nsPerOperation": 10.792125355113637,
 				"resource": {
-					"cpuMs": 380,
-					"peakRssBytes": 21069824,
+					"cpuMs": 390,
+					"peakRssBytes": 21102592,
 					"allocatedBytes": 163029312,
 					"collections": 36,
 					"peakLiveBytes": 89632,
-					"maxPauseMs": 0.355
+					"maxPauseMs": 0.371
 				}
 			},
-			"ratio": 7.054545454545455,
-			"hostGapMs": 333
+			"ratio": 7.072727272727272,
+			"hostGapMs": 334
 		},
 		{
 			"id": "direct-calls",
 			"group": "primitive",
 			"owner": "direct function calls",
 			"category": "function-closure-dispatch",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
 			"scale": 14,
 			"operations": 16800000,
 			"checksum": 737999979,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 48
-					},
-					{
 						"elapsedMs": 47
 					},
 					{
@@ -1009,6 +1006,9 @@
 					},
 					{
 						"elapsedMs": 48
+					},
+					{
+						"elapsedMs": 47
 					},
 					{
 						"elapsedMs": 47
@@ -1019,7 +1019,7 @@
 				"resource": {
 					"cpuMs": 70,
 					"peakRssBytes": 62832640,
-					"sampledAllocatedBytes": 497728,
+					"sampledAllocatedBytes": 474648,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -1031,12 +1031,12 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 272,
+						"elapsedMs": 262,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 264,
+						"elapsedMs": 272,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -1046,24 +1046,24 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 271,
+						"elapsedMs": 261,
 						"allocatedBytes": 64,
 						"collections": 0
 					}
 				],
-				"medianMs": 264,
-				"nsPerOperation": 15.714285714285714,
+				"medianMs": 262,
+				"nsPerOperation": 15.595238095238095,
 				"resource": {
-					"cpuMs": 270,
-					"peakRssBytes": 3588096,
+					"cpuMs": 280,
+					"peakRssBytes": 3620864,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 5.617021276595745,
-			"hostGapMs": 217
+			"ratio": 5.574468085106383,
+			"hostGapMs": 215
 		},
 		{
 			"id": "indirect-calls",
@@ -1071,68 +1071,68 @@
 			"owner": "indirect function calls",
 			"category": "function-closure-dispatch",
 			"sourceSeam": "src/compiler/core/core-program-flow.ts",
-			"scale": 10,
-			"operations": 9000000,
-			"checksum": 891704902,
+			"scale": 16,
+			"operations": 14400000,
+			"checksum": 26603315,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 42
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 42
+						"elapsedMs": 68
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 71
 					},
 					{
-						"elapsedMs": 42
+						"elapsedMs": 72
 					}
 				],
-				"medianMs": 42,
-				"nsPerOperation": 4.666666666666667,
+				"medianMs": 69,
+				"nsPerOperation": 4.791666666666667,
 				"resource": {
-					"cpuMs": 70,
-					"peakRssBytes": 63651840,
-					"sampledAllocatedBytes": 476232,
+					"cpuMs": 100,
+					"peakRssBytes": 63864832,
+					"sampledAllocatedBytes": 518224,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 196,
+						"elapsedMs": 317,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 197,
+						"elapsedMs": 316,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 196,
+						"elapsedMs": 328,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 200,
+						"elapsedMs": 342,
 						"allocatedBytes": 480,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 198,
+						"elapsedMs": 342,
 						"allocatedBytes": 480,
 						"collections": 0
 					}
 				],
-				"medianMs": 197,
-				"nsPerOperation": 21.88888888888889,
+				"medianMs": 328,
+				"nsPerOperation": 22.77777777777778,
 				"resource": {
-					"cpuMs": 210,
+					"cpuMs": 360,
 					"peakRssBytes": 3588096,
 					"allocatedBytes": 480,
 					"collections": 0,
@@ -1140,59 +1140,54 @@
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 4.690476190476191,
-			"hostGapMs": 155
+			"ratio": 4.753623188405797,
+			"hostGapMs": 259
 		},
 		{
 			"id": "closure-calls",
 			"group": "primitive",
 			"owner": "closure calls and captured state",
 			"category": "function-closure-dispatch",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-local-optimizer.ts",
 			"scale": 28,
 			"operations": 25200000,
 			"checksum": 446276994,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 72
-					},
-					{
 						"elapsedMs": 71
 					},
 					{
-						"elapsedMs": 75
+						"elapsedMs": 74
 					},
 					{
-						"elapsedMs": 75
+						"elapsedMs": 78
+					},
+					{
+						"elapsedMs": 72
 					},
 					{
 						"elapsedMs": 75
 					}
 				],
-				"medianMs": 75,
-				"nsPerOperation": 2.9761904761904763,
+				"medianMs": 74,
+				"nsPerOperation": 2.9365079365079363,
 				"resource": {
 					"cpuMs": 100,
-					"peakRssBytes": 62980096,
-					"sampledAllocatedBytes": 520016,
+					"peakRssBytes": 62783488,
+					"sampledAllocatedBytes": 506848,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 552,
+						"elapsedMs": 544,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 561,
-						"allocatedBytes": 7936,
-						"collections": 0
-					},
-					{
-						"elapsedMs": 546,
+						"elapsedMs": 573,
 						"allocatedBytes": 7936,
 						"collections": 0
 					},
@@ -1202,24 +1197,29 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 548,
+						"elapsedMs": 552,
+						"allocatedBytes": 7936,
+						"collections": 0
+					},
+					{
+						"elapsedMs": 562,
 						"allocatedBytes": 7936,
 						"collections": 0
 					}
 				],
-				"medianMs": 548,
-				"nsPerOperation": 21.746031746031747,
+				"medianMs": 552,
+				"nsPerOperation": 21.904761904761905,
 				"resource": {
 					"cpuMs": 560,
-					"peakRssBytes": 3620864,
+					"peakRssBytes": 3637248,
 					"allocatedBytes": 7936,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 7.306666666666667,
-			"hostGapMs": 473
+			"ratio": 7.45945945945946,
+			"hostGapMs": 478
 		},
 		{
 			"id": "string-keys",
@@ -1236,31 +1236,41 @@
 						"elapsedMs": 57
 					},
 					{
-						"elapsedMs": 57
-					},
-					{
-						"elapsedMs": 57
-					},
-					{
-						"elapsedMs": 57
+						"elapsedMs": 58
 					},
 					{
 						"elapsedMs": 56
+					},
+					{
+						"elapsedMs": 56
+					},
+					{
+						"elapsedMs": 57
 					}
 				],
 				"medianMs": 57,
 				"nsPerOperation": 35.18518518518518,
 				"resource": {
 					"cpuMs": 190,
-					"peakRssBytes": 65290240,
-					"sampledAllocatedBytes": 511760,
+					"peakRssBytes": 65355776,
+					"sampledAllocatedBytes": 497904,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 115,
+						"elapsedMs": 113,
+						"allocatedBytes": 77841968,
+						"collections": 18
+					},
+					{
+						"elapsedMs": 116,
+						"allocatedBytes": 77841968,
+						"collections": 18
+					},
+					{
+						"elapsedMs": 116,
 						"allocatedBytes": 77841968,
 						"collections": 18
 					},
@@ -1273,38 +1283,28 @@
 						"elapsedMs": 110,
 						"allocatedBytes": 77841968,
 						"collections": 18
-					},
-					{
-						"elapsedMs": 111,
-						"allocatedBytes": 77841968,
-						"collections": 18
-					},
-					{
-						"elapsedMs": 111,
-						"allocatedBytes": 77841968,
-						"collections": 18
 					}
 				],
-				"medianMs": 111,
-				"nsPerOperation": 68.51851851851852,
+				"medianMs": 113,
+				"nsPerOperation": 69.75308641975309,
 				"resource": {
-					"cpuMs": 140,
-					"peakRssBytes": 20070400,
+					"cpuMs": 150,
+					"peakRssBytes": 20103168,
 					"allocatedBytes": 77841968,
 					"collections": 18,
 					"peakLiveBytes": 186688,
-					"maxPauseMs": 1.441
+					"maxPauseMs": 1.669
 				}
 			},
-			"ratio": 1.9473684210526316,
-			"hostGapMs": 54
+			"ratio": 1.9824561403508771,
+			"hostGapMs": 56
 		},
 		{
 			"id": "sorting",
 			"group": "primitive",
 			"owner": "sorting numeric and compiler-key arrays",
 			"category": "iterators-callbacks",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-transform-candidates.ts",
 			"scale": 4,
 			"operations": 983040,
 			"checksum": 7384160,
@@ -1323,7 +1323,7 @@
 						"elapsedMs": 47
 					},
 					{
-						"elapsedMs": 48
+						"elapsedMs": 47
 					}
 				],
 				"medianMs": 47,
@@ -1331,68 +1331,68 @@
 				"resource": {
 					"cpuMs": 120,
 					"peakRssBytes": 67747840,
-					"sampledAllocatedBytes": 477544,
+					"sampledAllocatedBytes": 512776,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 139,
+						"elapsedMs": 141,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					},
 					{
-						"elapsedMs": 138,
+						"elapsedMs": 143,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					},
 					{
-						"elapsedMs": 139,
+						"elapsedMs": 142,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					},
 					{
-						"elapsedMs": 139,
+						"elapsedMs": 142,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					},
 					{
-						"elapsedMs": 138,
+						"elapsedMs": 142,
 						"allocatedBytes": 43423488,
 						"collections": 9
 					}
 				],
-				"medianMs": 139,
-				"nsPerOperation": 141.39811197916666,
+				"medianMs": 142,
+				"nsPerOperation": 144.44986979166666,
 				"resource": {
 					"cpuMs": 170,
-					"peakRssBytes": 19529728,
+					"peakRssBytes": 19595264,
 					"allocatedBytes": 43423488,
 					"collections": 9,
 					"peakLiveBytes": 614176,
-					"maxPauseMs": 1.314
+					"maxPauseMs": 1.184
 				}
 			},
-			"ratio": 2.9574468085106385,
-			"hostGapMs": 92
+			"ratio": 3.021276595744681,
+			"hostGapMs": 95
 		},
 		{
 			"id": "low-retention-churn",
 			"group": "primitive",
 			"owner": "allocation churn with low retention",
 			"category": "allocation-gc",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-store.ts",
 			"scale": 40,
 			"operations": 20000000,
 			"checksum": 37200000,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 61
+						"elapsedMs": 62
 					},
 					{
-						"elapsedMs": 61
+						"elapsedMs": 62
 					},
 					{
 						"elapsedMs": 62
@@ -1408,8 +1408,8 @@
 				"nsPerOperation": 3.1,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64733184,
-					"sampledAllocatedBytes": 505856,
+					"peakRssBytes": 64454656,
+					"sampledAllocatedBytes": 516072,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -1431,7 +1431,7 @@
 						"collections": 0
 					},
 					{
-						"elapsedMs": 332,
+						"elapsedMs": 331,
 						"allocatedBytes": 64,
 						"collections": 0
 					},
@@ -1445,7 +1445,7 @@
 				"nsPerOperation": 16.55,
 				"resource": {
 					"cpuMs": 340,
-					"peakRssBytes": 3604480,
+					"peakRssBytes": 3653632,
 					"allocatedBytes": 64,
 					"collections": 0,
 					"peakLiveBytes": 0,
@@ -1461,162 +1461,162 @@
 			"owner": "allocation churn with moderate retention",
 			"category": "allocation-gc",
 			"sourceSeam": "src/compiler/core/core-ir.ts",
-			"scale": 20,
-			"operations": 8250000,
-			"checksum": 135768993,
+			"scale": 28,
+			"operations": 11550000,
+			"checksum": 589947233,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 51
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 50
+						"elapsedMs": 70
 					},
 					{
-						"elapsedMs": 49
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 49
+						"elapsedMs": 69
 					},
 					{
-						"elapsedMs": 50
+						"elapsedMs": 69
 					}
 				],
-				"medianMs": 50,
-				"nsPerOperation": 6.0606060606060606,
+				"medianMs": 69,
+				"nsPerOperation": 5.974025974025974,
 				"resource": {
-					"cpuMs": 930,
-					"peakRssBytes": 175587328,
-					"sampledAllocatedBytes": 491240,
+					"cpuMs": 1320,
+					"peakRssBytes": 192020480,
+					"sampledAllocatedBytes": 502448,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 587,
-						"allocatedBytes": 1284194480,
-						"collections": 75
+						"elapsedMs": 838,
+						"allocatedBytes": 1800388784,
+						"collections": 82
 					},
 					{
-						"elapsedMs": 588,
-						"allocatedBytes": 1284194480,
-						"collections": 75
+						"elapsedMs": 848,
+						"allocatedBytes": 1800388784,
+						"collections": 82
 					},
 					{
-						"elapsedMs": 593,
-						"allocatedBytes": 1284194480,
-						"collections": 75
+						"elapsedMs": 853,
+						"allocatedBytes": 1800388784,
+						"collections": 82
 					},
 					{
-						"elapsedMs": 588,
-						"allocatedBytes": 1284194480,
-						"collections": 75
+						"elapsedMs": 848,
+						"allocatedBytes": 1800388784,
+						"collections": 82
 					},
 					{
-						"elapsedMs": 589,
-						"allocatedBytes": 1284194480,
-						"collections": 75
+						"elapsedMs": 850,
+						"allocatedBytes": 1800388784,
+						"collections": 82
 					}
 				],
-				"medianMs": 588,
-				"nsPerOperation": 71.27272727272727,
+				"medianMs": 848,
+				"nsPerOperation": 73.41991341991341,
 				"resource": {
-					"cpuMs": 600,
-					"peakRssBytes": 104923136,
-					"allocatedBytes": 1284194480,
-					"collections": 75,
-					"peakLiveBytes": 30845472,
-					"maxPauseMs": 16.489
+					"cpuMs": 880,
+					"peakRssBytes": 148553728,
+					"allocatedBytes": 1800388784,
+					"collections": 82,
+					"peakLiveBytes": 43268768,
+					"maxPauseMs": 26.836
 				}
 			},
-			"ratio": 11.76,
-			"hostGapMs": 538
+			"ratio": 12.289855072463768,
+			"hostGapMs": 779
 		},
 		{
 			"id": "pruned-ssa",
 			"group": "algorithm",
 			"owner": "pruned SSA definition lookup and virtual phi resolution",
 			"category": "compiler-algorithms",
-			"sourceSeam": "src/compiler/core/compile-core.ts",
-			"scale": 10,
-			"operations": 8739200,
-			"checksum": 222403158,
+			"sourceSeam": "src/compiler/core/core-frontend-construction.ts",
+			"scale": 6,
+			"operations": 5243520,
+			"checksum": 313806699,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 78
+						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 84
+						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 76
+						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 78
+						"elapsedMs": 43
 					},
 					{
-						"elapsedMs": 79
+						"elapsedMs": 47
 					}
 				],
-				"medianMs": 78,
-				"nsPerOperation": 8.925302087147564,
+				"medianMs": 44,
+				"nsPerOperation": 8.39130965458318,
 				"resource": {
-					"cpuMs": 120,
-					"peakRssBytes": 71532544,
-					"sampledAllocatedBytes": 525504,
+					"cpuMs": 90,
+					"peakRssBytes": 71417856,
+					"sampledAllocatedBytes": 534504,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 985,
-						"allocatedBytes": 471603568,
-						"collections": 111
+						"elapsedMs": 601,
+						"allocatedBytes": 282962288,
+						"collections": 67
 					},
 					{
-						"elapsedMs": 987,
-						"allocatedBytes": 471603568,
-						"collections": 111
+						"elapsedMs": 593,
+						"allocatedBytes": 282962288,
+						"collections": 67
 					},
 					{
-						"elapsedMs": 993,
-						"allocatedBytes": 471603568,
-						"collections": 111
+						"elapsedMs": 592,
+						"allocatedBytes": 282962288,
+						"collections": 67
 					},
 					{
-						"elapsedMs": 988,
-						"allocatedBytes": 471603568,
-						"collections": 111
+						"elapsedMs": 594,
+						"allocatedBytes": 282962288,
+						"collections": 67
 					},
 					{
-						"elapsedMs": 983,
-						"allocatedBytes": 471603568,
-						"collections": 111
+						"elapsedMs": 602,
+						"allocatedBytes": 282962288,
+						"collections": 67
 					}
 				],
-				"medianMs": 987,
-				"nsPerOperation": 112.93939948736727,
+				"medianMs": 594,
+				"nsPerOperation": 113.28268033687294,
 				"resource": {
-					"cpuMs": 1090,
-					"peakRssBytes": 4112384,
-					"allocatedBytes": 471603568,
-					"collections": 111,
+					"cpuMs": 690,
+					"peakRssBytes": 3981312,
+					"allocatedBytes": 282962288,
+					"collections": 67,
 					"peakLiveBytes": 88384,
-					"maxPauseMs": 0.04
+					"maxPauseMs": 0.039
 				}
 			},
-			"ratio": 12.653846153846153,
-			"hostGapMs": 909
+			"ratio": 13.5,
+			"hostGapMs": 550
 		},
 		{
 			"id": "dense-relocation",
 			"group": "algorithm",
 			"owner": "dense generation relocation",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-dense-generation.ts",
+			"sourceSeam": "src/compiler/core/core-store.ts",
 			"scale": 4,
 			"operations": 19660800,
 			"checksum": 690171641,
@@ -1626,75 +1626,75 @@
 						"elapsedMs": 47
 					},
 					{
-						"elapsedMs": 48
-					},
-					{
 						"elapsedMs": 47
 					},
 					{
 						"elapsedMs": 48
 					},
 					{
-						"elapsedMs": 48
+						"elapsedMs": 47
+					},
+					{
+						"elapsedMs": 47
 					}
 				],
-				"medianMs": 48,
-				"nsPerOperation": 2.44140625,
+				"medianMs": 47,
+				"nsPerOperation": 2.3905436197916665,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64569344,
-					"sampledAllocatedBytes": 482936,
+					"peakRssBytes": 64536576,
+					"sampledAllocatedBytes": 500784,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 432,
+						"elapsedMs": 428,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 432,
+						"elapsedMs": 426,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 438,
+						"elapsedMs": 430,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 436,
+						"elapsedMs": 424,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 431,
+						"elapsedMs": 425,
 						"allocatedBytes": 384,
 						"collections": 0
 					}
 				],
-				"medianMs": 432,
-				"nsPerOperation": 21.97265625,
+				"medianMs": 426,
+				"nsPerOperation": 21.66748046875,
 				"resource": {
-					"cpuMs": 540,
-					"peakRssBytes": 4964352,
+					"cpuMs": 530,
+					"peakRssBytes": 4947968,
 					"allocatedBytes": 384,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 9,
-			"hostGapMs": 384
+			"ratio": 9.063829787234043,
+			"hostGapMs": 379
 		},
 		{
 			"id": "optimizer-queue",
 			"group": "algorithm",
 			"owner": "fused local optimizer queue",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-function-optimization-session.ts",
 			"scale": 28,
 			"operations": 36704640,
 			"checksum": 333028230,
@@ -1704,59 +1704,59 @@
 						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 77
+						"elapsedMs": 80
+					},
+					{
+						"elapsedMs": 81
 					},
 					{
 						"elapsedMs": 78
 					},
 					{
 						"elapsedMs": 77
-					},
-					{
-						"elapsedMs": 80
 					}
 				],
-				"medianMs": 77,
-				"nsPerOperation": 2.097827413645795,
+				"medianMs": 78,
+				"nsPerOperation": 2.125071925511325,
 				"resource": {
 					"cpuMs": 110,
-					"peakRssBytes": 63438848,
-					"sampledAllocatedBytes": 487904,
+					"peakRssBytes": 63356928,
+					"sampledAllocatedBytes": 486472,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 2376,
+						"elapsedMs": 2378,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2362,
+						"elapsedMs": 2403,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2399,
+						"elapsedMs": 2353,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2392,
+						"elapsedMs": 2383,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2387,
+						"elapsedMs": 2375,
 						"allocatedBytes": 384,
 						"collections": 0
 					}
 				],
-				"medianMs": 2387,
-				"nsPerOperation": 65.03264982301965,
+				"medianMs": 2378,
+				"nsPerOperation": 64.78744921622989,
 				"resource": {
-					"cpuMs": 2450,
+					"cpuMs": 2440,
 					"peakRssBytes": 3768320,
 					"allocatedBytes": 384,
 					"collections": 0,
@@ -1764,100 +1764,100 @@
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 31,
-			"hostGapMs": 2310
+			"ratio": 30.487179487179485,
+			"hostGapMs": 2300
 		},
 		{
 			"id": "block-parameters",
 			"group": "algorithm",
 			"owner": "block-parameter simplification",
 			"category": "runtime-collections-properties",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
-			"scale": 56,
-			"operations": 11468800,
-			"checksum": 817878426,
+			"sourceSeam": "src/compiler/core/core-control-flow-passes.ts",
+			"scale": 60,
+			"operations": 12288000,
+			"checksum": 590654243,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 43
+						"elapsedMs": 47
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 42
+						"elapsedMs": 46
 					},
 					{
-						"elapsedMs": 42
+						"elapsedMs": 47
 					},
 					{
-						"elapsedMs": 44
+						"elapsedMs": 46
 					}
 				],
-				"medianMs": 43,
-				"nsPerOperation": 3.749302455357143,
+				"medianMs": 46,
+				"nsPerOperation": 3.7434895833333335,
 				"resource": {
 					"cpuMs": 80,
-					"peakRssBytes": 69009408,
-					"sampledAllocatedBytes": 497384,
+					"peakRssBytes": 68993024,
+					"sampledAllocatedBytes": 513032,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 433,
-						"allocatedBytes": 231214080,
-						"collections": 53
+						"elapsedMs": 449,
+						"allocatedBytes": 247614080,
+						"collections": 57
 					},
 					{
-						"elapsedMs": 419,
-						"allocatedBytes": 231214080,
-						"collections": 53
+						"elapsedMs": 448,
+						"allocatedBytes": 247614080,
+						"collections": 57
 					},
 					{
-						"elapsedMs": 414,
-						"allocatedBytes": 231214080,
-						"collections": 53
+						"elapsedMs": 455,
+						"allocatedBytes": 247614080,
+						"collections": 57
 					},
 					{
-						"elapsedMs": 418,
-						"allocatedBytes": 231214080,
-						"collections": 53
+						"elapsedMs": 457,
+						"allocatedBytes": 247614080,
+						"collections": 57
 					},
 					{
-						"elapsedMs": 432,
-						"allocatedBytes": 231214080,
-						"collections": 53
+						"elapsedMs": 454,
+						"allocatedBytes": 247614080,
+						"collections": 57
 					}
 				],
-				"medianMs": 419,
-				"nsPerOperation": 36.533900669642854,
+				"medianMs": 454,
+				"nsPerOperation": 36.946614583333336,
 				"resource": {
-					"cpuMs": 420,
+					"cpuMs": 450,
 					"peakRssBytes": 20021248,
-					"allocatedBytes": 231214080,
-					"collections": 53,
+					"allocatedBytes": 247614080,
+					"collections": 57,
 					"peakLiveBytes": 482720,
-					"maxPauseMs": 1.39
+					"maxPauseMs": 1.301
 				}
 			},
-			"ratio": 9.744186046511627,
-			"hostGapMs": 376
+			"ratio": 9.869565217391305,
+			"hostGapMs": 408
 		},
 		{
 			"id": "cfg-edges",
 			"group": "algorithm",
 			"owner": "CFG edge construction",
 			"category": "allocation-gc",
-			"sourceSeam": "src/compiler/core/core-ir-cfg.ts",
+			"sourceSeam": "src/compiler/core/core-ir-control-flow.ts",
 			"scale": 4,
 			"operations": 2293200,
 			"checksum": 782454474,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 43
+						"elapsedMs": 44
 					},
 					{
 						"elapsedMs": 44
@@ -1876,23 +1876,13 @@
 				"nsPerOperation": 19.187162044304902,
 				"resource": {
 					"cpuMs": 340,
-					"peakRssBytes": 105480192,
-					"sampledAllocatedBytes": 442144,
+					"peakRssBytes": 105414656,
+					"sampledAllocatedBytes": 515304,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
-					{
-						"elapsedMs": 243,
-						"allocatedBytes": 212435968,
-						"collections": 29
-					},
-					{
-						"elapsedMs": 238,
-						"allocatedBytes": 212435968,
-						"collections": 29
-					},
 					{
 						"elapsedMs": 238,
 						"allocatedBytes": 212435968,
@@ -1904,31 +1894,41 @@
 						"collections": 29
 					},
 					{
-						"elapsedMs": 244,
+						"elapsedMs": 239,
+						"allocatedBytes": 212435968,
+						"collections": 29
+					},
+					{
+						"elapsedMs": 239,
+						"allocatedBytes": 212435968,
+						"collections": 29
+					},
+					{
+						"elapsedMs": 242,
 						"allocatedBytes": 212435968,
 						"collections": 29
 					}
 				],
-				"medianMs": 241,
-				"nsPerOperation": 105.09331937903366,
+				"medianMs": 239,
+				"nsPerOperation": 104.22117564974708,
 				"resource": {
 					"cpuMs": 290,
 					"peakRssBytes": 26460160,
 					"allocatedBytes": 212435968,
 					"collections": 29,
 					"peakLiveBytes": 6381472,
-					"maxPauseMs": 1.895
+					"maxPauseMs": 1.834
 				}
 			},
-			"ratio": 5.4772727272727275,
-			"hostGapMs": 197
+			"ratio": 5.431818181818182,
+			"hostGapMs": 195
 		},
 		{
 			"id": "immediate-dominators",
 			"group": "algorithm",
 			"owner": "immediate dominators",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-cfg.ts",
+			"sourceSeam": "src/compiler/core/core-ir-control-flow.ts",
 			"scale": 14,
 			"operations": 11468800,
 			"checksum": 876147991,
@@ -1954,30 +1954,30 @@
 				"nsPerOperation": 3.574916294642857,
 				"resource": {
 					"cpuMs": 70,
-					"peakRssBytes": 63602688,
-					"sampledAllocatedBytes": 502976,
+					"peakRssBytes": 63422464,
+					"sampledAllocatedBytes": 470448,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 337,
+						"elapsedMs": 334,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 336,
+						"elapsedMs": 331,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 337,
+						"elapsedMs": 333,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 337,
+						"elapsedMs": 332,
 						"allocatedBytes": 224,
 						"collections": 0
 					},
@@ -1987,104 +1987,104 @@
 						"collections": 0
 					}
 				],
-				"medianMs": 337,
-				"nsPerOperation": 29.384068080357142,
+				"medianMs": 333,
+				"nsPerOperation": 29.035295758928573,
 				"resource": {
 					"cpuMs": 360,
-					"peakRssBytes": 3751936,
+					"peakRssBytes": 3768320,
 					"allocatedBytes": 224,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 8.21951219512195,
-			"hostGapMs": 296
+			"ratio": 8.121951219512194,
+			"hostGapMs": 292
 		},
 		{
 			"id": "value-kinds",
 			"group": "algorithm",
 			"owner": "local value-kind propagation",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-ir-value-kinds.ts",
 			"scale": 10,
 			"operations": 20184780,
 			"checksum": 30140181,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 60
-					},
-					{
-						"elapsedMs": 61
-					},
-					{
-						"elapsedMs": 60
-					},
-					{
-						"elapsedMs": 60
+						"elapsedMs": 59
 					},
 					{
 						"elapsedMs": 59
+					},
+					{
+						"elapsedMs": 59
+					},
+					{
+						"elapsedMs": 59
+					},
+					{
+						"elapsedMs": 63
 					}
 				],
-				"medianMs": 60,
-				"nsPerOperation": 2.9725367331226797,
+				"medianMs": 59,
+				"nsPerOperation": 2.9229944542373016,
 				"resource": {
 					"cpuMs": 100,
-					"peakRssBytes": 69730304,
-					"sampledAllocatedBytes": 493128,
+					"peakRssBytes": 69500928,
+					"sampledAllocatedBytes": 474824,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 2235,
+						"elapsedMs": 2215,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2234,
+						"elapsedMs": 2213,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2230,
+						"elapsedMs": 2220,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2241,
+						"elapsedMs": 2244,
 						"allocatedBytes": 544,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 2231,
+						"elapsedMs": 2249,
 						"allocatedBytes": 544,
 						"collections": 0
 					}
 				],
-				"medianMs": 2234,
-				"nsPerOperation": 110.67745102993443,
+				"medianMs": 2220,
+				"nsPerOperation": 109.98385912553914,
 				"resource": {
 					"cpuMs": 2490,
-					"peakRssBytes": 5160960,
+					"peakRssBytes": 5193728,
 					"allocatedBytes": 544,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 37.233333333333334,
-			"hostGapMs": 2174
+			"ratio": 37.6271186440678,
+			"hostGapMs": 2161
 		},
 		{
 			"id": "canonical-roots",
 			"group": "algorithm",
 			"owner": "canonical root calculation",
 			"category": "typed-arrays-numeric-loops",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-ir-value-classes.ts",
 			"scale": 2,
 			"operations": 22216704,
 			"checksum": 46921949,
@@ -2094,10 +2094,10 @@
 						"elapsedMs": 42
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 45
 					},
 					{
-						"elapsedMs": 42
+						"elapsedMs": 45
 					},
 					{
 						"elapsedMs": 45
@@ -2106,56 +2106,56 @@
 						"elapsedMs": 43
 					}
 				],
-				"medianMs": 43,
-				"nsPerOperation": 1.9354806185471976,
+				"medianMs": 45,
+				"nsPerOperation": 2.02550297289823,
 				"resource": {
 					"cpuMs": 90,
-					"peakRssBytes": 64110592,
-					"sampledAllocatedBytes": 486744,
+					"peakRssBytes": 64389120,
+					"sampledAllocatedBytes": 505544,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 606,
+						"elapsedMs": 596,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 605,
+						"elapsedMs": 595,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 605,
+						"elapsedMs": 597,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 608,
+						"elapsedMs": 597,
 						"allocatedBytes": 352,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 605,
+						"elapsedMs": 598,
 						"allocatedBytes": 352,
 						"collections": 0
 					}
 				],
-				"medianMs": 605,
-				"nsPerOperation": 27.231762191187315,
+				"medianMs": 597,
+				"nsPerOperation": 26.871672773783185,
 				"resource": {
 					"cpuMs": 900,
-					"peakRssBytes": 4751360,
+					"peakRssBytes": 4800512,
 					"allocatedBytes": 352,
 					"collections": 0,
 					"peakLiveBytes": 0,
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 14.069767441860465,
-			"hostGapMs": 562
+			"ratio": 13.266666666666667,
+			"hostGapMs": 552
 		},
 		{
 			"id": "fact-provenance",
@@ -2169,44 +2169,44 @@
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 76
+						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 76
+						"elapsedMs": 75
 					},
 					{
-						"elapsedMs": 76
+						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 78
+						"elapsedMs": 77
 					},
 					{
-						"elapsedMs": 76
+						"elapsedMs": 77
 					}
 				],
-				"medianMs": 76,
-				"nsPerOperation": 17.59259259259259,
+				"medianMs": 77,
+				"nsPerOperation": 17.824074074074073,
 				"resource": {
 					"cpuMs": 150.00000000000003,
-					"peakRssBytes": 200376320,
-					"sampledAllocatedBytes": 490752,
+					"peakRssBytes": 200359936,
+					"sampledAllocatedBytes": 502760,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 177,
-						"allocatedBytes": 212322448,
-						"collections": 45
-					},
-					{
-						"elapsedMs": 175,
+						"elapsedMs": 179,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					},
 					{
 						"elapsedMs": 177,
+						"allocatedBytes": 212322448,
+						"collections": 45
+					},
+					{
+						"elapsedMs": 179,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					},
@@ -2216,24 +2216,24 @@
 						"collections": 45
 					},
 					{
-						"elapsedMs": 177,
+						"elapsedMs": 179,
 						"allocatedBytes": 212322448,
 						"collections": 45
 					}
 				],
-				"medianMs": 177,
-				"nsPerOperation": 40.97222222222222,
+				"medianMs": 179,
+				"nsPerOperation": 41.43518518518518,
 				"resource": {
 					"cpuMs": 260,
 					"peakRssBytes": 6864896,
 					"allocatedBytes": 212322448,
 					"collections": 45,
 					"peakLiveBytes": 88256,
-					"maxPauseMs": 0.064
+					"maxPauseMs": 0.062
 				}
 			},
-			"ratio": 2.3289473684210527,
-			"hostGapMs": 101
+			"ratio": 2.324675324675325,
+			"hostGapMs": 102
 		},
 		{
 			"id": "memory-events",
@@ -2247,49 +2247,34 @@
 			"node": {
 				"samples": [
 					{
+						"elapsedMs": 60
+					},
+					{
+						"elapsedMs": 58
+					},
+					{
 						"elapsedMs": 57
 					},
 					{
 						"elapsedMs": 60
 					},
 					{
-						"elapsedMs": 60
-					},
-					{
 						"elapsedMs": 57
-					},
-					{
-						"elapsedMs": 60
 					}
 				],
-				"medianMs": 60,
-				"nsPerOperation": 4.285714285714286,
+				"medianMs": 58,
+				"nsPerOperation": 4.142857142857143,
 				"resource": {
 					"cpuMs": 120,
-					"peakRssBytes": 93650944,
-					"sampledAllocatedBytes": 512040,
+					"peakRssBytes": 93585408,
+					"sampledAllocatedBytes": 488960,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 540,
-						"allocatedBytes": 186448256,
-						"collections": 28
-					},
-					{
-						"elapsedMs": 552,
-						"allocatedBytes": 186448256,
-						"collections": 28
-					},
-					{
-						"elapsedMs": 542,
-						"allocatedBytes": 186448256,
-						"collections": 28
-					},
-					{
-						"elapsedMs": 538,
+						"elapsedMs": 547,
 						"allocatedBytes": 186448256,
 						"collections": 28
 					},
@@ -2297,21 +2282,36 @@
 						"elapsedMs": 541,
 						"allocatedBytes": 186448256,
 						"collections": 28
+					},
+					{
+						"elapsedMs": 553,
+						"allocatedBytes": 186448256,
+						"collections": 28
+					},
+					{
+						"elapsedMs": 553,
+						"allocatedBytes": 186448256,
+						"collections": 28
+					},
+					{
+						"elapsedMs": 543,
+						"allocatedBytes": 186448256,
+						"collections": 28
 					}
 				],
-				"medianMs": 541,
-				"nsPerOperation": 38.642857142857146,
+				"medianMs": 547,
+				"nsPerOperation": 39.07142857142857,
 				"resource": {
 					"cpuMs": 590,
-					"peakRssBytes": 17432576,
+					"peakRssBytes": 17481728,
 					"allocatedBytes": 186448256,
 					"collections": 28,
 					"peakLiveBytes": 5209424,
-					"maxPauseMs": 0.728
+					"maxPauseMs": 0.698
 				}
 			},
-			"ratio": 9.016666666666667,
-			"hostGapMs": 481
+			"ratio": 9.431034482758621,
+			"hostGapMs": 489
 		},
 		{
 			"id": "memory-versions",
@@ -2328,7 +2328,7 @@
 						"elapsedMs": 55
 					},
 					{
-						"elapsedMs": 55
+						"elapsedMs": 54
 					},
 					{
 						"elapsedMs": 54
@@ -2340,12 +2340,12 @@
 						"elapsedMs": 55
 					}
 				],
-				"medianMs": 55,
-				"nsPerOperation": 4.526748971193416,
+				"medianMs": 54,
+				"nsPerOperation": 4.444444444444445,
 				"resource": {
 					"cpuMs": 120,
-					"peakRssBytes": 68206592,
-					"sampledAllocatedBytes": 511896,
+					"peakRssBytes": 67829760,
+					"sampledAllocatedBytes": 474600,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
@@ -2357,39 +2357,39 @@
 						"collections": 7
 					},
 					{
-						"elapsedMs": 335,
+						"elapsedMs": 339,
 						"allocatedBytes": 32438944,
 						"collections": 7
 					},
 					{
-						"elapsedMs": 335,
+						"elapsedMs": 337,
 						"allocatedBytes": 32438944,
 						"collections": 7
 					},
 					{
-						"elapsedMs": 341,
+						"elapsedMs": 339,
 						"allocatedBytes": 32438944,
 						"collections": 7
 					},
 					{
-						"elapsedMs": 338,
+						"elapsedMs": 340,
 						"allocatedBytes": 32438944,
 						"collections": 7
 					}
 				],
-				"medianMs": 337,
-				"nsPerOperation": 27.736625514403293,
+				"medianMs": 339,
+				"nsPerOperation": 27.901234567901234,
 				"resource": {
-					"cpuMs": 450,
-					"peakRssBytes": 19038208,
+					"cpuMs": 440,
+					"peakRssBytes": 19087360,
 					"allocatedBytes": 32438944,
 					"collections": 7,
 					"peakLiveBytes": 546848,
-					"maxPauseMs": 0.787
+					"maxPauseMs": 1.021
 				}
 			},
-			"ratio": 6.127272727272727,
-			"hostGapMs": 282
+			"ratio": 6.277777777777778,
+			"hostGapMs": 285
 		},
 		{
 			"id": "program-flow-extraction",
@@ -2406,10 +2406,10 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 45
+						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 44
 					},
 					{
 						"elapsedMs": 44
@@ -2421,53 +2421,53 @@
 				"medianMs": 44,
 				"nsPerOperation": 8.148148148148149,
 				"resource": {
-					"cpuMs": 510,
-					"peakRssBytes": 248889344,
-					"sampledAllocatedBytes": 508376,
+					"cpuMs": 470.00000000000006,
+					"peakRssBytes": 239419392,
+					"sampledAllocatedBytes": 509848,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
+						"elapsedMs": 230,
+						"allocatedBytes": 209846944,
+						"collections": 30
+					},
+					{
+						"elapsedMs": 232,
+						"allocatedBytes": 209846944,
+						"collections": 30
+					},
+					{
+						"elapsedMs": 236,
+						"allocatedBytes": 209846944,
+						"collections": 30
+					},
+					{
 						"elapsedMs": 231,
 						"allocatedBytes": 209846944,
 						"collections": 30
 					},
 					{
-						"elapsedMs": 236,
-						"allocatedBytes": 209846944,
-						"collections": 30
-					},
-					{
-						"elapsedMs": 233,
-						"allocatedBytes": 209846944,
-						"collections": 30
-					},
-					{
-						"elapsedMs": 236,
-						"allocatedBytes": 209846944,
-						"collections": 30
-					},
-					{
-						"elapsedMs": 233,
+						"elapsedMs": 234,
 						"allocatedBytes": 209846944,
 						"collections": 30
 					}
 				],
-				"medianMs": 233,
-				"nsPerOperation": 43.148148148148145,
+				"medianMs": 232,
+				"nsPerOperation": 42.96296296296296,
 				"resource": {
-					"cpuMs": 340,
-					"peakRssBytes": 25444352,
+					"cpuMs": 350,
+					"peakRssBytes": 25460736,
 					"allocatedBytes": 209846944,
 					"collections": 30,
 					"peakLiveBytes": 5502400,
-					"maxPauseMs": 1.341
+					"maxPauseMs": 1.432
 				}
 			},
-			"ratio": 5.295454545454546,
-			"hostGapMs": 189
+			"ratio": 5.2727272727272725,
+			"hostGapMs": 188
 		},
 		{
 			"id": "program-flow-convergence",
@@ -2475,68 +2475,68 @@
 			"owner": "program-flow SCC/worklist convergence",
 			"category": "typed-arrays-numeric-loops",
 			"sourceSeam": "src/compiler/core/core-program-flow.ts",
-			"scale": 20,
-			"operations": 19677199,
-			"checksum": 543457964,
+			"scale": 14,
+			"operations": 13778959,
+			"checksum": 2302266,
 			"node": {
 				"samples": [
 					{
-						"elapsedMs": 64
+						"elapsedMs": 48
 					},
 					{
-						"elapsedMs": 67
+						"elapsedMs": 45
 					},
 					{
-						"elapsedMs": 68
+						"elapsedMs": 45
 					},
 					{
-						"elapsedMs": 64
+						"elapsedMs": 45
 					},
 					{
-						"elapsedMs": 67
+						"elapsedMs": 45
 					}
 				],
-				"medianMs": 67,
-				"nsPerOperation": 3.4049561627140124,
+				"medianMs": 45,
+				"nsPerOperation": 3.265849038378008,
 				"resource": {
-					"cpuMs": 100,
-					"peakRssBytes": 64012288,
-					"sampledAllocatedBytes": 509432,
+					"cpuMs": 80,
+					"peakRssBytes": 64126976,
+					"sampledAllocatedBytes": 493072,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 1128,
+						"elapsedMs": 775,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 1129,
+						"elapsedMs": 780,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 1157,
+						"elapsedMs": 779,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 1129,
+						"elapsedMs": 775,
 						"allocatedBytes": 384,
 						"collections": 0
 					},
 					{
-						"elapsedMs": 1131,
+						"elapsedMs": 776,
 						"allocatedBytes": 384,
 						"collections": 0
 					}
 				],
-				"medianMs": 1129,
-				"nsPerOperation": 57.376052353792836,
+				"medianMs": 776,
+				"nsPerOperation": 56.317752306251876,
 				"resource": {
-					"cpuMs": 1180,
+					"cpuMs": 830,
 					"peakRssBytes": 4063232,
 					"allocatedBytes": 384,
 					"collections": 0,
@@ -2544,15 +2544,15 @@
 					"maxPauseMs": 0
 				}
 			},
-			"ratio": 16.850746268656717,
-			"hostGapMs": 1062
+			"ratio": 17.244444444444444,
+			"hostGapMs": 731
 		},
 		{
 			"id": "candidate-ranking",
 			"group": "algorithm",
 			"owner": "candidate ranking and plan selection",
 			"category": "iterators-callbacks",
-			"sourceSeam": "src/compiler/core/core-ir-opt.ts",
+			"sourceSeam": "src/compiler/core/core-transform-candidates.ts",
 			"scale": 1,
 			"operations": 819200,
 			"checksum": 516678,
@@ -2565,7 +2565,7 @@
 						"elapsedMs": 44
 					},
 					{
-						"elapsedMs": 43
+						"elapsedMs": 44
 					},
 					{
 						"elapsedMs": 44
@@ -2578,59 +2578,59 @@
 				"nsPerOperation": 53.7109375,
 				"resource": {
 					"cpuMs": 160,
-					"peakRssBytes": 80494592,
-					"sampledAllocatedBytes": 505488,
+					"peakRssBytes": 80248832,
+					"sampledAllocatedBytes": 520024,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 142,
+						"elapsedMs": 143,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					},
 					{
-						"elapsedMs": 142,
+						"elapsedMs": 143,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					},
 					{
-						"elapsedMs": 142,
+						"elapsedMs": 145,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					},
 					{
-						"elapsedMs": 146,
+						"elapsedMs": 143,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					},
 					{
-						"elapsedMs": 142,
+						"elapsedMs": 143,
 						"allocatedBytes": 36086528,
 						"collections": 8
 					}
 				],
-				"medianMs": 142,
-				"nsPerOperation": 173.33984375,
+				"medianMs": 143,
+				"nsPerOperation": 174.560546875,
 				"resource": {
 					"cpuMs": 280,
-					"peakRssBytes": 19922944,
+					"peakRssBytes": 19955712,
 					"allocatedBytes": 36086528,
 					"collections": 8,
 					"peakLiveBytes": 2187072,
-					"maxPauseMs": 1.213
+					"maxPauseMs": 1.276
 				}
 			},
-			"ratio": 3.227272727272727,
-			"hostGapMs": 98
+			"ratio": 3.25,
+			"hostGapMs": 99
 		},
 		{
 			"id": "core-to-execution",
 			"group": "algorithm",
 			"owner": "Core-to-Execution lowering",
 			"category": "allocation-gc",
-			"sourceSeam": "src/compiler/core/lower-core.ts",
+			"sourceSeam": "src/compiler/target/lower-execution.ts",
 			"scale": 8,
 			"operations": 36000000,
 			"checksum": 988041487,
@@ -2643,33 +2643,28 @@
 						"elapsedMs": 58
 					},
 					{
-						"elapsedMs": 58
+						"elapsedMs": 57
 					},
 					{
-						"elapsedMs": 58
+						"elapsedMs": 57
 					},
 					{
 						"elapsedMs": 58
 					}
 				],
-				"medianMs": 58,
-				"nsPerOperation": 1.6111111111111112,
+				"medianMs": 57,
+				"nsPerOperation": 1.5833333333333333,
 				"resource": {
-					"cpuMs": 130,
-					"peakRssBytes": 164347904,
-					"sampledAllocatedBytes": 481720,
+					"cpuMs": 140,
+					"peakRssBytes": 164184064,
+					"sampledAllocatedBytes": 474040,
 					"allocationSamplingIntervalBytes": 1024
 				}
 			},
 			"maligator": {
 				"samples": [
 					{
-						"elapsedMs": 590,
-						"allocatedBytes": 10160256,
-						"collections": 1
-					},
-					{
-						"elapsedMs": 596,
+						"elapsedMs": 587,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					},
@@ -2679,29 +2674,34 @@
 						"collections": 1
 					},
 					{
-						"elapsedMs": 614,
+						"elapsedMs": 588,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					},
 					{
-						"elapsedMs": 626,
+						"elapsedMs": 588,
+						"allocatedBytes": 10160256,
+						"collections": 1
+					},
+					{
+						"elapsedMs": 589,
 						"allocatedBytes": 10160256,
 						"collections": 1
 					}
 				],
-				"medianMs": 596,
-				"nsPerOperation": 16.555555555555557,
+				"medianMs": 588,
+				"nsPerOperation": 16.333333333333332,
 				"resource": {
-					"cpuMs": 670,
-					"peakRssBytes": 144949248,
+					"cpuMs": 660,
+					"peakRssBytes": 144998400,
 					"allocatedBytes": 10160256,
 					"collections": 1,
 					"peakLiveBytes": 4657120,
-					"maxPauseMs": 1.808
+					"maxPauseMs": 1.809
 				}
 			},
-			"ratio": 10.275862068965518,
-			"hostGapMs": 538
+			"ratio": 10.31578947368421,
+			"hostGapMs": 531
 		}
 	],
 	"diagnosis": {
@@ -2710,24 +2710,24 @@
 		"topHostGap": [
 			"optimizer-queue",
 			"value-kinds",
-			"program-flow-convergence",
 			"spread-copies",
-			"pruned-ssa"
+			"dynamic-array-operations",
+			"moderate-retention-churn"
 		],
 		"topAllocation": [
 			"moderate-retention-churn",
-			"pruned-ssa",
 			"iterator-generator-traversal",
-			"block-parameters",
-			"frozen-records"
+			"pruned-ssa",
+			"map-operations",
+			"block-parameters"
 		],
 		"categoryFractions": {
-			"runtime-collections-properties": 0.14260891150552316,
-			"function-closure-dispatch": 0.052438873029663643,
-			"iterators-callbacks": 0.06056844979520914,
-			"allocation-gc": 0.21931239915601342,
-			"typed-arrays-numeric-loops": 0.4686607918580117,
-			"compiler-algorithms": 0.056410574655579,
+			"runtime-collections-properties": 0.1517414496391591,
+			"function-closure-dispatch": 0.059742704737998115,
+			"iterators-callbacks": 0.06733605271415125,
+			"allocation-gc": 0.23633511139002197,
+			"typed-arrays-numeric-loops": 0.4503294634452463,
+			"compiler-algorithms": 0.03451521807342328,
 			"unattributed-execution": 0
 		}
 	}
