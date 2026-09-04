@@ -1,10 +1,6 @@
 #pragma once
 
-#include <assert.h>
-#include <stdlib.h>
-
 #include "./defaults.h"
-#include "gc.h"
 #include "object.h"
 
 typedef struct MalArrayObject {
@@ -136,56 +132,12 @@ bool mal_array_object_dense_append_many(
  * Push returns false only at the uint32 Array-length boundary. Pop reports
  * whether an element was present and applies the SATB deletion barrier.
  */
-static inline bool mal_array_object_contained_dense_push(
+bool mal_array_object_contained_dense_push(
     MalArrayObject *array, const MalValue *values, u32 count
-) {
-    assert(!array->dense_deopted);
-    assert(array->object.extensible);
-    assert(array->length_writable);
-    assert(array->dense_count == array->length);
-    assert(array->length == 0 || array->elements != nullptr);
-
-    u32 start = array->length;
-    if (count > UINT32_MAX - start) {
-        return false;
-    }
-    if (count == 0) {
-        return true;
-    }
-    u32 end = start + count;
-    if (!mal_array_object_dense_reserve(array, end)) {
-        abort();
-    }
-    for (u32 i = 0; i < count; i++) {
-        MalValue value = values[i];
-        array->elements[start + i] = value;
-        mal_gc_card(&array->object.header, value);
-    }
-    array->dense_count = end;
-    array->length = end;
-    return true;
-}
-
-static inline bool mal_array_object_contained_dense_pop(
+);
+bool mal_array_object_contained_dense_pop(
     MalArrayObject *array, MalValue *value_out
-) {
-    assert(!array->dense_deopted);
-    assert(array->object.extensible);
-    assert(array->length_writable);
-    assert(array->dense_count == array->length);
-    assert(array->length == 0 || array->elements != nullptr);
-
-    if (array->length == 0) {
-        return false;
-    }
-    u32 index = array->length - 1;
-    MalValue value = array->elements[index];
-    mal_gc_write_barrier(value);
-    array->dense_count = index;
-    array->length = index;
-    *value_out = value;
-    return true;
-}
+);
 
 /**
  * Append values into the unpublished tail of a native-built dense Array. Unlike
