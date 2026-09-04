@@ -36,7 +36,10 @@ import {
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
-import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();
@@ -290,6 +293,52 @@ describe("Core IR", () => {
 			CORE_EFFECT_DOMAINS.length + exactReadCount,
 		);
 		expect(memory.statistics.stateEntries).toBe(exactReadCount * 2);
+	});
+
+	it("restores parent memory versions between single-predecessor branches", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [one!], { attributes: { index: 0 } });
+		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		const [two] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.appendInstruction(left, "storeGlobal", [two!], { attributes: { index: 0 } });
+		const [leftRead] = builder.appendInstruction(left, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [rightRead] = builder.appendInstruction(right, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, { kind: "return", value: leftRead! });
+		builder.setTerminator(right, { kind: "return", value: rightRead! });
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
+		const leftDefinition = inspectCoreValueDefinition(fn, leftRead!);
+		const rightDefinition = inspectCoreValueDefinition(fn, rightRead!);
+		if (leftDefinition.kind !== "instruction" || rightDefinition.kind !== "instruction") {
+			throw new Error("Expected load results");
+		}
+
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+		const location = { kind: "global-slot", slot: 0 } as const;
+
+		expect(memory.valueForRead(leftDefinition.instruction, location)).toBe(two);
+		expect(memory.valueForRead(rightDefinition.instruction, location)).toBe(one);
 	});
 
 	it("indexes memory work independently of unrelated operations", () => {
