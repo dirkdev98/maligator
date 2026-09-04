@@ -280,12 +280,21 @@ function hashBytes(value: string | Uint8Array): string {
 }
 
 function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
-	const commit = execFileSync("git", ["rev-parse", "HEAD"], {
-		encoding: "utf8",
-	}).trim();
-	const dirtyPatch = execFileSync("git", ["diff", "--binary", "HEAD"], {
-		encoding: "utf8",
-	});
+	const archivedCommit = process.env.MAL_INTERNAL_BENCH_SOURCE_COMMIT;
+	if (archivedCommit !== undefined && !/^[0-9a-f]{40}$/.test(archivedCommit)) {
+		throw new Error("invalid archived benchmark source commit");
+	}
+	const commit =
+		archivedCommit ??
+		execFileSync("git", ["rev-parse", "HEAD"], {
+			encoding: "utf8",
+		}).trim();
+	const dirtyPatch =
+		archivedCommit === undefined
+			? execFileSync("git", ["diff", "--binary", "HEAD"], {
+					encoding: "utf8",
+				})
+			: "";
 	const benchmarkFiles = [
 		"bench/javascript.mjs",
 		"bench/http/express-server.cjs",

@@ -276,6 +276,7 @@ function runSnapshot(
 	extraArgs: Array<string>,
 	temporaryRoot: string,
 	label: string,
+	sourceCommit?: string,
 ): unknown {
 	const output = path.join(temporaryRoot, `${label}.json`);
 	const result = spawnSync(
@@ -283,7 +284,13 @@ function runSnapshot(
 		["scripts/bench.ts", ...lanes, "--runs", "1", "--json-out", output, ...extraArgs],
 		{
 			cwd: repository,
-			env: { ...process.env, NO_COLOR: "true" },
+			env: {
+				...process.env,
+				NO_COLOR: "true",
+				...(sourceCommit === undefined
+					? {}
+					: { MAL_INTERNAL_BENCH_SOURCE_COMMIT: sourceCommit }),
+			},
 			encoding: "utf-8",
 			maxBuffer: 32 * 1024 * 1024,
 		},
@@ -311,10 +318,13 @@ export function runBenchmarkComparison(options: {
 	const base = path.join(temporary, "base");
 	const baseArgs = options.extraArgs ?? [];
 	const headArgs = [...baseArgs, ...(options.headExtraArgs ?? [])];
+	const baseCommit = command("git", ["rev-parse", options.baseRef], {
+		cwd: repository,
+	}).trim();
 	try {
 		exportBase(options.baseRef, repository, temporary);
 		// Warm both exact source trees before collecting an interleaved pair.
-		runSnapshot(base, options.lanes, baseArgs, temporary, "warm-base");
+		runSnapshot(base, options.lanes, baseArgs, temporary, "warm-base", baseCommit);
 		runSnapshot(repository, options.lanes, headArgs, temporary, "warm-head");
 		const samples = new Map<string, Array<MetricSample>>();
 		const maxPairs = Math.max(options.pairs, options.maxPairs ?? 15);
@@ -327,6 +337,7 @@ export function runBenchmarkComparison(options: {
 				baseFirst ? baseArgs : headArgs,
 				temporary,
 				`pair-${pairCount}-${baseFirst ? "base" : "head"}`,
+				baseFirst ? baseCommit : undefined,
 			);
 			const second = runSnapshot(
 				baseFirst ? repository : base,
@@ -334,6 +345,7 @@ export function runBenchmarkComparison(options: {
 				baseFirst ? headArgs : baseArgs,
 				temporary,
 				`pair-${pairCount}-${baseFirst ? "head" : "base"}`,
+				baseFirst ? undefined : baseCommit,
 			);
 			const baseValues = flatten(baseFirst ? first : second);
 			const headValues = flatten(baseFirst ? second : first);
