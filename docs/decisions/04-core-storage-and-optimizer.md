@@ -139,17 +139,19 @@ recomputations, invalidations, and elapsed time for every analysis.
 
 ### Pass scheduling
 
-`CorePassManager` owns traversal and work queues. A pass declares its scope as
-instruction, block, function, SCC, or program, together with required analyses,
-change kinds that wake it, analyses it preserves, the version domains it may change,
-and a compiler-work budget with an explicit exhaustion policy.
+Each `CoreFunctionOptimizationSession` owns a function-only pass scheduler, local
+optimizer queues, analysis manager, feature-index views, and bounded shared scratch.
+A function pass declares its required analyses, change kinds that wake it, version
+domains it may change, and a compiler-work budget with an explicit exhaustion policy.
+The pass contract has no scope discriminator and the scheduler cannot enqueue work
+for another function.
 
-Edits enqueue only affected instructions, users, blocks, functions, SCC members, or
-program consumers. Queue exhaustion defines convergence. There are no global
-optimization rounds, `maxRounds`, generic `dependsOnProgram`, or pass-private
-whole-program fixed-point loops. Optional transforms stop conservatively when their
-budgets are exhausted; sound analyses converge or widen to a documented conservative
-result.
+Edits enqueue only affected local components. Queue exhaustion defines convergence.
+There are no stage-major function sweeps, global optimization rounds, `maxRounds`,
+generic `dependsOnProgram`, or pass-private whole-program fixed-point loops. Program
+flow and cross-call selection remain explicit whole-program owners outside the
+function scheduler. Optional transforms stop conservatively when their budgets are
+exhausted; sound analyses converge or widen to a documented conservative result.
 
 Per-pass verification consumes `CoreChangeSet` and checks the changed local and
 cross-function contracts. Full verification remains unconditional at the major Core

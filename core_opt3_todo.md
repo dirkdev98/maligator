@@ -64,17 +64,18 @@ warm peak RSS is 3,316,121,600 bytes, or 91.1%. The canonical repeated capture i
 `bench/core-opt3-slice2.json`; the function-major lifetime work in Slice 3 must address
 these failed memory gates before Slice 2 can be marked complete.
 
-The clean Slice 3 checkpoint at `2b54268b` constructed 496,336 values and sealed
-179,419 live output values: a 2.766× construction amplification. Its five-run warm
-off median is 14,977.201 ms, or 67.01% of Slice 0, so the total-time gate passes.
-Warm `optimizeCore` is 8,885.216 ms, or 60.31%, which misses the 60% gate by
-46.168 ms. The five warm off samples have a 1,939,754,488-byte peak-managed-heap
-median, or 76.56% of Slice 0, and a 2,900,410,368-byte peak RSS, or 79.69%; both
-memory gates remain open. The full sample recorded 126,655 analysis recomputations,
-20.97% above the Slice 0 full sample rather than the required 40% reduction.
-Generated code is 101.04% of Slice 0, and all warm, cold, counter and profile samples
-agree on their generated-output digest and observable checksum. The canonical
-capture is `bench/core-opt3-slice3.json`; Slice 3 is not complete.
+The completed Slice 3 checkpoint at `db65f06e` constructed 495,788 values and sealed
+179,007 live output values: a 2.769× construction amplification. Its five-run warm
+off median is 14,580.115 ms, or 65.24% of Slice 0, and warm `optimizeCore` is
+8,614.247 ms, or 58.47%. The five warm off samples have a 1,061,365,944-byte
+peak-managed-heap median, or 41.89% of Slice 0, and a 2,252,161,024-byte peak RSS,
+or 61.88%. The full sample recorded 62,271 analysis recomputations, 40.53% below
+Slice 0. Combined control-flow-bundle and canonical-root analysis time is 525 ms,
+10.96% of the corresponding 4,790 ms Slice 0 analyses. Generated code is 100.86%
+of Slice 0. All warm, cold, counter, phase and profile samples agree on their
+generated-output digest and observable checksum; repeated lower-tier checks show no
+regression, and JavaScript, HTTP and Maligator-hosted self-compile output gates pass.
+The canonical compiler capture is `bench/core-opt3-slice3.json`; Slice 3 is complete.
 
 Preserve the completed architecture
 
@@ -833,6 +834,12 @@ whole-program budget
 measurement lane that justifies retaining it
 
 An expensive analysis may not run without a named admitted consumer.
+
+Record every numeric profitability multiplier and its unit, including helper, guard,
+boxing, root, safepoint, duplication, fallback, admission, materialization,
+synchronization and loop-frequency weights. Calibrate them against the permanent
+output lanes; do not retain or change a multiplier solely because it appears
+plausible on one compiler workload.
 
 Required emitted-program work
 
