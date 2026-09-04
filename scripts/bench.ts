@@ -1759,12 +1759,13 @@ if (options.compareRef !== undefined) {
 			"--http-seconds",
 			String(options.httpSeconds),
 			...(options.mode === undefined ? [] : ["--mode", options.mode]),
-			...(options.coreOptimizationAblation === undefined
-				? []
-				: ["--ablate-core-family", options.coreOptimizationAblation]),
 		],
+		headExtraArgs:
+			options.coreOptimizationAblation === undefined
+				? undefined
+				: ["--ablate-core-family", options.coreOptimizationAblation],
 	});
-	process.exit(comparison.exitCode);
+	process.exit(options.coreOptimizationAblation === undefined ? comparison.exitCode : 0);
 }
 
 if (requestedLanes.length === 0) {

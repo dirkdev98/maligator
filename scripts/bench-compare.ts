@@ -303,17 +303,19 @@ export function runBenchmarkComparison(options: {
 	pairs: number;
 	maxPairs?: number;
 	extraArgs?: Array<string>;
+	headExtraArgs?: Array<string>;
 	repository?: string;
 }): { exitCode: number; reportPath: string; metrics: Array<MetricResult> } {
 	const repository = path.resolve(options.repository ?? process.cwd());
 	const temporary = mkdtempSync(path.join(os.tmpdir(), "mal-bench-compare-"));
 	const base = path.join(temporary, "base");
-	const extraArgs = options.extraArgs ?? [];
+	const baseArgs = options.extraArgs ?? [];
+	const headArgs = [...baseArgs, ...(options.headExtraArgs ?? [])];
 	try {
 		exportBase(options.baseRef, repository, temporary);
 		// Warm both exact source trees before collecting an interleaved pair.
-		runSnapshot(base, options.lanes, extraArgs, temporary, "warm-base");
-		runSnapshot(repository, options.lanes, extraArgs, temporary, "warm-head");
+		runSnapshot(base, options.lanes, baseArgs, temporary, "warm-base");
+		runSnapshot(repository, options.lanes, headArgs, temporary, "warm-head");
 		const samples = new Map<string, Array<MetricSample>>();
 		const maxPairs = Math.max(options.pairs, options.maxPairs ?? 15);
 		let pairCount = 0;
@@ -322,14 +324,14 @@ export function runBenchmarkComparison(options: {
 			const first = runSnapshot(
 				baseFirst ? base : repository,
 				options.lanes,
-				extraArgs,
+				baseFirst ? baseArgs : headArgs,
 				temporary,
 				`pair-${pairCount}-${baseFirst ? "base" : "head"}`,
 			);
 			const second = runSnapshot(
 				baseFirst ? repository : base,
 				options.lanes,
-				extraArgs,
+				baseFirst ? headArgs : baseArgs,
 				temporary,
 				`pair-${pairCount}-${baseFirst ? "head" : "base"}`,
 			);
@@ -364,6 +366,8 @@ export function runBenchmarkComparison(options: {
 					schema: 1,
 					baseRef: options.baseRef,
 					lanes: options.lanes,
+					extraArgs: baseArgs,
+					headExtraArgs: options.headExtraArgs ?? [],
 					environment: {
 						platform: process.platform,
 						arch: process.arch,
