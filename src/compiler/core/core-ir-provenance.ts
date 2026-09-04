@@ -1387,7 +1387,12 @@ function denseArrayCandidates(
 		const counterRoot = roots.get(counter) ?? counter;
 		if ((roots.get(incrementInput) ?? incrementInput) !== counterRoot) continue;
 		const writes = [...loop.blocks].flatMap((block) =>
-			[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
+			[...fn.bodyInstructionIds(block)].flatMap<{
+				readonly instruction: CoreInstructionId;
+				readonly value: CoreValueId;
+				readonly receiverPosition: number;
+				readonly property?: CoreInstructionId;
+			}>((instruction) => {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (
 					opcode === "storeProperty" &&
@@ -1396,7 +1401,13 @@ function denseArrayCandidates(
 					(roots.get(instructionOperand(fn, instruction, 1)!) ??
 						instructionOperand(fn, instruction, 1)!) === counterRoot
 				) {
-					return [{ instruction, value: instructionOperand(fn, instruction, 2)! }];
+					return [
+						{
+							instruction,
+							value: instructionOperand(fn, instruction, 2)!,
+							receiverPosition: 0,
+						},
+					];
 				}
 				if (
 					opcode === "callBuiltin" &&
@@ -1404,7 +1415,40 @@ function denseArrayCandidates(
 					instructionOperandCount(fn, instruction) === 2 &&
 					aliasesAllocation(instructionOperand(fn, instruction, 0)!)
 				) {
-					return [{ instruction, value: instructionOperand(fn, instruction, 1)! }];
+					return [
+						{
+							instruction,
+							value: instructionOperand(fn, instruction, 1)!,
+							receiverPosition: 0,
+						},
+					];
+				}
+				const known = fn.instructionAttributes(instruction).knownBuiltinCall as
+					| { readonly operation?: string }
+					| undefined;
+				if (
+					opcode === "call" &&
+					known?.operation === "Array.prototype.push" &&
+					instructionOperandCount(fn, instruction) === 3 &&
+					aliasesAllocation(instructionOperand(fn, instruction, 1)!)
+				) {
+					const callee = instructionOperand(fn, instruction, 0)!;
+					const property = definingInstruction(fn, roots.get(callee) ?? callee);
+					if (
+						property !== undefined &&
+						(fn.instructionOpcodeName(property) === "loadProperty" ||
+							fn.instructionOpcodeName(property) === "loadPropertyStatic") &&
+						aliasesAllocation(instructionOperand(fn, property, 0)!)
+					) {
+						return [
+							{
+								instruction,
+								value: instructionOperand(fn, instruction, 2)!,
+								receiverPosition: 1,
+								property,
+							},
+						];
+					}
 				}
 				return [];
 			}),
@@ -1425,7 +1469,8 @@ function denseArrayCandidates(
 						(opcode === "move" && position === 0) ||
 						(opcode === "throwIfTdz" && position === 0) ||
 						opcode === "rootUse" ||
-						(instruction === write.instruction && position === 0) ||
+						(instruction === write.instruction && position === write.receiverPosition) ||
+						(instruction === write.property && position === 0) ||
 						control.dominates(exitBlock, block)
 					) {
 						continue;
@@ -1450,7 +1495,11 @@ function denseArrayCandidates(
 		}
 		if (!safe) continue;
 		const instructions = Object.freeze(
-			[layout.instruction, write.instruction].sort((left, right) => left - right),
+			[
+				layout.instruction,
+				write.instruction,
+				...(write.property === undefined ? [] : [write.property]),
+			].sort((left, right) => left - right),
 		);
 		candidates.push(
 			Object.freeze({
