@@ -608,7 +608,7 @@ const kernels = [
 		"primitive",
 		"numeric scalar loops",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		numericScalarLoops,
 	),
 	kernel(
@@ -640,7 +640,7 @@ const kernels = [
 		"primitive",
 		"Set add, has and iteration",
 		"runtime-collections-properties",
-		"src/compiler/core/core-ir-verify.ts",
+		"src/compiler/core/core-ir-verifier.ts",
 		setOperations,
 	),
 	kernel(
@@ -656,7 +656,7 @@ const kernels = [
 		"primitive",
 		"object allocation and short-lived records",
 		"allocation-gc",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-store.ts",
 		shortLivedRecords,
 	),
 	kernel(
@@ -680,7 +680,7 @@ const kernels = [
 		"primitive",
 		"iterator and generator traversal",
 		"iterators-callbacks",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		iteratorGeneratorTraversal,
 	),
 	kernel(
@@ -688,7 +688,7 @@ const kernels = [
 		"primitive",
 		"for-of over arrays, maps and sets",
 		"iterators-callbacks",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		forOfCollections,
 	),
 	kernel(
@@ -696,7 +696,7 @@ const kernels = [
 		"primitive",
 		"Array map, filter, find, some and includes",
 		"iterators-callbacks",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		arrayCallbacks,
 	),
 	kernel(
@@ -704,7 +704,7 @@ const kernels = [
 		"primitive",
 		"direct function calls",
 		"function-closure-dispatch",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		directCalls,
 	),
 	kernel(
@@ -720,7 +720,7 @@ const kernels = [
 		"primitive",
 		"closure calls and captured state",
 		"function-closure-dispatch",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-local-optimizer.ts",
 		closureCalls,
 	),
 	kernel(
@@ -736,7 +736,7 @@ const kernels = [
 		"primitive",
 		"sorting numeric and compiler-key arrays",
 		"iterators-callbacks",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-transform-candidates.ts",
 		sorting,
 	),
 	kernel(
@@ -744,7 +744,7 @@ const kernels = [
 		"primitive",
 		"allocation churn with low retention",
 		"allocation-gc",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-store.ts",
 		lowRetentionChurn,
 	),
 	kernel(
@@ -760,7 +760,7 @@ const kernels = [
 		"algorithm",
 		"pruned SSA definition lookup and virtual phi resolution",
 		"compiler-algorithms",
-		"src/compiler/core/compile-core.ts",
+		"src/compiler/core/core-frontend-construction.ts",
 		prunedSsaReplay,
 	),
 	kernel(
@@ -768,7 +768,7 @@ const kernels = [
 		"algorithm",
 		"dense generation relocation",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-dense-generation.ts",
+		"src/compiler/core/core-store.ts",
 		denseRelocationReplay,
 	),
 	kernel(
@@ -776,7 +776,7 @@ const kernels = [
 		"algorithm",
 		"fused local optimizer queue",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-function-optimization-session.ts",
 		optimizerQueueReplay,
 	),
 	kernel(
@@ -784,7 +784,7 @@ const kernels = [
 		"algorithm",
 		"block-parameter simplification",
 		"runtime-collections-properties",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-control-flow-passes.ts",
 		blockParameterReplay,
 	),
 	kernel(
@@ -792,7 +792,7 @@ const kernels = [
 		"algorithm",
 		"CFG edge construction",
 		"allocation-gc",
-		"src/compiler/core/core-ir-cfg.ts",
+		"src/compiler/core/core-ir-control-flow.ts",
 		cfgEdgesReplay,
 	),
 	kernel(
@@ -800,7 +800,7 @@ const kernels = [
 		"algorithm",
 		"immediate dominators",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-cfg.ts",
+		"src/compiler/core/core-ir-control-flow.ts",
 		immediateDominatorsReplay,
 	),
 	kernel(
@@ -808,7 +808,7 @@ const kernels = [
 		"algorithm",
 		"local value-kind propagation",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-ir-value-kinds.ts",
 		valueKindReplay,
 	),
 	kernel(
@@ -816,7 +816,7 @@ const kernels = [
 		"algorithm",
 		"canonical root calculation",
 		"typed-arrays-numeric-loops",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-ir-value-classes.ts",
 		canonicalRootsReplay,
 	),
 	kernel(
@@ -864,7 +864,7 @@ const kernels = [
 		"algorithm",
 		"candidate ranking and plan selection",
 		"iterators-callbacks",
-		"src/compiler/core/core-ir-opt.ts",
+		"src/compiler/core/core-transform-candidates.ts",
 		candidateRankingReplay,
 	),
 	kernel(
@@ -872,7 +872,7 @@ const kernels = [
 		"algorithm",
 		"Core-to-Execution lowering",
 		"allocation-gc",
-		"src/compiler/core/lower-core.ts",
+		"src/compiler/target/lower-execution.ts",
 		loweringReplay,
 	),
 ];
