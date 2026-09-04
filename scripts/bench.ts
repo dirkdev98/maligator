@@ -240,7 +240,7 @@ interface NativeOutputBuildMetrics {
 	readonly cCompilationMs: number;
 	readonly linkMs: number;
 	readonly stripMs: number;
-	readonly peakRssBytes: number;
+	readonly peakRssBytes?: number;
 }
 
 interface NativeRuntimeMetrics {
@@ -385,9 +385,6 @@ function nativeBuildRecorder(): {
 			const generated = events.find((event) => event.phase === "write generated C");
 			const objects = events.find((event) => event.phase === "generated C objects");
 			const peakRssBytes = peakRssBySubject.get(subject);
-			if (peakRssBytes === undefined) {
-				throw new Error(`native build RSS was not measured for ${subject}`);
-			}
 			return Object.freeze({
 				phasesMs: Object.freeze(
 					Object.fromEntries(events.map((event) => [event.phase, phase(event.phase)])),
@@ -399,7 +396,7 @@ function nativeBuildRecorder(): {
 				cCompilationMs: phase("generated C objects"),
 				linkMs: phase("link"),
 				stripMs: phase("strip"),
-				peakRssBytes,
+				...(peakRssBytes === undefined ? {} : { peakRssBytes }),
 			});
 		},
 	};
