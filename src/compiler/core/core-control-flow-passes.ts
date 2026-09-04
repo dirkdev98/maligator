@@ -211,6 +211,148 @@ function pureExpressionOpcode(
 	return opcode;
 }
 
+function ordinaryPredecessorCounts(fn: CoreFunctionStore): Uint32Array {
+	const counts = new Uint32Array(fn.blockCapacity);
+	for (const block of fn.blockIds()) {
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let index = 0; index < edgeCount; index++) {
+			counts[fn.kernel.terminatorEdgeBlock(edgeStart + index)]!++;
+		}
+	}
+	return counts;
+}
+
+function hasLoopNormalizationConsumer(fn: CoreFunctionStore): boolean {
+	const predecessorCounts = ordinaryPredecessorCounts(fn);
+	for (const block of fn.blockIds()) {
+		if (predecessorCounts[block]! > 1) return true;
+		if (fn.instructionKind(fn.blockTerminator(block)) !== "jump") return true;
+	}
+	return false;
+}
+
+function hasLoopInvariantConsumer(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			pureExpressionOpcode(fn, instruction) !== undefined ||
+			(fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "loadPropertyStatic")
+		)
+			return true;
+	}
+	return false;
+}
+
+function hasRepeatedPureExpressionAcrossBlocks(fn: CoreFunctionStore): boolean {
+	const firstBlockByOpcode = new Map<number, CoreBlockId>();
+	for (const block of fn.blockIds()) {
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			const opcode = pureExpressionOpcode(fn, instruction);
+			if (opcode === undefined) continue;
+			const firstBlock = firstBlockByOpcode.get(opcode);
+			if (firstBlock !== undefined && firstBlock !== block) return true;
+			firstBlockByOpcode.set(opcode, block);
+		}
+	}
+	return false;
+}
+
+function hasPartialRedundancyConsumer(fn: CoreFunctionStore): boolean {
+	const expressionsByBlock = Array.from(
+		{ length: fn.blockCapacity },
+		() => new Set<number>(),
+	);
+	const predecessors = Array.from(
+		{ length: fn.blockCapacity },
+		() => new Set<CoreBlockId>(),
+	);
+	for (const block of fn.blockIds()) {
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			const opcode = pureExpressionOpcode(fn, instruction);
+			if (opcode !== undefined) expressionsByBlock[block]!.add(opcode);
+		}
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let index = 0; index < edgeCount; index++) {
+			predecessors[fn.kernel.terminatorEdgeBlock(edgeStart + index)]!.add(block);
+		}
+	}
+	for (const block of fn.blockIds()) {
+		if (predecessors[block]!.size < 2 || expressionsByBlock[block]!.size === 0) continue;
+		for (const predecessor of predecessors[block]!) {
+			for (const opcode of expressionsByBlock[block]!) {
+				if (expressionsByBlock[predecessor]!.has(opcode)) return true;
+			}
+		}
+	}
+	return false;
+}
+
+function hasRelationalConstantComparison(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "binary"
+		)
+			continue;
+		const operator = fn.instructionAttributes(instruction).operator;
+		if (operator !== "<" && operator !== "<=" && operator !== ">" && operator !== ">=")
+			continue;
+		const first = instructionOperand(fn, instruction, 0);
+		const second = instructionOperand(fn, instruction, 1);
+		if (
+			(first !== undefined && numberConstant(fn, first) !== undefined) ||
+			(second !== undefined && numberConstant(fn, second) !== undefined)
+		)
+			return true;
+	}
+	return false;
+}
+
+function hasLoopScalarRepresentationConsumer(fn: CoreFunctionStore): boolean {
+	let boxedParameter = false;
+	for (const block of fn.blockIds()) {
+		const start = fn.kernel.blockParameterStart(block);
+		const count = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < count; index++) {
+			if (
+				fn.valueRepresentation(fn.kernel.blockParameterValue(start + index)) === "boxed"
+			) {
+				boxedParameter = true;
+				break;
+			}
+		}
+		if (boxedParameter) break;
+	}
+	if (!boxedParameter) return false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operator = fn.instructionAttributes(instruction).operator;
+		if (
+			(opcode === "binary" && (operator === "+" || operator === "-")) ||
+			(opcode === "unary" && (operator === "increment" || operator === "decrement"))
+		)
+			return true;
+	}
+	return false;
+}
+
+function hasRemainderStrengthReductionConsumer(fn: CoreFunctionStore): boolean {
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "binary" &&
+			fn.instructionAttributes(instruction).operator === "%"
+		)
+			return true;
+	}
+	return false;
+}
+
 function expressionsEqual(
 	fn: CoreFunctionStore,
 	left: CoreInstructionId,
@@ -250,6 +392,12 @@ const canonicalizeNaturalLoops: CoreFunctionPass = {
 	name: "natural-loop-canonicalization",
 	stage: "control-flow",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+	admission: {
+		predicate: "cyclic control flow with a multi-predecessor block or non-jump latch",
+		hasOpportunity({ program, function: functionId }) {
+			return hasLoopNormalizationConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
 	changes: CONTROL_FLOW_CHANGES,
@@ -454,6 +602,12 @@ const hoistLoopInvariants: CoreFunctionPass = {
 	name: "loop-invariant-code-motion",
 	stage: "control-flow",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+	admission: {
+		predicate: "cyclic control flow with a pure expression or static property read",
+		hasOpportunity({ program, function: functionId }) {
+			return hasLoopInvariantConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
@@ -533,6 +687,12 @@ const hoistLoopInvariants: CoreFunctionPass = {
 const eliminateDominatedRedundancy: CoreFunctionPass = {
 	name: "dominance-redundancy-elimination",
 	stage: "control-flow",
+	admission: {
+		predicate: "repeated pure expression opcode across distinct blocks",
+		hasOpportunity({ program, function: functionId }) {
+			return hasRepeatedPureExpressionAcrossBlocks(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -656,6 +816,12 @@ function translatedInputs(
 const eliminatePartialRedundancy: CoreFunctionPass = {
 	name: "partial-redundancy-elimination",
 	stage: "control-flow",
+	admission: {
+		predicate: "join expression with the same pure opcode in an incoming block",
+		hasOpportunity({ program, function: functionId }) {
+			return hasPartialRedundancyConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
@@ -832,6 +998,13 @@ function proveRangedInstruction(
 const foldPathComparisons: CoreFunctionPass = {
 	name: "path-range-control-folding",
 	stage: "control-flow",
+	requiredFunctionOpcodesAny: ["binary"],
+	admission: {
+		predicate: "relational comparison against a numeric constant",
+		hasOpportunity({ program, function: functionId }) {
+			return hasRelationalConstantComparison(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: CONTROL_FLOW_CHANGES,
@@ -908,6 +1081,13 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 	name: "loop-scalar-representation-selection",
 	stage: "control-flow",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+	requiredFunctionOpcodesAny: ["binary", "unary"],
+	admission: {
+		predicate: "boxed loop parameter with an induction update operation",
+		hasOpportunity({ program, function: functionId }) {
+			return hasLoopScalarRepresentationConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
@@ -1158,6 +1338,13 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 const reduceBoundedRemainders: CoreFunctionPass = {
 	name: "path-range-strength-reduction",
 	stage: "control-flow",
+	requiredFunctionOpcodesAny: ["binary"],
+	admission: {
+		predicate: "remainder operation with a potential bounded numeric dividend",
+		hasOpportunity({ program, function: functionId }) {
+			return hasRemainderStrengthReductionConsumer(program.function(functionId));
+		},
+	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },

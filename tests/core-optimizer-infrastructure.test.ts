@@ -4,6 +4,7 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreAnalysisScratchPool } from "../src/compiler/core/core-analysis-scratch.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
+import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "../src/compiler/core/core-function-features.ts";
 import {
@@ -561,6 +562,38 @@ describe("Core optimizer infrastructure", () => {
 		expect(
 			report.finish(program, { directEntries: [], specializations: [] }).analyses,
 		).toMatchObject([{ analysis: "test-admitted-analysis", queries: 1 }]);
+	});
+
+	it("declares concrete admissions for every analysis-backed O2 pass", () => {
+		for (const pass of [
+			...CORE_CONTROL_FLOW_PASSES,
+			...CORE_PROOF_PASSES,
+			...CORE_MEMORY_PASSES,
+		]) {
+			if (pass.requiredAnalyses.length === 0) continue;
+			expect(pass.admission, pass.name).toBeDefined();
+			expect(pass.admission?.predicate.trim().length, pass.name).toBeGreaterThan(0);
+		}
+	});
+
+	it("makes an O2-ineligible function perform zero analysis queries", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			functions[0]!.id,
+		);
+
+		scheduler.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES);
+		scheduler.runComponent("proofs", CORE_PROOF_PASSES);
+		scheduler.runComponent("memory", CORE_MEMORY_PASSES);
+
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).analyses,
+		).toEqual([]);
 	});
 
 	it("bounds only optional development work and reports profile exhaustion", () => {

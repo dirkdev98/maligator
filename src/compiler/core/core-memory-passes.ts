@@ -367,17 +367,13 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 
 function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 	let allocation = false;
-	let propertyRead = false;
+	let propertyConsumer = false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 		if (descriptor.allocation !== undefined) allocation = true;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (
-			(opcode === "loadProperty" || opcode === "loadPropertyStatic") &&
-			fn.kernel.instructionResultCount(instruction) === 1
-		)
-			propertyRead = true;
+		if (CONTAINED_PROPERTY_ACCESS_OPCODES.has(opcode)) propertyConsumer = true;
 		if (
 			fn.kernel.instructionResultCount(instruction) === 1 &&
 			effectsPermitRemoval(fn, instruction) &&
@@ -386,7 +382,7 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 			)
 		)
 			return true;
-		if (allocation && propertyRead) return true;
+		if (allocation && propertyConsumer) return true;
 	}
 	return false;
 }
@@ -1772,7 +1768,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	name: "scalar-replace-contained-aggregates",
 	stage: "memory",
 	admission: {
-		predicate: "removable exact read or fresh allocation with a property-read consumer",
+		predicate: "removable exact read or fresh allocation with a property consumer",
 		hasOpportunity({ program, function: functionId }) {
 			return hasAggregateScalarReplacementConsumer(program.function(functionId));
 		},
