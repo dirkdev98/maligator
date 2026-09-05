@@ -45,7 +45,11 @@ import {
 	resolveHarnessExecutionInvocation,
 } from "../src/test-harness.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
-import { runBenchmarkComparison, selectChangedBenchmarkLanes } from "./bench-compare.ts";
+import {
+	runBenchmarkComparison,
+	selectChangedBenchmarkLanes,
+	selfCompileStages,
+} from "./bench-compare.ts";
 import {
 	formatOhaDuration,
 	parseOhaOutput,
@@ -79,7 +83,6 @@ type JavascriptMode = (typeof JAVASCRIPT_MODES)[number];
 type JavascriptWorld = "closed" | "open";
 type JavascriptBackend = "compiled" | "interpreted";
 
-const progress = new CommandProgress("bench");
 const CLOSED_CONFIG = resolveBuildConfig({});
 const OPEN_CONFIG = resolveBuildConfig({
 	engine: { primordials: "mutable", eval: true, realms: true },
@@ -1804,6 +1807,9 @@ Options:
   --changed           Select families affected by files changed from a Git ref
   --compare REF       Run paired base/head comparisons against REF
   --max-pairs N       Cap adaptive paired comparison samples
+  --budget-seconds N  Stop a comparison at its wall-clock budget; exit 2 if incomplete
+  --resume DIR        Resume a retained comparison with the same source/options
+  --plan=json         Print selected work, including cold and diagnostic stages, then exit
   --json-out PATH     Write the measured snapshot as JSON
   --native-cache-dir PATH
                       Isolate native artifacts for build-cost measurements
@@ -1822,6 +1828,9 @@ interface Options {
 	httpSeconds: number;
 	compareRef?: string;
 	maxPairs?: number;
+	budgetSeconds?: number;
+	resumeDirectory?: string;
+	plan?: boolean;
 	jsonOut?: string;
 	nativeCacheDirectory?: string;
 	checkpointPath?: string;
@@ -1864,6 +1873,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 		if (arg === "--update") options.update = true;
 		else if (arg === "--changed") options.changed = true;
 		else if (arg === "--full") options.full = true;
+		else if (arg === "--plan=json") options.plan = true;
 		else if (arg === "--runs") {
 			options.runs = parsePositiveNumber(requiredValue(args, index, arg), arg);
 			index++;
@@ -1875,6 +1885,12 @@ function parseOptions(args: Array<string>): Options | undefined {
 			index++;
 		} else if (arg === "--max-pairs") {
 			options.maxPairs = parsePositiveNumber(requiredValue(args, index, arg), arg);
+			index++;
+		} else if (arg === "--budget-seconds") {
+			options.budgetSeconds = parsePositiveNumber(requiredValue(args, index, arg), arg);
+			index++;
+		} else if (arg === "--resume") {
+			options.resumeDirectory = path.resolve(requiredValue(args, index, arg));
 			index++;
 		} else if (arg === "--json-out") {
 			options.jsonOut = requiredValue(args, index, arg);
@@ -1905,6 +1921,17 @@ function parseOptions(args: Array<string>): Options | undefined {
 	if (!Number.isInteger(options.runs)) throw new Error("--runs must be an integer");
 	if (options.maxPairs !== undefined && !Number.isInteger(options.maxPairs)) {
 		throw new Error("--max-pairs must be an integer");
+	}
+	if (options.maxPairs !== undefined && options.maxPairs < options.runs) {
+		throw new Error("--max-pairs must be at least --runs");
+	}
+	if (
+		(options.budgetSeconds !== undefined ||
+			options.resumeDirectory !== undefined ||
+			options.maxPairs !== undefined) &&
+		options.compareRef === undefined
+	) {
+		throw new Error("--budget-seconds, --max-pairs and --resume require --compare");
 	}
 	if (options.update && options.compareRef !== undefined) {
 		throw new Error("--compare cannot update the committed benchmark baseline");
@@ -1956,6 +1983,44 @@ if (options.checkpointPath !== undefined && options.jsonOut === undefined) {
 if (options.checkpointPath !== undefined && options.compareRef !== undefined) {
 	throw new Error("--checkpoint cannot be combined with --compare");
 }
+if (options.plan) {
+	const comparison = options.compareRef !== undefined;
+	const snapshotRuns = comparison ? 1 : options.runs;
+	console.log(
+		JSON.stringify(
+			{
+				schema: 1,
+				lanes: requestedLanes,
+				comparison: comparison
+					? {
+							baseRef: options.compareRef,
+							warmupSnapshots: 2,
+							minimumMeasuredSnapshots: options.runs * 2,
+							maximumMeasuredSnapshots:
+								(options.maxPairs ?? Math.max(options.runs, 15)) * 2,
+							budgetSeconds: options.budgetSeconds ?? null,
+							resumeDirectory: options.resumeDirectory ?? null,
+							incompleteExitCode: 2,
+						}
+					: null,
+				perSnapshot: {
+					runs: snapshotRuns,
+					selfCompileStages: requestedLanes.includes("self-compile")
+						? selfCompileStages(snapshotRuns)
+						: [],
+					selfCompileCheckpointed:
+						comparison &&
+						requestedLanes.length === 1 &&
+						requestedLanes[0] === "self-compile",
+				},
+				updatesBaseline: options.update,
+			},
+			null,
+			2,
+		),
+	);
+	process.exit(0);
+}
 if (changedSelection !== undefined) {
 	console.log(
 		`changed benchmark selection: ${changedSelection.files.length} files -> ${requestedLanes.length === 0 ? "no families" : requestedLanes.join(", ")}`,
@@ -1967,14 +2032,19 @@ if (options.compareRef !== undefined) {
 		console.log("No benchmark families correspond to the changed files.");
 		process.exit(0);
 	}
-	const comparison = runBenchmarkComparison({
+	const comparison = await runBenchmarkComparison({
 		baseRef: options.compareRef,
 		lanes: requestedLanes,
 		pairs: options.runs,
 		maxPairs: options.maxPairs,
+		budgetSeconds: options.budgetSeconds,
+		resumeDirectory: options.resumeDirectory,
 		extraArgs: [
 			"--http-seconds",
 			String(options.httpSeconds),
+			...(options.nativeCacheDirectory === undefined
+				? []
+				: ["--native-cache-dir", options.nativeCacheDirectory]),
 			...(options.mode === undefined ? [] : ["--mode", options.mode]),
 		],
 		headExtraArgs:
@@ -1982,7 +2052,11 @@ if (options.compareRef !== undefined) {
 				? undefined
 				: ["--ablate-core-family", options.coreOptimizationAblation],
 	});
-	process.exit(options.coreOptimizationAblation === undefined ? comparison.exitCode : 0);
+	process.exit(
+		options.coreOptimizationAblation !== undefined && comparison.exitCode === 1
+			? 0
+			: comparison.exitCode,
+	);
 }
 
 if (requestedLanes.length === 0) {
@@ -1999,6 +2073,7 @@ if (savedBaseline !== undefined && savedBaseline.schema !== BENCHMARK_SCHEMA) {
 	);
 }
 const baseline = savedBaseline as BenchmarkSnapshot | undefined;
+const progress = new CommandProgress("bench");
 
 const entry: BenchmarkSnapshot = {
 	schema: BENCHMARK_SCHEMA,
