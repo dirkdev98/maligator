@@ -46,10 +46,70 @@ function validBranchProgram() {
 		entry,
 		consequent,
 		alternate,
+		condition: condition!,
 	};
 }
 
 describe("Core verification", () => {
+	it("verifies repeated uses of value zero after operand replacement and row deletion", () => {
+		const { program, fn, entry, condition } = validBranchProgram();
+		const editor = CoreEditor.open(program, fn.id);
+		const replacement = editor.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: false },
+		}).outputs[0]!;
+		const operations = Array.from(
+			{ length: 16 },
+			() =>
+				editor.appendInstruction(entry, "binary", [condition, condition], {
+					attributes: { operator: "===" },
+				}).instruction,
+		);
+		editor.commit();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+		const rewrite = CoreEditor.open(program, fn.id);
+		for (const [index, instruction] of operations.entries()) {
+			if (index % 2 === 0) rewrite.removeInstruction(instruction);
+			else rewrite.replaceOperands(instruction, [replacement, condition]);
+		}
+		rewrite.commit();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+	});
+
+	it("rejects an instruction linked more than once in block order", () => {
+		const { program, fn, entry } = validBranchProgram();
+		const first = fn.kernel.blockFirstInstruction(entry);
+		fn.kernel.instructionNext = () => first;
+		expect(() => verifyCoreProgram(program)).toThrow(/appears twice in block order/);
+	});
+
+	it("rejects a cyclic value-use chain", () => {
+		const { program, fn, condition } = validBranchProgram();
+		const first = fn.kernel.valueFirstUse(condition);
+		fn.kernel.useNext = () => first;
+		expect(() => verifyCoreProgram(program)).toThrow(/invalid use-list chain/);
+	});
+
+	it("rejects a use count that disagrees with operand storage", () => {
+		const { program, fn } = validBranchProgram();
+		fn.kernel.valueUseCount = () => 0;
+		expect(() => verifyCoreProgram(program)).toThrow(/use count does not match/);
+	});
+
+	it("rejects a live use row absent from operands and value chains", () => {
+		const { program, fn, entry, condition } = validBranchProgram();
+		const editor = CoreEditor.open(program, fn.id);
+		const { instruction } = editor.appendInstruction(entry, "unary", [condition], {
+			attributes: { operator: "!" },
+		});
+		const orphan = fn.kernel.operandUseAt(fn.kernel.instructionOperandStart(instruction));
+		editor.removeInstruction(instruction);
+		editor.commit();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+		const useLive = fn.kernel.useLive.bind(fn.kernel);
+		fn.kernel.useLive = (use) => (use === orphan ? 1 : useLive(use));
+		expect(() => verifyCoreProgram(program)).toThrow(/absent from its value chain/);
+	});
+
 	it("verifies store rows, definitions, uses, CFG indexes, and metadata", () => {
 		const { program, fn, entry, consequent, alternate } = validBranchProgram();
 		expect(() => verifyCoreProgram(program, { stage: "construction" })).not.toThrow();

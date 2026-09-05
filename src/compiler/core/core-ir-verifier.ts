@@ -239,8 +239,8 @@ function verifyMetadata(fn: CoreFunctionStore, program: CoreProgram): void {
 	}
 }
 
-function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
-	const linked = new Set<CoreInstructionId>();
+function verifyBlockRows(fn: CoreFunctionStore): void {
+	const linked = new Uint8Array(fn.instructionCapacity);
 	for (let rawBlock = 0; rawBlock < fn.blockCapacity; rawBlock++) {
 		const block = coreBlockId(rawBlock);
 		const parameterStart = fn.kernel.blockParameterStart(block);
@@ -267,10 +267,10 @@ function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
 				fail(`block b${block} links unknown instruction @${current}`);
 			}
 			const instruction = coreInstructionId(current);
-			if (linked.has(instruction)) {
+			if (linked[instruction] !== 0) {
 				fail(`instruction @${instruction} appears twice in block order`);
 			}
-			linked.add(instruction);
+			linked[instruction] = 1;
 			if (fn.kernel.instructionLive(instruction) === 0)
 				fail(`block b${block} links deleted instruction @${current}`);
 			const instructionBlock = fn.kernel.instructionBlock(instruction);
@@ -300,22 +300,25 @@ function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
 		rawInstruction++
 	) {
 		const instruction = coreInstructionId(rawInstruction);
-		if ((fn.kernel.instructionLive(instruction) !== 0) !== linked.has(instruction)) {
+		if ((fn.kernel.instructionLive(instruction) !== 0) !== (linked[instruction] !== 0)) {
 			fail(`instruction @${instruction} live state disagrees with block order`);
 		}
 	}
-	return linked;
+}
+
+interface OperandUseIndex {
+	readonly valueCounts: Uint32Array;
+	// Zero denotes an absent use; other entries encode the operand's value ID plus one.
+	readonly valueByUse: Uint32Array;
 }
 
 function verifyInstructionRows(
 	fn: CoreFunctionStore,
 	program: CoreProgram,
-): {
-	readonly currentOperands: Set<number>;
-	readonly liveUses: Map<number, Set<number>>;
-} {
-	const currentOperands = new Set<number>();
-	const liveUses = new Map<number, Set<number>>();
+): OperandUseIndex {
+	const currentOperands = new Uint8Array(fn.operandCapacity);
+	const valueCounts = new Uint32Array(fn.valueCapacity);
+	const valueByUse = new Uint32Array(fn.useCapacity);
 	for (
 		let rawInstruction = 0;
 		rawInstruction < fn.instructionCapacity;
@@ -406,7 +409,7 @@ function verifyInstructionRows(
 		} else fn.instructionKind(instruction);
 		for (let operand = 0; operand < operandCount; operand++) {
 			const recordIndex = operandStart + operand;
-			currentOperands.add(recordIndex);
+			currentOperands[recordIndex] = 1;
 			const value = fn.kernel.operandAt(recordIndex);
 			const useId = fn.kernel.operandUseAt(recordIndex);
 			if (fn.kernel.valueLive(value) === 0) {
@@ -424,9 +427,8 @@ function verifyInstructionRows(
 					`instruction @${instruction} operand ${operand} has an inconsistent use row`,
 				);
 			}
-			const uses = liveUses.get(value) ?? new Set<number>();
-			uses.add(useId);
-			liveUses.set(value, uses);
+			if (valueByUse[useId] === 0) valueCounts[value] = valueCounts[value]! + 1;
+			valueByUse[useId] = value + 1;
 		}
 		for (let result = 0; result < resultCount; result++) {
 			const value = fn.kernel.resultAt(resultStart + result);
@@ -445,33 +447,28 @@ function verifyInstructionRows(
 	for (let record = 0; record < fn.operandCapacity; record++) {
 		const useId = fn.kernel.operandUseAt(record);
 		if (useId < 0) {
-			if (currentOperands.has(record)) fail(`live operand row ${record} has no use`);
+			if (currentOperands[record] !== 0) fail(`live operand row ${record} has no use`);
 			continue;
 		}
-		if ((fn.kernel.useLive(useId) !== 0) !== currentOperands.has(record)) {
+		if ((fn.kernel.useLive(useId) !== 0) !== (currentOperands[record] !== 0)) {
 			fail(`operand row ${record} has stale live-use state`);
 		}
 	}
-	return { currentOperands, liveUses };
+	return { valueCounts, valueByUse };
 }
 
-function verifyValueRows(
-	fn: CoreFunctionStore,
-	expectedUses: Map<number, Set<number>>,
-): void {
-	const useRowsInChains = new Set<number>();
+function verifyValueRows(fn: CoreFunctionStore, expectedUses: OperandUseIndex): void {
+	const useRowsInChains = new Uint32Array(fn.useCapacity);
 	for (let rawValue = 0; rawValue < fn.valueCapacity; rawValue++) {
 		const value = coreValueId(rawValue);
 		let current = fn.kernel.valueFirstUse(value);
 		let liveCount = 0;
-		const chain = new Set<number>();
 		let previous = -1;
 		while (current >= 0) {
-			if (current >= fn.useCapacity || chain.has(current)) {
+			if (current >= fn.useCapacity || useRowsInChains[current] === value + 1) {
 				fail(`value %${value} has an invalid use-list chain`);
 			}
-			chain.add(current);
-			useRowsInChains.add(current);
+			useRowsInChains[current] = value + 1;
 			if (fn.kernel.useValue(current) !== value)
 				fail(`value %${value} use-list contains another value`);
 			if (fn.kernel.useLive(current) === 0)
@@ -480,7 +477,7 @@ function verifyValueRows(
 				fail(`value %${value} has an inconsistent previous-use link`);
 			}
 			liveCount++;
-			if (!expectedUses.get(value)?.has(current)) {
+			if (expectedUses.valueByUse[current] !== value + 1) {
 				fail(`value %${value} has a live use missing from operand storage`);
 			}
 			previous = current;
@@ -488,7 +485,7 @@ function verifyValueRows(
 		}
 		if (
 			liveCount !== fn.kernel.valueUseCount(value) ||
-			liveCount !== (expectedUses.get(value)?.size ?? 0)
+			liveCount !== expectedUses.valueCounts[value]
 		) {
 			fail(`value %${value} use count does not match its live uses`);
 		}
@@ -530,7 +527,7 @@ function verifyValueRows(
 		} else fail(`value %${value} has invalid definition kind ${definitionKind}`);
 	}
 	for (let use = 0; use < fn.useCapacity; use++) {
-		if (fn.kernel.useLive(use) !== 0 && !useRowsInChains.has(use)) {
+		if (fn.kernel.useLive(use) !== 0 && useRowsInChains[use] === 0) {
 			fail(`live use row ${use} is absent from its value chain`);
 		}
 		if (
@@ -1052,7 +1049,7 @@ function verifyFunction(program: CoreProgram, functionId: CoreFunctionId): void 
 	if (fn.id !== functionId) fail(`function row ${functionId} carries id ${fn.id}`);
 	verifyMetadata(fn, program);
 	verifyBlockRows(fn);
-	const { liveUses } = verifyInstructionRows(fn, program);
+	const liveUses = verifyInstructionRows(fn, program);
 	verifyValueRows(fn, liveUses);
 	verifyBlockParameters(fn);
 	verifyFunctionParameters(fn);
