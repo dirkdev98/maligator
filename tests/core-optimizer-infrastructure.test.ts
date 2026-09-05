@@ -34,7 +34,10 @@ import {
 import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
-import type { CoreFunctionPass } from "../src/compiler/core/core-pass.ts";
+import type {
+	CoreFunctionPass,
+	CoreFunctionPassContext,
+} from "../src/compiler/core/core-pass.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import {
 	CORE_PROGRAM_FLOW_REPRESENTATIONS,
@@ -422,6 +425,43 @@ describe("Core optimizer infrastructure", () => {
 				.finish(program, { directEntries: [], specializations: [] })
 				.passes.map(({ pass }) => pass),
 		).toEqual(["late"]);
+	});
+
+	it("reuses pass contexts without sharing them across passes or functions", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const compilationContext = context();
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, compilationContext, report);
+		const contexts: Array<CoreFunctionPassContext> = [];
+		const passes = ["first", "second"].map(
+			(name): CoreFunctionPass => ({
+				...noOpPass(name, []),
+				run(passContext) {
+					contexts.push(passContext);
+					return undefined;
+				},
+			}),
+		);
+		for (const { id } of functions) {
+			const scheduler = new CoreFunctionPassScheduler(
+				program,
+				compilationContext,
+				analyses,
+				report,
+				id,
+			);
+			scheduler.runComponent("canonicalize", passes);
+			scheduler.runComponent("canonicalize", passes);
+		}
+
+		expect(contexts).toHaveLength(8);
+		for (const start of [0, 4]) {
+			expect(contexts[start]).toBe(contexts[start + 2]);
+			expect(contexts[start + 1]).toBe(contexts[start + 3]);
+			expect(contexts[start]!.item.function).toBe(functions[start / 4]!.id);
+			expect(contexts[start + 1]!.item.function).toBe(functions[start / 4]!.id);
+		}
+		expect(new Set(contexts).size).toBe(4);
 	});
 
 	it("does not rerun an existing pass when a no-op pass is registered", () => {

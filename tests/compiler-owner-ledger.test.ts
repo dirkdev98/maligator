@@ -4,7 +4,6 @@ import {
 	compilerOwnerCoverage,
 } from "../scripts/compiler-owner-ledger.ts";
 import {
-	coreOptimizationOwnerIsOptimizeCore,
 	CORE_OPTIMIZATION_OWNER,
 	CORE_OPTIMIZATION_OWNERS,
 } from "../src/compiler/core/core-optimization-owners.ts";
@@ -53,32 +52,43 @@ describe("compiler owner ledger", () => {
 	});
 
 	it("reports optimizer, host-gap and allocation coverage", () => {
-		const owners = compareCompilerOwnerLedgers(ledger(1), ledger(2));
-		const optimizeSum = owners
-			.filter(({ id }) => coreOptimizationOwnerIsOptimizeCore(id))
-			.reduce((sum, owner) => sum + owner.nodeMs, 0);
-		const attributedGap = owners
-			.filter(({ id }) => id !== CORE_OPTIMIZATION_OWNER.unattributed)
-			.reduce((sum, owner) => sum + owner.hostGapMs, 0);
-		const totalAllocated = owners.reduce(
-			(sum, owner) => sum + (owner.allocatedBytes ?? 0),
-			0,
+		const owners = compareCompilerOwnerLedgers(
+			[
+				{ id: 0, name: "unattributed", elapsedMs: 7, workUnits: 0 },
+				{ id: 1, name: "semantic-to-Core construction", elapsedMs: 10, workUnits: 1 },
+				{ id: 2, name: "construction structural cleanup", elapsedMs: 20, workUnits: 1 },
+			],
+			[
+				{ id: 0, name: "unattributed", elapsedMs: 17, workUnits: 0, allocatedBytes: 100 },
+				{
+					id: 1,
+					name: "semantic-to-Core construction",
+					elapsedMs: 30,
+					workUnits: 1,
+					allocatedBytes: 200,
+				},
+				{
+					id: 2,
+					name: "construction structural cleanup",
+					elapsedMs: 50,
+					workUnits: 1,
+					allocatedBytes: 500,
+				},
+			],
 		);
 
 		expect(
 			compilerOwnerCoverage(owners, {
-				nodeOptimizeCoreMs: optimizeSum,
-				maligatorOptimizeCoreMs: optimizeSum * 2,
+				nodeOptimizeCoreMs: 80,
+				maligatorOptimizeCoreMs: 100,
 				nodeWallMs: 100,
-				maligatorWallMs: 100 + attributedGap,
+				maligatorWallMs: 300,
 			}),
 		).toEqual({
-			nodeOptimizeCore: 1,
-			maligatorOptimizeCore: 1,
-			hostGap: 1,
-			allocation:
-				(totalAllocated - owners[CORE_OPTIMIZATION_OWNER.unattributed]!.allocatedBytes!) /
-				totalAllocated,
+			nodeOptimizeCore: 0.25,
+			maligatorOptimizeCore: 0.5,
+			hostGap: 0.25,
+			allocation: 0.875,
 		});
 	});
 });
