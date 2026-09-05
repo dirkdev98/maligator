@@ -792,7 +792,7 @@ export class CoreFunctionStore {
 	}
 
 	blockIds(): Iterable<CoreBlockId> {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		if (this.#sealedBlocks !== undefined) return this.#sealedBlocks;
 		if (!this.#activeEditor) {
 			if (this.#blockSnapshot === undefined) {
@@ -814,7 +814,7 @@ export class CoreFunctionStore {
 	}
 
 	instructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		if (block === undefined && this.#sealedInstructions !== undefined)
 			return this.#sealedInstructions;
 		if (block === undefined && !this.#activeEditor) {
@@ -871,29 +871,29 @@ export class CoreFunctionStore {
 	}
 
 	*factIds(): Iterable<CoreFactId> {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		for (let id = 0; id < this.#facts.length; id++) {
 			if (this.#facts[id] !== undefined) yield coreFactId(id);
 		}
 	}
 
 	isBlockLive(id: CoreBlockId): boolean {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		return this.#blockLive[id] === 1;
 	}
 
 	isInstructionLive(id: CoreInstructionId): boolean {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		return this.#instructionLive[id] === 1;
 	}
 
 	isValueLive(id: CoreValueId): boolean {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		return this.#valueLive[id] === 1;
 	}
 
 	isFactLive(id: CoreFactId): boolean {
-		this.#requireCurrentGeneration();
+		if (this.#retired) this.#throwRetiredGeneration();
 		return this.#facts[id] !== undefined;
 	}
 
@@ -2444,12 +2444,10 @@ export class CoreFunctionStore {
 			throw new Error("Core store mutation is private");
 	}
 
-	#requireCurrentGeneration(): void {
-		if (this.#retired) {
-			throw new Error(
-				`Core function ${this.id} belongs to retired generation ${this.generation}`,
-			);
-		}
+	#throwRetiredGeneration(): never {
+		throw new Error(
+			`Core function ${this.id} belongs to retired generation ${this.generation}`,
+		);
 	}
 
 	#assertEditing(mutation: CoreStoreMutation): void {
@@ -2458,15 +2456,19 @@ export class CoreFunctionStore {
 	}
 
 	#requireBlock(id: CoreBlockId): void {
-		if (!this.isBlockLive(id)) throw new Error(`Unknown Core block ${id}`);
+		if (this.#retired) this.#throwRetiredGeneration();
+		if (this.#blockLive[id] !== 1) throw new Error(`Unknown Core block ${id}`);
 	}
 
 	#requireInstruction(id: CoreInstructionId): void {
-		if (!this.isInstructionLive(id)) throw new Error(`Unknown Core instruction ${id}`);
+		if (this.#retired) this.#throwRetiredGeneration();
+		if (this.#instructionLive[id] !== 1)
+			throw new Error(`Unknown Core instruction ${id}`);
 	}
 
 	#requireValue(id: CoreValueId): void {
-		if (!this.isValueLive(id)) throw new Error(`Unknown Core value ${id}`);
+		if (this.#retired) this.#throwRetiredGeneration();
+		if (this.#valueLive[id] !== 1) throw new Error(`Unknown Core value ${id}`);
 	}
 }
 

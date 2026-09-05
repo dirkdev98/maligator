@@ -6,6 +6,9 @@ import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
+	coreBlockId,
+	coreInstructionId,
+	coreValueId,
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 import type {
@@ -316,6 +319,46 @@ function mutateTerminatorSnapshot(payload: CoreTerminatorPayload): void {
 }
 
 describe("Core store", () => {
+	it("preserves unknown-ID errors and rejects retired generations before reading IDs", () => {
+		const { program, fn, entry, parameter } = oneFunction();
+		const instruction = fn.blockTerminator(entry);
+		const unknownBlock = coreBlockId(fn.blockCapacity);
+		const unknownInstruction = coreInstructionId(fn.instructionCapacity);
+		const unknownValue = coreValueId(fn.valueCapacity);
+		const unknownReads = [
+			{
+				live: () => fn.isBlockLive(unknownBlock),
+				read: () => fn.blockTerminator(unknownBlock),
+				error: `Unknown Core block ${unknownBlock}`,
+			},
+			{
+				live: () => fn.isInstructionLive(unknownInstruction),
+				read: () => fn.instructionKind(unknownInstruction),
+				error: `Unknown Core instruction ${unknownInstruction}`,
+			},
+			{
+				live: () => fn.isValueLive(unknownValue),
+				read: () => fn.valueRepresentation(unknownValue),
+				error: `Unknown Core value ${unknownValue}`,
+			},
+		];
+		for (const { live, read, error } of unknownReads) {
+			expect(live()).toBe(false);
+			expect(read).toThrow(error);
+		}
+		program.finalizeConstructionGeneration();
+		const retiredReads = [
+			...unknownReads.flatMap(({ live, read }) => [live, read]),
+			() => fn.blockTerminator(entry),
+			() => fn.instructionKind(instruction),
+			() => fn.valueRepresentation(parameter),
+			() => fn.blockIds(),
+			() => fn.instructionIds(),
+			() => [...fn.factIds()],
+		];
+		for (const read of retiredReads) expect(read).toThrow("retired generation 0");
+	});
+
 	it("checks function identities without enumerating the program", () => {
 		const { program, fn } = oneFunction();
 		Object.defineProperty(program, "functionIds", {
