@@ -230,7 +230,7 @@ function buildStructural(
 	);
 	return Object.freeze({
 		function: fn.id,
-		cfgVersion: fn.versions.cfg,
+		cfgVersion: fn.version("cfg"),
 		exceptionFlowVersion: 0,
 		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
 		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
@@ -283,8 +283,8 @@ function buildExceptionalStructural(
 	);
 	return Object.freeze({
 		function: fn.id,
-		cfgVersion: fn.versions.cfg,
-		exceptionFlowVersion: fn.versions.exceptionFlow,
+		cfgVersion: fn.version("cfg"),
+		exceptionFlowVersion: fn.version("exceptionFlow"),
 		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
 		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
 		reachable: Object.freeze(reachable),
@@ -733,8 +733,8 @@ function buildFromStructural(
 	);
 	return Object.freeze({
 		function: fn.id,
-		cfgVersion: fn.versions.cfg,
-		exceptionFlowVersion: includeExceptions ? fn.versions.exceptionFlow : 0,
+		cfgVersion: fn.version("cfg"),
+		exceptionFlowVersion: includeExceptions ? fn.version("exceptionFlow") : 0,
 		successors,
 		predecessors,
 		reachable: Object.freeze(reachable),
@@ -762,7 +762,7 @@ function buildControlFlowBundle(
 	let structuralExceptionFlowVersion = -1;
 	let structuralMemoryEffectsVersion = -1;
 	const currentOrdinaryStructural = (): CoreStructuralControlFlow => {
-		const cfgVersion = fn.versions.cfg;
+		const cfgVersion = fn.version("cfg");
 		if (ordinaryStructural === undefined || ordinaryCfgVersion !== cfgVersion) {
 			ordinaryStructural = buildStructural(fn, runOwner);
 			ordinary = undefined;
@@ -782,8 +782,8 @@ function buildControlFlowBundle(
 	const exceptionalStructural = (): CoreStructuralControlFlow => {
 		const currentOrdinary = currentOrdinaryStructural();
 		if (fn.handlerBlockCount === 0) return currentOrdinary;
-		const exceptionFlowVersion = fn.versions.exceptionFlow;
-		const memoryEffectsVersion = fn.versions.memoryEffects;
+		const exceptionFlowVersion = fn.version("exceptionFlow");
+		const memoryEffectsVersion = fn.version("memoryEffects");
 		if (
 			structural === undefined ||
 			structuralExceptionFlowVersion !== exceptionFlowVersion ||
