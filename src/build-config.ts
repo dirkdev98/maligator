@@ -544,9 +544,7 @@ export function resolveOutputName(
 }
 
 function shortHash(value: unknown): string {
-	// One-shot node:crypto.hash (not createHash) so the compiler dogfoods the same
-	// native `hash` export the node surface ships — byte-identical to the streaming
-	// digest (see the build-cache parity test). SHA-256 of the JSON, first 8 hex.
+	// Exercise the native node:crypto.hash export when the compiler self-hosts.
 	return hash("sha256", JSON.stringify(value), "hex").slice(0, 8);
 }
 

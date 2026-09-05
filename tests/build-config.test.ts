@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,7 +15,7 @@ import {
 	resolveOutputName,
 } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
-import { featureDefines } from "../src/build-flags.ts";
+import { normalizeNativeFeatures } from "../src/build-flags.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -420,7 +419,7 @@ describe("buildConfigCacheSuffix", () => {
 		});
 		expect(buildConfigCacheSuffix(locked)).toBe("");
 		expect(buildConfigCacheSuffix(mutable)).toMatch(/^[0-9a-f]{8}$/);
-		expect(featureDefines({ primordialsLocked: false })).toContain(
+		expect(normalizeNativeFeatures({ primordialsLocked: false }).cDefines).toContain(
 			"-DMAL_PRIMORDIALS_LOCKED=0",
 		);
 	});
@@ -472,7 +471,9 @@ describe("buildConfigCacheSuffix", () => {
 		});
 		expect(buildDerivationFromConfig(noTemporal).features.temporalEnabled).toBe(false);
 		expect(buildDerivationFromConfig(canonical).features.temporalEnabled).toBe(true);
-		expect(featureDefines({ temporalEnabled: false })).toContain("-DMAL_TEMPORAL=0");
+		expect(normalizeNativeFeatures({ temporalEnabled: false }).cDefines).toContain(
+			"-DMAL_TEMPORAL=0",
+		);
 		expect(buildConfigCacheSuffix(noTemporal)).not.toBe(
 			buildConfigCacheSuffix(canonical),
 		);
@@ -533,9 +534,13 @@ describe("engine.realms build plumbing", () => {
 	});
 
 	it("emits -DMAL_REALMS=0 only when realms is disabled", () => {
-		expect(featureDefines({ realmsEnabled: false })).toContain("-DMAL_REALMS=0");
-		expect(featureDefines({ realmsEnabled: true })).not.toContain("-DMAL_REALMS=0");
-		expect(featureDefines({})).not.toContain("-DMAL_REALMS=0");
+		expect(normalizeNativeFeatures({ realmsEnabled: false }).cDefines).toContain(
+			"-DMAL_REALMS=0",
+		);
+		expect(normalizeNativeFeatures({ realmsEnabled: true }).cDefines).not.toContain(
+			"-DMAL_REALMS=0",
+		);
+		expect(normalizeNativeFeatures({}).cDefines).not.toContain("-DMAL_REALMS=0");
 	});
 
 	it("realms-on is canonical (C suffix ''); realms-off gets a distinct C hash", () => {
@@ -545,54 +550,16 @@ describe("engine.realms build plumbing", () => {
 	});
 });
 
-// The cache suffix moved from a streaming createHash("sha256").update(...).digest()
-// to the one-shot node:crypto.hash(...) so the compiler dogfoods the native `hash`
-// export. Both compute the same SHA-256 hex, so every suffix must be byte-identical
-// to the pre-swap value. These tests pin output-name parity against the legacy
-// digest and a literal.
-describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
-	// The exact build-affecting projection the module hashes (key order matters for
-	// JSON.stringify), reconstructed here so parity is checked against the legacy
-	// streaming digest independent of build-config.ts's own hashing.
-	function legacyShortHash(value: unknown): string {
-		return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 8);
-	}
-	// Full reimplementation of the suffix function using the legacy streaming digest.
-	function legacyCSuffix(c: ResolvedBuildConfig): string {
-		const services = [...new Set(c.engine.intl.features)].sort();
-		if (
-			c.engine.eval &&
-			c.engine.realms &&
-			c.engine.intl.enabled &&
-			services.length === 0 &&
-			c.surface.webPlatform &&
-			c.engine.regexp &&
-			c.engine.temporal &&
-			c.engine.primordials === "locked" &&
-			!c.surface.node
-		) {
-			return "";
-		}
-		return legacyShortHash({
-			eval: c.engine.eval,
-			intl: c.engine.intl.enabled,
-			services,
-			web: c.surface.webPlatform,
-			regexp: c.engine.regexp,
-			temporal: c.engine.temporal,
-			primordials: c.engine.primordials,
-			node: c.surface.node,
-			realms: c.engine.realms,
-		});
-	}
-	const configs: Array<[string, ResolvedBuildConfig]> = [
-		["eval-off", resolveBuildConfig({ engine: { eval: false } })],
+describe("build-cache suffix stability", () => {
+	const configs: Array<[string, ResolvedBuildConfig, string]> = [
+		["eval-off", resolveBuildConfig({ engine: { eval: false } }), "fdaeecf2"],
 		[
 			"node-on",
 			resolveBuildConfig({
 				engine: { eval: true, intl: { enabled: true } },
 				surface: { webPlatform: true, node: true },
 			}),
+			"cd505751",
 		],
 		[
 			"intl-subset + web-off",
@@ -604,19 +571,12 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 				},
 				surface: { webPlatform: false },
 			}),
+			"680c6d9c",
 		],
 	];
 
-	it.each(configs)("%s suffix matches the legacy streaming digest", (_name, config) => {
-		expect(buildConfigCacheSuffix(config)).toBe(legacyCSuffix(config));
-	});
-
-	it("pins the node-on C suffix to its pre-swap literal", () => {
-		const nodeOn = resolveBuildConfig({
-			engine: { eval: true, intl: { enabled: true } },
-			surface: { webPlatform: true, node: true },
-		});
-		expect(buildConfigCacheSuffix(nodeOn)).toBe("cd505751");
+	it.each(configs)("%s has a stable output suffix", (_name, config, expected) => {
+		expect(buildConfigCacheSuffix(config)).toBe(expected);
 	});
 
 	it("does not include executable assets in the output suffix", () => {

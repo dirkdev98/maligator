@@ -96,7 +96,7 @@ function test262Toolchain(): Toolchain {
  */
 // The default -O0 stays for fast compiles, but sanitizerCcFlags() must reach the
 // generated-C object, the harness mains, AND the final link: under MAL_ASAN /
-// MAL_UBSAN the archive is built instrumented (runtimeCcFlags), so every consumer
+// MAL_UBSAN the archive is built instrumented (ccExtraFlags), so every consumer
 // needs the matching `-fsanitize=…` or the link pulls in undefined
 // sanitizer-runtime symbols. Empty for a normal build.
 const GENERATED_C_OPT_FLAGS = ["-O0"];

@@ -77,7 +77,24 @@ export const INTL_SERVICE_FEATURES: Record<string, { cargo: string; define: stri
 	},
 };
 
-export interface NativeFeatureInput extends FeatureDefineOpts {
+export interface NativeFeatureInput {
+	/** `-DMAL_PRIMORDIALS_LOCKED=0` for compatibility/conformance builds. */
+	primordialsLocked?: boolean;
+	evalEnabled?: boolean;
+	realmsEnabled?: boolean;
+	intlEnabled?: boolean;
+	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
+	intlServiceDefines?: Array<string>;
+	webPlatformEnabled?: boolean;
+	regexpEnabled?: boolean;
+	/** `-DMAL_TEMPORAL=0` when the Temporal surface is excluded (default on internally). */
+	temporalEnabled?: boolean;
+	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
+	nodeEnabled?: boolean;
+	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
+	profileEnabled?: boolean;
+	/** Compile the private self-hosted CLI development and test API. */
+	developmentApiEnabled?: boolean;
 	/** Selected per-service Intl Cargo features; empty means the full Intl surface. */
 	intlFeatures?: Array<string>;
 }
@@ -365,96 +382,7 @@ export function optFlags(
 	return plan?.lto === true ? ["-O2", "-g0", ...plan.ltoFlags] : ["-O2", "-g0"];
 }
 
-/**
- * Compiler flags for the runtime archives. Passing
- * `evalEnabled: false` adds `-DMAL_EVAL=0`, which drops the `#embed` of the
- * baked compiler and turns the eval/Function runtime path into an EvalError throw.
- * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
- * call sites (kept in lockstep with the Rust `intl` Cargo feature).
- * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`; when Node is also off,
- * this compiles web_url.c away in lockstep with the Rust `url` feature and drops
- * the C++ ada parser + `-lc++`. `temporalEnabled: false`
- * adds `-DMAL_TEMPORAL=0` and omits the Rust Temporal feature. `nodeEnabled: true` adds
- * `-DMAL_NODE=1`, opting the node host built-in surface in (it defaults off, so —
- * unlike the default-on features above — only the ON case emits a define).
- */
-export interface FeatureDefineOpts {
-	/** `-DMAL_PRIMORDIALS_LOCKED=0` for compatibility/conformance builds. */
-	primordialsLocked?: boolean;
-	evalEnabled?: boolean;
-	realmsEnabled?: boolean;
-	intlEnabled?: boolean;
-	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
-	intlServiceDefines?: Array<string>;
-	webPlatformEnabled?: boolean;
-	regexpEnabled?: boolean;
-	/** `-DMAL_TEMPORAL=0` when the Temporal surface is excluded (default on internally). */
-	temporalEnabled?: boolean;
-	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
-	nodeEnabled?: boolean;
-	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
-	profileEnabled?: boolean;
-	/** Compile the private self-hosted CLI development and test API. */
-	developmentApiEnabled?: boolean;
-}
-
-/**
- * The `-D…=0` feature defines a build config projects onto the C preprocessor.
- * These MUST be passed identically to the runtime archive build AND to the final cc
- * that compiles the entry driver (host_main.c / test262_main.c) + the emitted
- * program: the entry driver has `#if MAL_WEB_PLATFORM` gates around the web
- * installs, so if it compiled with the default (all-on) values while the archive
- * compiled them off, it would reference definitions the archive omitted (undefined
- * symbols at link).
- */
-export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
-	const primordialFlag =
-		opts.primordialsLocked === false ? ["-DMAL_PRIMORDIALS_LOCKED=0"] : [];
-	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
-	const realmsFlag = opts.realmsEnabled === false ? ["-DMAL_REALMS=0"] : [];
-	// Intl off → -DMAL_INTL=0 (per-service gates default to MAL_INTL, so all off).
-	// Intl on → per-service disable defines (empty for the full build).
-	const intlFlags =
-		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
-	const webFlag = opts.webPlatformEnabled === false ? ["-DMAL_WEB_PLATFORM=0"] : [];
-	const regexpFlag = opts.regexpEnabled === false ? ["-DMAL_REGEXP=0"] : [];
-	const temporalFlag = opts.temporalEnabled === false ? ["-DMAL_TEMPORAL=0"] : [];
-	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
-	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
-	const profileFlag = opts.profileEnabled === true ? ["-DMAL_PROFILE=1"] : [];
-	const developmentApiFlag =
-		opts.developmentApiEnabled === true ? ["-DMAL_DEVELOPMENT_API=1"] : [];
-	return [
-		...primordialFlag,
-		...evalFlag,
-		...realmsFlag,
-		...intlFlags,
-		...webFlag,
-		...regexpFlag,
-		...temporalFlag,
-		...nodeFlag,
-		...profileFlag,
-		...developmentApiFlag,
-	];
-}
-
-export function runtimeCcFlags(
-	opts: FeatureDefineOpts = {},
-	plan?: NativeBuildPlan,
-	env: NodeJS.ProcessEnv = process.env,
-	platform: NodeJS.Platform = process.platform,
-): Array<string> {
-	return [
-		...platformCcFlags(platform),
-		...optFlags(plan, env),
-		...SANITIZER_FLAGS[sanitizerMode(env)],
-		...gcDefines(env),
-		...perfStatsDefines(env),
-		...featureDefines(opts),
-	];
-}
-
-/** Extra cc flags (compile + link) for an emitted translation unit. */
+/** Shared compiler flags; callers append the normalized feature defines. */
 export function ccExtraFlags(
 	plan?: NativeBuildPlan,
 	env: NodeJS.ProcessEnv = process.env,

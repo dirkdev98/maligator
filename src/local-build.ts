@@ -4,7 +4,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -412,10 +411,6 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				context.toolchain.tools.strip !== undefined &&
 				!zigLinkTimeStrip
 			) {
-				const objcopy =
-					context.toolchain.tools.strip.args?.[0] === "objcopy"
-						? `${binaryPath}.stripped`
-						: undefined;
 				try {
 					const stripStartedAt = performance.now();
 					runNativeCommand(
@@ -424,7 +419,6 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 						toolArguments(context.toolchain.tools.strip, [
 							...context.toolchain.probes.stripArgs,
 							binaryPath,
-							...(objcopy === undefined ? [] : [objcopy]),
 						]),
 						{ verbose: options.verbose },
 					);
@@ -432,10 +426,8 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 						phase: "strip",
 						durationMs: performance.now() - stripStartedAt,
 					});
-					if (objcopy !== undefined) renameSync(objcopy, binaryPath);
 				} catch (error) {
 					cacheable = false;
-					if (objcopy !== undefined) rmSync(objcopy, { force: true });
 					options.onWarning?.(
 						`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
 					);

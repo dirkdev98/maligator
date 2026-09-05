@@ -680,8 +680,13 @@ exit 7
 			toolchain,
 			plan: production,
 			cacheDirectory: path.join(fake.root, "cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: {
+				evalEnabled: false,
+				webPlatformEnabled: false,
+				intlFeatures: ["intl-segmenter"],
+			},
 		});
+		writeFileSync(fake.logPath, "");
 		const { binaryPath: binary } = buildLocalBinary({
 			context,
 			name: "production-output",
@@ -694,6 +699,13 @@ exit 7
 		expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/vm\.c/);
 		expect(invocations).toContain(`-O2 -g0 -flto=thin`);
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
+		const compilations = invocations.split("\n").filter((line) => line.includes(" -c "));
+		expect(compilations.length).toBeGreaterThan(0);
+		for (const invocation of compilations) {
+			for (const define of context.features.cDefines) {
+				expect(invocation.split(" ")).toContain(define);
+			}
+		}
 
 		writeFileSync(fake.logPath, "");
 		buildLocalBinary({
@@ -704,6 +716,47 @@ exit 7
 			outDir: fake.root,
 		});
 		expect(readFileSync(fake.logPath, "utf-8")).toBe("");
+	});
+
+	it("keeps the binary but never caches a failed post-link strip", () => {
+		const fake = createFakeToolchain();
+		const { toolchain } = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		expect(toolchain).toBeDefined();
+		expect(toolchain!.probes.strip).toBe(true);
+		executable(toolchain!.tools.strip!.path, "exit 1\n");
+		const binaryHits: Array<boolean> = [];
+		const warnings: Array<string> = [];
+		const context = resolveNativeBuildContext({
+			toolchain: toolchain!,
+			production: true,
+			cacheDirectory: path.join(fake.root, "cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+			onCacheEvent: (event) => {
+				if (event.artifact === "binary") binaryHits.push(event.hit);
+			},
+		});
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const { binaryPath } = buildLocalBinary({
+				context,
+				name: "strip-failure",
+				cSource: "int value;",
+				verbose: false,
+				outDir: fake.root,
+				onWarning: (warning) => warnings.push(warning),
+			});
+			expect(existsSync(binaryPath)).toBe(true);
+		}
+		expect(binaryHits).toEqual([false, false]);
+		expect(warnings).toHaveLength(2);
+		for (const warning of warnings) {
+			expect(warning).toContain("symbol stripping failed after a successful probe");
+		}
 	});
 
 	it("keeps development at O2 unstripped and falls back when production options fail probes", () => {

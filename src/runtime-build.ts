@@ -19,7 +19,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { runtimeCcFlags, sanitizerMode } from "./build-flags.ts";
+import { ccExtraFlags, sanitizerMode } from "./build-flags.ts";
 import { ensureCompilerArtifacts } from "./compiler-bake.ts";
 import {
 	hashDirectoryTrees,
@@ -190,8 +190,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		}
 	}
 	const flags = [
-		...runtimeCcFlags(
-			{},
+		...ccExtraFlags(
 			context.plan,
 			context.environment,
 			context.toolchain.platform ?? process.platform,
