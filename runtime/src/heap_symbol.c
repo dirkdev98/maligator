@@ -5,6 +5,7 @@ void mal_symbol_init(MalSymbol *symbol, MalString *description) {
     symbol->description = description;
     symbol->registered = false;
     symbol->is_private = false;
+    symbol->private_entry_hint = 0;
 }
 
 MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description) {

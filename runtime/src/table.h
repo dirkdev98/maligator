@@ -4,6 +4,7 @@
 #include "./key.h"
 
 typedef struct MalTable MalTable;
+typedef struct MalSymbol MalSymbol;
 
 /**
  * Storage mode carried by a table instance.
@@ -80,6 +81,9 @@ bool mal_table_reserve(MalTable *table, usize desired_size);
  * Look up a key using the equality rule implied by key.kind.
  */
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key);
+
+// Private fields and compiler-managed brand markers always carry inline data values.
+bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalValue *value);
 
 /**
  * Insert a new entry for key, or return the existing live entry if present.

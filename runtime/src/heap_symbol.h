@@ -12,14 +12,17 @@ typedef struct MalSymbol {
      * Set for symbols created through the Symbol.for registry: keyFor
      * answers with the description, and CanBeHeldWeakly excludes them.
      */
-    bool registered : 1;
+    u32 registered : 1;
 
     /**
      * Set for the synthetic symbols that back private class members. They key
      * own properties just like ordinary symbols but stay hidden from
      * reflection (getOwnPropertySymbols / getOwnPropertyDescriptors).
      */
-    bool is_private : 1;
+    u32 is_private : 1;
+
+    // A truncated 1-based entry index, validated against each receiver's live key.
+    u32 private_entry_hint : 30;
 
     MalString *description;
 } MalSymbol;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNativeBinary, runToStdout } from "../../src/test-harness.ts";
+import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
 
 const fixture = "tests/local/private-batch.js";
 
@@ -14,5 +14,6 @@ describe("bulk private names and initializer-free instance fields", () => {
 			compiled,
 		});
 		expect(runToStdout(binary)).toBe("private-batch PASS\n");
+		expect(runToStdout(binary, { env: STRESS_ENV })).toBe("private-batch PASS\n");
 	});
 });

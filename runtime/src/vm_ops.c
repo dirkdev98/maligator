@@ -6867,16 +6867,14 @@ MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_v
         return mal_value_new_undefined();
     }
 
-    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
-    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
-    if (!lookup.present) {
+    MalValue value;
+    if (!mal_table_get_private_value(
+            mal_value_to_object(object_value)->overflow, mal_value_to_symbol(key_value), &value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return mal_value_new_undefined();
     }
 
-    // Private fields and the brand marker are always data descriptors;
-    // private accessors are dispatched by the compiler, never stored here.
-    return lookup.desc.value;
+    return value;
 }
 
 void mal_op_load_private(MalCallable *callable, const MalInstruction *instruction) {

@@ -193,4 +193,113 @@ ok(
 	"source getter may install the brand before PutValue",
 );
 
+function makeReader() {
+	return class extends StampBase {
+		#value = undefined;
+
+		static read(receiver) {
+			return receiver.#value;
+		}
+
+		static write(receiver, value) {
+			receiver.#value = value;
+		}
+	};
+}
+
+const Reader = makeReader();
+const OtherReader = makeReader();
+const crowded = {};
+const crowdedKeys = Array.from({ length: 96 }, (_, i) => Symbol("before" + i));
+for (const key of crowdedKeys) crowded[key] = "public";
+new Reader(crowded);
+Reader.write(crowded, "crowded");
+const sparse = new Reader({});
+Reader.write(sparse, "sparse");
+const otherBrand = new OtherReader({});
+OtherReader.write(otherBrand, "other brand");
+
+for (let iteration = 0; iteration < 20; iteration++) {
+	ok(
+		Reader.read(crowded) === "crowded",
+		"private read among preceding symbol properties",
+	);
+	ok(Reader.read(sparse) === "sparse", "same private name on a shorter receiver");
+	let threw = false;
+	try {
+		Reader.read(otherBrand);
+	} catch (error) {
+		threw = error instanceof TypeError;
+	}
+	ok(threw, "same field position with another class brand rejects the receiver");
+}
+
+for (const key of crowdedKeys) delete crowded[key];
+for (let index = 0; index < 256; index++) crowded[Symbol("after" + index)] = index;
+ok(
+	Reader.read(crowded) === "crowded",
+	"private read survives public symbol deletion and growth",
+);
+
+const uninitialized = new Reader({});
+ok(Reader.read(uninitialized) === undefined, "undefined private value is present");
+const objectValue = { identity: "private" };
+Reader.write(uninitialized, objectValue);
+Object.freeze(uninitialized);
+ok(Reader.read(uninitialized) === objectValue, "private read on a frozen receiver");
+Reader.write(uninitialized, "after freeze");
+ok(
+	Reader.read(uninitialized) === "after freeze",
+	"private read observes writes after freezing",
+);
+
+let proxyTraps = 0;
+const proxy = new Proxy(
+	{},
+	{
+		get() {
+			proxyTraps++;
+			throw new Error("private read invoked get trap");
+		},
+		getOwnPropertyDescriptor() {
+			proxyTraps++;
+			throw new Error("private read invoked descriptor trap");
+		},
+	},
+);
+new Reader(proxy);
+Reader.write(proxy, "proxy field");
+ok(Reader.read(proxy) === "proxy field", "private field belongs to the stamped proxy");
+ok(proxyTraps === 0, "private reads bypass proxy traps");
+
+for (const absent of [{}, Object.create(sparse), new Proxy(sparse, {}), null, 7]) {
+	let threw = false;
+	try {
+		Reader.read(absent);
+	} catch (error) {
+		threw = error instanceof TypeError;
+	}
+	ok(threw, "private reads reject absent own brands and primitive receivers");
+}
+
+class StaticReader {
+	static #value = "static";
+
+	static read(receiver) {
+		return receiver.#value;
+	}
+}
+class StaticChild extends StaticReader {}
+ok(
+	StaticReader.read(StaticReader) === "static",
+	"private static field reads its declaring class",
+);
+let inheritedStaticThrew = false;
+try {
+	StaticReader.read(StaticChild);
+} catch (error) {
+	inheritedStaticThrew = error instanceof TypeError;
+}
+ok(inheritedStaticThrew, "private static fields are not inherited");
+
 console.log("private-batch PASS");

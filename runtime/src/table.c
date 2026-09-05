@@ -6,6 +6,7 @@
 #include "./gc.h"
 #include "./heap.h"
 #include "./heap_string.h"
+#include "./heap_symbol.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 
@@ -384,6 +385,25 @@ bool mal_table_reserve(MalTable *table, usize desired_size) {
     if (target_slots > table->slot_capacity) {
         mal_table_rehash(table, target_slots);
     }
+    return true;
+}
+
+bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalValue *value) {
+    if (table == nullptr) return false;
+    MalValue key = mal_value_from_symbol(symbol);
+    u32 index = symbol->private_entry_hint - 1;
+    if (index < table->entry_count) {
+        const MalTableEntry *entry = &table->entries[index];
+        // Exact identity makes hints safe across receivers, growth, and compaction.
+        if (entry->live && entry->key == key) {
+            *value = entry->value;
+            return true;
+        }
+    }
+    MalTableLookup lookup = mal_table_lookup(table, (MalKey) {.kind = MAL_KEY_SYMBOL, .value = key});
+    if (!lookup.present) return false;
+    symbol->private_entry_hint = (u32) (uptr) lookup.entry;
+    *value = table->entries[mal_table_handle_index(lookup.entry)].value;
     return true;
 }
 
