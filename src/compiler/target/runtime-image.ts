@@ -501,6 +501,7 @@ export function computeArgumentRetentionLimit(
 			(instruction) =>
 				instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
 				instruction.opcode === "CREATE_REST_ARGUMENTS" ||
+				instruction.opcode === "CALL_REST_ARGUMENTS" ||
 				instruction.opcode === "LOAD_ARGUMENT",
 		)
 	) {
@@ -1016,6 +1017,15 @@ export type BytecodeInstruction =
 			callee: number;
 			thisValue: number;
 			argumentsArray: number;
+	  }
+	| {
+			opcode: "CALL_REST_ARGUMENTS";
+			dst: number;
+			callee: number;
+			thisValue: number;
+			receiver: number;
+			startIndex: number;
+			apply: boolean;
 	  }
 	| {
 			opcode: "CALL_SPREAD_ITERABLE";
@@ -3342,6 +3352,16 @@ function lowerInstructionToBytecodeInstruction(
 				callee: instruction.registers[1],
 				thisValue: instruction.registers[2],
 				argumentsArray: instruction.registers[3],
+			};
+		case "callRestArguments":
+			return {
+				opcode: "CALL_REST_ARGUMENTS",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				thisValue: instruction.registers[2],
+				receiver: instruction.registers[3],
+				startIndex: instruction.startIndex,
+				apply: instruction.apply,
 			};
 		case "callSpreadIterable":
 			return {

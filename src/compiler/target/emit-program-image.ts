@@ -311,6 +311,14 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 
 	fn.instructions.forEach((instruction, index) => {
 		switch (instruction.opcode) {
+			case "CALL_REST_ARGUMENTS":
+				offsets[index] = data.length;
+				data.push(
+					instruction.receiver,
+					instruction.startIndex,
+					instruction.apply ? 1 : 0,
+				);
+				break;
 			case "SELECT_SHAPE_CASE":
 				offsets[index] = data.length;
 				for (const candidate of instruction.candidates) {
@@ -1776,6 +1784,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_FOR_IN_KEYS, .as.for_in_keys = { .dst = ${instruction.dst}, .source = ${instruction.source} } }`;
 		case "CALL_SPREAD":
 			return `{ .opcode = MAL_OP_CALL_SPREAD, .as.call_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .arguments_array = ${instruction.argumentsArray} } }`;
+		case "CALL_REST_ARGUMENTS":
+			return `{ .opcode = MAL_OP_CALL_REST_ARGUMENTS, .as.call_rest_arguments = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "CALL_SPREAD_ITERABLE":
 			return `{ .opcode = MAL_OP_CALL_SPREAD_ITERABLE, .as.call_spread_iterable = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .iterable = ${instruction.iterable} } }`;
 		case "CONSTRUCT_SPREAD":

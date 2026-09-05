@@ -91,9 +91,9 @@ describe("Core local optimizer migration matrix", () => {
 		const rows = migrationRows();
 		const matrixByName = new Map(rows.map((row) => [row.name, row]));
 
-		expect(runtimeEntries).toHaveLength(37);
+		expect(runtimeEntries).toHaveLength(38);
 		expect(runtimeByName.size).toBe(runtimeEntries.length);
-		expect(rows).toHaveLength(49);
+		expect(rows).toHaveLength(50);
 		expect(matrixByName.size).toBe(rows.length);
 		expect([...runtimeByName.keys()].sort()).toEqual(
 			[...matrixByName.keys()].filter((name) => !MIGRATED_NAMES.has(name)).sort(),

@@ -14,6 +14,7 @@
 #include "builtin_async_iterator.h"
 #include "builtin_boolean.h"
 #include "builtin_date.h"
+#include "builtin_function.h"
 #include "builtin_iterator.h"
 #include "builtin_map.h"
 #include "builtin_math.h"
@@ -2307,7 +2308,11 @@ static i32 mal_vm_marshal_spread_iterable(
         && mal_value_is_native_function_object(method)
         && mal_native_function_object_callback(
             mal_value_to_native_function_object(method))
-            == mal_array_values_callback) {
+            == mal_array_values_callback
+#if MAL_REALMS
+        && mal_value_to_native_function_object(method)->realm == vm->current_realm
+#endif
+        && mal_builtin_array_iterator_protocol_guard(vm)) {
         i32 count;
         if (mal_vm_try_marshal_dense_array(
                 vm, mal_value_to_array_object(iterable),
@@ -2809,6 +2814,99 @@ MalCompletion mal_vm_op_call_spread_iterable(
         argument_count);
     vm->value_stack_size = base;
     return completion;
+}
+
+static bool mal_vm_rest_arguments_can_forward(
+    MalVm *vm, MalValue callee, MalValue this_value, bool apply) {
+    if (!apply) return mal_builtin_array_iterator_protocol_guard(vm);
+    if (!mal_value_is_native_function_object(callee)) return false;
+    MalNativeFunctionObject *native = mal_value_to_native_function_object(callee);
+    if (mal_native_function_object_callback(native) != mal_builtin_function_prototype_apply) {
+        return false;
+    }
+#if MAL_REALMS
+    if (native->realm != vm->current_realm) return false;
+#endif
+    return mal_value_is_callable(this_value);
+}
+
+MalCompletion mal_vm_op_call_rest_arguments(
+    MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver,
+    const MalValue *args, i32 arg_count, i32 start, bool apply) {
+    i32 count = arg_count > start ? arg_count - start : 0;
+    if (count <= vm->value_stack_capacity - vm->value_stack_size
+        && mal_vm_rest_arguments_can_forward(vm, callee, this_value, apply)) {
+        MAL_PERF_COUNT(rest_forward_calls);
+        MAL_PERF_ADD(rest_forward_values, count);
+        return mal_vm_call_value(vm, apply ? this_value : callee,
+            apply ? receiver : this_value, count > 0 ? args + start : nullptr, count);
+    }
+
+    MalValue roots[4] = {callee, this_value, receiver, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[3] = mal_create_rest_arguments(vm, args, arg_count, start);
+    MalCompletion completion;
+    if (apply) {
+        MalValue call_args[2] = {receiver, roots[3]};
+        completion = mal_vm_call_value(vm, callee, this_value, call_args, 2);
+    } else {
+        completion = mal_vm_op_call_spread_iterable(vm, callee, this_value, roots[3]);
+    }
+    mal_gc_unroot(&root);
+    return completion;
+}
+
+void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.call_rest_arguments.callee];
+    MalValue this_value = callable->registers[instruction->as.call_rest_arguments.this_value];
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.call_rest_arguments.data_offset);
+    MalValue receiver = callable->registers[data[0]];
+    i32 start = data[1];
+    bool apply = data[2] != 0;
+    i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
+    i32 base = vm->value_stack_size;
+    if (count <= vm->value_stack_capacity - base
+        && mal_vm_rest_arguments_can_forward(vm, callee, this_value, apply)) {
+        MAL_PERF_COUNT(rest_forward_calls);
+        MAL_PERF_ADD(rest_forward_values, count);
+        MAL_PERF_ADD(rest_forward_copies, count);
+        // Retain the iterative dispatcher so forwarded calls do not grow the C stack.
+        if (count > 0) {
+            memcpy(&vm->value_stack[base], callable->arguments + start,
+                (usize) count * sizeof(MalValue));
+        }
+        vm->value_stack_size = base + count;
+        if (apply) {
+            callee = this_value;
+            this_value = receiver;
+        }
+    } else {
+        MalValue rest = mal_create_rest_arguments(
+            vm, callable->arguments, callable->argument_count, start);
+        MalRootSpan root;
+        mal_gc_root(&root, &rest, 1);
+        if (apply) {
+            if (vm->value_stack_capacity - base < 2) {
+                mal_gc_unroot(&root);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Maximum call stack size exceeded");
+                return;
+            }
+            vm->value_stack[base] = receiver;
+            vm->value_stack[base + 1] = rest;
+            count = 2;
+            vm->value_stack_size = base + count;
+        } else {
+            count = mal_vm_marshal_spread_iterable(vm, rest);
+        }
+        mal_gc_unroot(&root);
+        if (count < 0) return;
+    }
+    mal_vm_call_dispatch(
+        vm, callee, this_value, base, count, instruction->as.call_rest_arguments.dst);
 }
 
 MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array) {
@@ -6234,6 +6332,8 @@ void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instr
 // `start` onward as a fresh Array. Shared by the interpreter op and compiled code.
 MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start) {
     i32 count = arg_count > start ? arg_count - start : 0;
+    MAL_PERF_COUNT(rest_array_allocations);
+    MAL_PERF_ADD(rest_array_values, count);
 
     MalArrayObject *rest = mal_array_object_new(
         &vm->heap,

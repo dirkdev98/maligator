@@ -758,7 +758,12 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         mal_value_is_native_function_object(method) &&
         mal_native_function_object_callback(
             mal_value_to_native_function_object(method)) ==
-            mal_array_values_callback;
+            mal_array_values_callback &&
+        mal_builtin_array_iterator_protocol_guard(vm);
+#if MAL_REALMS
+    direct_array_copy = direct_array_copy &&
+        mal_value_to_native_function_object(method)->realm == vm->current_realm;
+#endif
 
     if (mal_value_is_callable(method) && !direct_array_copy) {
         MalValue a;
@@ -1847,7 +1852,11 @@ bool mal_builtin_array_push_try_direct(
     return true;
 }
 
-static bool mal_builtin_array_private_iterator_protocol_guard(MalVm *vm) {
+bool mal_builtin_array_iterator_protocol_guard(MalVm *vm) {
+#if MAL_PRIMORDIALS_LOCKED
+    (void) vm;
+    return true;
+#else
     MalValue array_prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalValue iterator_prototype_value =
         vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE];
@@ -1865,6 +1874,9 @@ static bool mal_builtin_array_private_iterator_protocol_guard(MalVm *vm) {
             mal_array_values_callback) {
         return false;
     }
+#if MAL_REALMS
+    if (mal_value_to_native_function_object(values.desc.value)->realm != vm->current_realm) return false;
+#endif
     MalPropertyLookup next = mal_object_get_own(
         mal_value_to_object(iterator_prototype_value),
         mal_intrinsic_string_key(vm, "next"));
@@ -1873,6 +1885,7 @@ static bool mal_builtin_array_private_iterator_protocol_guard(MalVm *vm) {
         mal_native_function_object_callback(
             mal_value_to_native_function_object(next.desc.value)) ==
             mal_array_iterator_next_callback;
+#endif
 }
 
 MalCompletion mal_builtin_array_push_direct(

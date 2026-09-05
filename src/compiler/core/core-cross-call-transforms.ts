@@ -204,6 +204,7 @@ function inlineSourcePositions(
 const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
+	"callRestArguments",
 	"loadArgument",
 	"loadArgumentCount",
 	"loadCallee",

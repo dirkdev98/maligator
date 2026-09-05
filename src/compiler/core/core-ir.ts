@@ -179,7 +179,8 @@ export type CoreOpcodeAllocation =
  * live beside the callee declaration so whole-program analyses cannot agree on
  * the call graph while silently disagreeing about parameter flow. A positional
  * list maps one-to-one onto source formals from `firstOperand`; an aggregate
- * list is dynamically expanded and therefore opens every formal. `receiverOperand`
+ * list is dynamically expanded and therefore opens every formal. An activation
+ * source also opens every formal, without an aggregate value in SSA. `receiverOperand`
  * is present only for [[Call]]. [[Construct]] creates its receiver internally.
  */
 export interface CoreOpcodeCallTransfer {
@@ -195,7 +196,8 @@ export interface CoreOpcodeCallTransfer {
 		| {
 				readonly kind: "aggregate";
 				readonly operand: number;
-		  };
+		  }
+		| { readonly kind: "activation" };
 }
 
 export interface CoreArity {
@@ -385,6 +387,7 @@ function validateCallTransfer(descriptor: CoreOpcodeDefinition): void {
 	} else if (transfer.receiverOperand !== undefined) {
 		throw new Error(`${opcode} declares a receiver operand for [[Construct]]`);
 	}
+	if (transfer.arguments.kind === "activation") return;
 	const argumentOperand =
 		transfer.arguments.kind === "positional"
 			? transfer.arguments.firstOperand

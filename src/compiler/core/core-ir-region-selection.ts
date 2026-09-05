@@ -1169,7 +1169,8 @@ function directEntryCandidates(
 					opcode === "loadArgumentCount" ||
 					opcode === "loadArgument" ||
 					opcode === "createArgumentsObject" ||
-					opcode === "createRestArguments"
+					opcode === "createRestArguments" ||
+					opcode === "callRestArguments"
 				);
 			})
 		)

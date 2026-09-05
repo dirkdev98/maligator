@@ -112,3 +112,6 @@ bool mal_builtin_array_push_try_direct(
     i32 arg_count,
     MalValue *result_out
 );
+
+/** Side-effect-free proof for iterating a fresh current-realm Array. */
+bool mal_builtin_array_iterator_protocol_guard(MalVm *vm);

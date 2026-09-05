@@ -30,6 +30,7 @@ export const CORE_OPCODES = [
 	"callBuiltin",
 	"callSpread",
 	"callSpreadIterable",
+	"callRestArguments",
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
@@ -221,6 +222,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"callBuiltin",
 	"callSpread",
 	"callSpreadIterable",
+	"callRestArguments",
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
@@ -443,6 +445,13 @@ const OPCODE_ALLOCATIONS = {
  * function's return value is involved.
  */
 const OPCODE_CALL_TRANSFERS = {
+	callRestArguments: {
+		calleeOperand: 0,
+		result: "call-completion",
+		invocation: "call",
+		receiverOperand: 1,
+		arguments: { kind: "activation" },
+	},
 	call: {
 		calleeOperand: 0,
 		result: "call-completion",
@@ -565,6 +574,7 @@ const INPUT_ARITIES = {
 	callBuiltin: [1, 65_535],
 	callSpread: [3, 3],
 	callSpreadIterable: [3, 3],
+	callRestArguments: [3, 3],
 	checkSuperClass: [1, 1],
 	construct: [1, 65_535],
 	constructSpread: [2, 2],

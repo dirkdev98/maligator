@@ -437,6 +437,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.promise_resolving_pairs,
         (unsigned long long) mal_perf_stats.promise_async_generator_direct_requests
     );
+    fprintf(stderr, "[perf-rest-stats] arrays=%llu array_values=%llu forwards=%llu forwarded_values=%llu forward_copies=%llu\n",
+        (unsigned long long) mal_perf_stats.rest_array_allocations,
+        (unsigned long long) mal_perf_stats.rest_array_values,
+        (unsigned long long) mal_perf_stats.rest_forward_calls,
+        (unsigned long long) mal_perf_stats.rest_forward_values,
+        (unsigned long long) mal_perf_stats.rest_forward_copies);
     fprintf(
         stderr,
         "[perf-arguments-stats] logical_values=%llu destination_writes=%llu "

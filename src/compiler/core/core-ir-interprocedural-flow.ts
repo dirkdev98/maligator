@@ -91,7 +91,10 @@ export function analyzeCoreInterproceduralValueFlow(
 			);
 		} else {
 			aggregateCalls++;
-			const aggregateArguments = operand(transfer.arguments.operand);
+			const aggregateArguments =
+				transfer.arguments.kind === "aggregate"
+					? operand(transfer.arguments.operand)
+					: undefined;
 			calls.push(
 				Object.freeze({
 					caller: fn.id,

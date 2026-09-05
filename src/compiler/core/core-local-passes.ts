@@ -2065,8 +2065,95 @@ const canonicalizeBlockParameters: CoreFunctionPass = {
 	},
 };
 
+const forwardRestArguments: CoreFunctionPass = {
+	name: "forward-rest-arguments",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["createRestArguments"],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
+	wakesOn: ["body", "cfg"],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		const fn = program.function(item.function);
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.metadata.isClassConstructor ||
+			fn.metadata.isDerivedConstructor ||
+			fn.metadata.mappedArguments
+		)
+			return undefined;
+		let editor: CoreEditor | undefined;
+		for (const producer of fn.instructionIds()) {
+			if (
+				fn.instructionKind(producer) !== "operation" ||
+				fn.instructionOpcodeName(producer) !== "createRestArguments"
+			)
+				continue;
+			const rest = instructionResult(fn, producer, 0)!;
+			if (fn.kernel.valueHandlerUseCount(rest) !== 0) continue;
+			let use = fn.kernel.valueFirstUse(rest);
+			let consumer: CoreInstructionId | undefined;
+			let useCount = 0;
+			while (use >= 0) {
+				if (fn.kernel.useLive(use) !== 0) {
+					consumer = fn.kernel.useInstruction(use);
+					useCount++;
+				}
+				use = fn.kernel.useNext(use);
+			}
+			if (
+				useCount !== 1 ||
+				consumer === undefined ||
+				fn.instructionKind(consumer) !== "operation"
+			)
+				continue;
+			const opcode = fn.instructionOpcodeName(consumer);
+			const inputs = copyInstructionOperands(fn, consumer);
+			const apply = opcode === "call" && inputs.length === 4 && inputs[3] === rest;
+			if (!apply && !(opcode === "callSpreadIterable" && inputs[2] === rest)) continue;
+			if (apply) {
+				const property = definingInstruction(fn, inputs[0]!);
+				if (
+					property === undefined ||
+					fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
+					instructionOperand(fn, property, 0) !== inputs[1]
+				)
+					continue;
+				const key = fn.instructionAttributes(property).stringIndex;
+				if (typeof key !== "number" || decodeString(program, key) !== "apply") continue;
+			}
+			const startIndex = fn.instructionAttributes(producer).startIndex;
+			if (typeof startIndex !== "number") continue;
+			const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+			const block = fn.instructionBlock(consumer);
+			// A repeated fallback must reuse the same Array, which this representation does not retain.
+			if (
+				!control.dominates(fn.instructionBlock(producer), block) ||
+				control.loops.some((loop) => loop.blocks.has(block)) ||
+				control.irreducibleCycles.some((cycle) => cycle.blocks.has(block))
+			)
+				continue;
+			editor ??= CoreEditor.open(program, item.function);
+			editor.replaceInstruction(
+				consumer,
+				"callRestArguments",
+				apply ? inputs.slice(0, 3) : [inputs[0]!, inputs[1]!, inputs[1]!],
+				{
+					attributes: { startIndex, apply },
+					sourcePosition: fn.instructionSourcePosition(consumer),
+				},
+			);
+			editor.removeInstruction(producer);
+		}
+		return editor?.commit();
+	},
+};
+
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
+	forwardRestArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,

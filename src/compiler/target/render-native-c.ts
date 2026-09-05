@@ -784,7 +784,12 @@ function emitCompiledVariant(
 	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
 	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
-	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
+	const retainsForwardedArguments = fn.instructions.some(
+		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
+	);
+	const gcUnlink =
+		(retainsForwardedArguments ? "mal_gc_unroot(&__argument_roots); " : "") +
+		(needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
@@ -957,6 +962,14 @@ function emitCompiledVariant(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
 			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
+		);
+	}
+
+	if (retainsForwardedArguments) {
+		// Elided rest arrays no longer root their elements across intervening calls.
+		lines.push(
+			"    MalRootSpan __argument_roots;",
+			"    mal_gc_root(&__argument_roots, (MalValue *) args, arg_count);",
 		);
 	}
 
@@ -5636,6 +5649,15 @@ function emitInstruction(
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
+			];
+		}
+		case "CALL_REST_ARGUMENTS": {
+			const tmp = `call_rest_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${instruction.apply});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${tmp}.value;`,
+				poll,
 			];
 		}
 		case "CALL_SPREAD_ITERABLE": {

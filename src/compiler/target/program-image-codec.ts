@@ -23,7 +23,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 35;
+export const WIRE_VERSION = 36;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1060,6 +1060,14 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.thisValue);
 			w.i32(i.argumentsArray);
 			return;
+		case "CALL_REST_ARGUMENTS":
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.thisValue);
+			w.i32(i.receiver);
+			w.i32(i.startIndex);
+			w.u8(i.apply ? 1 : 0);
+			return;
 		case "CALL_SPREAD_ITERABLE":
 			w.i32(i.dst);
 			w.i32(i.callee);
@@ -1864,6 +1872,16 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				callee: r.i32(),
 				thisValue: r.i32(),
 				argumentsArray: r.i32(),
+			};
+		case "CALL_REST_ARGUMENTS":
+			return {
+				opcode,
+				dst: r.i32(),
+				callee: r.i32(),
+				thisValue: r.i32(),
+				receiver: r.i32(),
+				startIndex: r.i32(),
+				apply: r.u8() !== 0,
 			};
 		case "CALL_SPREAD_ITERABLE":
 			return {

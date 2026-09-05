@@ -663,9 +663,8 @@ describe("program-image-codec", () => {
 	});
 
 	it("covers every opcode in the wire table", () => {
-		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-17)).toEqual([
+		expect(WIRE_OPCODES.slice(-18)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -675,6 +674,7 @@ describe("program-image-codec", () => {
 			"SET_THIS",
 			"LOAD_STATIC_ARGUMENT",
 			"CALL_SPREAD_ITERABLE",
+			"CALL_REST_ARGUMENTS",
 			"MATH_UNARY_NUMBER",
 			"MATH_BINARY_NUMBER",
 			"CALL_BUILTIN",

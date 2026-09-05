@@ -18,6 +18,7 @@ cleanup belongs to fact mutation. No entry is temporary or legacy.
 | Registered name                                  | Current registry                     | Final owner               | Migration note                                                                         |
 | ------------------------------------------------ | ------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------- |
 | `annotate-terminal-yield-sites`                  | `CORE_LOCAL_CANONICALIZATION_PASSES` | late recipe matcher       | Match the complete generator terminal-yield recipe after local convergence.            |
+| `forward-rest-arguments`                         | `CORE_LOCAL_CANONICALIZATION_PASSES` | function CFG transform    | Fuse a single-use rest producer with an acyclic spread or guarded apply consumer.      |
 | `fold-static-property-keys`                      | `CORE_LOCAL_CANONICALIZATION_PASSES` | local opcode rule         | Dispatch from dynamic property loads and stores.                                       |
 | `rewrite-exact-builtin-calls`                    | `CORE_LOCAL_CANONICALIZATION_PASSES` | local opcode rule         | Dispatch from calls dirtied by fact or value-kind changes.                             |
 | `local-constant-folding`                         | `CORE_LOCAL_CANONICALIZATION_PASSES` | local opcode rule         | Dispatch from foldable unary, binary, and typeof operations.                           |

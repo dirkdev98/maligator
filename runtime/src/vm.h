@@ -642,6 +642,10 @@ typedef struct MalInstruction {
         } call_spread_iterable;
 
         struct {
+            i32 dst, callee, this_value, data_offset;
+        } call_rest_arguments;
+
+        struct {
             i32 dst, callee, arguments_array;
         } construct_spread;
 

@@ -236,6 +236,11 @@ typedef struct MalPerfStats {
     u64 interpreter_iterator_dense_hits;
     u64 interpreter_iterator_sync_fallbacks;
 
+    u64 rest_array_allocations;
+    u64 rest_array_values;
+    u64 rest_forward_calls;
+    u64 rest_forward_values;
+    u64 rest_forward_copies;
     u64 argument_snapshot_logical_values;
     u64 argument_snapshot_destination_writes;
     u64 argument_snapshot_temporary_copies;

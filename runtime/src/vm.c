@@ -2601,6 +2601,10 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_spread(frame, instruction));
                 break;
             }
+            case MAL_OP_CALL_REST_ARGUMENTS: {
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_rest_arguments(frame, instruction));
+                break;
+            }
             case MAL_OP_CALL_SPREAD_ITERABLE: {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(
                     mal_op_call_spread_iterable(frame, instruction));

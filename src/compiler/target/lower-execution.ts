@@ -99,6 +99,7 @@ const RAW_ARGUMENT_OPCODES: ReadonlySet<string> = new Set([
 	"loadStaticArgument",
 	"createArgumentsObject",
 	"createRestArguments",
+	"callRestArguments",
 ]);
 
 export function coreSupportsDirectEntries(fn: CoreFunctionStore): boolean {

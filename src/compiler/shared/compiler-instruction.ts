@@ -656,6 +656,12 @@ export type CompilerInstruction =
 			registers: [number, number, number, number];
 	  }
 	| {
+			type: "callRestArguments";
+			registers: [number, number, number, number];
+			startIndex: number;
+			apply: boolean;
+	  }
+	| {
 			type: "callSpreadIterable";
 
 			// [destination, callee, this, iterable] — used when the entire

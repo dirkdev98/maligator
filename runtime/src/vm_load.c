@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 35u
+#define WIRE_VERSION 36u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1003,6 +1003,24 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.call_spread.this_value = rd_i32(r);
             o->as.call_spread.arguments_array = rd_i32(r);
             return;
+        case WIRE_CALL_REST_ARGUMENTS: {
+            o->opcode = MAL_OP_CALL_REST_ARGUMENTS;
+            o->as.call_rest_arguments.dst = rd_i32(r);
+            o->as.call_rest_arguments.callee = rd_i32(r);
+            o->as.call_rest_arguments.this_value = rd_i32(r);
+            i32 receiver = rd_i32(r);
+            i32 start = rd_i32(r);
+            bool apply = rd_u8(r) != 0;
+            if (start < 0 || !i32_builder_reserve(side_data, r, 3)) {
+                r->ok = false;
+                return;
+            }
+            o->as.call_rest_arguments.data_offset = (i32) side_data->count;
+            side_data->data[side_data->count++] = receiver;
+            side_data->data[side_data->count++] = start;
+            side_data->data[side_data->count++] = apply;
+            return;
+        }
         case WIRE_CALL_SPREAD_ITERABLE:
             o->opcode = MAL_OP_CALL_SPREAD_ITERABLE;
             o->as.call_spread_iterable.dst = rd_i32(r);
@@ -1308,6 +1326,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_FOR_IN_KEYS, for_in_keys);
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD, call_spread);
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD_ITERABLE, call_spread_iterable);
+        MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_EXPLICIT, construct_super_explicit);
@@ -1420,6 +1439,7 @@ static i32 argument_retention_limit(const MalFunction *fn) {
         const MalInstruction *instruction = &fn->instructions[i];
         if (instruction->opcode == MAL_OP_CREATE_ARGUMENTS_OBJECT ||
             instruction->opcode == MAL_OP_CREATE_REST_ARGUMENTS ||
+            instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
             instruction->opcode == MAL_OP_LOAD_ARGUMENT) {
             return INT32_MAX;
         }
