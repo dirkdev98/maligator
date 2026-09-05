@@ -722,7 +722,14 @@ function verifySpecialization(
 	}
 	claimedInstructions.set(selection.function, owned);
 	if (selection.kind === "guarded-direct-call") {
-		if (selection.anchors.length !== 1 || selection.targetFunctions.length === 0) {
+		if (
+			selection.anchors.length !== 1 ||
+			selection.targetFunctions.length === 0 ||
+			(selection.representation !== "exact-function" &&
+				selection.representation !== "finite-function-set") ||
+			(selection.representation === "exact-function" &&
+				selection.targetFunctions.length !== 1)
+		) {
 			fail(`${selection.id} has an invalid guarded-call target set`);
 		}
 		const anchor = selection.anchors[0]!;

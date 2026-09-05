@@ -1094,7 +1094,9 @@ function guardedCallCandidates(
 				ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
 				exceptionalBlocks: Object.freeze([]),
 				representation:
-					targetFunctions.length === 1 ? "exact-function" : "finite-function-set",
+					!site.open && targetFunctions.length === 1
+						? "exact-function"
+						: "finite-function-set",
 				requiredRepresentations: Object.freeze([]),
 				target: "native",
 				fallback: "canonical-core",

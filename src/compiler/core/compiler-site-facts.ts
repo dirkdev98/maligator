@@ -20,6 +20,7 @@ import {
 	coreSpecializationRecipeAnchorsAt,
 	coreSpecializationRecipeFunctionAt,
 	coreSpecializationRecipeKindAt,
+	coreSpecializationRecipeRepresentationAt,
 	coreSpecializationRecipeTargetFunctionsAt,
 } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -189,15 +190,18 @@ function selectedCallTargets(
 	compilation: CoreCompilation,
 ): ReadonlyMap<string, CompilerCallTargetSet> {
 	const selected = new Map<string, Set<CoreFunctionId>>();
+	const open = new Set<string>();
 	const add = (
 		caller: CoreFunctionId,
 		instruction: CoreInstructionId,
 		targets: ReadonlyArray<CoreFunctionId>,
+		opaque: boolean,
 	): void => {
 		const key = `${caller}:${instruction}`;
 		const current = selected.get(key) ?? new Set<CoreFunctionId>();
 		for (const target of targets) current.add(target);
 		selected.set(key, current);
+		if (opaque) open.add(key);
 	};
 	for (let row = 0; row < compilation.plan.recipes.count; row++) {
 		if (
@@ -209,11 +213,13 @@ function selectedCallTargets(
 			coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row),
 			coreSpecializationRecipeAnchorsAt(compilation.plan.recipes, row)[0]!,
 			coreSpecializationRecipeTargetFunctionsAt(compilation.plan.recipes, row),
+			coreSpecializationRecipeRepresentationAt(compilation.plan.recipes, row) !==
+				"exact-function",
 		);
 	}
 	for (const entry of compilation.plan.directEntries) {
 		for (const site of entry.callSites) {
-			add(site.caller, site.instruction, [entry.function]);
+			add(site.caller, site.instruction, [entry.function], false);
 		}
 	}
 	return new Map(
@@ -222,7 +228,7 @@ function selectedCallTargets(
 			{
 				functions: [...targets].sort((left, right) => left - right),
 				anyScript: false,
-				opaque: false,
+				opaque: open.has(key),
 			},
 		]),
 	);

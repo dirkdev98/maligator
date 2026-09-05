@@ -463,6 +463,16 @@ export function coreSpecializationRecipeFunctionAt(
 	return recipeStorage(table).functions[index]! as CoreFunctionId;
 }
 
+export function coreSpecializationRecipeRepresentationAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): string {
+	if (index < 0 || index >= table.count)
+		throw new Error(`Core specialization recipe ${index} is out of range`);
+	const storage = recipeStorage(table);
+	return storage.strings[storage.representationStringIds[index]!]!;
+}
+
 export function coreSpecializationRecipeIdAt(
 	table: CoreSpecializationRecipeTable,
 	index: number,

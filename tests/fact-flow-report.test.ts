@@ -95,3 +95,31 @@ test("fact flow records finite guarded target sets in both outputs", () => {
 	);
 	expect(definition.diagnostics.factFlow!.summary.consumed).toBeGreaterThanOrEqual(3);
 });
+
+test("a singleton candidate with a non-callable alternative remains guarded", () => {
+	const definition = compile(`
+		function target(value) { ${"value += 1;".repeat(300)} return value; }
+		const handler = globalThis.chooseTarget ? target : null;
+		globalThis.result = handler(globalThis.value);
+	`);
+	const singleton = definition.diagnostics.factFlow!.entries.find(
+		({ functions, events }) =>
+			functions.length === 1 &&
+			events.some(
+				(event) =>
+					event.phase === "native-output" && event.artifact === "guardedFunctionIndices",
+			),
+	);
+	expect(singleton?.events).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				phase: "core-to-execution",
+				artifact: "guardedFunctionIndices",
+			}),
+			expect.objectContaining({
+				phase: "runtime-output",
+				artifact: "guardedFunctionIndices",
+			}),
+		]),
+	);
+});

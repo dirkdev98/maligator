@@ -147,7 +147,10 @@ export function collectCompilerFactFlowReport(
 				phase: "core-to-execution",
 				disposition: sameTargets(functions, selectedTargets) ? "consumed" : "narrowed",
 				artifact:
-					selectedTargets.length === 1 ? "directFunctionIndex" : "guardedFunctionIndices",
+					nativeInstruction?.kind === "call" &&
+					nativeInstruction.guardedFunctionIndices !== undefined
+						? "guardedFunctionIndices"
+						: "directFunctionIndex",
 				functionIndex,
 				instructionIndex,
 				...(selectedTargets.length === 1

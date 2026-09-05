@@ -36,6 +36,7 @@ import {
 	coreSpecializationRecipeKindAt,
 	coreSpecializationRecipeOrdinaryBlocksAt,
 	coreSpecializationRecipePayloadAt,
+	coreSpecializationRecipeRepresentationAt,
 	coreSpecializationRecipeTargetFunctionsAt,
 } from "../core/core-specialization-recipes.ts";
 import type { CoreSpecializationRecipeTable } from "../core/core-specialization-recipes.ts";
@@ -361,6 +362,7 @@ function rebuildOperation(
 	functionMap: ExecutionFunctionMap,
 	directEntryId: number | undefined,
 	guardedTargets: ReadonlyArray<CoreFunctionId> | undefined,
+	exactCallTarget: boolean,
 	knownBuiltinCall: CoreAttributeValue | undefined,
 	exactCollectionReceiver: CoreAttributeValue | undefined,
 	exactArrayLength: CoreAttributeValue | undefined,
@@ -401,7 +403,7 @@ function rebuildOperation(
 	delete selectedAttributes.directFunctionIndex;
 	delete selectedAttributes.guardedFunctionIndices;
 	if (guardedTargets !== undefined) {
-		if (guardedTargets.length === 1) {
+		if (exactCallTarget) {
 			selectedAttributes.directFunctionIndex = guardedTargets[0]!;
 		} else {
 			selectedAttributes.guardedFunctionIndices = guardedTargets;
@@ -1671,6 +1673,7 @@ function lowerFunctionToTarget(
 	);
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
+	const exactCallTargets = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
 		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "guarded-direct-call")
 			continue;
@@ -1678,9 +1681,13 @@ function lowerFunctionToTarget(
 			coreSpecializationRecipeAnchorsAt(recipeTable, row)[0]!,
 			coreSpecializationRecipeTargetFunctionsAt(recipeTable, row),
 		);
+		if (coreSpecializationRecipeRepresentationAt(recipeTable, row) === "exact-function") {
+			exactCallTargets.add(coreSpecializationRecipeAnchorsAt(recipeTable, row)[0]!);
+		}
 	}
 	for (const [instruction, target] of directEntryTargets) {
 		guardedTargets.set(instruction, [target]);
+		exactCallTargets.add(instruction);
 	}
 	const denseReserveLengths = new Map<CoreInstructionId, number>();
 	const plannedBuiltinCalls = new Map<CoreInstructionId, CoreAttributeValue>();
@@ -1950,6 +1957,7 @@ function lowerFunctionToTarget(
 				functionMap,
 				directEntryIds.get(instruction),
 				guardedTargets.get(instruction),
+				exactCallTargets.has(instruction),
 				plannedBuiltinCalls.get(instruction),
 				plannedExactCollectionReceivers.get(instruction),
 				plannedExactArrayLengths.get(instruction),

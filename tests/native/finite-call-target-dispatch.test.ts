@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -73,5 +73,65 @@ describe("finite script call-target dispatch", () => {
 			}),
 			expected,
 		);
+	});
+});
+
+describe("open singleton script call targets", () => {
+	let interpreted: string;
+	let compiled: string;
+
+	beforeAll(() => {
+		const fixture = path.join(outDir, "singleton.js");
+		// Exceed the inline budget so the late call specialization owns the mismatch.
+		writeFileSync(
+			fixture,
+			`let calls = 0;
+			function add(value) {
+				calls++;
+				${"value += 1;".repeat(300)}
+				return this.bias + value + arguments.length;
+			}
+			function holder() {}
+			holder.bias = 10;
+			holder.run = add;
+			function invoke(value) {
+				let result = 0;
+				for (let index = 0; index < 3; index++) result += holder.run(value);
+				return result;
+			}
+			if (invoke(5) !== 948) throw new Error("receiver or arguments changed");
+			holder.run = null;
+			let threw = false;
+			try { invoke(-5); } catch (error) { threw = error instanceof TypeError; }
+			if (!threw || calls !== 3) throw new Error("non-callable target entered script");
+			console.log("singleton-call-target PASS");`,
+		);
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "singleton-call-target",
+			outDir,
+		});
+		interpreted = pair.interpreted;
+		compiled = pair.compiled;
+		expect(
+			pair.programImage.native.functions.some((fn) =>
+				fn.instructions.some(
+					(instruction) =>
+						instruction?.kind === "call" &&
+						instruction.guardedFunctionIndices?.length === 1 &&
+						instruction.directFunctionIndex === undefined,
+				),
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		["interpreted", () => interpreted],
+		["compiled", () => compiled],
+	] as const)("preserves a non-callable replacement in %s output", (_, binary) => {
+		assertExactLines(runToStdout(binary()), ["singleton-call-target PASS"]);
+		assertExactLines(runToStdout(binary(), { env: STRESS_ENV }), [
+			"singleton-call-target PASS",
+		]);
 	});
 });
