@@ -317,6 +317,37 @@ const dictionary = {};
 for (let index = 0; index < 40; index++) dictionary["key" + index] = index;
 checks.push(dictionary[["key", 39].join("")] === 39);
 
+const indexedDictionary = { 0: 10, 1: undefined, 2: 12 };
+const indexedGetter = function () {
+	return this[0] + 20;
+};
+Object.defineProperty(indexedDictionary, "1", { get: indexedGetter });
+Object.defineProperty(indexedDictionary, "2", { writable: false });
+checks.push(
+	indexedDictionary[0] === 10,
+	indexedDictionary[1] === 30,
+	Object.getOwnPropertyDescriptor(indexedDictionary, "1").get === indexedGetter,
+	Object.getOwnPropertyDescriptor(indexedDictionary, "2").writable === false,
+	!Reflect.set(indexedDictionary, "2", 99),
+	indexedDictionary[2] === 12,
+);
+delete indexedDictionary[0];
+indexedDictionary[0] = 13;
+checks.push(
+	indexedDictionary[0] === 13,
+	indexedDictionary[1] === 33,
+	Reflect.ownKeys(indexedDictionary).join(",") === "0,1,2",
+);
+const shiftedDictionary = { named: 50, 0: 51, 1: 52 };
+const shiftedSymbol = Symbol("shifted");
+shiftedDictionary[shiftedSymbol] = 53;
+delete shiftedDictionary.named;
+checks.push(
+	shiftedDictionary[0] === 51,
+	shiftedDictionary[1] === 52,
+	shiftedDictionary[shiftedSymbol] === 53,
+);
+
 const ensured = {};
 Object.defineProperty(ensured, "anchor", { value: 1 });
 for (let index = 0; index < 20; index++) {

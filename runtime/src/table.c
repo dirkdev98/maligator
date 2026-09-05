@@ -416,6 +416,17 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
         if (stats != nullptr) stats->lookup_misses++;
         return (MalTableLookup) {.present = false, .entry = nullptr};
     }
+    if (key.kind == MAL_KEY_INDEX && table->mode == MAL_TABLE_MODE_OBJECT) {
+        u32 index = mal_key_index_value(key);
+        if (index < table->entry_count) {
+            const MalTableEntry *entry = &table->entries[index];
+            // Dense array deoptimization preserves index order; exact keys reject shifted entries.
+            if (entry->live && entry->key == key.value) {
+                if (stats != nullptr) stats->lookup_hits++;
+                return (MalTableLookup) {.present = true, .entry = mal_table_handle(index)};
+            }
+        }
+    }
     u64 hash = mal_table_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry = table->slots[index];

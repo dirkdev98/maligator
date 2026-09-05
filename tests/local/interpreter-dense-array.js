@@ -83,7 +83,85 @@ const sparse = [11];
 store(sparse, 5000, 22);
 check(load(sparse, 5000) === 22 && sparse.length === 5001, "sparse store falls back");
 store(sparse, 0, 33);
-check(load(sparse, 0) === 33, "deoptimized array stays on generic path");
+check(load(sparse, 0) === 33, "deoptimized array observes overwrites");
+
+const frozenDense = Object.freeze([undefined, { value: 42 }, 19]);
+check(
+	load(frozenDense, 0) === undefined && Object.hasOwn(frozenDense, 0),
+	"frozen undefined is present",
+);
+check(
+	load(frozenDense, 1).value === 42 && load(frozenDense, 2) === 19,
+	"frozen data elements remain readable",
+);
+check(
+	throwsTypeError(() => store(frozenDense, 2, 20)) && load(frozenDense, 2) === 19,
+	"frozen element remains non-writable",
+);
+const sealedDense = Object.seal([21, 22]);
+check(load(sealedDense, 0) === 21, "sealed element read");
+store(sealedDense, 0, 23);
+check(load(sealedDense, 0) === 23, "sealed element overwrite is observed");
+
+const shiftedFrozen = [31, , 33];
+shiftedFrozen[Symbol("before indices")] = 91;
+Object.freeze(shiftedFrozen);
+check(
+	load(shiftedFrozen, 0) === 31 &&
+		load(shiftedFrozen, 1) === undefined &&
+		load(shiftedFrozen, 2) === 33,
+	"entry positions cannot substitute for index keys",
+);
+
+let indexedGetterCalls = 0;
+const changingDictionary = [41, 42, 43];
+Object.defineProperty(changingDictionary, "1", {
+	configurable: true,
+	get() {
+		indexedGetterCalls++;
+		return this[0] + 10;
+	},
+});
+check(
+	load(changingDictionary, 1) === 51 && indexedGetterCalls === 1,
+	"dictionary accessor runs with the original receiver",
+);
+Object.defineProperty(changingDictionary, "1", {
+	configurable: true,
+	writable: true,
+	value: 52,
+});
+check(
+	load(changingDictionary, 1) === 52,
+	"accessor replacement exposes the new data value",
+);
+delete changingDictionary[0];
+check(load(changingDictionary, 0) === undefined, "deleted entry is absent");
+store(changingDictionary, 0, 53);
+check(
+	load(changingDictionary, 0) === 53,
+	"reinserted index may occupy a different entry",
+);
+for (let index = 3; index < 160; index++) store(changingDictionary, index, index + 100);
+for (let index = 3; index < 150; index++) delete changingDictionary[index];
+for (let index = 160; index < 240; index++) store(changingDictionary, index, index + 100);
+check(
+	load(changingDictionary, 0) === 53 &&
+		load(changingDictionary, 1) === 52 &&
+		load(changingDictionary, 2) === 43 &&
+		load(changingDictionary, 149) === undefined &&
+		load(changingDictionary, 239) === 339,
+	"growth and deletion preserve dictionary element reads",
+);
+Object.defineProperty(changingDictionary, "1", {
+	get() {
+		throw new TypeError("dictionary accessor");
+	},
+});
+check(
+	throwsTypeError(() => load(changingDictionary, 1)),
+	"dictionary accessor exceptions propagate",
+);
 
 const ranged = [];
 store(ranged, -1, "negative");
@@ -113,6 +191,7 @@ store(custom, 0, 73);
 check(load(custom, 0) === 73, "own element shadows custom prototype");
 
 let inheritedGetCalls = 0;
+const frozenInheritedHole = Object.freeze([70, , 72]);
 Object.defineProperty(Array.prototype, "1", {
 	configurable: true,
 	get() {
@@ -122,6 +201,10 @@ Object.defineProperty(Array.prototype, "1", {
 });
 const inheritedHole = [80, , 82];
 check(load(inheritedHole, 1) === 81 && inheritedGetCalls === 1, "protected hole getter");
+check(
+	load(frozenInheritedHole, 1) === 81 && inheritedGetCalls === 2,
+	"frozen hole observes a newly inherited getter",
+);
 delete Array.prototype[1];
 
 let inheritedSetValue;
