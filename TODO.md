@@ -21,6 +21,26 @@ the work itself is not duplicated.
 7. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
+## Verification workflow
+
+- [ ] Make `scripts/dx-performance.ts` verify the running application's revision
+      before and after a dependency edit. A controlled driver that keeps reporting
+      revision 0 after the source changes to 1 currently passes on compiler log markers.
+      Bound invocation, readiness, and shutdown; a child ignoring SIGTERM currently
+      hangs cleanup. Require prompt failure on child exit, forced termination after
+      a grace period, and retained diagnostics. Verify stale-output and stuck-child
+      failures alongside a real successful development restart.
+
+- [ ] Retain gate reports per run with source revision/content identity. The current
+      `scripts/test-suite.ts` overwrites `report-<tier>.json` and cannot associate its
+      stage verdicts with a specific source snapshot. Preserve a discoverable latest
+      report without replacing earlier evidence.
+
+- [ ] Align `scripts/command-requirements.ts` with actual cache-lease behavior. Unit
+      and quality plans declare no user-cache writes, while their `CommandProgress`
+      wrappers create leases there. Verify the declared capabilities against the
+      command lifecycle so restricted execution retains cache coordination.
+
 # Compiler and Core IR
 
 ## Core IR contract
