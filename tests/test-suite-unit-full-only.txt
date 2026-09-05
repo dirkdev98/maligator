@@ -1,2 +1,3 @@
 # Slow pure-TypeScript or subprocess-heavy integration tests run only in full.
 tests/toolchain.test.ts
+tests/self-compile-experiment.test.ts

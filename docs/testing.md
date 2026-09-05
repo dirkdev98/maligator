@@ -104,6 +104,40 @@ inside the run directory for resumption. After confirming the run has stopped,
 removing its directory discards only that run's evidence and scratch. Shared native
 artifacts remain under normal cache management.
 
+## Focused compiler execution experiments
+
+For a small compiler or runtime execution experiment, preserve a compiler before
+editing and compare it with a later capture on the same frozen input:
+
+```sh
+npm run bench:self-compile-experiment -- capture .cache/compiler-base
+# Edit the compiler or runtime, then capture the candidate.
+npm run bench:self-compile-experiment -- capture .cache/compiler-candidate
+npm run bench:self-compile-experiment -- compare .cache/compiler-base .cache/compiler-candidate --output .cache/compiler-pairs --workload parser --pairs 5 --budget-seconds 600 --plan=json
+```
+
+Remove `--plan=json` to execute. Select `--workload shape` or `--workload full`
+for larger inputs, and `--host node` for a separate Node-hosted comparison.
+Both Node compiler snapshots use the same source preparation. The native captures
+use closed development O2/no-LTO builds without instrumentation; this is an inner
+loop, not the production-plan JavaScript/HTTP benchmark matrix.
+
+Capture records HEAD plus a digest of pending changes, the tracked patch, exact
+prepared source and binary hashes, lockfile, Node/host identity, and native build
+plan/toolchain. Comparison refuses modified captures or different preparation,
+dependencies, hosts, and native plans. Every run compiles the baseline capture's
+input and must exactly match its Node output oracle. Changes that intentionally
+alter emitted C need semantic benchmarks instead of this strict output comparison.
+
+The budget includes the oracle, two warmups, and all measured pairs. Only complete
+pairs enter the elapsed-time summary; individual peak-RSS readings and raw resource
+logs are retained on macOS/Linux. The time covers JavaScript input through C
+emission, excluding capture/build and output-digest verification. A timeout stops
+the worker process group and exits 2, retaining partial outputs and `report.json`
+with `status: incomplete`. Other failures also exit 2. A completed run records
+samples and variability without declaring a performance win. Output directories
+must be new, and evidence remains until explicitly removed.
+
 ## Cache ownership
 
 Maligator bounds its shared user-cache artifacts without touching source,
