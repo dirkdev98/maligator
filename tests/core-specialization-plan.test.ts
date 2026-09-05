@@ -187,7 +187,9 @@ function numericFanOutProgram(): {
 	return { program, function: functionId };
 }
 
-function stackObjectProgram(mode: "elided" | "activation-local" | "materialized"): {
+function stackObjectProgram(
+	mode: "elided" | "activation-local" | "materialized" | "identity",
+): {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionId;
 } {
@@ -206,7 +208,13 @@ function stackObjectProgram(mode: "elided" | "activation-local" | "materialized"
 		attributes: { keyStringIndices: [0] },
 		outputRepresentations: ["boxed"],
 	});
-	if (mode === "activation-local") {
+	if (mode === "identity") {
+		const [value] = builder.appendInstruction(entry, "typeofCompare", [object!], {
+			attributes: { expected: "object", negated: false },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+	} else if (mode === "activation-local") {
 		const [value] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
 			attributes: { stringIndex: 0 },
 			outputRepresentations: ["boolean"],
@@ -577,6 +585,7 @@ describe("late Core specialization plan", () => {
 			["elided", "elided", 0],
 			["activation-local", "activation-local", 0],
 			["materialized", "activation-local", 1],
+			["identity", "activation-local", 0],
 		] as const) {
 			const { program, function: functionId } = stackObjectProgram(sourceMode);
 			const { context, plan } = planning(program, [functionId]);
@@ -596,7 +605,14 @@ describe("late Core specialization plan", () => {
 				context,
 				plan: verifyCoreOptimizationPlan(sealed, plan),
 			});
-			expect(() => lowerExecutionToProgramImage(execution)).not.toThrow();
+			const image = deserializeCompilerArtifact(
+				serializeCompilerArtifact(lowerExecutionToProgramImage(execution)),
+			);
+			const region = image.native.functions[0]!.specializations.find(
+				({ kind }) => kind === "stack-object-plan",
+			);
+			if (region?.kind !== "stack-object-plan") throw new Error("Expected stack plan");
+			expect(region.sites[0]!.mode).toBe(expectedMode);
 			if (selection?.kind !== "stack-object-plan") {
 				throw new Error("expected stack-object plan");
 			}

@@ -838,6 +838,7 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 	readonly [Extract<CompilerInstruction, { type: "createObject" | "createObjectShaped" }>]
 > {
 	readonly sites: ReadonlyArray<{
+		readonly mode: "elided" | "activation-local";
 		readonly allocation: Extract<
 			CompilerInstruction,
 			{ type: "createObject" | "createObjectShaped" }

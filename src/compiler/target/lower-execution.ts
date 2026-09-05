@@ -1313,6 +1313,7 @@ function lowerCoreSpecializations(
 				sites: [
 					{
 						allocation,
+						mode: stack.mode,
 						slotCount: stack.slotCount,
 						accesses,
 						materializations,

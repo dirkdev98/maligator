@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 51;
+export const COMPILER_ARTIFACT_VERSION = 52;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -1130,6 +1130,7 @@ function writeCompilerArtifact(
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
 						w.i32(site.allocationIp);
+						w.u8(site.mode === "elided" ? 0 : 1);
 						w.i32(site.slotCount);
 						w.u32(site.accesses.length);
 						for (const access of site.accesses) {
@@ -1461,6 +1462,11 @@ function validateStackObjectPlanRegion(
 		const allocation = fn.instructions[site.allocationIp];
 		if (
 			allocationIps.has(site.allocationIp) ||
+			(site.mode !== "elided" && site.mode !== "activation-local") ||
+			(site.mode === "elided" &&
+				(site.accesses.length !== 0 ||
+					site.inheritedAccessIp !== undefined ||
+					site.materializations.length !== 0)) ||
 			region.anchors[siteIndex] !== site.allocationIp ||
 			(allocation?.opcode !== "CREATE_OBJECT" &&
 				allocation?.opcode !== "CREATE_OBJECT_SHAPED") ||
@@ -3549,6 +3555,10 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					> = [];
 					for (let siteIndex = 0; siteIndex < siteCount; siteIndex++) {
 						const allocationIp = r.i32();
+						const modeTag = r.u8();
+						if (modeTag > 1) {
+							throw new RangeError("program-image-codec: invalid stack-object mode");
+						}
 						const slotCount = r.i32();
 						const accessCount = r.count(2);
 						const accesses: Array<{ ip: number; slot: number }> = [];
@@ -3577,6 +3587,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						}
 						sites.push({
 							allocationIp,
+							mode: modeTag === 0 ? "elided" : "activation-local",
 							slotCount,
 							accesses,
 							...(inheritedAccessIp < 0 ? {} : { inheritedAccessIp }),

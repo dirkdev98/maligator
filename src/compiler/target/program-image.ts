@@ -551,6 +551,7 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 	"none" | "on-demand"
 > & {
 	readonly sites: ReadonlyArray<{
+		readonly mode: "elided" | "activation-local";
 		readonly allocationIp: number;
 		readonly slotCount: number;
 		readonly accesses: ReadonlyArray<{
@@ -2166,6 +2167,7 @@ function lowerExecutionFunctionToNativePlan(
 				payloadIps.push(...sitePayload);
 				resolvedSites.push({
 					allocationIp,
+					mode: site.mode,
 					slotCount: site.slotCount,
 					accesses: resolvedAccesses,
 					...(inheritedAccessIp === undefined ? {} : { inheritedAccessIp }),

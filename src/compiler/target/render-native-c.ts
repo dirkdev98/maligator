@@ -563,10 +563,7 @@ function emitCompiledVariant(
 			region,
 			site,
 		);
-		const elided =
-			site.accesses.length === 0 &&
-			site.inheritedAccessIp === undefined &&
-			site.materializations.length === 0;
+		const elided = site.mode === "elided";
 		stackObjectSites.set(site.allocationIp, {
 			objectName: `__stack_object_${site.allocationIp}`,
 			...(elided

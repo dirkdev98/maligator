@@ -417,6 +417,7 @@ function stackObjectDefinition(): ProgramImage {
 				sites: [
 					{
 						allocationIp: 2,
+						mode: "activation-local",
 						slotCount: 2,
 						accesses: [
 							{ ip: 3, slot: 1 },
