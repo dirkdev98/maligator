@@ -1,124 +1,144 @@
-# Agent Guidelines
+# Working on Maligator
 
-## Commands
+Maligator is an ahead-of-time JavaScript compiler and native runtime. Use current
+source, command help, and test manifests to establish behavior. Saved memories,
+design documents, and old reports provide context, not proof about the current tree.
+[TODO.md](TODO.md) owns unfinished project work; [docs/testing.md](docs/testing.md)
+owns detailed test selection, runner flags, and evidence formats.
 
-- `npm run test:smoke` - Optional 20-second warm / four-minute cold fuse; runs first inside larger gates
-- `npm run test:check` - Default approximately two-minute developer gate; partitions native tests between normal-sensitive and sanitizer-primary dimensions and excludes slow toolchain integration
-- `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
-- `npm run test:full:report` - Exhaustive completion policy; ask before running
-- `npm run test:help` - Show tier policy; add `-- --list` to a tier command to print exact stages
-- `npm run test:check -- --plan=json` - Print exact stage, CPU, approval, sandbox, and cache requirements without running tests
-- `npm run env:check -- --json` - Probe workspace/temp/user/npm/Cargo cache writes, `listen(0)`, active Maligator commands, and current CPU load
-- `npm run type-check` - TypeScript type checking
-- `npm run lint` - ESLint with auto-fix
-- `npm run lint:ci` - ESLint without auto-fix (CI)
-- `npm test` - Vitest watch mode across unit and native projects, not every repository test lane
-- `npm test run` - Run both Vitest projects once, not standards/self-host/sanitizer lanes
-- `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
-- `npm run test:unit:full-only -- <filename>` - Run a slow unit/integration test from the full-only manifest
-- `npm run test:native` - Explicit normal native lane: build each fixture into an isolate binary/server and drive it
-- `npm run test:rust` - Full-only Rust runtime unit lane, including `node-zlib`
-- `npm run test:sanitize -- <filename>` - Platform-safe native sanitizer lane (UBSan on macOS, ASan+UBSan elsewhere)
-- `npm test -- <filename>` - Run a single test file
-- `npm run test:leak` - macOS-only GC leak audit (`leaks`), off by default
-- `npm run test262` - Full test262 suite (expensive; ask before running)
-- `npm run test262:regressions` - Curated common-case regression manifest vs the committed baseline
-- `npm run test262:report` - Complete compiled/normal Test262 report without updating the baseline (full corpus; ask before running)
-- `npm run test:wpt:report` - Complete compiled/normal curated WPT report
-- `npm run test:wpt:matrix-report` - Complete compiled/interpreted normal/GC-stress WPT report
-- `npm run bench` - Consolidated benchmark runner (size / language-vs-V8 / gc / http); `--update` merges selected lanes into the saved snapshot
-- `node ./src/index.ts cache status|prune|clear` - Inspect or reclaim Maligator-owned rebuildable caches; preview prune with `prune --dry-run`, and require `clear --all` for a full reset
+## Scope and authority
 
-Before the first project command, select a sandbox that can bind loopback
-`listen(0)` and write the workspace, temporary directory, Maligator user cache,
-`npm config get cache`, and `${CARGO_HOME:-~/.cargo}`. `npm run env:check -- --json`
-prints and verifies the concrete paths. Network, Git writes, pushes, and publishing
-remain separate capabilities and must not be inferred from this normal sandbox.
-If the probe or test runner reports `EPERM`/`EACCES`, fix the sandbox and rerun the
-exact command; do not diagnose or change Maligator code for an environment failure.
+- Distinguish investigation from implementation. During design, explain trade-offs
+  and a recommendation in prose; ask structured questions only for concrete decisions.
+- Complete the requested semantic slice, including relevant verification. Report
+  separate discoveries with evidence rather than expanding into unrelated work.
+- Inspect the working tree first and preserve unrelated edits. Work in the assigned
+  checkout; creating, removing, pruning, relocating, or switching worktrees requires
+  an explicit request.
+- Commit only when requested, using unsigned local commits. Push, publish, deploy,
+  and remote execution require explicit authorization. Existing authorization for
+  the same action and scope persists; do not ask for it again.
+- For an authorized push, check the ignored `AGENTS.local.md` for host-specific
+  authentication. Never print or persist credentials.
 
-Before starting a heavy or performance-sensitive command, inspect current CPU
-activity and `maligator cache status`. Defer the planned command when another build,
-test, or benchmark would contaminate it. This is voluntary coordination: never
-create or wait on a global performance lock.
+## Implementation
 
-### Manual milestone scripts (not part of `npm test`)
+- Fix defects at the owning layer. Do not hide them with fixture-specific branches,
+  disabled checks, unconditional cache clearing, or retry loops.
+- JavaScript semantics and compiler invariants take priority over passing one case.
+  Trace the actual fact, effect, control-flow, and representation contracts before
+  changing an optimization. Use the [ECMAScript specification](https://tc39.es/ecma262/multipage/)
+  for language semantics.
+- Internal compatibility is unnecessary before 1.0. Migrate callers together and
+  invalidate affected cache/schema identities instead of adding legacy readers,
+  adapters, or parallel representations. Public API changes are allowed when they
+  improve the design; update their documentation and consumers.
+- Use strict TypeScript with erasable syntax and `.ts` import extensions. Prefer
+  assertions and type guards that preserve type inference. Follow the configured
+  ESLint and formatting rules.
+- Test observable behavior and real integration. Structural assertions belong to
+  explicit compiler, verifier, wire-format, or ABI contracts; avoid tautologies and
+  tests that freeze incidental instruction order, register numbers, or generated text.
 
-- `node scripts/eval-phase2-check.ts` - wire-format loader differential
-- `node scripts/eval-selfhost-check.ts` - self-hosted compiler differential (slow: AOT-compiles the whole compiler)
-- `node scripts/eval-strip-check.ts` - homegrown type strip + source-position fidelity
+## Comments
 
-### Test / runtime flags
+- Explain an invariant, constraint, non-obvious choice, or deliberate hazard. Do not
+  narrate the code or the edit. One line is the default; length follows the surprise.
+- Refactor confusing code you are changing. Remove stale and redundant comments in
+  the edited region; no banner comments or blanket JSDoc.
+- Document exports where names and types do not express the contract, especially at
+  shared-library boundaries. Test intent belongs in test names and named helpers.
+- Keep comments self-contained. TODOs need no ticket; link an upstream issue when it
+  explains a workaround that can later be removed.
 
-- Build-time (own build dir): `MAL_ASAN`, `MAL_UBSAN`, `MAL_GC_GENERATIONAL`, `MAL_GC_CONCURRENT`, `MAL_PERF_STATS` (set again at runtime to enable and print the compiled counters).
-- Runtime GC/performance instruments (same binary): `MAL_GC_STRESS`, `MAL_EVAL_GC_STRESS_INTERVAL`, `MAL_GC_VERIFY`, `MAL_GC_OFF`, `MAL_GC_THRESHOLD`, `MAL_GC_MAJOR_EVERY`, `MAL_GC_STATS`, `MAL_HOST_GC`, `MAL_GC_AT_EXIT`, `MAL_GMALLOC`.
-- Backend: `MAL_INTERP=1` forces the bytecode interpreter (test262 runner); the native harness takes a `compiled` flag directly.
-- Test262 runner: `--filter`, `--manifest <file>`, `--exclude-manifest <file>`, `--variant strict|sloppy`, `--backend compiled|interpreted|wire`, `--mode normal|gc-stress`, `--check`, `--policy bail|complete`, `--canonical`, `--random`.
-- WPT runner: repeatable `--test`, `--mode normal|gc-stress`, `--backend compiled|interpreted`, `--policy bail|complete`, and `--canonical`.
+## Environment and coordination
 
-## Code Style
+Establish the session's execution environment with `npm run env:check -- --json`
+before builds, tests, or benchmarks. It needs permission to write the workspace,
+temporary directory, Maligator user cache, npm cache, and
+Cargo cache, and to bind loopback `listen(0)`. Read-only inspection does not need
+those capabilities. Download/network access and Git writes are separate permissions.
+Unit and quality wrappers also attempt to write cache leases; do not assume that a
+TypeScript-only command needs no user-cache access.
 
-- Use TypeScript with strict mode enabled, using erasable syntax only. This allows us to
-  directly execute TS files with Node.js. E.g `node ./src/index.ts build entry.ts`.
-- Import extensions: `.ts` for TypeScript files
-- Use `@lightbase/eslint-config` for linting rules
-- Vitest for testing
-- Use assertion and type-guard methods that aid with TS inference.
-- Follow ECMAScript spec references in comments.
+If the probe confirms an `EPERM` or `EACCES` capability failure, correct the sandbox
+and rerun the exact command before diagnosing product code. Before heavy work,
+inspect CPU activity and `node ./src/index.ts cache status`. Defer conflicting builds,
+tests, and benchmarks; never kill another task or introduce a global performance lock.
 
-## Local verification
+## Verification
 
-```
-# Build an existing focused fixture through the product CLI.
-MAL_DEBUG=true node ./src/index.ts build ./tests/local/runtime-mechanics.mjs
-```
+Use bounded, one-shot commands while developing. `npm test` and `npm run test:unit`
+can enter watch mode; use that only when requested.
 
-`MAL_DEBUG=true` also selects the per-pass Core verification profile, so an invalid
-graph names the stage, pass, and function that produced it instead of surfacing at a
-later boundary. Core verification at the pre-optimization, final-region-selection,
-and pre-target boundaries is unconditional.
+| Purpose                                    | Command                                       |
+| ------------------------------------------ | --------------------------------------------- |
+| Inspect the normal gate without running it | `npm run test:check -- --plan=json`           |
+| Focused unit tests                         | `npm run test:unit -- --run <file>`           |
+| Focused slow unit/integration test         | `npm run test:unit:full-only -- --run <file>` |
+| Focused native behavior                    | `npm run test:native -- <file>`               |
+| Native memory/UB checks                    | `npm run test:sanitize -- <file>`             |
+| Type checking                              | `npm run type-check`                          |
+| Lint and formatting without source edits   | `npm run lint:ci`                             |
+| Normal developer gate                      | `npm run test:check`                          |
 
-Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
+`test:check` includes smoke and the selected native, sanitizer, and standards lanes.
+It does not cover every native fixture or the full standards corpus. Use focused
+tests during implementation, then run it after code changes; repeat only when later
+changes, failures, or unresolved concerns justify it. For documentation-only cleanup,
+check formatting, links, and command accuracy without rebuilding the runtime.
+Use `npm run test:help`, tier `--list`/`--plan=json`, and the manifests for exact coverage
+and time budgets; durations depend on the host and cache state.
 
-## Importing fix queues
+Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the
+acceptance boundary could reasonably belong in multiple lanes. Slow unit/subprocess
+tests belong in `tests/test-suite-unit-full-only.txt`. For Core changes, use the
+[focused optimizer workflow](docs/testing.md#focused-optimizer-verification).
+`MAL_DEBUG=true node ./src/index.ts build <fixture>` enables per-pass Core diagnostics.
+Reproduce Test262 cases through its runner so harness includes and variants are honored.
 
-For a fix queue maintained in a separate clone:
+## Standards and baselines
 
-- Treat the source clone as read-only; fetch its branch into the primary clone with `git fetch <source-clone> <branch>`.
-- Require the primary `main` to have no remote-only commits before starting.
-- Track the last imported source hash and select later non-merge commits in first-parent order because cherry-picked hashes differ from source hashes.
-- Cherry-pick the explicit source hashes in order, compare the result with `git diff --exit-code <last-source-hash> HEAD`, and scan for stale source-hash references.
-- Run focused tests and `npm run test:check` before pushing.
+Full Test262, `test:full`, and `test:full:report` require explicit authorization;
+filtered tests and small manifests remain normal development tools. Keep self-hosted
+checks early in the full gate. Use explicit `--backend` and `--mode` flags: canonical
+runners remove ambient runtime overrides such as `MAL_INTERP`.
 
-## Working Preferences
+`npm run test262` and `npm run test262:report` check against the resolved HEAD baseline
+without rewriting it. `--baseline <file>` selects an explicit comparison input.
+Inspect completeness and exact `PASSED -> FAILED` transitions, not just totals.
+Replacing `scripts/test262.json` requires an authorized
+`npm run test262:update-baseline`; updating `bench/baseline.json` requires an authorized
+benchmark `--update`. Neither baseline update is implied by running a check.
 
-- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/decisions/03-wave-0-host-architecture.md`).
+## Performance and evidence
 
-- Internal backwards compatibility is never required. Refactor internal representations and migrate all callers freely; prefer a clean cutover, invalidating or rebuilding internal artifacts where needed, over preserving legacy paths, adapters, shims, dual formats, or staged compatibility.
+The benchmark families are `javascript`, `http`, and `self-compile`; default runs
+select the first two and `--full` selects all three. Keep Node-hosted compiler DX
+measurements (`npm run bench:dx -- --source`) distinct from AOT self-compile measurements.
 
-- Maligator is a user-facing product. Every issue discovered must receive a proper fix at the owning layer; never hide or work around an issue with test-, fixture-, or scenario-specific hacks.
-- Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
-- Treat `npm run test:check` as the normal local gate. Put unusually slow unit or subprocess integration tests in `tests/test-suite-unit-full-only.txt`; `tests/toolchain.test.ts` is the current example.
-- Keep self-hosted checks early in `test:full`, before broad native and standards matrices.
-- Ask for explicit approval before running the full Test262 suite, `test:full`, or `test:full:report`.
-- Use targeted single-test or small-batch verification during development.
-- Follow `docs/testing.md` when placing tests. If a regression could reasonably belong in more than one lane, ask the user rather than guessing.
-- Working inside an assigned managed checkout/worktree is allowed. Never create,
-  register, remove, prune, relocate, or switch worktrees unless explicitly asked.
-- When asked to commit, create unsigned local commits and do not push unless explicitly asked.
-- When a push is explicitly authorized, host-specific authentication instructions may
-  be available in the ignored `AGENTS.local.md`. Never print or persist the GitHub
-  token, and do not weaken the explicit-push requirement when using that fallback.
-- Work through clusters in phased semantic slices rather than stopping after the first passing case.
+Use matched workloads, output parity/checksums, source/toolchain identity, and repeated
+interleaved pairs for performance conclusions. Inspect `--plan=json` before a costly
+comparison: even `--runs 1` includes warmup and can include cold and diagnostic work.
+For comparisons, use `--compare <ref> --budget-seconds <seconds>` and retain the printed
+run directory. Exit 2 means failed or incomplete; exit 1 flags a classified regression.
+A single pair or a zero exit code does not establish stable performance acceptance.
+Resume only with matching source/options/host, after a fresh environment check.
 
-## External Subagents
+Report what was exercised, failed, and left unverified. Preserve useful reports and
+raw samples; historical timings and old passes are not current validation. Retain a
+copy of a gate report when needed because `report-<tier>.json` is overwritten.
 
-- When the user asks for subagents, use the available external harness, either `opencode run` or `claude -p`, and give each invocation a 30-minute wall-clock limit.
-- On macOS, enforce the limit with Perl's alarm wrapper:
-  - `perl -e 'alarm shift; exec @ARGV' 1800 opencode run "<prompt>" --auto --session "<session-id>"`
-  - `perl -e 'alarm shift; exec @ARGV' 1800 claude -p "<prompt>"`
-- The installed OpenCode CLI accepts the prompt as a positional argument; do not use the unsupported `opencode run --prompt` form.
-- Give each subagent a complete, self-contained prompt with its scope, whether it may edit files, expected verification, and the exact result it should report.
-- Run independent subagents in parallel. Reuse an OpenCode session ID when continuing the same assignment rather than starting over.
-- Treat timeout exit status as an incomplete run, inspect the worktree and captured output, and either resume the session or finish the remaining work directly.
-- Read the complete captured output when terminal output is truncated, then review all subagent edits and run the relevant verification before considering the assignment complete.
+## Cleanup and delegation
+
+Audit ownership and activity before deleting artifacts. Remove only explicitly
+identified inactive scratch or superseded generated data; preserve source, baselines,
+useful failure evidence, and unrelated drafts. Use `cache prune --dry-run` before
+supported cache pruning, and respect live leases. Never reuse an old deletion list.
+
+Delegate only when requested. Use the requested available external harness, give each
+assignment a complete scope and a 30-minute wall-clock limit, and capture its output.
+Run independent assignments in parallel only with non-overlapping edits. Treat a
+timeout as incomplete; inspect outputs and processes, review edits, and verify them
+before acceptance. Do not inherit old model pins or unrestricted-permission recipes
+from saved task history.

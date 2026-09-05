@@ -21,35 +21,6 @@ the work itself is not duplicated.
 7. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
-## Development experience and stability
-
-Cache failures are product or environment failures, not inconveniences to bypass.
-Fix incorrect cache identity, invalidation, corruption, leasing, or recovery at the
-owning layer; never hide them with unconditional cache clearing, retry loops, disabled
-tests, or scenario-specific fallbacks.
-
-Keep AGENTS.md and the environment probe synchronized with the capabilities normal
-development actually needs: workspace and temporary writes, Maligator, npm, and Cargo
-cache writes, loopback listen(0), CPU/activity inspection, and any newly introduced
-resource. Treat EPERM and EACCES as sandbox failures when the probe confirms that
-diagnosis, update the instructions or sandbox, and rerun the exact command instead of
-changing Maligator behavior.
-
-Tests should primarily exercise observable behavior and real cross-layer integration.
-Use structural assertions only for an explicit compiler, verifier, wire-format, or ABI
-contract; do not freeze instruction order, register numbers, private helper layout,
-exact generated C text, or other replaceable implementation details.
-
-Representative validation commands are:
-
-    npm run env:check -- --json
-    npm run test:smoke
-    npm run test:check
-
-Use focused tests while developing, the smoke tier as a quick repository-wide signal,
-and test:check as the normal local gate. Full Test262, test:full, and test:full:report
-remain approval-only.
-
 # Compiler and Core IR
 
 ## Core IR contract

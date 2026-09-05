@@ -496,7 +496,7 @@ node ./src/index.ts build path/to/entry.ts
 # Default developer gate; smoke is its fast initial fuse.
 npm run test:check
 
-# Standalone 20-second warm / two-minute cold fuse.
+# Standalone 20-second warm / four-minute cold fuse.
 npm run test:smoke
 
 # Exhaustive gates. Ask before running either command: they include full Test262.
@@ -510,10 +510,14 @@ npm run bench -- javascript --mode open-interpreted
 npm run bench -- --full --update           # add closed self-compile; hard-cut baseline
 npm run bench -- javascript --compare HEAD --runs 5
 npm run bench -- --changed --compare HEAD
+npm run bench -- self-compile --compare HEAD --runs 1 --max-pairs 1 --budget-seconds 600 --plan=json
 
 # Complete standards reports without baseline updates. Ask before full Test262.
 npm run test262:report
 npm run test:wpt:report
+
+# Explicit full-corpus baseline replacement; ask before running.
+npm run test262:update-baseline
 
 # Targeted lanes remain available while developing.
 npm run test:unit                 # watch mode

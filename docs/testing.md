@@ -9,7 +9,9 @@ and the full tier is exhaustive rather than interactive.
 `npm run bench:dx -- <maligator-binary>` creates an isolated representative
 Express, Drizzle, Valibot, SQLite, and TypeScript project. It reports cold and
 warm `run` and `test` latency plus cold and cached `dev` readiness and a leaf-edit
-restart. Use `--only run`, `--only test`, or `--only dev` for independent lanes,
+recompile message. The development measurement currently waits for compiler log
+markers; it does not assert that the restarted application serves the edited revision.
+Use `--only run`, `--only test`, or `--only dev` for independent lanes,
 and `--fresh-cache` to give the selected project a disposable empty user cache.
 The generated project and optional fresh cache are removed afterward. Add
 `--assets` after the binary to include the deliberately slower 100-file configured-
@@ -50,18 +52,57 @@ closed compiled bare and Express servers. `--full` adds the slower fully closed
 self-compile family.
 
 Every classified metric reports the paired median change and a bootstrapped 95%
-confidence interval. Wall time and throughput require a 3% effect; p99 latency,
+confidence interval. Wall time and throughput require a 2% effect; p99 latency,
 RSS, and GC pause metrics require 5%; binary size requires 0.5% and at least 32 KiB.
-The outcomes are `improvement`, `regression`, `unchanged`, and `inconclusive`. Only
-a statistically supported practical regression returns nonzero. An inconclusive
-result remains evidence to inspect, not a passing performance claim.
+The outcomes are `improvement`, `regression`, `unchanged`, and `inconclusive`.
+Exit 1 flags a classified regression; exit 2 means execution failed or was incomplete.
+The classifier also operates on a single pair, whose bootstrap interval cannot
+estimate run-to-run variability. Use repeated matched pairs before making a
+performance claim. An inconclusive result remains evidence to inspect, not a passing
+performance claim.
 
 Raw reports are retained under `.cache/bench-comparisons/`. They include every
-paired sample, metric direction, threshold, interval, source revision, selected
-lanes, and environment identity. The comparison refuses different
+completed source snapshot and its checksums, configuration, native plan, resource
+counters, and numeric samples. Each run has a directory containing `report.json`,
+the original snapshots, and a log per snapshot. The report is written before work
+starts and after each pair; `status` distinguishes `running`, `complete`,
+`incomplete`, and `failed`. Failed and interrupted runs retain their evidence.
+The comparison refuses different
 `package-lock.json` contents rather than silently measuring different dependencies.
 The base revision must contain the paired-runner support; use a recent checkpoint
 when investigating older history.
+
+Inspect all planned work before a time-sensitive experiment:
+
+```sh
+npm run bench -- self-compile --compare HEAD --runs 1 --max-pairs 1 --budget-seconds 600 --plan=json
+```
+
+Remove `--plan=json` to execute. `--runs` counts measured pairs; each comparison
+also warms both sources. A self-compile snapshot includes a native build, three
+cold pairs, a warmup pair, the requested measured pairs, phase/counter/owner
+instrumentation, and a resource pair. A one-pair comparison can therefore exceed
+ten minutes. The plan reports this additional work explicitly.
+
+`--budget-seconds` bounds each comparison invocation, including preparation and
+warmup. The runner stops its child process group at the deadline and allows a short
+shutdown grace period before forcing termination. Exit 2 means failed or incomplete,
+never a passing performance claim. Completed snapshots and pairs remain available;
+single-family self-compile comparisons also checkpoint between stages. Resume with
+the same command plus `--resume <run-directory>` and a fresh time budget. Source
+content (including untracked files), revision, options, and host identity must match.
+Only complete pairs contribute metrics; a partial pair is retained but excluded.
+Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
+are listed under `unpairedMetrics` and excluded rather than treated as zero.
+Source changes during execution invalidate resumption, even if later reverted.
+Run `env:check` and inspect cache activity before each resume, since power and CPU
+load can change between invocations.
+
+On completion the runner removes its exported baseline source while retaining the
+reports and snapshots. Interrupted runs retain that source and self-compile scratch
+inside the run directory for resumption. After confirming the run has stopped,
+removing its directory discards only that run's evidence and scratch. Shared native
+artifacts remain under normal cache management.
 
 ## Cache ownership
 
@@ -179,9 +220,18 @@ Explicit toolchain overrides such as `CC`, `CFLAGS`, and `RUSTFLAGS` remain
 supported and are part of native cache identity. Use explicit `--backend` and
 `--mode` arguments when requesting non-default Test262 dimensions.
 
-Plain `npm run test262` is the explicit baseline-update command and may rewrite
-`scripts/test262.json`. Both it and `npm run test262:report` traverse the full
-corpus; ask before running either command, `test:full`, or `test:full:report`.
+Plain `npm run test262` and `npm run test262:report` are non-mutating gates. They
+load `scripts/test262.json` from the resolved HEAD commit, so an uncommitted baseline
+update cannot hide regressions on the next run. Reports record that commit and the
+baseline content digest. `--baseline <file>` explicitly selects a frozen comparison
+file for reproductions. Single-variant checks return nonzero on regressions under
+both `bail` and `complete`; intentional variant skips are not regressions.
+
+`npm run test262:update-baseline` explicitly replaces `scripts/test262.json`. It
+requires a full canonical compiled/normal run with complete policy; partial,
+single-variant, custom-baseline, and instrumented updates are rejected before work.
+All three full-corpus commands are expensive; ask before running them, `test:full`,
+or `test:full:report`. Filtered diagnostic selections remain focused commands.
 
 ## Full standards policy
 
@@ -302,6 +352,41 @@ tier's fixed budget. Add an unusually slow unit or subprocess integration test t
 Do not guess when a regression plausibly belongs in more than one lane, such as
 Test262 versus native or WPT versus native. Ask the user which acceptance boundary
 they want before adding the test.
+
+## Focused optimizer verification
+
+When adding or changing a Core pass, check its integration contracts before the
+normal gate:
+
+```sh
+npm run test:unit -- --run tests/core-pass-contracts.test.ts tests/core-optimizer-infrastructure.test.ts
+```
+
+Add the affected pass's existing unit file to that command, such as
+`tests/core-memory-passes.test.ts` or `tests/rest-forwarding.test.ts`. These checks
+cover registration uniqueness, analysis admission, profitability ownership, and
+analysis invalidation without requiring a native build.
+
+Then run the fixture that observes the affected behavior. For example:
+
+```sh
+npm run test:native -- tests/native/rest-forwarding.test.ts
+npm run test:native -- tests/native/stack-object.test.ts tests/native/allocation-sinking.test.ts
+```
+
+Choose the relevant command, rather than running every example. Those fixtures
+exercise backend parity and GC stress themselves. Add a focused
+`npm run test:sanitize -- <file>` when changing C memory ownership or root lifetime.
+`rest-forwarding` and `stack-object` currently belong to the full-tier native
+complement; a successful `test:check` alone does not exercise them. Use
+`npm run test:check -- --plan=json` or a tier's `--list` to inspect actual selection.
+Finish with `npm run test:check` once the focused behavior passes.
+
+For a compiler representation failure, use the product CLI with `MAL_DEBUG=true`
+and a self-contained fixture. A raw Test262 file may require harness includes;
+reproduce it through `scripts/test262.ts --filter <path> --variant strict --policy bail`
+instead of assuming it can be built as a standalone program. Add an explicit
+backend/mode only when that dimension matters to the failure.
 
 ## Maintaining Selections
 
