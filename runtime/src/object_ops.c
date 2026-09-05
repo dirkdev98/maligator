@@ -190,6 +190,12 @@ void mal_object_set_extensible(MalObject *object, bool extensible) {
 
 void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     object->extensible = false;
+    if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) object;
+        // Dense storage cannot represent non-configurable element descriptors.
+        mal_object_array_deoptimize(array);
+        if (clear_writable) array->length_writable = false;
+    }
     bool has_shape_properties = object->shape->inline_count != 0;
     bool has_overflow_properties =
         object->overflow != nullptr && mal_table_size(object->overflow) != 0;

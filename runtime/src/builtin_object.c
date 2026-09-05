@@ -1409,14 +1409,11 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_object_is_extensible(mal_value_to_object(args[0])));
 }
 
-/**
- * SetIntegrityLevel: prevent extensions, snapshot [[OwnPropertyKeys]], then
- * clear CONFIGURABLE (and for freeze WRITABLE on data properties) per key.
- */
 bool mal_builtin_object_set_integrity(
     MalVm *vm, MalValue target, bool clear_writable
 ) {
-    if (mal_value_heap_type(target) == MAL_HEAP_OBJECT &&
+    if ((mal_value_heap_type(target) == MAL_HEAP_OBJECT ||
+         mal_value_heap_type(target) == MAL_HEAP_ARRAY_OBJECT) &&
         !mal_object_is_locked_primordial(mal_value_to_object(target))) {
         mal_object_set_integrity_level(
             mal_value_to_object(target), clear_writable);

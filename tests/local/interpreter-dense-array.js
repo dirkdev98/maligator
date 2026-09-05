@@ -113,6 +113,138 @@ check(
 	"entry positions cannot substitute for index keys",
 );
 
+for (const freeze of [false, true]) {
+	const integrity = freeze ? Object.freeze : Object.seal;
+	const array = [{ marker: 91 }, , undefined];
+	array.length = 6;
+	const symbol = Symbol("integrity data");
+	array[symbol] = 92;
+	let getterCalls = 0;
+	let setterValue;
+	const getter = () => {
+		getterCalls++;
+		return setterValue;
+	};
+	const setter = (value) => {
+		setterValue = value;
+	};
+	Object.defineProperty(array, "accessor", {
+		configurable: true,
+		get: getter,
+		set: setter,
+	});
+	Object.defineProperty(array, "hidden", { configurable: true, value: 93 });
+	check(integrity(array) === array && getterCalls === 0, "integrity skips getters");
+	check(
+		Object.isSealed(array) && Object.isFrozen(array) === freeze,
+		"array integrity level",
+	);
+	check(
+		array.length === 6 && !Object.hasOwn(array, 1) && Object.hasOwn(array, 2),
+		"integrity preserves holes, undefined elements, and trailing length",
+	);
+	const element = Object.getOwnPropertyDescriptor(array, "0");
+	const symbolic = Object.getOwnPropertyDescriptor(array, symbol);
+	const hidden = Object.getOwnPropertyDescriptor(array, "hidden");
+	const accessor = Object.getOwnPropertyDescriptor(array, "accessor");
+	const length = Object.getOwnPropertyDescriptor(array, "length");
+	check(
+		!element.configurable &&
+			element.writable === !freeze &&
+			element.enumerable &&
+			!symbolic.configurable &&
+			symbolic.writable === !freeze &&
+			symbolic.value === 92 &&
+			!hidden.configurable &&
+			!hidden.writable &&
+			!hidden.enumerable &&
+			hidden.value === 93,
+		"integrity preserves data values and narrows descriptor flags",
+	);
+	check(
+		!accessor.configurable &&
+			!accessor.enumerable &&
+			accessor.get === getter &&
+			accessor.set === setter &&
+			!Object.hasOwn(accessor, "writable"),
+		"integrity retains accessor identity and descriptor kind",
+	);
+	check(
+		!length.configurable && !length.enumerable && length.writable === !freeze,
+		"array length integrity lives outside indexed properties",
+	);
+	array.accessor = 94;
+	check(array.accessor === 94 && getterCalls === 1, "frozen accessors retain setters");
+	check(
+		throwsTypeError(() => store(array, 1, 95)),
+		"integrity forbids filling holes",
+	);
+	check(
+		throwsTypeError(() => {
+			delete array[0];
+		}),
+		"integrity forbids element deletion",
+	);
+	check(
+		throwsTypeError(() => {
+			array.length = 1;
+		}),
+		"integrity rejects deleting fixed elements",
+	);
+	check(array.length === (freeze ? 6 : 3), "sealed shrink stops at last fixed element");
+	Object.freeze(array);
+	Object.seal(array);
+	check(Object.isFrozen(array), "seal cannot undo a previous freeze");
+}
+
+const frozenEmpty = Object.freeze([]);
+const sealedEmpty = Object.seal([]);
+check(
+	throwsTypeError(() => frozenEmpty.pop()),
+	"empty frozen pop still writes length",
+);
+check(
+	sealedEmpty.pop() === undefined &&
+		Object.getOwnPropertyDescriptor(sealedEmpty, "length").writable,
+	"sealed empty length stays writable",
+);
+sealedEmpty.length = 2;
+check(
+	sealedEmpty.length === 2 && !Object.hasOwn(sealedEmpty, 0),
+	"sealed empty length can grow without creating elements",
+);
+
+class IntegrityArray extends Array {
+	#marker = 96;
+	read() {
+		return this.#marker;
+	}
+	write(value) {
+		this.#marker = value;
+	}
+}
+const privateArray = new IntegrityArray();
+privateArray.push({ marker: 97 });
+Object.freeze(privateArray);
+privateArray.write(98);
+if (typeof collect === "function") collect();
+check(
+	privateArray.read() === 98 && privateArray[0].marker === 97,
+	"freezing an array keeps private fields mutable",
+);
+
+const frozenObjects = [];
+for (let index = 0; index < 40; index++) frozenObjects.push({ marker: index + 100 });
+if (typeof collect === "function") collect();
+Object.freeze(frozenObjects);
+if (typeof collect === "function") collect();
+for (let index = 0; index < frozenObjects.length; index++) {
+	check(
+		load(frozenObjects, index).marker === index + 100,
+		"frozen migration roots element values",
+	);
+}
+
 let indexedGetterCalls = 0;
 const changingDictionary = [41, 42, 43];
 Object.defineProperty(changingDictionary, "1", {

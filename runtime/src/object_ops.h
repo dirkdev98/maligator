@@ -38,7 +38,7 @@ bool mal_object_is_extensible(const MalObject *object);
 void mal_object_set_extensible(MalObject *object, bool extensible);
 
 /**
- * Apply sealed/frozen descriptor flags directly to an exact ordinary object.
+ * Apply sealed/frozen descriptor flags directly to an exact ordinary object or array.
  * The caller must exclude protected primordial objects whose mutation policy is
  * enforced by the VM-level define-own-property path.
  */
