@@ -536,7 +536,7 @@ function edgeTerminatesWith(
 	const target = enterEdge(fn, edge, environment);
 	const terminator = fn.blockTerminator(target.block);
 	return (
-		[...fn.bodyInstructionIds(target.block)].length === 0 &&
+		!fn.hasBodyInstructions(target.block) &&
 		fn.instructionKind(terminator) === kind &&
 		instructionOperand(fn, terminator, 0) !== undefined &&
 		origin(instructionOperand(fn, terminator, 0)!, target.environment) === value
@@ -1592,7 +1592,7 @@ const eliminateForwardingBlocks: CoreFunctionPass = {
 			) {
 				continue;
 			}
-			if ([...fn.bodyInstructionIds(block)].length !== 0) continue;
+			if (fn.hasBodyInstructions(block)) continue;
 			const parameterStart = fn.kernel.blockParameterStart(block);
 			const parameterCount = fn.kernel.blockParameterCount(block);
 			let hasOutsideUse = false;

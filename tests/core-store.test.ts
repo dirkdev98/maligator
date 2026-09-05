@@ -354,10 +354,71 @@ describe("Core store", () => {
 			() => fn.valueRepresentation(parameter),
 			() => fn.blockIds(),
 			() => fn.instructionIds(),
+			() => fn.hasBodyInstructions(entry),
+			() => [...fn.bodyInstructionIds(entry)],
 			() => [...fn.factIds()],
 		];
 		for (const read of retiredReads) expect(read).toThrow("retired generation 0");
 	});
+
+	it("observes empty block bodies during construction and after edits", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const block = builder.createBlock();
+		const fn = builder.editor.function;
+		expect(fn.hasBodyInstructions(block)).toBe(false);
+		expect([...fn.bodyInstructionIds(block)]).toEqual([]);
+		builder.setTerminator(block, { kind: "unreachable" });
+		builder.finish(block);
+		expect(fn.hasBodyInstructions(block)).toBe(false);
+		const editor = CoreEditor.open(program, fn.id);
+		const added = editor.appendInstruction(block, "constant", []);
+		expect(fn.hasBodyInstructions(block)).toBe(true);
+		expect([...fn.bodyInstructionIds(block)]).toEqual([added.instruction]);
+		editor.removeInstruction(added.instruction);
+		expect(fn.hasBodyInstructions(block)).toBe(false);
+		expect([...fn.bodyInstructionIds(block)]).toEqual([]);
+		editor.commit();
+		expect(() => fn.hasBodyInstructions(coreBlockId(fn.blockCapacity))).toThrow(
+			"Unknown Core block",
+		);
+		verifyCoreProgram(program);
+	});
+
+	it("observes inserted and removed successors while walking a block body", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const block = builder.createBlock([{ representation: "boxed" }]);
+		const value = builder.blockParameterValue(block, 0);
+		for (let index = 0; index < 3; index++)
+			builder.appendInstruction(block, "sink", [value]);
+		builder.setTerminator(block, { kind: "return", value });
+		builder.finish(block);
+		const fn = builder.editor.function;
+		const [first, second, third] = [...fn.bodyInstructionIds(block)];
+		const iterator = fn.bodyInstructionIds(block)[Symbol.iterator]();
+		expect(iterator.next().value).toBe(first);
+		const editor = CoreEditor.open(program, fn.id);
+		const inserted = editor.insertInstruction(block, second, "sink", [value]);
+		editor.removeInstruction(second!);
+		expect(iterator.next().value).toBe(inserted.instruction);
+		expect(iterator.next().value).toBe(third);
+		expect(iterator.next().done).toBe(true);
+		editor.commit();
+		verifyCoreProgram(program);
+	});
+
+	it.each([false, true])(
+		"rejects retirement while a body iterator is suspended (last operation: %s)",
+		(lastOperation) => {
+			const { program, fn, entry } = oneFunction();
+			const iterator = fn.bodyInstructionIds(entry)[Symbol.iterator]();
+			expect(iterator.next().done).toBe(false);
+			if (lastOperation) expect(iterator.next().done).toBe(false);
+			program.finalizeConstructionGeneration();
+			expect(() => iterator.next()).toThrow("retired generation 0");
+		},
+	);
 
 	it("checks function identities without enumerating the program", () => {
 		const { program, fn } = oneFunction();

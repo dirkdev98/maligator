@@ -865,9 +865,22 @@ export class CoreFunctionStore {
 	}
 
 	*bodyInstructionIds(block: CoreBlockId): Iterable<CoreInstructionId> {
-		for (const instruction of this.instructionIds(block)) {
-			if (this.instructionKind(instruction) === "operation") yield instruction;
+		this.#requireBlock(block);
+		for (
+			let instruction = this.#blockFirstInstruction[block] ?? -1;
+			instruction >= 0;
+			instruction = this.#instructionNext[instruction] ?? -1
+		) {
+			if (this.#retired) this.#throwRetiredGeneration();
+			if (this.#instructionOpcode[instruction]! >= 0)
+				yield coreInstructionId(instruction);
 		}
+	}
+
+	hasBodyInstructions(block: CoreBlockId): boolean {
+		this.#requireBlock(block);
+		const first = this.#blockFirstInstruction[block] ?? -1;
+		return first >= 0 && this.#instructionOpcode[first]! >= 0;
 	}
 
 	*factIds(): Iterable<CoreFactId> {
