@@ -20,7 +20,9 @@ import {
 	analyzeCoreProvenance,
 	discoverCoreLocalSpecializationCandidates,
 } from "../src/compiler/core/core-ir-provenance.ts";
+import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
@@ -64,6 +66,87 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it.each([
+		"conditional",
+		"loop",
+		"weak-field",
+		"handler",
+		"source-use",
+		"suspend",
+	] as const)(
+		"only sinks conditional allocations without identity or lifetime hazards: %s",
+		(scenario) => {
+			const core = new CoreProgram(coreOpcodeRegistry, {
+				globalCount: 1,
+				stringConstants: [[0x78]],
+			});
+			const builder = new CoreFunctionBuilder(core, {
+				parameterCount: 1,
+				isAsync: scenario === "suspend",
+			});
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const flag = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const used = builder.createBlock();
+			const skipped = builder.createBlock();
+			const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[scenario === "weak-field" ? flag : seven!],
+				{ attributes: { keyStringIndices: [0] } },
+			);
+			if (scenario === "source-use") {
+				builder.appendInstruction(entry, "rootUse", [object!]);
+			}
+			if (scenario === "suspend") builder.appendInstruction(entry, "await", [seven!]);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: flag,
+				consequent: { block: used, arguments: [] },
+				alternate: { block: skipped, arguments: [] },
+			});
+			builder.appendInstruction(used, "storeGlobal", [object!], {
+				attributes: { index: 0 },
+			});
+			if (scenario === "loop") {
+				builder.setTerminator(used, {
+					kind: "branch",
+					condition: flag,
+					consequent: { block: used, arguments: [] },
+					alternate: { block: skipped, arguments: [] },
+				});
+			} else builder.setTerminator(used, { kind: "return", value: seven! });
+			builder.setTerminator(skipped, { kind: "return", value: seven! });
+			if (scenario === "handler") {
+				const handler = builder.createBlock([
+					{ representation: "boxed", role: "exception" },
+				]);
+				builder.setHandler(entry, handler, []);
+				builder.setTerminator(handler, {
+					kind: "return",
+					value: inspectCoreBlockParameters(builder, handler)[0]!.value,
+				});
+			}
+			const finished = builder.finish(entry);
+			const fn = core.function(finished.function);
+			const definition = inspectCoreValueDefinition(fn, object!);
+			if (definition.kind !== "instruction") throw new Error("Expected allocation");
+			const report = new CoreOptimizationReportBuilder(core);
+			const analyses = new CoreAnalysisManager(core, context, report);
+			const pass = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "sink-conditional-object-allocations",
+			)!;
+			new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+				verification: "per-pass",
+			}).runComponent("memory", [pass]);
+			expect(fn.instructionBlock(definition.instruction)).toBe(
+				scenario === "conditional" ? used : entry,
+			);
+		},
+	);
+
 	it("skips allocation-observation provenance for unrelated values", () => {
 		const core = new CoreProgram(coreOpcodeRegistry, {
 			globalCount: 2,

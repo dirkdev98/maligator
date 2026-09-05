@@ -33,6 +33,39 @@ function emptyObserved(seed) {
 	return typeof o === "object" && o === o;
 }
 
+function conditionalObjects() {
+	const retained = [];
+	let initialized = 0;
+	for (let index = 0; index < 40; index++) {
+		const value = { index: (initialized++, index), text: "item:" + index };
+		allocateNoise(index);
+		if ((index & 3) === 0) retained.push(value, value);
+	}
+	if (initialized !== 40 || retained.length !== 20) return false;
+	for (let index = 0; index < retained.length; index += 2) {
+		const value = retained[index];
+		if (
+			value !== retained[index + 1] ||
+			(index > 0 && value === retained[index - 2]) ||
+			value.index !== index * 2 ||
+			value.text !== "item:" + index * 2
+		)
+			return false;
+		value.index++;
+		if (retained[index + 1].index !== index * 2 + 1) return false;
+	}
+	return true;
+}
+
+function repeatedConditionalUse() {
+	const values = [];
+	const value = { index: 7 };
+	let count = 0;
+	while (count++ < 4) values.push(value);
+	values[0].index = 19;
+	return values.every((entry) => entry === value && entry.index === 19);
+}
+
 function simultaneous(seed) {
 	const left = { value: seed, tag: "left:" + seed };
 	const right = { value: seed + 1, tag: "right:" + seed };
@@ -475,6 +508,12 @@ check(
 	"ordinary object prototype",
 	Object.getPrototypeOf(prototypeNegative) === Object.prototype,
 );
+
+check(
+	"conditional allocation keeps initializers, retained identity, and string roots",
+	conditionalObjects(),
+);
+check("repeated conditional uses share one allocation", repeatedConditionalUse());
 
 if (failed !== 0) throw new Error("stack-object failures: " + failed);
 console.log("stack-object PASS " + passed + "/" + passed);

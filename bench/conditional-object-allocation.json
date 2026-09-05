@@ -1,0 +1,2292 @@
+{
+	"schema": 1,
+	"optimization": "Sink a shaped-object allocation into its uniquely entered consuming successor after a branch",
+	"workload": "javascript-v1",
+	"command": "npm run bench -- javascript --compare e1fb84b8 --runs 5 --max-pairs 5",
+	"baseline": {
+		"commit": "e1fb84b84d02bf72f28260fcdb3982cb60d36136",
+		"dirty": false,
+		"digest": "ec60fc20a111645c689414c39906dcb2238e336bce0bc45556bc7af5eb78fc73",
+		"benchmarkDigest": "427d7ef335c3934116ef753857d46514ab5178e3ce6d395412f19f64c6d9b775",
+		"configurationDigest": "1509e8d492d351fcfb6821fda64cada15f933cc8591ba1c871f812c9728a051a"
+	},
+	"candidate": {
+		"commit": "e1fb84b84d02bf72f28260fcdb3982cb60d36136",
+		"dirty": true,
+		"digest": "262a278617db5251ad13825813270499d76a77956ae57fc5e0301706d33aa063",
+		"benchmarkDigest": "427d7ef335c3934116ef753857d46514ab5178e3ce6d395412f19f64c6d9b775",
+		"configurationDigest": "1509e8d492d351fcfb6821fda64cada15f933cc8591ba1c871f812c9728a051a"
+	},
+	"optimizerFileSha256": "654eb688e969e871641ac81721ceec9dc3b6c781e0edbaf1d057bc6f08e3d0b6",
+	"nativeBuild": {
+		"mode": "production",
+		"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+		"lto": true,
+		"strip": true,
+		"compiler": "/usr/bin/cc",
+		"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+		"target": "aarch64-apple-darwin"
+	},
+	"host": {
+		"platform": "darwin",
+		"arch": "arm64",
+		"node": "v26.7.0",
+		"logicalCpus": 11,
+		"power": "ac",
+		"preflightRecommendation": "ready"
+	},
+	"phaseChecksums": {
+		"core": 299544852,
+		"objects": 338353713,
+		"collections": 742032359,
+		"text": 87308370,
+		"async": 79845414,
+		"allocation": 77034407
+	},
+	"pairedComparison": {
+		"schema": 1,
+		"baseRef": "e1fb84b8",
+		"lanes": ["javascript"],
+		"extraArgs": ["--http-seconds", "5"],
+		"headExtraArgs": [],
+		"environment": {
+			"platform": "darwin",
+			"arch": "arm64",
+			"node": "v26.7.0"
+		},
+		"metrics": [
+			{
+				"path": "javascript.modes.closed-compiled.balancedRatio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -2.461909406614657,
+				"confidenceInterval": [-14.90199815540155, 14.252077834523574],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 5.845453459392019,
+						"head": 4.974364092698564
+					},
+					{
+						"base": 5.131008023084566,
+						"head": 4.956113083935855
+					},
+					{
+						"base": 5.94637995397661,
+						"head": 5.8489425646311055
+					},
+					{
+						"base": 5.14984747414087,
+						"head": 5.883807744514673
+					},
+					{
+						"base": 5.1282475037162145,
+						"head": 5.001994696027744
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.binaryBytes",
+				"direction": "lower",
+				"thresholdPercent": 0.5,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [0, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 2532792,
+						"head": 2532792
+					},
+					{
+						"base": 2532792,
+						"head": 2532792
+					},
+					{
+						"base": 2532792,
+						"head": 2532792
+					},
+					{
+						"base": 2532792,
+						"head": 2532792
+					},
+					{
+						"base": 2532792,
+						"head": 2532792
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.maxPauseMs",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -50.787518573551274,
+				"confidenceInterval": [-52.09032651815685, -50.07329228965113],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 3.365,
+						"head": 1.656
+					},
+					{
+						"base": 3.292,
+						"head": 1.623
+					},
+					{
+						"base": 3.408,
+						"head": 1.637
+					},
+					{
+						"base": 3.411,
+						"head": 1.703
+					},
+					{
+						"base": 3.277,
+						"head": 1.57
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.nativeBuild.cCompilationMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -26.328844572195987,
+				"confidenceInterval": [-43.753439044479684, -1.169155803062893],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 363.4459999999999,
+						"head": 359.19674999999995
+					},
+					{
+						"base": 5.346167000000037,
+						"head": 3.938582999999994
+					},
+					{
+						"base": 3.551207999999974,
+						"head": 2.80929100000003
+					},
+					{
+						"base": 4.8559999999999945,
+						"head": 2.7313330000000633
+					},
+					{
+						"base": 4.01258299999995,
+						"head": 2.7777920000000904
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.nativeBuild.linkMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -5.540316582681921,
+				"confidenceInterval": [-20.51317299541504, 13.544501892102703],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 1525.7452500000002,
+						"head": 1512.867042
+					},
+					{
+						"base": 1.291417000000024,
+						"head": 1.4663329999999632
+					},
+					{
+						"base": 1.3255000000000337,
+						"head": 1.1583329999999705
+					},
+					{
+						"base": 1.254458999999997,
+						"head": 1.1849580000000515
+					},
+					{
+						"base": 1.4403330000000096,
+						"head": 1.1448749999999563
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.nativeBuild.peakRssBytes",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": 0.5521593374087951,
+				"confidenceInterval": [0.5521593374087951, 0.5521593374087951],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 249249792,
+						"head": 250626048
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.nativeBuild.stripMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [0, 2.5760180822131757],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 13.051500000000033,
+						"head": 13.387709000000086
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.nativeBuild.totalMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -9.952500616639815,
+				"confidenceInterval": [-16.858369991507622, -0.9448754154683883],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 1925.7256250000003,
+						"head": 1907.5299170000003
+					},
+					{
+						"base": 24.47558400000014,
+						"head": 22.723790000000008
+					},
+					{
+						"base": 22.999667000000045,
+						"head": 20.710624999999936
+					},
+					{
+						"base": 24.401333000000022,
+						"head": 20.287666000000172
+					},
+					{
+						"base": 23.666584000000057,
+						"head": 20.49783400000001
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.allocation",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -12.063227953410982,
+				"confidenceInterval": [-12.354892205638475, -11.322314049586776],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 1202,
+						"head": 1057
+					},
+					{
+						"base": 1206,
+						"head": 1057
+					},
+					{
+						"base": 1198,
+						"head": 1053
+					},
+					{
+						"base": 1210,
+						"head": 1073
+					},
+					{
+						"base": 1195,
+						"head": 1055
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.async",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-2.197802197802198, 1.1235955056179776],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 91,
+						"head": 89
+					},
+					{
+						"base": 89,
+						"head": 90
+					},
+					{
+						"base": 90,
+						"head": 89
+					},
+					{
+						"base": 90,
+						"head": 91
+					},
+					{
+						"base": 90,
+						"head": 90
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.collections",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-1.1235955056179776, 1.1406844106463878],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 264,
+						"head": 264
+					},
+					{
+						"base": 267,
+						"head": 264
+					},
+					{
+						"base": 265,
+						"head": 263
+					},
+					{
+						"base": 264,
+						"head": 264
+					},
+					{
+						"base": 263,
+						"head": 266
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.core",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.5319148936170213,
+				"confidenceInterval": [-2.1164021164021163, 0.53475935828877],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 191,
+						"head": 188
+					},
+					{
+						"base": 189,
+						"head": 188
+					},
+					{
+						"base": 187,
+						"head": 188
+					},
+					{
+						"base": 189,
+						"head": 185
+					},
+					{
+						"base": 188,
+						"head": 187
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.objects",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.9380863039399625,
+				"confidenceInterval": [-0.9242144177449169, 1.890359168241966],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 541,
+						"head": 536
+					},
+					{
+						"base": 529,
+						"head": 539
+					},
+					{
+						"base": 539,
+						"head": 540
+					},
+					{
+						"base": 535,
+						"head": 542
+					},
+					{
+						"base": 533,
+						"head": 538
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.phaseMs.text",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.6514657980456027,
+				"confidenceInterval": [-0.6472491909385114, 0.9803921568627451],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 312,
+						"head": 310
+					},
+					{
+						"base": 307,
+						"head": 310
+					},
+					{
+						"base": 306,
+						"head": 309
+					},
+					{
+						"base": 309,
+						"head": 307
+					},
+					{
+						"base": 307,
+						"head": 309
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.ratio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -5.977153873732028,
+				"confidenceInterval": [-19.03276739418366, 11.811387271928119],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 7.334535192689797,
+						"head": 5.938570170020608
+					},
+					{
+						"base": 6.365678564579257,
+						"head": 5.929864359405103
+					},
+					{
+						"base": 7.483687270861414,
+						"head": 7.0882682404792
+					},
+					{
+						"base": 6.38021360639765,
+						"head": 7.133805344225528
+					},
+					{
+						"base": 6.3564604200338035,
+						"head": 5.97652499980551
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.rssMb",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -22.991768379222254,
+				"confidenceInterval": [-23.06382978723404, -22.969903463940945],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 55.046875,
+						"head": 42.390625
+					},
+					{
+						"base": 55.078125,
+						"head": 42.375
+					},
+					{
+						"base": 55.03125,
+						"head": 42.390625
+					},
+					{
+						"base": 55.046875,
+						"head": 42.375
+					},
+					{
+						"base": 55.03125,
+						"head": 42.390625
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-compiled.wallMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -5.35349123099992,
+				"confidenceInterval": [-6.007783541266526, -5.05453025424078],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 2604.66275,
+						"head": 2448.18025
+					},
+					{
+						"base": 2590.638875,
+						"head": 2451.94925
+					},
+					{
+						"base": 2588.822583,
+						"head": 2444.8905
+					},
+					{
+						"base": 2599.353791,
+						"head": 2465.643166
+					},
+					{
+						"base": 2579.49375,
+						"head": 2449.112458
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.balancedRatio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -2.6476355070934776,
+				"confidenceInterval": [-14.713710952833642, 13.723226146776987],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 9.749185368252139,
+						"head": 8.314718412911569
+					},
+					{
+						"base": 8.579803795716707,
+						"head": 8.260893563903126
+					},
+					{
+						"base": 9.973549271154114,
+						"head": 9.802930606513893
+					},
+					{
+						"base": 8.632647708204646,
+						"head": 9.81732547565613
+					},
+					{
+						"base": 8.603937318826878,
+						"head": 8.376136419365551
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.binaryBytes",
+				"direction": "lower",
+				"thresholdPercent": 0.5,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [0, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 2402040,
+						"head": 2402040
+					},
+					{
+						"base": 2402040,
+						"head": 2402040
+					},
+					{
+						"base": 2402040,
+						"head": 2402040
+					},
+					{
+						"base": 2402040,
+						"head": 2402040
+					},
+					{
+						"base": 2402040,
+						"head": 2402040
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.maxPauseMs",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -60.915275200989484,
+				"confidenceInterval": [-62.24429291431959, -58.46532369675535],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 6.514,
+						"head": 2.526
+					},
+					{
+						"base": 6.585,
+						"head": 2.616
+					},
+					{
+						"base": 6.746,
+						"head": 2.547
+					},
+					{
+						"base": 6.468,
+						"head": 2.528
+					},
+					{
+						"base": 6.503,
+						"head": 2.701
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.nativeBuild.cCompilationMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -25.52796077332352,
+				"confidenceInterval": [-28.2203851744179, -23.381114903298453],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 2.749540999999681,
+						"head": 2.046541000000161
+					},
+					{
+						"base": 2.7468750000000455,
+						"head": 2.1046250000000555
+					},
+					{
+						"base": 2.7367089999999052,
+						"head": 2.038082999999915
+					},
+					{
+						"base": 2.7519999999999527,
+						"head": 1.9753749999999854
+					},
+					{
+						"base": 2.6820840000000317,
+						"head": 2.0094159999999874
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.nativeBuild.linkMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -1.7735887301122788,
+				"confidenceInterval": [-7.2603092028363365, 6.773440134906711],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 1.3411660000001575,
+						"head": 1.2615829999999733
+					},
+					{
+						"base": 1.202374999999961,
+						"head": 1.197917000000075
+					},
+					{
+						"base": 1.2287079999999833,
+						"head": 1.1394999999999982
+					},
+					{
+						"base": 1.2333750000000236,
+						"head": 1.211500000000001
+					},
+					{
+						"base": 1.1860000000000355,
+						"head": 1.2663330000000315
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.nativeBuild.stripMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [0, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.nativeBuild.totalMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -20.658233250402432,
+				"confidenceInterval": [-23.7381124194415, -17.665622342269828],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 8.74449899999945,
+						"head": 6.938040000000456
+					},
+					{
+						"base": 8.390750000000025,
+						"head": 6.866459000000191
+					},
+					{
+						"base": 8.371665999999777,
+						"head": 6.618873999999892
+					},
+					{
+						"base": 8.523916999999983,
+						"head": 6.500500000000102
+					},
+					{
+						"base": 8.236584999999991,
+						"head": 6.781540999999947
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.allocation",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -12.562814070351758,
+				"confidenceInterval": [-13.366336633663368, -12.103505843071787],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 1198,
+						"head": 1042
+					},
+					{
+						"base": 1197,
+						"head": 1047
+					},
+					{
+						"base": 1198,
+						"head": 1053
+					},
+					{
+						"base": 1212,
+						"head": 1050
+					},
+					{
+						"base": 1194,
+						"head": 1044
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.async",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-1.5384615384615385, 0.78125],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 130,
+						"head": 128
+					},
+					{
+						"base": 129,
+						"head": 129
+					},
+					{
+						"base": 128,
+						"head": 129
+					},
+					{
+						"base": 130,
+						"head": 129
+					},
+					{
+						"base": 129,
+						"head": 130
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.collections",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.22624434389140274,
+				"confidenceInterval": [-1.55902004454343, 1.366742596810934],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 449,
+						"head": 442
+					},
+					{
+						"base": 441,
+						"head": 443
+					},
+					{
+						"base": 442,
+						"head": 441
+					},
+					{
+						"base": 444,
+						"head": 441
+					},
+					{
+						"base": 439,
+						"head": 445
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.core",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-0.16366612111292964, 0.32786885245901637],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 610,
+						"head": 612
+					},
+					{
+						"base": 612,
+						"head": 611
+					},
+					{
+						"base": 611,
+						"head": 610
+					},
+					{
+						"base": 612,
+						"head": 612
+					},
+					{
+						"base": 611,
+						"head": 613
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.objects",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.08025682182985554,
+				"confidenceInterval": [-0.16051364365971107, 0.5658852061438965],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 1246,
+						"head": 1244
+					},
+					{
+						"base": 1237,
+						"head": 1244
+					},
+					{
+						"base": 1250,
+						"head": 1254
+					},
+					{
+						"base": 1248,
+						"head": 1249
+					},
+					{
+						"base": 1246,
+						"head": 1247
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.phaseMs.text",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.2680965147453083,
+				"confidenceInterval": [-1.3192612137203166, 0.5361930294906166],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 377,
+						"head": 377
+					},
+					{
+						"base": 373,
+						"head": 372
+					},
+					{
+						"base": 379,
+						"head": 374
+					},
+					{
+						"base": 373,
+						"head": 375
+					},
+					{
+						"base": 377,
+						"head": 375
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.ratio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -4.399153441669376,
+				"confidenceInterval": [-17.397698917648242, 13.129816680624673],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 11.303340143620009,
+						"head": 9.336819057795331
+					},
+					{
+						"base": 9.813824240335322,
+						"head": 9.316431037750764
+					},
+					{
+						"base": 11.598868746815638,
+						"head": 11.21177452761114
+					},
+					{
+						"base": 9.87587929664241,
+						"head": 11.172564143891323
+					},
+					{
+						"base": 9.85735806555647,
+						"head": 9.423717758957869
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.rssMb",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -48.06874884494548,
+				"confidenceInterval": [-48.126269152667525, -47.98670114517917],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 84.546875,
+						"head": 43.90625
+					},
+					{
+						"base": 84.59375,
+						"head": 44
+					},
+					{
+						"base": 84.578125,
+						"head": 43.921875
+					},
+					{
+						"base": 84.640625,
+						"head": 43.90625
+					},
+					{
+						"base": 84.59375,
+						"head": 44
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.closed-interpreted.wallMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -3.6190211439547566,
+				"confidenceInterval": [-4.1096859377635315, -3.4610452827265963],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 4014.077,
+						"head": 3849.111042
+					},
+					{
+						"base": 3993.93,
+						"head": 3852.266209
+					},
+					{
+						"base": 4012.382167,
+						"head": 3867.173208
+					},
+					{
+						"base": 4023.518,
+						"head": 3861.551458
+					},
+					{
+						"base": 4000.181208,
+						"head": 3861.733125
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.balancedRatio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -3.179179477541263,
+				"confidenceInterval": [-14.357739100715538, 13.698415346117883],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 5.815619105407392,
+						"head": 4.980627687161632
+					},
+					{
+						"base": 5.172406822790846,
+						"head": 4.969736660942283
+					},
+					{
+						"base": 5.964438687321357,
+						"head": 5.838188305774365
+					},
+					{
+						"base": 5.16909552976847,
+						"head": 5.877179705073768
+					},
+					{
+						"base": 5.166862580607537,
+						"head": 5.0025987458121035
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.binaryBytes",
+				"direction": "lower",
+				"thresholdPercent": 0.5,
+				"medianRegressionPercent": 0.16286325219225403,
+				"confidenceInterval": [0.16286325219225403, 0.16286325219225403],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 30563064,
+						"head": 30612840
+					},
+					{
+						"base": 30563064,
+						"head": 30612840
+					},
+					{
+						"base": 30563064,
+						"head": 30612840
+					},
+					{
+						"base": 30563064,
+						"head": 30612840
+					},
+					{
+						"base": 30563064,
+						"head": 30612840
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.maxPauseMs",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -63.43135087331417,
+				"confidenceInterval": [-63.895809739524346, -62.24809673085535],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 4.543,
+						"head": 1.678
+					},
+					{
+						"base": 4.466,
+						"head": 1.686
+					},
+					{
+						"base": 4.415,
+						"head": 1.594
+					},
+					{
+						"base": 4.545,
+						"head": 1.652
+					},
+					{
+						"base": 4.523,
+						"head": 1.654
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.nativeBuild.cCompilationMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -1.0230648500231736,
+				"confidenceInterval": [-5.811738077835932, 2.2036336073721214],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 351.5457500000002,
+						"head": 347.9492089999999
+					},
+					{
+						"base": 2.6702920000000177,
+						"head": 2.637042000000065
+					},
+					{
+						"base": 2.680499999999938,
+						"head": 2.661041999999952
+					},
+					{
+						"base": 2.652665999999954,
+						"head": 2.498500000000149
+					},
+					{
+						"base": 2.5752919999999904,
+						"head": 2.632041999999956
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.nativeBuild.linkMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -7.422842628937687,
+				"confidenceInterval": [-9.713973996169925, 1.5268522313309651],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 25030.942166999997,
+						"head": 25413.127666
+					},
+					{
+						"base": 12.308958000000075,
+						"head": 11.182999999999993
+					},
+					{
+						"base": 12.64329100000009,
+						"head": 11.415124999999989
+					},
+					{
+						"base": 11.909750000000031,
+						"head": 11.025708000000122
+					},
+					{
+						"base": 11.777749999999969,
+						"head": 11.739707999999837
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.nativeBuild.peakRssBytes",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -2.4085031578756606,
+				"confidenceInterval": [-2.4085031578756606, -2.4085031578756606],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 1808121856,
+						"head": 1764573184
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.nativeBuild.stripMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-1.1728126220430102, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 24.005624999997963,
+						"head": 23.724083999997674
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.nativeBuild.totalMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -1.7555675682855445,
+				"confidenceInterval": [-3.47796014187296, 2.117606261974102],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 25534.008458999997,
+						"head": 25913.873375999996
+					},
+					{
+						"base": 87.39429199999995,
+						"head": 89.24495899999988
+					},
+					{
+						"base": 88.76729100000023,
+						"head": 85.67999999999984
+					},
+					{
+						"base": 87.58899899999983,
+						"head": 85.96545800000024
+					},
+					{
+						"base": 88.43766700000003,
+						"head": 86.88508399999967
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.allocation",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -13.70767960363336,
+				"confidenceInterval": [-14.390842191332789, -12.737799834574028],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 1212,
+						"head": 1057
+					},
+					{
+						"base": 1223,
+						"head": 1047
+					},
+					{
+						"base": 1211,
+						"head": 1045
+					},
+					{
+						"base": 1218,
+						"head": 1049
+					},
+					{
+						"base": 1209,
+						"head": 1055
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.async",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-1.0526315789473684, 1.0638297872340425],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 95,
+						"head": 94
+					},
+					{
+						"base": 94,
+						"head": 95
+					},
+					{
+						"base": 95,
+						"head": 95
+					},
+					{
+						"base": 95,
+						"head": 96
+					},
+					{
+						"base": 95,
+						"head": 95
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.collections",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.3676470588235294,
+				"confidenceInterval": [-1.4598540145985401, -0.3663003663003663],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 274,
+						"head": 270
+					},
+					{
+						"base": 273,
+						"head": 272
+					},
+					{
+						"base": 272,
+						"head": 271
+					},
+					{
+						"base": 272,
+						"head": 271
+					},
+					{
+						"base": 274,
+						"head": 270
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.core",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.5263157894736842,
+				"confidenceInterval": [-1.5789473684210527, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 190,
+						"head": 190
+					},
+					{
+						"base": 190,
+						"head": 189
+					},
+					{
+						"base": 189,
+						"head": 187
+					},
+					{
+						"base": 190,
+						"head": 187
+					},
+					{
+						"base": 190,
+						"head": 190
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.objects",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.1855287569573284,
+				"confidenceInterval": [-1.4625228519195612, 0.7462686567164178],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 536,
+						"head": 540
+					},
+					{
+						"base": 547,
+						"head": 539
+					},
+					{
+						"base": 540,
+						"head": 539
+					},
+					{
+						"base": 539,
+						"head": 540
+					},
+					{
+						"base": 536,
+						"head": 540
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.phaseMs.text",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.3558718861209964,
+				"confidenceInterval": [-0.35211267605633806, 2.8268551236749118],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 281,
+						"head": 284
+					},
+					{
+						"base": 283,
+						"head": 291
+					},
+					{
+						"base": 281,
+						"head": 282
+					},
+					{
+						"base": 285,
+						"head": 286
+					},
+					{
+						"base": 284,
+						"head": 283
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.ratio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -6.862158801648718,
+				"confidenceInterval": [-18.92435168297727, 10.18565351827684],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 7.299487603288238,
+						"head": 5.918106898186643
+					},
+					{
+						"base": 6.423308763475273,
+						"head": 5.894631179047459
+					},
+					{
+						"base": 7.492495081718419,
+						"head": 7.024657728001649
+					},
+					{
+						"base": 6.387463495369062,
+						"head": 7.038068395613769
+					},
+					{
+						"base": 6.387690504067054,
+						"head": 5.949357037920137
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.rssMb",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -34.77556686719112,
+				"confidenceInterval": [-34.80573543015726, -34.745370370370374],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 67.5,
+						"head": 44.046875
+					},
+					{
+						"base": 67.5625,
+						"head": 44.046875
+					},
+					{
+						"base": 67.53125,
+						"head": 44.046875
+					},
+					{
+						"base": 67.546875,
+						"head": 44.046875
+					},
+					{
+						"base": 67.53125,
+						"head": 44.046875
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-compiled.wallMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -6.517285833150946,
+				"confidenceInterval": [-6.759974696765017, -5.881927282292604],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 2592.216542,
+						"head": 2439.74425
+					},
+					{
+						"base": 2614.092625,
+						"head": 2437.380625
+					},
+					{
+						"base": 2591.869458,
+						"head": 2422.949917
+					},
+					{
+						"base": 2602.307458,
+						"head": 2432.553792
+					},
+					{
+						"base": 2592.167125,
+						"head": 2437.979334
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.balancedRatio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -2.564398024125292,
+				"confidenceInterval": [-13.60907812530476, 13.816444658539877],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 9.6586022585788,
+						"head": 8.34415553139636
+					},
+					{
+						"base": 8.603517275044968,
+						"head": 8.259240569144028
+					},
+					{
+						"base": 9.97031954453155,
+						"head": 9.759784708452093
+					},
+					{
+						"base": 8.576935397812804,
+						"head": 9.761962930450327
+					},
+					{
+						"base": 8.60162744033713,
+						"head": 8.381047476214505
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.binaryBytes",
+				"direction": "lower",
+				"thresholdPercent": 0.5,
+				"medianRegressionPercent": 0.16373938437465213,
+				"confidenceInterval": [0.16373938437465213, 0.16373938437465213],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 30399528,
+						"head": 30449304
+					},
+					{
+						"base": 30399528,
+						"head": 30449304
+					},
+					{
+						"base": 30399528,
+						"head": 30449304
+					},
+					{
+						"base": 30399528,
+						"head": 30449304
+					},
+					{
+						"base": 30399528,
+						"head": 30449304
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.maxPauseMs",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -50.43183220234423,
+				"confidenceInterval": [-53.49744821374962, -48.43554443053818],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 3.331,
+						"head": 1.549
+					},
+					{
+						"base": 3.242,
+						"head": 1.607
+					},
+					{
+						"base": 3.189,
+						"head": 1.569
+					},
+					{
+						"base": 3.24,
+						"head": 1.613
+					},
+					{
+						"base": 3.196,
+						"head": 1.648
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.nativeBuild.cCompilationMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -8.847425337599615,
+				"confidenceInterval": [-10.568725803698415, -7.709345258571969],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 2.2278750000004948,
+						"head": 1.9924170000012964
+					},
+					{
+						"base": 2.2308750000001965,
+						"head": 2.0335000000000036
+					},
+					{
+						"base": 2.1802500000001146,
+						"head": 2.0121670000000904
+					},
+					{
+						"base": 2.1752089999999953,
+						"head": 1.9919999999999618
+					},
+					{
+						"base": 2.188583000000108,
+						"head": 1.9793330000002243
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.nativeBuild.linkMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -5.1494859661919214,
+				"confidenceInterval": [-8.862225562312759, 17.98583574910547],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 13.971750000000611,
+						"head": 12.733541999998124
+					},
+					{
+						"base": 13.275957999999946,
+						"head": 15.663750000000164
+					},
+					{
+						"base": 12.377917000000025,
+						"head": 11.471082999999908
+					},
+					{
+						"base": 12.64770899999985,
+						"head": 11.996417000000065
+					},
+					{
+						"base": 11.918833000000177,
+						"head": 12.199791999999889
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.nativeBuild.stripMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [0, 0],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					},
+					{
+						"base": 0,
+						"head": 0
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.nativeBuild.totalMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -1.7303572799145157,
+				"confidenceInterval": [-5.340077812223538, 2.6396137242190534],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 63.80920900000274,
+						"head": 61.577667999994446
+					},
+					{
+						"base": 58.719084000000294,
+						"head": 60.269041000000016
+					},
+					{
+						"base": 58.267709000000195,
+						"head": 55.15616800000021
+					},
+					{
+						"base": 58.082917999999836,
+						"head": 57.07787600000006
+					},
+					{
+						"base": 56.60974900000019,
+						"head": 56.69508299999984
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.allocation",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -13.010842368640535,
+				"confidenceInterval": [-13.366750208855471, -11.390284757118927],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 1194,
+						"head": 1058
+					},
+					{
+						"base": 1208,
+						"head": 1060
+					},
+					{
+						"base": 1200,
+						"head": 1041
+					},
+					{
+						"base": 1197,
+						"head": 1037
+					},
+					{
+						"base": 1199,
+						"head": 1043
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.async",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0,
+				"confidenceInterval": [-2.2222222222222223, 1.5151515151515151],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 133,
+						"head": 133
+					},
+					{
+						"base": 135,
+						"head": 132
+					},
+					{
+						"base": 133,
+						"head": 133
+					},
+					{
+						"base": 132,
+						"head": 133
+					},
+					{
+						"base": 132,
+						"head": 134
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.collections",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.4434589800443459,
+				"confidenceInterval": [-0.6622516556291391, 1.3303769401330376],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 451,
+						"head": 455
+					},
+					{
+						"base": 451,
+						"head": 453
+					},
+					{
+						"base": 453,
+						"head": 450
+					},
+					{
+						"base": 452,
+						"head": 452
+					},
+					{
+						"base": 451,
+						"head": 457
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.core",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.32786885245901637,
+				"confidenceInterval": [-0.8077544426494345, 0.6557377049180327],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 611,
+						"head": 614
+					},
+					{
+						"base": 610,
+						"head": 614
+					},
+					{
+						"base": 619,
+						"head": 614
+					},
+					{
+						"base": 612,
+						"head": 613
+					},
+					{
+						"base": 610,
+						"head": 612
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.objects",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": 0.16,
+				"confidenceInterval": [-0.642570281124498, 0.9700889248181084],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 1237,
+						"head": 1249
+					},
+					{
+						"base": 1245,
+						"head": 1237
+					},
+					{
+						"base": 1243,
+						"head": 1243
+					},
+					{
+						"base": 1239,
+						"head": 1241
+					},
+					{
+						"base": 1250,
+						"head": 1252
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.phaseMs.text",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -0.2808988764044944,
+				"confidenceInterval": [-1.4124293785310735, 0.5714285714285714],
+				"status": "unchanged",
+				"samples": [
+					{
+						"base": 350,
+						"head": 352
+					},
+					{
+						"base": 350,
+						"head": 351
+					},
+					{
+						"base": 352,
+						"head": 351
+					},
+					{
+						"base": 354,
+						"head": 349
+					},
+					{
+						"base": 356,
+						"head": 355
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.ratio",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -4.511372480724319,
+				"confidenceInterval": [-16.32972087955226, 13.144578086324552],
+				"status": "inconclusive",
+				"samples": [
+					{
+						"base": 11.20650141742546,
+						"head": 9.376511015596815
+					},
+					{
+						"base": 9.833905583424496,
+						"head": 9.311493612476431
+					},
+					{
+						"base": 11.571651919651085,
+						"head": 11.1224318952749
+					},
+					{
+						"base": 9.791738335096051,
+						"head": 11.078821026561327
+					},
+					{
+						"base": 9.858675606885422,
+						"head": 9.413914028592512
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.rssMb",
+				"direction": "lower",
+				"thresholdPercent": 5,
+				"medianRegressionPercent": -19.25133689839572,
+				"confidenceInterval": [-19.30762735716296, -19.189645469893076],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 55.515625,
+						"head": 44.828125
+					},
+					{
+						"base": 55.515625,
+						"head": 44.796875
+					},
+					{
+						"base": 55.53125,
+						"head": 44.828125
+					},
+					{
+						"base": 55.53125,
+						"head": 44.875
+					},
+					{
+						"base": 55.515625,
+						"head": 44.828125
+					}
+				]
+			},
+			{
+				"path": "javascript.modes.open-interpreted.wallMs",
+				"direction": "lower",
+				"thresholdPercent": 2,
+				"medianRegressionPercent": -3.7949521532744384,
+				"confidenceInterval": [-4.1621626284649125, -2.869905106688435],
+				"status": "improvement",
+				"samples": [
+					{
+						"base": 3979.687333,
+						"head": 3865.474083
+					},
+					{
+						"base": 4002.1025,
+						"head": 3850.224625
+					},
+					{
+						"base": 4002.967084,
+						"head": 3836.357084
+					},
+					{
+						"base": 3989.23825,
+						"head": 3829.151208
+					},
+					{
+						"base": 4000.715875,
+						"head": 3857.715667
+					}
+				]
+			}
+		]
+	},
+	"resourceCounterPairs": [
+		{
+			"pair": 1,
+			"baseline": {
+				"closed-compiled": {
+					"allocatedMiB": 1116.6976928710938,
+					"collections": 269,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 1125.4677124023438,
+					"collections": 230,
+					"peakLiveKiB": 15698.515625
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 1178.7082824707031,
+					"collections": 278,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 1187.478286743164,
+					"collections": 260,
+					"peakLiveKiB": 10646.765625
+				}
+			},
+			"candidate": {
+				"closed-compiled": {
+					"allocatedMiB": 604.0650024414062,
+					"collections": 144,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 612.8350219726562,
+					"collections": 146,
+					"peakLiveKiB": 15117.859375
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 666.0755920410156,
+					"collections": 160,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 674.8455963134766,
+					"collections": 161,
+					"peakLiveKiB": 9171.921875
+				}
+			}
+		},
+		{
+			"pair": 2,
+			"baseline": {
+				"closed-compiled": {
+					"allocatedMiB": 1116.6976928710938,
+					"collections": 269,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 1125.4677124023438,
+					"collections": 230,
+					"peakLiveKiB": 15698.515625
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 1178.7082824707031,
+					"collections": 278,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 1187.478286743164,
+					"collections": 260,
+					"peakLiveKiB": 10646.765625
+				}
+			},
+			"candidate": {
+				"closed-compiled": {
+					"allocatedMiB": 604.0650024414062,
+					"collections": 144,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 612.8350219726562,
+					"collections": 146,
+					"peakLiveKiB": 15117.859375
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 666.0755920410156,
+					"collections": 160,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 674.8455963134766,
+					"collections": 161,
+					"peakLiveKiB": 9171.921875
+				}
+			}
+		},
+		{
+			"pair": 3,
+			"baseline": {
+				"closed-compiled": {
+					"allocatedMiB": 1116.6976928710938,
+					"collections": 269,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 1125.4677124023438,
+					"collections": 230,
+					"peakLiveKiB": 15698.515625
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 1178.7082824707031,
+					"collections": 278,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 1187.478286743164,
+					"collections": 260,
+					"peakLiveKiB": 10646.765625
+				}
+			},
+			"candidate": {
+				"closed-compiled": {
+					"allocatedMiB": 604.0650024414062,
+					"collections": 144,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 612.8350219726562,
+					"collections": 146,
+					"peakLiveKiB": 15117.859375
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 666.0755920410156,
+					"collections": 160,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 674.8455963134766,
+					"collections": 161,
+					"peakLiveKiB": 9171.921875
+				}
+			}
+		},
+		{
+			"pair": 4,
+			"baseline": {
+				"closed-compiled": {
+					"allocatedMiB": 1116.6976928710938,
+					"collections": 269,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 1125.4677124023438,
+					"collections": 230,
+					"peakLiveKiB": 15698.515625
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 1178.7082824707031,
+					"collections": 278,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 1187.478286743164,
+					"collections": 260,
+					"peakLiveKiB": 10646.765625
+				}
+			},
+			"candidate": {
+				"closed-compiled": {
+					"allocatedMiB": 604.0650024414062,
+					"collections": 144,
+					"peakLiveKiB": 12411.859375
+				},
+				"open-compiled": {
+					"allocatedMiB": 612.8350219726562,
+					"collections": 146,
+					"peakLiveKiB": 15117.859375
+				},
+				"closed-interpreted": {
+					"allocatedMiB": 666.0755920410156,
+					"collections": 160,
+					"peakLiveKiB": 20933.546875
+				},
+				"open-interpreted": {
+					"allocatedMiB": 674.8455963134766,
+					"collections": 161,
+					"peakLiveKiB": 9171.921875
+				}
+			}
+		}
+	],
+	"resourceCounterNote": "Four complete paired resource snapshots retained; pairedComparison contains all five runtime timing pairs. Counters are separate from timing samples. Build RSS is available for only one pair and is not acceptance evidence.",
+	"validation": {
+		"testCheck": {
+			"complete": true,
+			"durationMs": 206048.672,
+			"stages": [
+				{
+					"name": "smoke: TypeScript",
+					"invocation": "npm run type-check",
+					"durationMs": 2713.249,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "smoke: fast unit suite",
+					"invocation": "npm run test:unit -- --run --bail=1 --sequence.seed=1 tests/build-frontend-cache.test.ts tests/cli.test.ts tests/compact-type-strip.test.ts tests/compile.test.ts tests/module-graph.test.ts tests/program-image-codec.test.ts tests/test-suite.test.ts tests/testing-runtime.test.ts",
+					"durationMs": 3555.324,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "smoke: native normal",
+					"invocation": "npm run test:native -- --bail=1 tests/native/development-runner.test.ts",
+					"durationMs": 34043.649,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "smoke: Test262 cross-section",
+					"invocation": "/Users/dirk/.nvm/versions/node/v26.7.0/bin/node scripts/test262.ts --canonical --backend wire --manifest tests/test-suite-test262-smoke.txt --check --policy bail",
+					"durationMs": 18722.118,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "smoke: WPT cross-section",
+					"invocation": "npm run test:wpt -- --canonical --test dom/abort/AbortSignal.any.js --mode normal --backend wire --policy bail",
+					"durationMs": 2780.286,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: lint and format",
+					"invocation": "npm run lint:ci",
+					"durationMs": 11505.479,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: unit complement",
+					"invocation": "npm run test:unit -- --run --bail=1 --sequence.seed=1 tests/arguments-lazy-materialization.test.ts tests/artifact-store.test.ts tests/assets.test.ts tests/bench-baseline.test.ts tests/bench-cli.test.ts tests/bench-compare.test.ts tests/bench-http.test.ts tests/build-config.test.ts tests/bytecode-operation-spec.test.ts tests/cache-management.test.ts tests/cache-root.test.ts tests/class-super.test.ts tests/command-requirements.test.ts tests/commonjs-loader.test.ts tests/compile-core.test.ts tests/compile-program-policy.test.ts tests/compiler-bake.test.ts tests/compiler-cache-identity.test.ts tests/compiler-host-gap.test.ts tests/compiler-owner-ledger.test.ts tests/compiler-profile-summary.test.ts tests/compiler-scale-manifest.test.ts tests/compiler-scale-normalization.test.ts tests/core-allocation-helper-chain.test.ts tests/core-builtin-call-abi.test.ts tests/core-call-graph.test.ts tests/core-call-targets.test.ts tests/core-construction.test.ts tests/core-control-flow-passes.test.ts tests/core-cross-call-transforms.test.ts tests/core-debug-view.test.ts tests/core-fact-implication.test.ts tests/core-forwarding-blocks.test.ts tests/core-function-features.test.ts tests/core-generated-cost.test.ts tests/core-ir-adversarial.test.ts tests/core-ir-lowering.test.ts tests/core-ir-path-ranges.test.ts tests/core-ir.test.ts tests/core-kernel-structure.test.ts tests/core-local-facts.test.ts tests/core-local-optimizer.test.ts tests/core-local-passes.test.ts tests/core-memory-joins.test.ts tests/core-memory-parity.test.ts tests/core-memory-passes.test.ts tests/core-operation-contract.test.ts tests/core-optimization-owners.test.ts tests/core-optimizer-infrastructure.test.ts tests/core-pass-contracts.test.ts tests/core-program-flow.test.ts tests/core-program-value-kinds.test.ts tests/core-proof-passes.test.ts tests/core-pruned-ssa-construction.test.ts tests/core-reachability.test.ts tests/core-region-placement.test.ts tests/core-region-validity.test.ts tests/core-shape-provenance.test.ts tests/core-specialization-plan.test.ts tests/core-store.test.ts tests/core-summaries.test.ts tests/core-verification.test.ts tests/direct-eval.test.ts tests/duplicate-functions.test.ts tests/estree-traversal.test.ts tests/execution-verification.test.ts tests/explicit-resource-management-frontend.test.ts tests/fact-flow-report.test.ts tests/fact-implication.test.ts tests/file-tree.test.ts tests/frontend-cache.test.ts tests/host-modules.test.ts tests/linker.test.ts tests/native-cache-identity.test.ts tests/native-command.test.ts tests/node-development-watch.test.ts tests/primordial-diagnostics.test.ts tests/profile-artifact.test.ts tests/profile-metadata.test.ts tests/program-closure.test.ts tests/program-image-emission.test.ts tests/public-api-types.test.ts tests/release.test.ts tests/rest-forwarding.test.ts tests/runtime-image-constant-compaction.test.ts tests/sanitizer-runner.test.ts tests/selfhost-native.test.ts tests/sema.test.ts tests/semantic-analysis-feature-gating.test.ts tests/site-data.test.ts tests/static-property.test.ts tests/terminal-yield.test.ts tests/test-environment.test.ts tests/test-telemetry.test.ts tests/test262-native-inputs.test.ts tests/test262-policy.test.ts tests/test262-program-image-cache.test.ts tests/test262-program-image-merger.test.ts tests/test262-report.test.ts tests/test262-selection.test.ts tests/test262-shared-helper-planner.test.ts tests/testing-cache.test.ts tests/testing-fragment-cache.test.ts tests/v8-gc-trace.test.ts tests/vm-immediate-operands.test.ts tests/wpt-harness.test.ts",
+					"durationMs": 4560.768,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: native normal",
+					"invocation": "npm run test:native -- --bail=1 tests/native/drivers.test.ts tests/native/allocation-sinking.test.ts tests/native/express-smoke.test.ts tests/native/function-call-direct.test.ts tests/native/array-push-direct.test.ts tests/native/collection-direct.test.ts tests/native/global-property-cache.test.ts tests/native/map-get-set-cache.test.ts tests/native/object-has-own-known.test.ts tests/native/object-rest-shaped.test.ts",
+					"durationMs": 52927.255,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: native sanitizer-primary",
+					"invocation": "npm run test:sanitize -- --bail=1 tests/native/eval-gc-runtime-compilation-p0.test.ts tests/native/function-reflect-builtins.test.ts tests/native/gc.test.ts tests/native/node-scheduling.test.ts tests/native/postgres-load.test.ts tests/native/runtime-mechanics.test.ts tests/native/test-runner-regressions.test.ts tests/native/wire-loader.test.ts",
+					"durationMs": 50004.674,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: Test262 regression complement",
+					"invocation": "/Users/dirk/.nvm/versions/node/v26.7.0/bin/node scripts/test262.ts --canonical --backend wire --manifest tests/test-suite-test262-check.txt --check --policy bail",
+					"durationMs": 9571.006,
+					"status": 0,
+					"signal": null
+				},
+				{
+					"name": "check: WPT complement",
+					"invocation": "npm run test:wpt -- --canonical --test dom/abort/event.any.js --test dom/abort/timeout.any.js --test dom/events/AddEventListenerOptions-once.any.js --test dom/events/Event-constructors.any.js --test dom/events/Event-isTrusted.any.js --test encoding/api-basics.any.js --test encoding/api-surrogates-utf8.any.js --test encoding/textdecoder-arguments.any.js --test encoding/textdecoder-byte-order-marks.any.js --test encoding/textdecoder-fatal.any.js --test encoding/textdecoder-fatal-streaming.any.js --test encoding/textdecoder-ignorebom.any.js --test encoding/textencoder-utf16-surrogates.any.js --test fetch/api/headers/header-setcookie.any.js --test fetch/api/headers/headers-basic.any.js --test fetch/api/headers/headers-casing.any.js --test fetch/api/headers/headers-combine.any.js --test fetch/api/headers/headers-errors.any.js --test fetch/api/headers/headers-normalize.any.js --test fetch/api/headers/headers-structure.any.js --test fetch/api/request/forbidden-method.any.js --test fetch/api/request/request-clone-readable-stream-body.any.js --test fetch/api/request/request-constructor-init-body-override.any.js --test fetch/api/request/request-consume-empty.any.js --test fetch/api/request/request-error.any.js --test fetch/api/request/request-init-002.any.js --test fetch/api/request/request-init-stream.any.js --test fetch/api/request/request-headers.any.js --test fetch/api/request/request-structure.any.js --test fetch/api/response/response-consume-empty.any.js --test fetch/api/response/response-consume-stream.any.js --test fetch/api/response/response-error.any.js --test fetch/api/response/response-error-from-stream.any.js --test fetch/api/response/response-from-stream.any.js --test fetch/api/response/response-init-001.any.js --test fetch/api/response/response-init-002.any.js --test fetch/api/response/response-init-contenttype.any.js --test fetch/api/response/response-stream-bad-chunk.any.js --test fetch/api/response/response-static-error.any.js --test fetch/api/response/response-static-json.any.js --test fetch/api/response/response-static-redirect.any.js --test hr-time/basic.any.js --test hr-time/monotonic-clock.any.js --test html/webappapis/timers/clearinterval-from-callback.any.js --test html/webappapis/timers/cleartimeout-clearinterval.any.js --test html/webappapis/timers/missing-timeout-setinterval.any.js --test html/webappapis/timers/negative-setinterval.any.js --test html/webappapis/timers/negative-settimeout.any.js --test streams/queuing-strategies.any.js --test streams/piping/abort.any.js --test streams/piping/close-propagation-backward.any.js --test streams/piping/close-propagation-forward.any.js --test streams/piping/flow-control.any.js --test streams/piping/general-addition.any.js --test streams/piping/general.any.js --test streams/piping/pipe-through.any.js --test streams/readable-byte-streams/bad-buffers-and-views.any.js --test streams/readable-byte-streams/construct-byob-request.any.js --test streams/readable-byte-streams/enqueue-with-detached-buffer.any.js --test streams/readable-byte-streams/general.any.js --test streams/readable-byte-streams/patched-global.any.js --test streams/readable-byte-streams/read-min.any.js --test streams/readable-byte-streams/respond-after-enqueue.any.js --test streams/readable-byte-streams/tee.any.js --test streams/readable-byte-streams/templated.any.js --test streams/readable-streams/async-iterator.any.js --test streams/readable-streams/bad-strategies.any.js --test streams/readable-streams/bad-underlying-sources.any.js --test streams/readable-streams/cancel.any.js --test streams/readable-streams/constructor.any.js --test streams/readable-streams/count-queuing-strategy-integration.any.js --test streams/readable-streams/default-reader.any.js --test streams/readable-streams/floating-point-total-queue-size.any.js --test streams/readable-streams/from.any.js --test streams/readable-streams/general.any.js --test streams/readable-streams/patched-global.any.js --test streams/readable-streams/reentrant-strategies.any.js --test streams/readable-streams/tee.any.js --test streams/readable-streams/templated.any.js --test streams/writable-streams/bad-strategies.any.js --test streams/writable-streams/bad-underlying-sinks.any.js --test streams/writable-streams/byte-length-queuing-strategy.any.js --test streams/writable-streams/constructor.any.js --test streams/writable-streams/count-queuing-strategy.any.js --test streams/writable-streams/error.any.js --test streams/writable-streams/floating-point-total-queue-size.any.js --test streams/writable-streams/general.any.js --test streams/writable-streams/properties.any.js --test streams/writable-streams/reentrant-strategy.any.js --test streams/writable-streams/start.any.js --test url/url-searchparams.any.js --test url/url-statics-canparse.any.js --test url/url-statics-parse.any.js --test url/url-tojson.any.js --test url/urlencoded-parser.any.js --test url/urlsearchparams-append.any.js --test url/urlsearchparams-constructor.any.js --test url/urlsearchparams-delete.any.js --test url/urlsearchparams-foreach.any.js --test url/urlsearchparams-get.any.js --test url/urlsearchparams-getall.any.js --test url/urlsearchparams-has.any.js --test url/urlsearchparams-set.any.js --test url/urlsearchparams-size.any.js --test url/urlsearchparams-sort.any.js --test url/urlsearchparams-stringifier.any.js --mode normal --backend wire --policy bail",
+					"durationMs": 15561.368,
+					"status": 0,
+					"signal": null
+				}
+			]
+		},
+		"fullTest262Run": false,
+		"httpPerformanceMeasured": false,
+		"selfCompilePerformanceMeasured": false
+	},
+	"prerequisite": {
+		"commit": "e1fb84b84d02bf72f28260fcdb3982cb60d36136",
+		"reason": "Preserve the Core elided/activation-local mode through lowering and compiler-artifact serialization, so native typeof observations do not see an undefined surrogate. Reproduced with allocation sinking disabled.",
+		"testMaintenance": "Removed an inherited-stack-path counter assertion whose Core producer no longer exists; the fixture retains its getter, mutation, identity, and GC behavior checks."
+	}
+}

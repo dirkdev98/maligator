@@ -1,6 +1,7 @@
 import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
+	CORE_FUNCTION_HAS_BRANCHES,
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 } from "./core-function-features.ts";
 import {
@@ -1912,6 +1913,125 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	},
 };
 
+function conditionalObjectAllocationDestination(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreBlockId | undefined {
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "createObjectShaped"
+	)
+		return undefined;
+	const source = fn.instructionBlock(instruction);
+	if (
+		fn.kernel.blockHandlerBlock(source) !== undefined ||
+		fn.instructionKind(fn.blockTerminator(source)) !== "branch"
+	)
+		return undefined;
+	const result = instructionResultAt(fn, instruction, 0)!;
+	if (fn.kernel.valueHandlerUseCount(result) !== 0) return undefined;
+	let destination: CoreBlockId | undefined;
+	for (
+		let use = fn.kernel.valueFirstUse(result);
+		use >= 0;
+		use = fn.kernel.useNext(use)
+	) {
+		const block = fn.instructionBlock(fn.kernel.useInstruction(use));
+		if (block === source || (destination !== undefined && block !== destination)) {
+			return undefined;
+		}
+		destination = block;
+	}
+	return destination === undefined ||
+		destination === fn.entry ||
+		fn.kernel.blockHandlerBlock(destination) !== undefined
+		? undefined
+		: destination;
+}
+
+const sinkConditionalObjectAllocations: CoreFunctionPass = {
+	name: "sink-conditional-object-allocations",
+	stage: "memory",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS | CORE_FUNCTION_HAS_BRANCHES,
+	requiredFunctionOpcodesAny: ["createObjectShaped"],
+	admission: {
+		predicate: "shaped allocation used only in a different block after a branch",
+		hasOpportunity({ program, function: functionId }) {
+			const fn = program.function(functionId);
+			for (const instruction of fn.instructionIds()) {
+				if (conditionalObjectAllocationDestination(fn, instruction) !== undefined)
+					return true;
+			}
+			return false;
+		},
+	},
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+	changes: { cfg: false, calls: false, facts: false, representations: false },
+	budget: PROVENANCE_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		const fn = program.function(item.function);
+		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const factSubjects = new Set<CoreValueId>();
+		const factInstructions = new Set<CoreInstructionId>();
+		for (const factId of fn.factIds()) {
+			for (const claim of fn.fact(factId).claims) {
+				if (claim.kind === "effect") factInstructions.add(claim.instruction);
+				else factSubjects.add(claim.subject);
+			}
+		}
+		for (const instruction of fn.instructionIds()) {
+			const destination = conditionalObjectAllocationDestination(fn, instruction);
+			if (
+				destination === undefined ||
+				fn.instructionEffectRefinement(instruction) !== undefined ||
+				factInstructions.has(instruction)
+			)
+				continue;
+			const source = fn.instructionBlock(instruction);
+			if (!control.reachable.has(source)) continue;
+			const result = instructionResultAt(fn, instruction, 0)!;
+			if (factSubjects.has(result)) continue;
+			let eligible = true;
+			const incoming = control.predecessors[destination] ?? [];
+			// A unique incoming edge keeps one object identity per original execution, even in loops.
+			if (
+				incoming.length !== 1 ||
+				incoming[0]!.from !== source ||
+				incoming[0]!.kind !== "ordinary"
+			)
+				continue;
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			// Keeping object or symbol fields live longer can change weak-reference observations.
+			for (let index = 0; index < operandCount; index++) {
+				if (kinds.exactScalar(fn.kernel.operandAt(operandStart + index)) === undefined) {
+					eligible = false;
+					break;
+				}
+			}
+			for (
+				let next = fn.instructionNext(instruction);
+				eligible && next !== undefined && fn.instructionKind(next) === "operation";
+				next = fn.instructionNext(next)
+			) {
+				if (coreInstructionEffects(fn, next).maySuspend) eligible = false;
+			}
+			if (!eligible) continue;
+			const editor = CoreEditor.open(program, item.function);
+			editor.moveInstruction(
+				instruction,
+				destination,
+				coreInstructionId(fn.kernel.blockFirstInstruction(destination)),
+			);
+			return editor.commit();
+		}
+		return undefined;
+	},
+};
+
 const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	name: "scalar-replace-contained-aggregates",
 	stage: "memory",
@@ -2126,6 +2246,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineStackObjectCellRepresentations,
 	scalarizeRootedContainedObjects,
 	scalarReplaceContainedAggregates,
+	sinkConditionalObjectAllocations,
 ];
 
 export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
@@ -2144,6 +2265,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineStackObjectCellRepresentations,
 	scalarizeRootedContainedObjects,
 	scalarReplaceContainedAggregates,
+	sinkConditionalObjectAllocations,
 ];
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
