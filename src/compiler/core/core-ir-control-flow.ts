@@ -316,12 +316,13 @@ function immediateDominators(
 				(successors[from] ??= []).push(coreBlockId(block));
 			}
 		}
-		const intersect = (left: CoreBlockId, right: CoreBlockId): CoreBlockId => {
+		// Parent links contain reachable block indices; IDs are checked when publishing the result.
+		const intersect = (left: number, right: number): number => {
 			let first = left;
 			let second = right;
 			while (first !== second) {
-				while (order[first]! > order[second]!) first = coreBlockId(dominators[first]!);
-				while (order[second]! > order[first]!) second = coreBlockId(dominators[second]!);
+				while (order[first]! > order[second]!) first = dominators[first]!;
+				while (order[second]! > order[first]!) second = dominators[second]!;
 			}
 			return first;
 		};
@@ -332,7 +333,7 @@ function immediateDominators(
 		while (cursor < queue.length) {
 			const block = queue[cursor++]!;
 			queued[block] = 0;
-			let next: CoreBlockId | undefined;
+			let next: number | undefined;
 			for (const edge of predecessors[block] ?? []) {
 				if (dominators[edge.from]! < 0) continue;
 				next = next === undefined ? edge.from : intersect(next, edge.from);

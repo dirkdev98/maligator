@@ -50,6 +50,88 @@ function definingInstruction(fn: CoreFunctionStore, value: CoreValueId) {
 }
 
 describe("Core control-flow analyses and passes", () => {
+	it.each([
+		{
+			name: "successive diamonds",
+			entry: 0,
+			edges: [[1, 2], [3], [3], [4, 5], [6], [6], [7, 8], [9], [9], []],
+		},
+		{
+			name: "nested loops and unreachable cycles",
+			entry: 0,
+			edges: [[1], [2, 7], [3, 4], [5], [5], [2, 6], [1], [], [9], [8]],
+		},
+		{
+			name: "irreducible cycles",
+			entry: 0,
+			edges: [[1, 2], [3], [3, 5], [4], [1, 5], [2, 6], []],
+		},
+		{
+			name: "nonzero entry and sparse reachable IDs",
+			entry: 2,
+			edges: [[0], [3], [1, 4], [5], [5], []],
+		},
+	])(
+		"matches dominance with block-removal reachability for $name",
+		({ entry, edges }) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const blocks = edges.map(() => builder.createBlock());
+			for (const [index, targets] of edges.entries()) {
+				const block = blocks[index]!;
+				const [condition] = builder.appendInstruction(block, "createBoolean", [], {
+					attributes: { value: true },
+				});
+				if (targets.length === 0) {
+					builder.setTerminator(block, { kind: "return", value: condition! });
+				} else if (targets.length === 1) {
+					builder.setTerminator(block, {
+						kind: "jump",
+						edge: { block: blocks[targets[0]!]!, arguments: [] },
+					});
+				} else {
+					builder.setTerminator(block, {
+						kind: "branch",
+						condition: condition!,
+						consequent: { block: blocks[targets[0]!]!, arguments: [] },
+						alternate: { block: blocks[targets[1]!]!, arguments: [] },
+					});
+				}
+			}
+			const reachableWithout = (removed: number): Set<number> => {
+				const pending = removed === entry ? [] : [entry];
+				const visited = new Set<number>();
+				for (const block of pending) {
+					if (visited.has(block)) continue;
+					visited.add(block);
+					for (const target of edges[block]!) {
+						if (target !== removed) pending.push(target);
+					}
+				}
+				return visited;
+			};
+			const reachable = reachableWithout(-1);
+			const avoided = blocks.map((_, block) => reachableWithout(block));
+			const expectedDominates = (dominator: number, block: number): boolean =>
+				reachable.has(block) && !avoided[dominator]!.has(block);
+			const cfg = buildCoreControlFlow(program, builder.finish(blocks[entry]!).function);
+			for (const [blockIndex, block] of blocks.entries()) {
+				const strictDominators: Array<number> = [];
+				for (const [dominatorIndex, dominator] of blocks.entries()) {
+					const expected = expectedDominates(dominatorIndex, blockIndex);
+					expect(cfg.dominates(dominator, block)).toBe(expected);
+					if (expected && dominator !== block) strictDominators.push(dominatorIndex);
+				}
+				const parent = strictDominators.find((candidate) =>
+					strictDominators.every((other) => expectedDominates(other, candidate)),
+				);
+				expect(cfg.immediateDominators[block]).toBe(
+					parent === undefined ? null : blocks[parent],
+				);
+			}
+		},
+	);
+
 	it("classifies a multi-entry cycle without inventing a natural loop", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
