@@ -118,8 +118,10 @@ npm run bench:self-compile-experiment -- compare .cache/compiler-base .cache/com
 
 Remove `--plan=json` to execute. Select `--workload shape` or `--workload full`
 for larger inputs, and `--host node` for a separate Node-hosted comparison.
-Both Node compiler snapshots use the same source preparation. The native captures
-use closed development O2/no-LTO builds without instrumentation; this is an inner
+Both Node compiler snapshots use the same source preparation. Native captures use
+a fresh explicit module frontend because cached artifacts deliberately lose trusted
+precise VM root maps on deserialization. This keeps their GC policy consistent.
+They use closed development O2/no-LTO builds without instrumentation; this is an inner
 loop, not the production-plan JavaScript/HTTP benchmark matrix.
 
 Capture records HEAD plus a digest of pending changes, the tracked patch, exact

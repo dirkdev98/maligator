@@ -36,7 +36,8 @@ Options:
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
 
-Capture uses development O2/no-LTO closed native code without instrumentation.
+Capture uses a fresh module frontend and development O2/no-LTO closed native code
+without instrumentation, keeping portable GC-root trust independent of cache hits.
 Compare runs a BASE Node output oracle and one warmup per compiler before timing.
 Every output must match that oracle exactly; use semantic benchmarks for changes
 that intentionally alter emitted C. This measures JS-to-C execution, not C builds.
@@ -63,7 +64,7 @@ interface Options {
 }
 
 interface Capture {
-	schema: 1;
+	schema: 2;
 	status: "complete";
 	capturedAt: string;
 	source: { commit: string; digest: string };
@@ -168,6 +169,8 @@ async function captureCompiler(directory: string): Promise<void> {
 	console.log("build closed native compiler");
 	const built = buildNativeBinaryResult({
 		fixture: "bench/self-compile.mts",
+		// Cached artifacts deliberately lose precise VM-root trust across serialization.
+		entryGoal: "module",
 		name: "self-compile-experiment",
 		config: SELF_COMPILE_CONFIG,
 		compiled: true,
@@ -185,7 +188,7 @@ async function captureCompiler(directory: string): Promise<void> {
 		throw new Error("source changed during capture; discard this capture and retry");
 	}
 	const capture: Capture = {
-		schema: 1,
+		schema: 2,
 		status: "complete",
 		capturedAt: new Date().toISOString(),
 		source,
@@ -209,7 +212,7 @@ function readCapture(directory: string): Capture {
 	const capture = JSON.parse(
 		readFileSync(path.join(directory, "capture.json"), "utf8"),
 	) as Capture;
-	if (capture.schema !== 1 || capture.status !== "complete") {
+	if (capture.schema !== 2 || capture.status !== "complete") {
 		throw new Error(`incomplete or unsupported capture: ${directory}`);
 	}
 	if (!isDeepStrictEqual(capture.files, captureFiles(directory))) {

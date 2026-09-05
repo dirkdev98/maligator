@@ -49,7 +49,7 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 			writeFileSync(path.join(directory, name), contents);
 		}
 		const manifest = {
-			schema: 1,
+			schema: 2,
 			status: "complete",
 			source: { commit: label, digest: label },
 			files: Object.fromEntries(
