@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
@@ -47,6 +49,8 @@ interface Test262Arguments {
 	backend?: string;
 	canonical: boolean;
 	check: boolean;
+	updateBaseline: boolean;
+	baseline?: string;
 	excludeManifests: Array<string>;
 	filter?: string;
 	manifests: Array<string>;
@@ -66,7 +70,9 @@ Options:
   --exclude-manifest <file>    omit listed paths; repeat to union manifests
   --filter <substring>         run matching test paths
   --variant strict|sloppy      run one language variant for diagnostics
-  --check                      compare without updating the baseline
+  --check                      compare without updating the baseline (default)
+  --baseline <file>            compare against an explicit baseline instead of HEAD
+  --update-baseline            replace scripts/test262.json after a full canonical run
   --policy bail|complete       stop on a regression or complete the selection
   --random                     run a non-baseline random sample
   -h, --help                   show this help`;
@@ -75,6 +81,7 @@ function parseArguments(): Test262Arguments {
 	const result: Test262Arguments = {
 		canonical: false,
 		check: false,
+		updateBaseline: false,
 		excludeManifests: [],
 		manifests: [],
 		random: false,
@@ -93,6 +100,7 @@ function parseArguments(): Test262Arguments {
 		seen.add(option);
 		if (option === "--canonical") result.canonical = true;
 		else if (option === "--check") result.check = true;
+		else if (option === "--update-baseline") result.updateBaseline = true;
 		else if (option === "--random") result.random = true;
 		else {
 			const value = process.argv[++index];
@@ -106,6 +114,7 @@ function parseArguments(): Test262Arguments {
 			else if (option === "--filter") result.filter = value;
 			else if (option === "--variant") result.variant = value;
 			else if (option === "--policy") result.policy = value;
+			else if (option === "--baseline") result.baseline = nodePath.resolve(value);
 			else throw new Error(`unknown option: ${option}\n${usage}`);
 		}
 	}
@@ -113,6 +122,26 @@ function parseArguments(): Test262Arguments {
 }
 
 const arguments_ = parseArguments();
+if (arguments_.check && arguments_.updateBaseline) {
+	throw new Error("--check and --update-baseline are mutually exclusive");
+}
+if (
+	arguments_.updateBaseline &&
+	(!arguments_.canonical ||
+		arguments_.variant !== undefined ||
+		arguments_.random ||
+		arguments_.filter !== undefined ||
+		arguments_.manifests.length > 0 ||
+		arguments_.excludeManifests.length > 0 ||
+		arguments_.baseline !== undefined ||
+		(arguments_.backend !== undefined && arguments_.backend !== "compiled") ||
+		(arguments_.mode !== undefined && arguments_.mode !== "normal") ||
+		(arguments_.policy !== undefined && arguments_.policy !== "complete"))
+) {
+	throw new Error(
+		"--update-baseline requires the full canonical compiled/normal corpus with complete policy and the HEAD baseline",
+	);
+}
 const requestedBackend = arguments_.backend ?? "compiled";
 if (
 	requestedBackend !== "compiled" &&
@@ -153,7 +182,7 @@ if (
 const random = arguments_.random;
 // Gate mode never rewrites the committed results and exits non-zero if a
 // previously passing test no longer passes.
-const checkMode = arguments_.check;
+const checkMode = !arguments_.updateBaseline;
 const policy = parseTest262Policy(arguments_.policy);
 if (policy === "bail" && !checkMode) {
 	throw new Error("--policy bail requires --check");
@@ -182,12 +211,42 @@ const compileWorkers = Math.max(
 const progress = new CommandProgress("test262");
 progress.start(`${requestedBackend}/${requestedMode} · ${policy} policy`);
 progress.stage(1, 3, "prepare pinned corpus");
-const previousOutput = existsSync(TEST262_METADATA.outputFile)
-	? (JSON.parse(readFileSync(TEST262_METADATA.outputFile, "utf-8")) as Test262Output)
-	: undefined;
-if (checkMode && previousOutput === undefined) {
-	throw new Error(`Test262 check requires ${TEST262_METADATA.outputFile}`);
+const baselineCommit =
+	arguments_.baseline === undefined
+		? execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+		: undefined;
+const baselineText =
+	arguments_.baseline === undefined
+		? execFileSync("git", ["show", `${baselineCommit}:${TEST262_METADATA.outputFile}`], {
+				encoding: "utf8",
+				maxBuffer: 32 * 1024 * 1024,
+			})
+		: readFileSync(arguments_.baseline, "utf8");
+const baselineIdentity = {
+	commit: baselineCommit,
+	path: arguments_.baseline ?? TEST262_METADATA.outputFile,
+	digest: createHash("sha256").update(baselineText).digest("hex"),
+};
+const previousOutput = JSON.parse(baselineText) as Test262Output;
+if (
+	previousOutput === null ||
+	typeof previousOutput !== "object" ||
+	typeof previousOutput.sha !== "string" ||
+	previousOutput.results === null ||
+	typeof previousOutput.results !== "object" ||
+	Array.isArray(previousOutput.results) ||
+	Object.keys(previousOutput.results).length === 0 ||
+	Object.values(previousOutput.results).some(
+		(result) => !["PASSED", "SKIPPED", "FAILED"].includes(result),
+	)
+) {
+	throw new Error(
+		"invalid Test262 baseline: expected a corpus revision and nonempty PASSED/SKIPPED/FAILED results",
+	);
 }
+test262Log(
+	`Baseline: ${baselineCommit ?? arguments_.baseline} (${baselineIdentity.digest.slice(0, 12)})`,
+);
 if (
 	previousOutput?.sha !== undefined &&
 	previousOutput.sha !== TEST262_METADATA.revision
@@ -354,7 +413,7 @@ async function runWithWorkers(
 									}
 								}
 								reportProgress(message.processed);
-								if (policy === "bail" && checkMode) {
+								if (checkMode) {
 									const batchRegressions = test262BatchRegressions(
 										message.results,
 										filesByPath,
@@ -363,7 +422,7 @@ async function runWithWorkers(
 									);
 									if (batchRegressions.length > 0) {
 										regressions.push(...batchRegressions);
-										aborted = true;
+										if (policy === "bail") aborted = true;
 									}
 								}
 								sendNext();
@@ -497,6 +556,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 			{
 				schemaVersion: 3,
 				variant,
+				baseline: baselineIdentity,
 				complete: !run.aborted,
 				aborted: run.aborted,
 				processedTests: completed,
@@ -603,6 +663,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 			{
 				schemaVersion: 2,
 				backend: requestedBackend,
+				baseline: baselineIdentity,
 				mode: process.env.MAL_GC_STRESS ? "gc-stress" : "normal",
 				policy,
 				complete: true,
@@ -659,7 +720,7 @@ progress.stage(
 if (onlyVariant) {
 	// Single-pass debug run: report only, never touch the committed results.
 	const run = await runVariant(onlyVariant);
-	if (run.aborted) {
+	if (run.aborted || (checkMode && run.regressions.length > 0)) {
 		process.exitCode = 1;
 	}
 } else {

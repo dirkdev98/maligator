@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
 	parseTest262Policy,
 	resolveTest262ObjectCache,
@@ -20,6 +24,36 @@ function file(path: string, flags: Array<string> = []): Test262File {
 }
 
 describe("Test262 runner policy", () => {
+	it("rejects a malformed explicit baseline before compiling or executing tests", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-test262-baseline-"));
+		onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+		const baseline = path.join(directory, "baseline.json");
+		writeFileSync(baseline, "{}");
+		const run = spawnSync(
+			process.execPath,
+			["scripts/test262.ts", "--baseline", baseline, "--filter", "unused"],
+			{ encoding: "utf8" },
+		);
+		expect(run.status).not.toBe(0);
+		expect(run.stderr).toContain("invalid Test262 baseline");
+		expect(run.stdout).not.toContain("Revision:");
+	});
+	it.each([
+		["--check", "--update-baseline"],
+		["--canonical", "--update-baseline", "--variant", "strict"],
+		["--canonical", "--update-baseline", "--manifest", "missing.txt"],
+		["--canonical", "--update-baseline", "--backend", "wire"],
+	])(
+		"rejects ambiguous or partial baseline updates %j before running tests",
+		(...args) => {
+			const run = spawnSync(process.execPath, ["scripts/test262.ts", ...args], {
+				encoding: "utf8",
+			});
+			expect(run.status).not.toBe(0);
+			expect(run.stderr).toContain("--update-baseline");
+			expect(run.stdout).not.toContain("[test262]");
+		},
+	);
 	it("bounds full-corpus scratch while retaining partial object caches", () => {
 		expect(resolveTest262ObjectCache(undefined, false)).toBe("0");
 		expect(resolveTest262ObjectCache(undefined, true)).toBe("1");
