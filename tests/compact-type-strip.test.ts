@@ -41,6 +41,15 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test("preserves loop comparisons before a later generic constructor", () => {
+		const source = `let sum = 0; for (let index = 0; index < 4; index++) { sum += index; } const cache = new Map<string, number>(); globalThis.stripResult = sum;`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		const run = new Function(stripped + "return globalThis.stripResult;");
+		expect(run()).toBe(6);
+		Reflect.deleteProperty(globalThis, "stripResult");
+	});
+
 	test("erases type spans in place, keeping length, newlines, and columns", () => {
 		const source = `import type { Model } from "./types.ts";
 export type Result = string;

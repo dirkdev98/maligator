@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v1";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v2";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -1116,6 +1116,16 @@ function blankGenericSyntax(
 	words: Array<Word>,
 	filePath: string,
 ): void {
+	const crossesStatementBoundary = (open: number, close: number): boolean => {
+		let braces = 0;
+		for (let index = open + 1; index < close; index++) {
+			if (!code[index]) continue;
+			if (source[index] === "{") braces++;
+			else if (source[index] === "}") braces--;
+			else if (source[index] === ";" && braces === 0) return true;
+		}
+		return false;
+	};
 	const functionGenerics = new Set<number>();
 	for (let wi = 0; wi < words.length; wi++) {
 		const word = words[wi]!;
@@ -1154,7 +1164,7 @@ function blankGenericSyntax(
 		)
 			continue;
 		const close = matchingOrMinusOne(source, code, open, "<", ">");
-		if (close < 0) continue;
+		if (close < 0 || crossesStatementBoundary(open, close)) continue;
 		const after = nextCodeIndex(source, code, close + 1);
 		const instantiationExpressionFollower =
 			after >= source.length ||
@@ -1169,7 +1179,7 @@ function blankGenericSyntax(
 	for (let open = 0; open < source.length; open++) {
 		if (!code[open] || source[open] !== "<") continue;
 		const close = matchingOrMinusOne(source, code, open, "<", ">");
-		if (close < 0) continue;
+		if (close < 0 || crossesStatementBoundary(open, close)) continue;
 		const parametersOpen = nextCodeIndex(source, code, close + 1);
 		if (source[parametersOpen] !== "(") continue;
 		const parametersClose = matching(source, code, parametersOpen, "(", ")", filePath);
