@@ -55,6 +55,19 @@ describe("numeric own-field native entry contracts", () => {
 			expect(emitted.directEntries).toHaveLength(1);
 			expect(emitted.directEntries[0]!.source).toContain("fp0");
 			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
+			const leaf = emitted.directEntries[0]!;
+			if (
+				decoded.runtime.functions[selected.functionIndex]!.instructions.every(
+					(op) => op.opcode !== "CALL",
+				)
+			) {
+				expect(leaf.leaf).toBe(true);
+				const worker = leaf.source.slice(
+					0,
+					leaf.source.indexOf(`\nstatic double ${leaf.symbol}(`),
+				);
+				expect(worker).not.toMatch(/MalVm|MalEnv|mal_gc_|vm->/);
+			} else expect(leaf.leaf).toBeUndefined();
 		}
 		const emitted = emitCompiledFunction(
 			decoded.runtime.functions[caller.functionIndex]!,

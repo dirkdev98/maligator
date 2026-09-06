@@ -623,6 +623,9 @@ interface CoreFrontendCursor {
 }
 
 const unboundCoreEmitter: CoreInstructionEmitter = {
+	emitNumericSwitch() {
+		throw new Error("Core frontend block is not attached to a function");
+	},
 	emit() {
 		throw new Error("Core frontend block is not attached to a function");
 	},
@@ -6176,11 +6179,6 @@ function compileAnnexBVarAssignment(
 	}
 }
 
-/**
- * Compile a switch statement: the discriminant and case tests stay in the
- * entry block chain, the case bodies are compiled in source order as
- * fall-through blocks, and break jumps are patched to the exit.
- */
 function compileSwitchStatement(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -6223,6 +6221,30 @@ function compileSwitchStatement(
 	};
 	previousTail?.emitter.emit(lastBodyExitJump);
 
+	const numericCases: Array<{ value: number; block: number }> = [];
+	let allNumeric = true;
+	for (const [i, switchCase] of statement.cases.entries()) {
+		const test = switchCase.test;
+		if (test === null) continue;
+		const value =
+			test.type === "Literal" && typeof test.value === "number"
+				? test.value
+				: test.type === "UnaryExpression" &&
+					  test.operator === "-" &&
+					  test.argument.type === "Literal" &&
+					  typeof test.argument.value === "number"
+					? -test.argument.value
+					: undefined;
+		if (
+			value === undefined ||
+			!Number.isInteger(value) ||
+			value < -2147483648 ||
+			value > 2147483647
+		)
+			allNumeric = false;
+		else numericCases.push({ value: value === 0 ? 0 : value, block: bodyStarts[i]! });
+	}
+	const nativeNumeric = allNumeric && numericCases.length >= 4;
 	let defaultCase = -1;
 	for (let i = 0; i < statement.cases.length; i++) {
 		const switchCase = statement.cases[i]!;
@@ -6231,6 +6253,7 @@ function compileSwitchStatement(
 			continue;
 		}
 
+		if (nativeNumeric) continue;
 		const test = compileExpression(program, fn, cursor, switchCase.test);
 		const matches = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -6249,7 +6272,13 @@ function compileSwitchStatement(
 		type: "jump",
 		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
 	};
-	cursor.block.emitter.emit(missJump);
+	if (nativeNumeric)
+		cursor.block.emitter.emitNumericSwitch({
+			selector: discriminant,
+			cases: numericCases,
+			defaultTarget: missJump,
+		});
+	else cursor.block.emitter.emit(missJump);
 
 	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	lastBodyExitJump.blocks[0] = exitIdx;

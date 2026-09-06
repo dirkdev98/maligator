@@ -11,6 +11,7 @@ import {
 	nativeFrameRootRegisters,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
+	validateNativeNumericSwitches,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
@@ -35,7 +36,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 55;
+export const COMPILER_ARTIFACT_VERSION = 56;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -556,6 +557,7 @@ function writeCompilerArtifact(
 			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
+		validateNativeNumericSwitches(fn, native);
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
 				? 0
@@ -595,6 +597,18 @@ function writeCompilerArtifact(
 
 		if (native.directEntries.length > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
+		}
+		w.u32(native.numericSwitches?.length ?? 0);
+		for (const site of native.numericSwitches ?? []) {
+			w.u32(site.instructionIp);
+			w.u32(site.endIp);
+			w.u32(site.selector);
+			w.u32(site.defaultIp);
+			w.u32(site.cases.length);
+			for (const label of site.cases) {
+				w.i32(label.value);
+				w.u32(label.targetIp);
+			}
 		}
 		w.u32(native.fieldCalls?.length ?? 0);
 		for (const site of native.fieldCalls ?? []) {
@@ -2727,6 +2741,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
+		const numericSwitchCount = r.count(20);
+		const numericSwitches = Array.from({ length: numericSwitchCount }, () => ({
+			instructionIp: r.u32(),
+			endIp: r.u32(),
+			selector: r.u32(),
+			defaultIp: r.u32(),
+			cases: Array.from({ length: r.count(8) }, () => ({
+				value: r.i32(),
+				targetIp: r.u32(),
+			})),
+		}));
 		const fieldCallCount = r.count(12);
 		const fieldCalls = Array.from({ length: fieldCallCount }, () => ({
 			allocationIp: r.u32(),
@@ -4066,6 +4091,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			registerRepresentations,
 			directEntries,
 			...(fieldCallCount === 0 ? {} : { fieldCalls }),
+			...(numericSwitchCount === 0 ? {} : { numericSwitches }),
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
@@ -4076,6 +4102,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	for (const native of nativeFunctions) {
 		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
+		validateNativeNumericSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;
 			if (plan.directEntryId !== undefined) {

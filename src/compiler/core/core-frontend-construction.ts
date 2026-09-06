@@ -22,7 +22,14 @@ export interface CoreConstructionBlock {
 	emitter: CoreInstructionEmitter;
 }
 
+interface NumericSwitchInput {
+	readonly selector: number;
+	readonly cases: ReadonlyArray<{ readonly value: number; readonly block: number }>;
+	readonly defaultTarget: Extract<CompilerInstruction, { type: "jump" }>;
+}
+
 export interface CoreInstructionEmitter {
+	emitNumericSwitch(input: NumericSwitchInput): void;
 	emit(...instructions: Array<CompilerInstruction>): void;
 	last(): CompilerInstruction | undefined;
 }
@@ -117,6 +124,17 @@ type TargetReference =
 	| { readonly kind: "fallthrough"; readonly block: number };
 
 type TerminatorDraft =
+	| {
+			readonly kind: "switch";
+			readonly selector: ConstructionValue;
+			readonly cases: ReadonlyArray<{
+				readonly value: number;
+				readonly target: TargetReference;
+			}>;
+			readonly defaultTarget: TargetReference;
+			readonly environment: ValueEnvironment;
+			readonly sourcePosition?: number;
+	  }
 	| {
 			readonly kind: "jump";
 			readonly target: TargetReference;
@@ -279,6 +297,11 @@ class BlockEmitter implements CoreInstructionEmitter {
 		}
 	}
 
+	emitNumericSwitch(input: NumericSwitchInput): void {
+		this.#construction.emitNumericSwitch(this, input);
+		this.#last = input.defaultTarget;
+	}
+
 	last(): CompilerInstruction | undefined {
 		return this.#last;
 	}
@@ -404,6 +427,25 @@ export class DirectCoreFunctionConstruction {
 		} finally {
 			this.#sourcePosition = sourcePosition;
 		}
+	}
+
+	emitNumericSwitch(emitter: BlockEmitter, input: NumericSwitchInput): void {
+		if (emitter.tail.terminator !== undefined && emitter.pendingConditional === undefined)
+			return;
+		if (emitter.pendingConditional !== undefined) this.#flushConditional(emitter);
+		emitter.tail.terminator = {
+			kind: "switch",
+			selector: this.#read(emitter.tail, input.selector),
+			cases: input.cases.map((label) => ({
+				value: label.value,
+				target: { kind: "fallthrough", block: label.block },
+			})),
+			defaultTarget: { kind: "instruction", instruction: input.defaultTarget, slot: 0 },
+			environment: valueEnvironment(emitter.tail),
+			...(this.#sourcePosition === undefined
+				? {}
+				: { sourcePosition: this.#sourcePosition }),
+		};
 	}
 
 	emit(emitter: BlockEmitter, instruction: CompilerInstruction): void {
@@ -844,6 +886,16 @@ export class DirectCoreFunctionConstruction {
 					},
 				);
 			}
+			if (terminator?.kind === "switch") {
+				for (const target of [
+					...terminator.cases.map((label) => label.target),
+					terminator.defaultTarget,
+				])
+					edges.push({
+						target: this.#resolveTarget(target),
+						environment: terminator.environment,
+					});
+			}
 			if (state.handler !== undefined) {
 				const target = this.#resolveTarget(state.handler.target);
 				this.#ensureExceptionParameter(target);
@@ -1107,6 +1159,20 @@ export class DirectCoreFunctionConstruction {
 					terminator = {
 						kind: "jump",
 						edge: edge(draft.target, draft.environment),
+						...(draft.sourcePosition === undefined
+							? {}
+							: { sourcePosition: draft.sourcePosition }),
+					};
+					break;
+				case "switch":
+					terminator = {
+						kind: "switch",
+						discriminant: this.#coreValue(draft.selector),
+						cases: draft.cases.map((label) => ({
+							value: { kind: "number", value: label.value },
+							edge: edge(label.target, draft.environment),
+						})),
+						default: edge(draft.defaultTarget, draft.environment),
 						...(draft.sourcePosition === undefined
 							? {}
 							: { sourcePosition: draft.sourcePosition }),

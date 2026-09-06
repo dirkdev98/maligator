@@ -3509,8 +3509,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 #endif
 }
 
-bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
-    MAL_PERF_COUNT(compiled_enter_calls);
+static bool mal_vm_enter_depth_checked(MalVm *vm) {
     // Real C-stack guard (robust to per-frame size): refuse when this entry's frame
     // has descended past the reserved margin. Falls back to the fixed depth counter
     // (also a backstop when stack bounds are unavailable). Both throw the same
@@ -3521,6 +3520,12 @@ bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
         return false;
     }
     vm->native_call_depth++;
+    return true;
+}
+
+bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
+    MAL_PERF_COUNT(compiled_enter_calls);
+    if (!mal_vm_enter_depth_checked(vm)) return false;
 
     // Record a native frame for stack traces. The compiled function writes its
     // current source position into pos_id as it runs. Skipped when debug info is
@@ -3544,6 +3549,20 @@ bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
         .hidden = false,
     };
     return true;
+}
+
+bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index) {
+    if (!mal_vm_leaf_unobserved(vm)) return mal_vm_enter_compiled(vm, function_index);
+    MAL_PERF_COUNT(compiled_enter_calls);
+    return mal_vm_enter_depth_checked(vm);
+}
+
+void mal_vm_leave_leaf_checked(MalVm *vm) {
+    if (!mal_vm_leaf_unobserved(vm)) {
+        mal_vm_leave_compiled(vm);
+        return;
+    }
+    vm->native_call_depth--;
 }
 
 void mal_vm_leave_compiled(MalVm *vm) {

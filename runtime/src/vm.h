@@ -1814,7 +1814,17 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
  * depth and returns true. Each successful enter must be paired with a leave.
  */
 bool mal_vm_enter_compiled(MalVm *vm, i32 function_index);
-/** Enter a statically stack-unobservable compiled body without a trace row. */
+// A leaf cannot change observation modes; its enter and leave make the same choice.
+static inline bool mal_vm_leaf_unobserved(const MalVm *vm) {
+#if MAL_PROFILE
+    (void) vm;
+    return false;
+#else
+    return vm->runtime_image->file_count == 0;
+#endif
+}
+bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index);
+void mal_vm_leave_leaf_checked(MalVm *vm);
 
 /** Leave a compiled-function invocation, balancing a prior enter. */
 void mal_vm_leave_compiled(MalVm *vm);

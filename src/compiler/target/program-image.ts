@@ -903,6 +903,13 @@ export interface NativeFunctionPlan {
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	/** Native-only ordinary-call siblings selected by closed-world call facts. */
 	readonly directEntries: ReadonlyArray<NativeDirectEntryPlan>;
+	readonly numericSwitches?: ReadonlyArray<{
+		readonly instructionIp: number;
+		readonly endIp: number;
+		readonly selector: number;
+		readonly cases: ReadonlyArray<{ readonly value: number; readonly targetIp: number }>;
+		readonly defaultIp: number;
+	}>;
 	readonly fieldCalls?: ReadonlyArray<{
 		readonly allocationIp: number;
 		readonly callIp: number;
@@ -1021,6 +1028,69 @@ export function validateNativeDirectEntry(
 		)
 			throw new RangeError("Native direct entry has an invalid constant comparison");
 		seen.add(instructionIp);
+	}
+}
+
+export function validateNativeNumericSwitches(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+): void {
+	let previousEnd = -1;
+	for (const site of native.numericSwitches ?? []) {
+		const fail = () => {
+			throw new RangeError("Invalid native numeric switch certificate");
+		};
+		if (
+			site.instructionIp <= previousEnd ||
+			site.selector < 0 ||
+			site.selector >= fn.registerCount ||
+			site.cases.length < 4 ||
+			site.endIp !== site.instructionIp + site.cases.length * 3
+		)
+			fail();
+		previousEnd = site.endIp;
+		const validTarget = (ip: number) =>
+			Number.isInteger(ip) &&
+			ip >= 0 &&
+			ip < fn.instructions.length &&
+			(ip <= site.instructionIp || ip > site.endIp);
+		for (const [index, label] of site.cases.entries()) {
+			const ip = site.instructionIp + index * 3;
+			const literal = fn.instructions[ip],
+				compare = fn.instructions[ip + 1],
+				branch = fn.instructions[ip + 2];
+			if (
+				!Number.isInteger(label.value) ||
+				label.value < -2147483648 ||
+				label.value > 2147483647 ||
+				!validTarget(label.targetIp) ||
+				(literal?.opcode !== "CREATE_NUMBER" && literal?.opcode !== "CREATE_F64") ||
+				literal.value !== label.value ||
+				compare?.opcode !== "BINARY" ||
+				compare.operator !== "===" ||
+				compare.left !== site.selector ||
+				compare.right !== literal.dst ||
+				branch?.opcode !== "JUMP_IF" ||
+				branch.cond !== compare.dst ||
+				branch.targetIp !== label.targetIp
+			)
+				fail();
+		}
+		const fallback = fn.instructions[site.endIp];
+		if (
+			!validTarget(site.defaultIp) ||
+			fallback?.opcode !== "JUMP" ||
+			fallback.targetIp !== site.defaultIp
+		)
+			fail();
+		for (const op of fn.instructions) {
+			if (
+				(op.opcode === "JUMP" || op.opcode === "JUMP_IF") &&
+				op.targetIp > site.instructionIp &&
+				op.targetIp <= site.endIp
+			)
+				fail();
+		}
 	}
 }
 
@@ -3734,6 +3804,20 @@ function lowerExecutionFunctionToNativePlan(
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 		registerRepresentations: [...fn.registerRepresentations],
 		directEntries,
+		...(fn.numericSwitches === undefined
+			? {}
+			: {
+					numericSwitches: fn.numericSwitches.map((site) => ({
+						instructionIp: instructionIndexByTargetInstruction.get(site.first)!,
+						endIp: instructionIndexByTargetInstruction.get(site.last)!,
+						selector: site.selector,
+						cases: site.cases.map((label) => ({
+							value: label.value,
+							targetIp: blockStartIps.get(label.block)!,
+						})),
+						defaultIp: blockStartIps.get(site.defaultBlock)!,
+					})),
+				}),
 		...(fn.fieldCalls === undefined
 			? {}
 			: {

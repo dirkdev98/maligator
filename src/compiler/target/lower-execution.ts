@@ -1709,6 +1709,9 @@ function lowerFunctionToTarget(
 	const blocks: Array<{ instructions: Array<CompilerInstruction> }> = blockOrder.map(
 		() => ({ instructions: [] }),
 	);
+	const numericSwitches: Array<
+		NonNullable<ExecutionFunction["numericSwitches"]>[number]
+	> = [];
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
 	const exactCallTargets = new Set<CoreInstructionId>();
@@ -2149,13 +2152,29 @@ function lowerFunctionToTarget(
 				loweredInstructions.set(terminatorId, lowered);
 				break;
 			}
-			case "switch":
+			case "switch": {
+				const start = instructions.length;
+				const cases: Array<{ value: number; block: number }> = [];
+				let numeric = terminatorEdgeCount >= 5;
 				for (let index = 0; index < terminatorEdgeCount - 1; index++) {
 					const edge = terminatorEdgeStart + index;
 					const caseValue = kernel.terminatorEdgeCaseValue(edge);
 					if (caseValue === undefined) {
 						throw new Error(`Core switch in b${blockId} has no case value`);
 					}
+					const targetBlock = lowerTerminatorEdge(edge);
+					if (
+						caseValue.kind !== "number" ||
+						!Number.isInteger(caseValue.value) ||
+						caseValue.value < -2147483648 ||
+						caseValue.value > 2147483647
+					)
+						numeric = false;
+					else
+						cases.push({
+							value: caseValue.value === 0 ? 0 : caseValue.value,
+							block: targetBlock,
+						});
 					const immediate = nextRegister.value++;
 					const matches = nextRegister.value++;
 					temporaryRegisters.push(immediate, matches);
@@ -2182,15 +2201,27 @@ function lowerFunctionToTarget(
 						{
 							type: "jumpIf",
 							registers: [matches],
-							blocks: [lowerTerminatorEdge(edge)],
+							blocks: [targetBlock],
 						},
 					);
 				}
+				const defaultBlock = lowerTerminatorEdge(
+					terminatorEdgeStart + terminatorEdgeCount - 1,
+				);
 				instructions.push({
 					type: "jump",
-					blocks: [lowerTerminatorEdge(terminatorEdgeStart + terminatorEdgeCount - 1)],
+					blocks: [defaultBlock],
 				});
+				if (numeric)
+					numericSwitches.push({
+						first: instructions[start]!,
+						last: instructions.at(-1)!,
+						selector: registerForValue(kernel.operandAt(terminatorOperandStart)),
+						cases,
+						defaultBlock,
+					});
 				break;
+			}
 			case "unreachable":
 				throw new Error(`Reachable Core block b${blockId} ends in unreachable`);
 		}
@@ -2234,6 +2265,7 @@ function lowerFunctionToTarget(
 		allocatedRegisterCount,
 		registerRepresentations: physicalRepresentations,
 		directEntries: [],
+		...(numericSwitches.length === 0 ? {} : { numericSwitches }),
 		capturedCount: coreFunction.metadata.capturedCount,
 		strict: coreFunction.metadata.strict,
 		isClassConstructor: coreFunction.metadata.isClassConstructor,

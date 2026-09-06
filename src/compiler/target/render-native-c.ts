@@ -16,6 +16,7 @@ import {
 	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
+	validateNativeNumericSwitches,
 	vmRegionActionsAreCurrent,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
@@ -176,10 +177,14 @@ export interface CompiledFunction {
 		source: string;
 		parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 		resultRepresentation: VmRegisterRepresentation;
+		leaf?: true;
 	}>;
 }
 
-export type DirectCompiledEntries = ReadonlyMap<string, NativeDirectEntryPlan>;
+export type DirectCompiledEntries = ReadonlyMap<
+	string,
+	NativeDirectEntryPlan & { readonly leaf?: true }
+>;
 
 interface NativeRelocationExpressions {
 	readonly enabled: boolean;
@@ -495,6 +500,7 @@ function emitCompiledVariant(
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
+	validateNativeNumericSwitches(fn, native);
 	const nativeContract: NativeFunctionPlan =
 		directEntry === undefined
 			? native
@@ -862,6 +868,7 @@ function emitCompiledVariant(
 		),
 		directEntry?.fieldParameters,
 		nativeContract.fieldCalls,
+		nativeContract.numericSwitches,
 	);
 	if (body === null) {
 		return null;
@@ -1060,6 +1067,99 @@ function emitCompiledVariant(
 	};
 }
 
+function numericLeafWorker(
+	fn: BytecodeFunction,
+	entry: NativeDirectEntryPlan,
+): Array<string> | null {
+	if (
+		fn.instructions.length > 48 ||
+		fn.handlers.length > 0 ||
+		fn.capturedCount > 0 ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.isClassConstructor ||
+		fn.mappedArguments ||
+		entry.argumentRepresentations !== undefined ||
+		entry.resultRepresentation !== "number"
+	)
+		return null;
+	const reps = entry.registerRepresentations;
+	const numeric = (r: number) => reps[r] === "number" || reps[r] === "int32";
+	const scalar = (r: number) => numeric(r) || reps[r] === "boolean";
+	const number = (r: number) => `(f64) r${r}`;
+	const body: Array<string> = [];
+	for (const [ip, op] of fn.instructions.entries()) {
+		let line: string;
+		switch (op.opcode) {
+			case "JUMP":
+			case "JUMP_IF":
+				if (op.targetIp <= ip || op.targetIp >= fn.instructions.length) return null;
+				if (op.opcode === "JUMP_IF" && reps[op.cond] !== "boolean") return null;
+				line = `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
+				break;
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				if (!numeric(op.dst)) return null;
+				line = `r${op.dst} = ${cF64Literal(op.value)};`;
+				break;
+			case "CREATE_BOOLEAN":
+				if (reps[op.dst] !== "boolean") return null;
+				line = `r${op.dst} = ${op.value};`;
+				break;
+			case "MOVE":
+				if (!scalar(op.dst) || reps[op.dst] !== reps[op.src]) return null;
+				line = `r${op.dst} = r${op.src};`;
+				break;
+			case "LOAD_PROPERTY_STATIC": {
+				const field = entry.fieldParameters?.loads.find(
+					(load) => load.instructionIp === ip,
+				);
+				if (field === undefined || reps[op.dst] !== "number") return null;
+				line = `r${op.dst} = fp${field.field};`;
+				break;
+			}
+			case "BINARY": {
+				if (!numeric(op.left) || !numeric(op.right)) return null;
+				const compare = NATIVE_COMPARE[op.operator];
+				const expression =
+					compare !== undefined && reps[op.dst] === "boolean"
+						? `${number(op.left)} ${compare} ${number(op.right)}`
+						: reps[op.dst] === "number"
+							? nativeNumberExpr(op.operator, number(op.left), number(op.right))
+							: null;
+				if (expression === null) return null;
+				line = `r${op.dst} = ${expression};`;
+				break;
+			}
+			case "UNARY":
+				if (
+					!numeric(op.src) ||
+					reps[op.dst] !== "number" ||
+					!["+", "-", "tonumeric"].includes(op.operator)
+				)
+					return null;
+				line = `r${op.dst} = ${op.operator === "-" ? "-" : ""}${number(op.src)};`;
+				break;
+			case "RETURN":
+				if (!numeric(op.value)) return null;
+				line = `return ${number(op.value)};`;
+				break;
+			default:
+				return null;
+		}
+		body.push(`L${ip}:; ${line}`);
+	}
+	if (fn.instructions.at(-1)?.opcode !== "RETURN") return null;
+	const declarations: Array<string> = [];
+	for (const [r, rep] of reps.entries()) {
+		if (!scalar(r)) continue;
+		declarations.push(
+			`${cTypeOf(rep)} r${r} = ${r < fn.parameterCount ? `p${r}` : "0"};`,
+		);
+	}
+	return [...declarations, ...body];
+}
+
 /** Emit the canonical boxed entry and every independently lowerable typed sibling. */
 export function emitCompiledFunction(
 	fn: BytecodeFunction,
@@ -1090,7 +1190,11 @@ export function emitCompiledFunction(
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
-	const variants = native.directEntries.flatMap((entry) => {
+	const variants = native.directEntries.flatMap<{
+		entry: NativeDirectEntryPlan;
+		emitted: CompiledFunction;
+		leaf: true | undefined;
+	}>((entry) => {
 		const emitted = emitCompiledVariant(
 			fn,
 			native,
@@ -1105,11 +1209,26 @@ export function emitCompiledFunction(
 			entry,
 			strictCompiledTargets,
 		);
-		return emitted === null ? [] : [{ entry, emitted }];
+		if (emitted === null) return [];
+		const worker = debug ? null : numericLeafWorker(fn, entry);
+		if (worker === null) return [{ entry, emitted, leaf: undefined }];
+		const parameters = entry.parameterRepresentations
+			.map((rep, i) => `${cTypeOf(rep)} p${i}`)
+			.concat(entry.fieldParameters?.keys.map((_, i) => `f64 fp${i}`) ?? []);
+		const args = entry.parameterRepresentations
+			.map((_, i) => `p${i}`)
+			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
+		const symbol = `${emitted.symbol}_leaf`;
+		const source = `static f64 ${symbol}(${parameters.join(", ") || "void"}) {\n${worker.join("\n")}\n}\n${emitted.source.replace(
+			" {\n",
+			` {\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
+		)}`;
+		return [{ entry, emitted: { ...emitted, source }, leaf: true as const }];
 	});
 	return {
 		...canonical,
-		directEntries: variants.map(({ entry, emitted }) => ({
+		directEntries: variants.map(({ entry, emitted, leaf }) => ({
+			...(leaf === undefined ? {} : { leaf }),
 			id: entry.id,
 			symbol: emitted.symbol,
 			source: emitted.source,
@@ -1784,6 +1903,7 @@ function emitBody(
 	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
 	directFields?: NativeDirectEntryPlan["fieldParameters"],
 	fieldCalls?: NativeFunctionPlan["fieldCalls"],
+	numericSwitches?: NativeFunctionPlan["numericSwitches"],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2323,6 +2443,11 @@ function emitBody(
 	const fieldLoads = new Map(
 		directFields?.loads.map((load) => [load.instructionIp, load.field]),
 	);
+	const switches = new Map(
+		fn.profileSiteIds === undefined
+			? numericSwitches?.map((site) => [site.instructionIp, site])
+			: [],
+	);
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
@@ -2333,6 +2458,45 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
+		}
+		const numericSwitch = switches.get(ip);
+		if (numericSwitch !== undefined) {
+			const branch = (target: number, branchIp: number) => {
+				const mask = inactiveRootMasks.get(branchIp);
+				if (target > branchIp) return `goto L${target};`;
+				if (gcSafepointKinds.get(branchIp) !== "loop-backedge")
+					throw new Error("Native switch backedge has no root plan");
+				return `if (mal_gc_poll) { ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); } goto L${target};`;
+			};
+			const fallback = branch(numericSwitch.defaultIp, numericSwitch.endIp);
+			const selector = numericSwitch.selector;
+			const representation = reps[selector];
+			if (representation === "boolean" || representation === "string")
+				lines.push(fallback);
+			else {
+				if (representation === "boxed")
+					lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
+				const value = `__switch_${ip}`;
+				lines.push(
+					`f64 ${value} = ${representation === "boxed" ? `mal_ops_number_as_f64(r${selector})` : `r${selector}`};`,
+				);
+				if (representation !== "int32")
+					lines.push(
+						`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
+					);
+				lines.push(`switch ((i32) ${value}) {`);
+				const seen = new Set<number>();
+				for (const [index, label] of numericSwitch.cases.entries()) {
+					if (seen.has(label.value)) continue;
+					seen.add(label.value);
+					lines.push(
+						`case ${label.value}: ${branch(label.targetIp, ip + index * 3 + 2)}`,
+					);
+				}
+				lines.push(`default: ${fallback}`, "}");
+			}
+			ip = numericSwitch.endIp;
+			continue;
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
 		const inactiveRootMask = inactiveRootMasks.get(ip);
@@ -5563,10 +5727,10 @@ function emitInstruction(
 							`  MalRealm *__entry_realm = vm->current_realm;`,
 							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
 							`#endif`,
-							`  if (mal_vm_enter_compiled(vm, ${target})) {`,
+							`  if (${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) {`,
 							`    MAL_PERF_COUNT(direct_entry_hits);`,
 							`    ${cTypeOf(entry.resultRepresentation)} ${value} = mal_direct_${target}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
-							`    mal_vm_leave_compiled(vm);`,
+							`    ${entry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 							`    ${tmp} = vm->completion.kind == MAL_COMPLETION_THROW ? vm->completion : (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = ${result} };`,
 							`  } else { ${tmp} = vm->completion; }`,
 							`#if MAL_REALMS`,
@@ -5646,10 +5810,10 @@ function emitInstruction(
 						return [
 							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 							`MAL_PERF_COUNT(direct_entry_hits);`,
-							`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
+							`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) ${onThrow()}`,
 							...functionDeclaration,
 							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
-							`mal_vm_leave_compiled(vm);`,
+							`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 							`r${instruction.dst} = ${directResult};`,
 							poll,

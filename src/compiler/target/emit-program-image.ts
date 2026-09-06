@@ -483,7 +483,9 @@ interface NativeCompilationAvailability {
 	directCompiledTargets: Set<number>;
 	directCompiledEntries: Map<
 		string,
-		ProgramImage["native"]["functions"][number]["directEntries"][number]
+		ProgramImage["native"]["functions"][number]["directEntries"][number] & {
+			readonly leaf?: true;
+		}
 	>;
 }
 
@@ -525,7 +527,7 @@ function nativeCompilationAvailability(
 			if (entry !== undefined) {
 				directCompiledEntries.set(
 					directCompiledEntryKey(functionIndex, emittedEntry.id),
-					entry,
+					{ ...entry, ...(emittedEntry.leaf ? { leaf: true as const } : {}) },
 				);
 			}
 		}
