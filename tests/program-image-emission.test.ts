@@ -1988,7 +1988,7 @@ describe("native update-expression representation", () => {
 
 		const lockedOutput = emitLocked(source);
 		expect(lockedOutput).not.toContain("mal_builtin_math_unary_number_known");
-		expect(lockedOutput).toContain("mal_builtin_math_binary_number_known");
+		expect(lockedOutput).not.toContain("mal_builtin_math_binary_number_known");
 	});
 
 	it("publishes locked Math root masks only when polling and forgets conditional state", () => {

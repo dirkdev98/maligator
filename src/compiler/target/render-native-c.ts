@@ -143,10 +143,20 @@ function nativeMathUnaryExpr(operation: string, argument: string): string | null
 	}
 }
 
-const MATH_BINARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
-	["Math.min", "MAL_MATH_BINARY_MIN"],
-	["Math.max", "MAL_MATH_BINARY_MAX"],
-] as const);
+const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
+
+function nativeMathBinaryExpr(
+	operation: string,
+	left: string,
+	right: string,
+): string | null {
+	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
+	const maximum = operation === "Math.max";
+	const compare = maximum ? ">" : "<";
+	const negativeZero = `signbit(${left}) ${maximum ? "&&" : "||"} signbit(${right})`;
+	// C fmin/fmax can discard a NaN operand and do not establish this signed-zero contract.
+	return `(isnan(${left}) || isnan(${right}) ? NAN : (${left} == 0.0 && ${right} == 0.0 ? (${negativeZero} ? -0.0 : 0.0) : (${left} ${compare} ${right} ? ${left} : ${right})))`;
+}
 
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
@@ -1971,7 +1981,7 @@ function emitBody(
 		} else if (
 			operation !== undefined &&
 			instruction.arguments.length === 2 &&
-			MATH_BINARY_NATIVE_OP.has(operation)
+			MATH_BINARY_OPERATIONS.has(operation)
 		) {
 			mathBinaryCalls.add(ip);
 		}
@@ -4420,17 +4430,15 @@ function emitInstruction(
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
 		case "MATH_BINARY_NUMBER": {
-			const operation = MATH_BINARY_NATIVE_OP.get(instruction.operation);
-			if (
-				operation === undefined ||
-				reps[instruction.left] !== "number" ||
-				reps[instruction.right] !== "number"
-			) {
+			if (reps[instruction.left] !== "number" || reps[instruction.right] !== "number") {
 				return null;
 			}
-			return [
-				`r${instruction.dst} = mal_builtin_math_binary_number_known(${operation}, ${num(instruction.left)}, ${num(instruction.right)});`,
-			];
+			const expression = nativeMathBinaryExpr(
+				instruction.operation,
+				num(instruction.left),
+				num(instruction.right),
+			);
+			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
 		case "CALL_BUILTIN": {
 			const argsExpr =
@@ -5262,21 +5270,18 @@ function emitInstruction(
 			if (mathBinaryCall) {
 				const left = instruction.arguments[0]!;
 				const right = instruction.arguments[1]!;
-				const nativeOperation = MATH_BINARY_NATIVE_OP.get(
-					callPlan?.guardedBuiltinCall?.operation ?? "",
-				);
 				const nativeLeft = nativeNumberOperand(left);
 				const nativeRight = nativeNumberOperand(right);
-				if (
-					reps[instruction.dst] === "number" &&
-					nativeOperation !== undefined &&
-					nativeLeft !== null &&
-					nativeRight !== null
-				) {
-					return [
-						`r${instruction.dst} = mal_builtin_math_binary_number_known(${nativeOperation}, ${nativeLeft}, ${nativeRight});`,
-						mathPoll,
-					];
+				const nativeExpression =
+					nativeLeft === null || nativeRight === null
+						? null
+						: nativeMathBinaryExpr(
+								callPlan?.guardedBuiltinCall?.operation ?? "",
+								nativeLeft,
+								nativeRight,
+							);
+				if (reps[instruction.dst] === "number" && nativeExpression !== null) {
+					return [`r${instruction.dst} = ${nativeExpression};`, mathPoll];
 				}
 				return [
 					`static MalMathBinaryOp __math_${ip};`,

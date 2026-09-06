@@ -14,6 +14,8 @@ import {
 const fixture = "tests/local/math-number-native.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-math-number-native-"));
 const exactOperations = new Set([
+	"min",
+	"max",
 	"abs",
 	"floor",
 	"ceil",
@@ -55,6 +57,7 @@ describe("native numeric Math emission", () => {
 			);
 			expect(emitted).not.toBeNull();
 			expect(emitted!.source).not.toContain("mal_builtin_math_unary_number_known");
+			expect(emitted!.source).not.toContain("mal_builtin_math_binary_number_known");
 			for (const operation of operations) numericOperations.add(operation.operation);
 		});
 		expect(numericOperations.size).toBe(27);
