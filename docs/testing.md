@@ -149,6 +149,17 @@ with `status: incomplete`. Other failures also exit 2. A completed run records
 samples and variability without declaring a performance win. Output directories
 must be new, and evidence remains until explicitly removed.
 
+For current-tree diagnostics, `npm run bench:self-compile-profile -- --quick`
+profiles the shape-analysis cone; omit `--quick` for full self-compilation.
+Add `--compiler-profile` for source-site counters or `--timing-only` for an
+uninstrumented run. Every mode uses a fresh certified whole-program frontend
+and development O2/no-LTO code. The report records its closure certificate,
+native plan, and toolchain. Native builds and child runs clear ambient `MAL_*`
+and `NODE_*` overrides before applying the selected instrumentation. Completed
+runs must match Node on the same prepared input, outside the timed interval.
+Failed runs retain their scratch directory for diagnosis. Profile runs are diagnostics;
+use the matched experiment workflow above for performance conclusions.
+
 ## Cache ownership
 
 Maligator bounds its shared user-cache artifacts without touching source,
