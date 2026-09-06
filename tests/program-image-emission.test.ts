@@ -1314,6 +1314,17 @@ describe("native update-expression representation", () => {
 		}
 	});
 
+	it.each(["===", "!=="] as const)(
+		"keeps boxed %s comparisons at the pure strict-equality boundary",
+		(operator) => {
+			const output = emit(
+				`globalThis.compare = function compare(left, right) { return left ${operator} right; };`,
+			);
+			expect(output).toContain("mal_ops_strict_equal_bool(");
+			expect(output).not.toMatch(/mal_vm_binary_op\(vm, MAL_BIN_STRICT_(?:EQ|NEQ)/);
+		},
+	);
+
 	it.each(["int32", "number"] as const)(
 		"converts bitwise operands only when their representation is %s",
 		(representation) => {

@@ -4224,6 +4224,10 @@ function emitInstruction(
 				if (leftIsNum && rightIsNum) {
 					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
 				}
+				if (bothBoxed && (operator === "===" || operator === "!==")) {
+					const equal = `mal_ops_strict_equal_bool(${boxed(left)}, ${boxed(right)})`;
+					return [storeBool(operator === "!==" ? `!${equal}` : equal)];
+				}
 				const compareCheck = binaryOpCanThrow(operator) ? [completionCheck] : [];
 				// Speculate a numeric compare when there is a numeric prior: always in
 				// the mixed case (one operand proven number), and in the both-boxed
