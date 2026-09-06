@@ -137,6 +137,18 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
     return result;
 }
 
+MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *right) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+    if (mal_string_length(left) == 0) return mal_value_from_string(right);
+    if (mal_string_length(right) == 0) return mal_value_from_string(left);
+    MalString *result;
+    if (!mal_string_new_cons_checked(&vm->heap, left, right, &result)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return MAL_VALUE_UNDEFINED;
+    }
+    return mal_value_from_string(result);
+}
+
 static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     if (string->array_index_impossible) return false;
     usize length = mal_string_length(string);

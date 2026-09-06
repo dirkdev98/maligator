@@ -327,6 +327,9 @@ bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out);
  */
 MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
 
+// Inputs are rooted primitive strings; pending throws and length-limit errors are preserved.
+MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *right);
+
 /**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound
  * functions unwrap to their target, then the value's prototype chain is
