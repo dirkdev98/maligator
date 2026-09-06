@@ -126,11 +126,8 @@ function representationKind(
 	}
 }
 
-function staticOpcodeKind(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): CompilerValueKindMask | undefined {
-	switch (fn.instructionOpcodeName(instruction)) {
+function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
+	switch (opcode) {
 		case "createUndefined":
 			return COMPILER_VALUE_KIND_UNDEFINED;
 		case "createNull":
@@ -222,13 +219,17 @@ function addOperationTransfer(
 	output: CoreValueId,
 	inputs?: CoreValueKindInputs,
 ): void {
-	const operandCount = fn.kernel.instructionOperandCount(instruction);
-	const staticKind = representationKind(fn, output) ?? staticOpcodeKind(fn, instruction);
+	const representation = representationKind(fn, output);
+	if (representation !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, representation);
+		return;
+	}
+	const opcode = fn.instructionOpcodeName(instruction);
+	const staticKind = staticOpcodeKind(opcode);
 	if (staticKind !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, staticKind);
 		return;
 	}
-	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, inputs.receiverMask);
 		return;
@@ -238,11 +239,15 @@ function addOperationTransfer(
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, supplied);
 		return;
 	}
-	const operator = fn.instructionAttributes(instruction).operator;
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
 	if (opcode === "move" && operandCount === 1) {
 		addOperationKindTransfer(buffer, KIND_TRANSFER_COPY, output, fn, instruction);
 		return;
 	}
+	const operator =
+		opcode === "unary" || opcode === "binary"
+			? fn.instructionAttributes(instruction).operator
+			: undefined;
 	if (opcode === "unary" && operandCount === 1 && typeof operator === "string") {
 		const constant =
 			operator === "!"
@@ -519,6 +524,8 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
+			if (context.data.singleAssignmentGlobalSlots.length === 0)
+				return analyzeCoreValueKinds(fn, cfg);
 			const closedGlobals = new Set(context.data.singleAssignmentGlobalSlots);
 			const stores = new Map<
 				number,
@@ -564,6 +571,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					continue;
 				stores.set(index, stores.has(index) ? null : { instruction, value });
 			}
+			if (stores.size === 0) return analyzeCoreValueKinds(fn, cfg);
 			const instructionOrder = new Int32Array(fn.instructionCapacity);
 			instructionOrder.fill(-1);
 			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
@@ -585,7 +593,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				if (representation !== undefined) return representation;
 				if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
 				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				const kind = staticOpcodeKind(fn, definition);
+				const kind = staticOpcodeKind(fn.instructionOpcodeName(definition));
 				if (kind !== undefined) return kind;
 				const source =
 					fn.kernel.instructionOperandCount(definition) === 0
@@ -611,11 +619,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? storedKind(store.value) : undefined;
 			};
-			return analyzeCoreValueKinds(
-				fn,
-				cfg,
-				closedGlobals.size === 0 ? undefined : { operationResultMask },
-			);
+			return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
 		},
 	};
 

@@ -51,6 +51,50 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it.each([
+		{ closed: false, stores: 1, expected: COMPILER_VALUE_KIND_TOP },
+		{ closed: true, stores: 0, expected: COMPILER_VALUE_KIND_TOP },
+		{ closed: true, stores: 1, expected: COMPILER_VALUE_KIND_NUMBER },
+		{ closed: true, stores: 2, expected: COMPILER_VALUE_KIND_TOP },
+	])(
+		"uses a global kind only after one dominating closed store: closed=$closed stores=$stores",
+		({ closed, stores, expected }) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [before] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 42 },
+			});
+			for (let index = 0; index < stores; index++)
+				builder.appendInstruction(entry, "storeGlobal", [value!], {
+					attributes: { index: 0 },
+				});
+			const [after] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: after! });
+			const finished = builder.finish(entry);
+			const analysisContext = {
+				...context,
+				data: { ...context.data, singleAssignmentGlobalSlots: closed ? [0] : [] },
+			};
+			const analyses = new CoreAnalysisManager(
+				program,
+				analysisContext,
+				new CoreOptimizationReportBuilder(program),
+			);
+			const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+				scope: "function",
+				function: finished.function,
+			});
+			expect(kinds.kindMask(before!)).toBe(COMPILER_VALUE_KIND_TOP);
+			expect(kinds.kindMask(after!)).toBe(expected);
+		},
+	);
+
 	it("makes a guard fact available only where its success edge dominates", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
