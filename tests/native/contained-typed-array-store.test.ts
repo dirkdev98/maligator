@@ -39,14 +39,17 @@ describe("contained numeric TypedArray stores", () => {
 			function probe${kind}() {
 				const values = new ${kind}(8);
 				const output = [];
-				for (let phase = 0; phase < 4; phase++) {
+				for (let phase = 0; phase < 5; phase++) {
 					for (let index = -2; index < 10; index++) {
 						let value = index * 7919.5 - 31;
 						if (phase === 1) value = index * 1099511627776 + 0.75;
 						if (phase === 2) value = (index - 4) / 0;
 						if (phase === 3) value = -(index % 2) * 0;
+						if (phase === 4) value = index === 7 ? 254.5 : index + 0.5;
 						values[index] = value;
 					}
+					values[phase + 0.5] = phase;
+					values[phase + 20] = phase;
 					for (let index = 0; index < values.length; index++) {
 						const value = values[index];
 						output.push(Object.is(value, -0) ? "-0" : String(value));
@@ -80,18 +83,10 @@ describe("contained numeric TypedArray stores", () => {
 			if (stores.length === 0) return;
 			const emitted = emitCompiledFunction(fn, plan, index, "", false);
 			expect(emitted).not.toBeNull();
-			if (stores.includes("Uint8ClampedArray")) {
-				expect(emitted!.source).toContain(
-					"mal_vm_numeric_typed_array_store_known_receiver(",
-				);
-			} else {
-				expect(emitted!.source).toContain("mal_scalar_store_native_");
-				for (const kind of stores) directKinds.add(kind);
-			}
+			expect(emitted!.source).toContain("mal_scalar_store_native_");
+			for (const kind of stores) directKinds.add(kind);
 		});
-		expect([...directKinds].sort()).toEqual(
-			kinds.filter((kind) => kind !== "Uint8ClampedArray").sort(),
-		);
+		expect([...directKinds].sort()).toEqual(kinds.toSorted());
 	});
 
 	it("matches Node for wrapping, fractions, non-finite values, signed zero, and bounds", () => {

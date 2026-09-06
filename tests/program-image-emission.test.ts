@@ -3481,7 +3481,7 @@ describe("native update-expression representation", () => {
 		const constructLine = lines.findIndex((line) =>
 			line.includes("mal_vm_construct_value"),
 		);
-		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_known"));
+		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_key"));
 
 		expect(constructLine).toBeGreaterThanOrEqual(0);
 		expect(

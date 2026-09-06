@@ -60,7 +60,9 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		value: unknown,
 		thisValue = undefinedOperand,
 	) => {
-		const dst = allocate();
+		const dst = allocate(
+			operation.endsWith(".has") || operation.endsWith(".delete") ? "boolean" : "boxed",
+		);
 		instructions.push({
 			opcode: "CALL_BUILTIN",
 			dst,
@@ -86,6 +88,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 	];
 	for (const value of values) {
 		const src = number(value);
+		builtin("Number.prototype.valueOf", [], value, src);
 		for (const operator of [
 			"-",
 			"+",
@@ -154,7 +157,101 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		record(dst, left! ** right!);
 	}
 	const truth = encodeVmValueOperand(-1, { kind: "boolean", value: true });
+	for (const intrinsic of ["Map", "Set"] as const) {
+		const constructor = allocate(),
+			receiver = allocate();
+		instructions.push(
+			{ opcode: "LOAD_INTRINSIC", dst: constructor, intrinsic },
+			{
+				opcode: "CONSTRUCT",
+				dst: receiver,
+				callee: constructor,
+				arguments: [],
+				argumentCount: 0,
+			},
+		);
+		const operation = intrinsic === "Map" ? "Map.prototype.set" : "Set.prototype.add";
+		builtin(operation, [], {}, receiver);
+		builtin(`${intrinsic}.prototype.has`, [], true, receiver);
+		builtin(`${intrinsic}.prototype.delete`, [], true, receiver);
+		builtin(`${intrinsic}.prototype.has`, [], false, receiver);
+		for (const key of [number(NaN), number(-0), receiver]) {
+			const args = intrinsic === "Map" ? [key, number(7)] : [key];
+			builtin(operation, args, {}, receiver);
+			builtin(`${intrinsic}.prototype.has`, [key], true, receiver);
+			if (intrinsic === "Map") builtin("Map.prototype.get", [key], 7, receiver);
+			builtin(`${intrinsic}.prototype.delete`, [key], true, receiver);
+			builtin(`${intrinsic}.prototype.has`, [key], false, receiver);
+			if (intrinsic === "Map") {
+				builtin("Map.prototype.get", [key], undefined, receiver);
+				builtin(operation, [key, number(8)], {}, receiver);
+				builtin("Map.prototype.get", [key], 8, receiver);
+			}
+		}
+	}
 	const falsehood = encodeVmValueOperand(-1, { kind: "boolean", value: false });
+	builtin("Boolean.prototype.valueOf", [], true, truth);
+	builtin("Boolean.prototype.valueOf", [], false, falsehood);
+	builtin(
+		"Number.prototype.valueOf",
+		[],
+		17,
+		encodeVmValueOperand(-1, { kind: "number", value: 17 }),
+	);
+	for (const value of [false, true]) {
+		const flag = allocate("boolean");
+		instructions.push({ opcode: "CREATE_BOOLEAN", dst: flag, value });
+		builtin("Boolean.prototype.valueOf", [], value, flag);
+		for (const [operator, expectedValue] of [
+			["+", Number(value)],
+			["-", -Number(value)],
+			["~", ~Number(value)],
+		] as const) {
+			const dst = allocate();
+			instructions.push({ opcode: "UNARY", dst, src: flag, operator });
+			record(dst, expectedValue);
+		}
+		for (const n of [-0, 1, 2, 7, NaN, Infinity]) {
+			const right = number(n);
+			for (const [operator, expectedValue] of [
+				["+", Number(value) + n],
+				["*", Number(value) * n],
+				["/", n / Number(value)],
+				["&", Number(value) & n],
+				["<<", Number(value) << n],
+				[">>>", Number(value) >>> n],
+				["<", Number(value) < n],
+				["==", Number(value) === n],
+				["===", false],
+			] as const) {
+				const dst = allocate(typeof expectedValue === "boolean" ? "boolean" : "boxed");
+				instructions.push({
+					opcode: "BINARY",
+					dst,
+					left: operator === "/" ? right : flag,
+					right: operator === "/" ? flag : right,
+					operator,
+				});
+				record(dst, expectedValue);
+			}
+		}
+	}
+	for (const src of [number(0), number(NaN), string(""), string("\u0000")]) {
+		instructions.push({ opcode: "REQUIRE_COERCIBLE", src });
+		for (const opcode of ["IS_EMPTY", "GUARD_FUNCTION_INDEX"] as const) {
+			const dst = allocate("boolean");
+			instructions.push(
+				opcode === "IS_EMPTY"
+					? { opcode, dst, src }
+					: { opcode, dst, callee: src, functionIndex: 1 },
+			);
+			record(dst, false);
+		}
+		const key = string("01"),
+			dst = allocate();
+		instructions.push({ opcode: "TO_PROPERTY_KEY", dst, object: src, key });
+		record(dst, "01");
+	}
 	builtin("Object.is", [truth, falsehood], false);
 	builtin("Object.is", [truth, truth], true);
 	for (const operation of [
@@ -201,6 +298,9 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 			operator: "+",
 		});
 		record(concat, left! + right!);
+		const negated = allocate("boolean");
+		instructions.push({ opcode: "UNARY", dst: negated, src: concat, operator: "!" });
+		record(negated, !(left! + right!));
 		for (const index of [NaN, -0.5, -1, 0, 1, 2, Infinity])
 			builtin(
 				"String.prototype.charCodeAt",

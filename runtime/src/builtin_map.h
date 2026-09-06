@@ -60,3 +60,9 @@ MalCompletion mal_builtin_collection_direct(
     const MalValue *args,
     i32 arg_count
 );
+
+// Fixed-arity native entries require an exact Map receiver.
+MalValue mal_builtin_map_get_key(MalVm *vm, MalValue this_value, MalValue key);
+MalValue mal_builtin_map_set_key_value(MalVm *vm, MalValue this_value, MalValue key, MalValue value);
+bool mal_builtin_map_has_key(MalVm *vm, MalValue this_value, MalValue key);
+bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key);

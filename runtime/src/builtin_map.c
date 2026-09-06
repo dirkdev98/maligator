@@ -376,17 +376,17 @@ static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, co
         arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
+MalValue mal_builtin_map_get_key(MalVm *vm, MalValue this_value, MalValue key) {
+    return mal_builtin_map_get_value(vm, this_value, mal_value_to_map_object(this_value), key);
+}
+
 MalValue mal_builtin_map_get_known(
     MalVm *vm,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-    return mal_builtin_map_get_value(
-        vm,
-        this_value,
-        mal_value_to_map_object(this_value),
-        arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_builtin_map_get_key(vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED);
 }
 
 static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -401,18 +401,17 @@ static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, co
         arg_count >= 2 ? args[1] : mal_value_new_undefined());
 }
 
+MalValue mal_builtin_map_set_key_value(MalVm *vm, MalValue this_value, MalValue key, MalValue value) {
+    return mal_builtin_map_set_value(vm, this_value, mal_value_to_map_object(this_value), key, value);
+}
+
 MalValue mal_builtin_map_set_known(
     MalVm *vm,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-    return mal_builtin_map_set_value(
-        vm,
-        this_value,
-        mal_value_to_map_object(this_value),
-        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
-        arg_count >= 2 ? args[1] : mal_value_new_undefined());
+    return mal_builtin_map_set_key_value(vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED, arg_count >= 2 ? args[1] : MAL_VALUE_UNDEFINED);
 }
 
 MalCompletion mal_builtin_collection_direct(
@@ -609,17 +608,24 @@ static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
+bool mal_builtin_map_has_key(MalVm *vm, MalValue this_value, MalValue key) {
+    return mal_builtin_map_has_value(vm, this_value, mal_value_to_map_object(this_value), key);
+}
+
 MalValue mal_builtin_map_has_known(
     MalVm *vm,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-    return mal_value_new_boolean(mal_builtin_map_has_value(
-        vm,
-        this_value,
-        mal_value_to_map_object(this_value),
-        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+    return mal_value_new_boolean(mal_builtin_map_has_key(vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED));
+}
+
+bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key) {
+    if (vm->map_get_set_cache.collection == this_value) {
+        mal_vm_invalidate_map_get_set_cache(vm);
+    }
+    return mal_map_object_delete(mal_value_to_map_object(this_value), key);
 }
 
 MalValue mal_builtin_map_delete_known(
@@ -628,12 +634,7 @@ MalValue mal_builtin_map_delete_known(
     const MalValue *args,
     i32 arg_count
 ) {
-    if (vm->map_get_set_cache.collection == this_value) {
-        mal_vm_invalidate_map_get_set_cache(vm);
-    }
-    return mal_value_new_boolean(mal_map_object_delete(
-        mal_value_to_map_object(this_value),
-        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+    return mal_value_new_boolean(mal_builtin_map_delete_key(vm, this_value, arg_count >= 1 ? args[0] : MAL_VALUE_UNDEFINED));
 }
 
 static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

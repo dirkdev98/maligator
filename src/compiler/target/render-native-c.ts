@@ -2866,6 +2866,34 @@ function emitInstruction(
 		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
 	const storeBoolean = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "boolean" ? expression : profileCall("boxing", `mal_value_new_boolean(${expression})`)};`;
+	const fixedCollectionCall = (
+		operation: string,
+		dst: number,
+		receiver: number,
+		args: ReadonlyArray<number>,
+	): string | null => {
+		const key = args[0] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]);
+		const value = args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1]);
+		const parameters = `vm, ${boxedOperand(receiver)}, ${key}`;
+		switch (operation) {
+			case "Map.prototype.get":
+				return `r${dst} = mal_builtin_map_get_key(${parameters});`;
+			case "Map.prototype.set":
+				return `r${dst} = mal_builtin_map_set_key_value(${parameters}, ${value});`;
+			case "Map.prototype.has":
+				return storeBoolean(dst, `mal_builtin_map_has_key(${parameters})`);
+			case "Map.prototype.delete":
+				return storeBoolean(dst, `mal_builtin_map_delete_key(${parameters})`);
+			case "Set.prototype.add":
+				return `r${dst} = mal_builtin_set_add_value(${parameters});`;
+			case "Set.prototype.has":
+				return storeBoolean(dst, `mal_builtin_set_has_value(${parameters})`);
+			case "Set.prototype.delete":
+				return storeBoolean(dst, `mal_builtin_set_delete_value(${parameters})`);
+			default:
+				return null;
+		}
+	};
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
@@ -3022,18 +3050,21 @@ function emitInstruction(
 			// Containment prevents buffer exposure; numeric operands need no observable coercion.
 			if (
 				nativePlan.kind === "contained-fixed-typed-array-element" &&
-				nativePlan.elementKind !== "Uint8ClampedArray" &&
 				isNumericRep(reps[instruction.key]!) &&
 				isNumericRep(reps[instruction.value]!)
 			) {
 				const array = `__typed_store_${ip}`;
 				const index = `__typed_store_index_${ip}`;
 				const storedBits =
-					nativePlan.elementKind === "Float64Array"
-						? `mal_scalar_f64_to_bits(${num(instruction.value)})`
-						: nativePlan.elementKind === "Float32Array"
-							? `mal_scalar_f32_to_bits((f32) ${num(instruction.value)})`
-							: `(u${elementSize * 8}) ${nativeInt32Operand(instruction.value)!}`;
+					nativePlan.elementKind === "Uint8ClampedArray"
+						? reps[instruction.value] === "int32"
+							? `(r${instruction.value} <= 0 ? 0 : r${instruction.value} >= 255 ? 255 : (u8) r${instruction.value})`
+							: `mal_typed_array_to_uint8_clamp(${num(instruction.value)})`
+						: nativePlan.elementKind === "Float64Array"
+							? `mal_scalar_f64_to_bits(${num(instruction.value)})`
+							: nativePlan.elementKind === "Float32Array"
+								? `mal_scalar_f32_to_bits((f32) ${num(instruction.value)})`
+								: `(u${elementSize * 8}) ${nativeInt32Operand(instruction.value)!}`;
 				return [
 					`MalTypedArrayObject *${array} = mal_value_to_typed_array_object(${boxed(instruction.object)});`,
 					`u32 ${index} = mal_vm_typed_array_numeric_index(${num(instruction.key)});`,
@@ -4527,55 +4558,13 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (instruction.operation === "Map.prototype.get") {
-				return [
-					`r${instruction.dst} = mal_builtin_map_get_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Map.prototype.set") {
-				return [
-					`r${instruction.dst} = mal_builtin_map_set_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Map.prototype.has") {
-				return [
-					`r${instruction.dst} = mal_builtin_map_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Map.prototype.delete") {
-				return [
-					`r${instruction.dst} = mal_builtin_map_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Set.prototype.add") {
-				return [
-					`r${instruction.dst} = mal_builtin_set_add_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Set.prototype.has") {
-				return [
-					`r${instruction.dst} = mal_builtin_set_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
-			if (instruction.operation === "Set.prototype.delete") {
-				return [
-					`r${instruction.dst} = mal_builtin_set_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
-					poll,
-				];
-			}
+			const collectionCall = fixedCollectionCall(
+				instruction.operation,
+				instruction.dst,
+				instruction.thisValue,
+				instruction.arguments,
+			);
+			if (collectionCall !== null) return [collectionCall, throwCheck(), poll];
 			if (
 				[
 					"Number.isNaN",
@@ -5073,17 +5062,8 @@ function emitInstruction(
 						callPlan?.exactCollectionReceiver === "Set"))
 			) {
 				const operation = nativeBuiltinCollectionCallChainAction.chain.operation;
-				const helper = {
-					"Map.prototype.get": "mal_builtin_map_get_known",
-					"Map.prototype.set": "mal_builtin_map_set_known",
-					"Map.prototype.has": "mal_builtin_map_has_known",
-					"Map.prototype.delete": "mal_builtin_map_delete_known",
-					"Set.prototype.add": "mal_builtin_set_add_known",
-					"Set.prototype.has": "mal_builtin_set_has_known",
-					"Set.prototype.delete": "mal_builtin_set_delete_known",
-				}[operation];
 				return [
-					`r${instruction.dst} = ${helper}(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					fixedCollectionCall(operation, instruction.dst, instruction.thisValue, args)!,
 					throwCheck(),
 					...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
 						? [poll]

@@ -28,7 +28,7 @@ int main(void) {
         else if (mal_value_is_null(value)) puts("null");
         else puts("object");
     }
-    vm.globals[0] = mal_value_from_string(vm.string_constant_atoms[0]);
+    vm.globals[0] = mal_value_from_string(mal_string_new_ascii(&vm.heap, (const byte *) "x", 1));
     while (mal_string_length(mal_value_to_string(vm.globals[0])) <= MAL_STRING_MAX_CODE_UNITS / 2) {
         MalString *string = mal_value_to_string(vm.globals[0]);
         vm.globals[0] = mal_vm_concat_strings_known(&vm, string, string);

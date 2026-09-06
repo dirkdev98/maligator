@@ -31,3 +31,8 @@ MalValue mal_builtin_set_delete_known(
     const MalValue *args,
     i32 arg_count
 );
+
+// Fixed-arity native entries require an exact Set receiver.
+MalValue mal_builtin_set_add_value(MalVm *vm, MalValue this_value, MalValue value);
+bool mal_builtin_set_has_value(MalVm *vm, MalValue this_value, MalValue value);
+bool mal_builtin_set_delete_value(MalVm *vm, MalValue this_value, MalValue value);

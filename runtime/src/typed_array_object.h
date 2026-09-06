@@ -1,5 +1,7 @@
 #pragma once
 
+#include <math.h>
+
 #include "./defaults.h"
 #include "array_buffer_object.h"
 #include "object.h"
@@ -118,3 +120,19 @@ MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 i
  * bounds-checked; out-of-bounds writes are silently dropped.
  */
 void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index, MalValue value);
+
+// ToUint8Clamp: clamp to [0, 255] with round-half-to-even.
+static inline u8 mal_typed_array_to_uint8_clamp(f64 number) {
+    if (isnan(number) || number <= 0) {
+        return 0;
+    }
+    if (number >= 255) {
+        return 255;
+    }
+    f64 rounded = floor(number);
+    f64 diff = number - rounded;
+    if (diff > 0.5 || (diff == 0.5 && ((u64) rounded) % 2 == 1)) {
+        rounded += 1;
+    }
+    return (u8) rounded;
+}
