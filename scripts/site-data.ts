@@ -99,7 +99,7 @@ export interface SelfCompilePoint extends DatedPoint, SelfCompileMetrics {
 	preview?: boolean;
 }
 
-function selfCompileMetrics(point: SelfCompilePoint): SelfCompileMetrics {
+function selfCompileMetrics(point: SelfCompileMetrics): SelfCompileMetrics {
 	return {
 		world: point.world,
 		maligatorMs: point.maligatorMs,
@@ -377,7 +377,7 @@ export function selfCompileHistory(
 	if (current !== undefined) {
 		const latest = committed.at(-1);
 		const comparable = latest === undefined ? undefined : selfCompileMetrics(latest);
-		if (JSON.stringify(comparable) !== JSON.stringify(current)) {
+		if (JSON.stringify(comparable) !== JSON.stringify(selfCompileMetrics(current))) {
 			committed.push({
 				commit: currentCommit(),
 				date: previewDate.toISOString(),
