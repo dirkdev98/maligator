@@ -6,6 +6,10 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
+	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
+	nativeStringSwitchHash,
+} from "../shared/native-string-switch.ts";
+import {
 	emitBinaryOperator,
 	emitIntrinsic,
 	emitTypeofResult,
@@ -16,7 +20,7 @@ import {
 	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
-	validateNativeNumericSwitches,
+	validateNativeLiteralSwitches,
 	vmRegionActionsAreCurrent,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
@@ -483,6 +487,7 @@ function emitCompiledVariant(
 	relocatable = false,
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -500,7 +505,7 @@ function emitCompiledVariant(
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
-	validateNativeNumericSwitches(fn, native);
+	validateNativeLiteralSwitches(fn, native);
 	const nativeContract: NativeFunctionPlan =
 		directEntry === undefined
 			? native
@@ -868,7 +873,8 @@ function emitCompiledVariant(
 		),
 		directEntry?.fieldParameters,
 		nativeContract.fieldCalls,
-		nativeContract.numericSwitches,
+		nativeContract.literalSwitches,
+		stringConstants,
 	);
 	if (body === null) {
 		return null;
@@ -1173,6 +1179,7 @@ export function emitCompiledFunction(
 	directCompiledEntries: DirectCompiledEntries = new Map(),
 	relocatable = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -1187,6 +1194,7 @@ export function emitCompiledFunction(
 		relocatable,
 		undefined,
 		strictCompiledTargets,
+		stringConstants,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1208,6 +1216,7 @@ export function emitCompiledFunction(
 			false,
 			entry,
 			strictCompiledTargets,
+			stringConstants,
 		);
 		if (emitted === null) return [];
 		const worker = debug ? null : numericLeafWorker(fn, entry);
@@ -1863,6 +1872,98 @@ function nativeBodyReference(
 	return NATIVE_BODY_REFERENCES[resource];
 }
 
+function emitStringSwitch(
+	site: Extract<
+		NonNullable<NativeFunctionPlan["literalSwitches"]>[number],
+		{ kind: "string" }
+	>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	suffix: string,
+	representation: RegisterRep,
+	relocation: NativeRelocationExpressions,
+	branch: (target: number, branchIp: number) => string,
+):
+	| { lines: Array<string>; strategy: "direct" | "length" | "hash" | "non-string" }
+	| undefined {
+	const fallback = branch(site.defaultIp, site.endIp);
+	if (representation !== "boxed" && representation !== "string")
+		return { lines: [fallback], strategy: "non-string" };
+	const labels: Array<{
+		stringIndex: number;
+		codeUnits: ReadonlyArray<number>;
+		targetIp: number;
+		branchIp: number;
+	}> = [];
+	const seen = new Set<number>();
+	let totalCodeUnits = 0;
+	let minLength = Infinity;
+	let maxLength = 0;
+	for (const [index, label] of site.cases.entries()) {
+		const codeUnits = stringConstants[label.stringIndex];
+		if (codeUnits === undefined) return undefined;
+		totalCodeUnits += codeUnits.length;
+		if (totalCodeUnits > NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT) return undefined;
+		if (seen.has(label.stringIndex)) continue;
+		seen.add(label.stringIndex);
+		minLength = Math.min(minLength, codeUnits.length);
+		maxLength = Math.max(maxLength, codeUnits.length);
+		labels.push({ ...label, codeUnits, branchIp: site.instructionIp + index * 3 + 2 });
+	}
+	const lengths = new Map<number, Array<(typeof labels)[number]>>();
+	let largestLengthGroup = 0;
+	for (const label of labels) {
+		const length = label.codeUnits.length;
+		let group = lengths.get(length);
+		if (group === undefined) lengths.set(length, (group = []));
+		group.push(label);
+		largestLengthGroup = Math.max(largestLengthGroup, group.length);
+	}
+	const strategy =
+		labels.length <= 3
+			? "direct"
+			: lengths.size > 1 && largestLengthGroup <= 3
+				? "length"
+				: labels.length >= 8
+					? "hash"
+					: "direct";
+	const value = `__switch_${site.instructionIp}`;
+	const lines: Array<string> = [];
+	if (representation === "boxed")
+		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
+	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
+	const compare = (label: (typeof labels)[number]) =>
+		`if (mal_string_equals(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex, suffix)}))) { ${branch(label.targetIp, label.branchIp)} }`;
+	if (strategy === "direct") {
+		for (const label of labels) lines.push(compare(label));
+	} else {
+		const groups =
+			strategy === "length" ? lengths : new Map<number, Array<(typeof labels)[number]>>();
+		if (strategy === "hash") {
+			for (const label of labels) {
+				const hash = nativeStringSwitchHash(label.codeUnits);
+				let group = groups.get(hash);
+				if (group === undefined) groups.set(hash, (group = []));
+				group.push(label);
+			}
+			// Bound rope flattening when hashing an unknown selector that cannot match a literal.
+			lines.push(
+				`if (${value}->length < ${minLength} || ${value}->length > ${maxLength}) { ${fallback} }`,
+			);
+		}
+		lines.push(
+			`switch (${strategy === "length" ? `${value}->length` : `(u32) mal_string_hash(${value})`}) {`,
+		);
+		for (const [key, group] of groups) {
+			lines.push(`case ${key}U:`);
+			for (const label of group) lines.push(compare(label));
+			lines.push("break;");
+		}
+		lines.push("}");
+	}
+	lines.push(fallback);
+	return { lines, strategy };
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -1903,7 +2004,8 @@ function emitBody(
 	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
 	directFields?: NativeDirectEntryPlan["fieldParameters"],
 	fieldCalls?: NativeFunctionPlan["fieldCalls"],
-	numericSwitches?: NativeFunctionPlan["numericSwitches"],
+	literalSwitches?: NativeFunctionPlan["literalSwitches"],
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2445,7 +2547,7 @@ function emitBody(
 	);
 	const switches = new Map(
 		fn.profileSiteIds === undefined
-			? numericSwitches?.map((site) => [site.instructionIp, site])
+			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
 	let lastPublishedPos = -1;
@@ -2459,8 +2561,8 @@ function emitBody(
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
 		}
-		const numericSwitch = switches.get(ip);
-		if (numericSwitch !== undefined) {
+		const literalSwitch = switches.get(ip);
+		if (literalSwitch !== undefined) {
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (target > branchIp) return `goto L${target};`;
@@ -2468,35 +2570,58 @@ function emitBody(
 					throw new Error("Native switch backedge has no root plan");
 				return `if (mal_gc_poll) { ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); } goto L${target};`;
 			};
-			const fallback = branch(numericSwitch.defaultIp, numericSwitch.endIp);
-			const selector = numericSwitch.selector;
-			const representation = reps[selector];
-			if (representation === "boolean" || representation === "string")
-				lines.push(fallback);
-			else {
-				if (representation === "boxed")
-					lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
-				const value = `__switch_${ip}`;
-				lines.push(
-					`f64 ${value} = ${representation === "boxed" ? `mal_ops_number_as_f64(r${selector})` : `r${selector}`};`,
+			if (literalSwitch.kind === "string") {
+				const emitted = emitStringSwitch(
+					literalSwitch,
+					stringConstants,
+					suffix,
+					reps[literalSwitch.selector]!,
+					relocation,
+					branch,
 				);
-				if (representation !== "int32")
-					lines.push(
-						`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
-					);
-				lines.push(`switch ((i32) ${value}) {`);
-				const seen = new Set<number>();
-				for (const [index, label] of numericSwitch.cases.entries()) {
-					if (seen.has(label.value)) continue;
-					seen.add(label.value);
-					lines.push(
-						`case ${label.value}: ${branch(label.targetIp, ip + index * 3 + 2)}`,
-					);
+				if (emitted !== undefined) {
+					lines.push(...emitted.lines);
+					profileDecisions.push({
+						instructionIndex: ip,
+						operation: "switch",
+						code: "native-string-switch",
+						outcome: "applied",
+						details: { strategy: emitted.strategy, cases: literalSwitch.cases.length },
+					});
+					ip = literalSwitch.endIp;
+					continue;
 				}
-				lines.push(`default: ${fallback}`, "}");
+			} else {
+				const fallback = branch(literalSwitch.defaultIp, literalSwitch.endIp);
+				const selector = literalSwitch.selector;
+				const representation = reps[selector];
+				if (representation === "boolean" || representation === "string")
+					lines.push(fallback);
+				else {
+					if (representation === "boxed")
+						lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
+					const value = `__switch_${ip}`;
+					lines.push(
+						`f64 ${value} = ${representation === "boxed" ? `mal_ops_number_as_f64(r${selector})` : `r${selector}`};`,
+					);
+					if (representation !== "int32")
+						lines.push(
+							`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
+						);
+					lines.push(`switch ((i32) ${value}) {`);
+					const seen = new Set<number>();
+					for (const [index, label] of literalSwitch.cases.entries()) {
+						if (seen.has(label.value)) continue;
+						seen.add(label.value);
+						lines.push(
+							`case ${label.value}: ${branch(label.targetIp, ip + index * 3 + 2)}`,
+						);
+					}
+					lines.push(`default: ${fallback}`, "}");
+				}
+				ip = literalSwitch.endIp;
+				continue;
 			}
-			ip = numericSwitch.endIp;
-			continue;
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
 		const inactiveRootMask = inactiveRootMasks.get(ip);

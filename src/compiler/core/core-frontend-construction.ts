@@ -13,6 +13,7 @@ import type {
 	CoreFunctionMetadata,
 	CoreInstructionId,
 	CoreInstructionAttributes,
+	CoreImmediate,
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -22,14 +23,17 @@ export interface CoreConstructionBlock {
 	emitter: CoreInstructionEmitter;
 }
 
-interface NumericSwitchInput {
+interface LiteralSwitchInput {
 	readonly selector: number;
-	readonly cases: ReadonlyArray<{ readonly value: number; readonly block: number }>;
+	readonly cases: ReadonlyArray<{
+		readonly value: CoreImmediate;
+		readonly block: number;
+	}>;
 	readonly defaultTarget: Extract<CompilerInstruction, { type: "jump" }>;
 }
 
 export interface CoreInstructionEmitter {
-	emitNumericSwitch(input: NumericSwitchInput): void;
+	emitLiteralSwitch(input: LiteralSwitchInput): void;
 	emit(...instructions: Array<CompilerInstruction>): void;
 	last(): CompilerInstruction | undefined;
 }
@@ -128,7 +132,7 @@ type TerminatorDraft =
 			readonly kind: "switch";
 			readonly selector: ConstructionValue;
 			readonly cases: ReadonlyArray<{
-				readonly value: number;
+				readonly value: CoreImmediate;
 				readonly target: TargetReference;
 			}>;
 			readonly defaultTarget: TargetReference;
@@ -297,8 +301,8 @@ class BlockEmitter implements CoreInstructionEmitter {
 		}
 	}
 
-	emitNumericSwitch(input: NumericSwitchInput): void {
-		this.#construction.emitNumericSwitch(this, input);
+	emitLiteralSwitch(input: LiteralSwitchInput): void {
+		this.#construction.emitLiteralSwitch(this, input);
 		this.#last = input.defaultTarget;
 	}
 
@@ -429,7 +433,7 @@ export class DirectCoreFunctionConstruction {
 		}
 	}
 
-	emitNumericSwitch(emitter: BlockEmitter, input: NumericSwitchInput): void {
+	emitLiteralSwitch(emitter: BlockEmitter, input: LiteralSwitchInput): void {
 		if (emitter.tail.terminator !== undefined && emitter.pendingConditional === undefined)
 			return;
 		if (emitter.pendingConditional !== undefined) this.#flushConditional(emitter);
@@ -1169,7 +1173,7 @@ export class DirectCoreFunctionConstruction {
 						kind: "switch",
 						discriminant: this.#coreValue(draft.selector),
 						cases: draft.cases.map((label) => ({
-							value: { kind: "number", value: label.value },
+							value: label.value,
 							edge: edge(label.target, draft.environment),
 						})),
 						default: edge(draft.defaultTarget, draft.environment),

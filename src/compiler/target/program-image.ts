@@ -13,6 +13,7 @@ import type {
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -903,13 +904,29 @@ export interface NativeFunctionPlan {
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	/** Native-only ordinary-call siblings selected by closed-world call facts. */
 	readonly directEntries: ReadonlyArray<NativeDirectEntryPlan>;
-	readonly numericSwitches?: ReadonlyArray<{
-		readonly instructionIp: number;
-		readonly endIp: number;
-		readonly selector: number;
-		readonly cases: ReadonlyArray<{ readonly value: number; readonly targetIp: number }>;
-		readonly defaultIp: number;
-	}>;
+	readonly literalSwitches?: ReadonlyArray<
+		{
+			readonly instructionIp: number;
+			readonly endIp: number;
+			readonly selector: number;
+			readonly defaultIp: number;
+		} & (
+			| {
+					readonly kind: "number";
+					readonly cases: ReadonlyArray<{
+						readonly value: number;
+						readonly targetIp: number;
+					}>;
+			  }
+			| {
+					readonly kind: "string";
+					readonly cases: ReadonlyArray<{
+						readonly stringIndex: number;
+						readonly targetIp: number;
+					}>;
+			  }
+		)
+	>;
 	readonly fieldCalls?: ReadonlyArray<{
 		readonly allocationIp: number;
 		readonly callIp: number;
@@ -1031,20 +1048,29 @@ export function validateNativeDirectEntry(
 	}
 }
 
-export function validateNativeNumericSwitches(
+export function validateNativeLiteralSwitches(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 ): void {
+	if (native.literalSwitches === undefined) return;
+	const jumpTargets = new Set<number>();
+	for (const op of fn.instructions) {
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
+	}
 	let previousEnd = -1;
-	for (const site of native.numericSwitches ?? []) {
+	for (const site of native.literalSwitches ?? []) {
 		const fail = () => {
-			throw new RangeError("Invalid native numeric switch certificate");
+			throw new RangeError("Invalid native literal switch certificate");
 		};
 		if (
 			site.instructionIp <= previousEnd ||
 			site.selector < 0 ||
 			site.selector >= fn.registerCount ||
-			site.cases.length < 4 ||
+			(site.kind === "number"
+				? site.cases.length < 4
+				: site.kind !== "string" ||
+					site.cases.length < 2 ||
+					site.cases.length > NATIVE_STRING_SWITCH_CASE_LIMIT) ||
 			site.endIp !== site.instructionIp + site.cases.length * 3
 		)
 			fail();
@@ -1059,13 +1085,27 @@ export function validateNativeNumericSwitches(
 			const literal = fn.instructions[ip],
 				compare = fn.instructions[ip + 1],
 				branch = fn.instructions[ip + 2];
+			const number = site.kind === "number" ? site.cases[index]!.value : undefined;
+			const stringIndex =
+				site.kind === "string" ? site.cases[index]!.stringIndex : undefined;
+			const validLiteral =
+				number !== undefined
+					? Number.isInteger(number) &&
+						number >= -2147483648 &&
+						number <= 2147483647 &&
+						(literal?.opcode === "CREATE_NUMBER" || literal?.opcode === "CREATE_F64") &&
+						literal.value === number
+					: stringIndex !== undefined &&
+						Number.isInteger(stringIndex) &&
+						stringIndex >= 0 &&
+						literal?.opcode === "CREATE_STRING" &&
+						literal.stringIndex === stringIndex;
 			if (
-				!Number.isInteger(label.value) ||
-				label.value < -2147483648 ||
-				label.value > 2147483647 ||
+				!validLiteral ||
 				!validTarget(label.targetIp) ||
-				(literal?.opcode !== "CREATE_NUMBER" && literal?.opcode !== "CREATE_F64") ||
-				literal.value !== label.value ||
+				(literal?.opcode !== "CREATE_NUMBER" &&
+					literal?.opcode !== "CREATE_F64" &&
+					literal?.opcode !== "CREATE_STRING") ||
 				compare?.opcode !== "BINARY" ||
 				compare.operator !== "===" ||
 				compare.left !== site.selector ||
@@ -1083,14 +1123,8 @@ export function validateNativeNumericSwitches(
 			fallback.targetIp !== site.defaultIp
 		)
 			fail();
-		for (const op of fn.instructions) {
-			if (
-				(op.opcode === "JUMP" || op.opcode === "JUMP_IF") &&
-				op.targetIp > site.instructionIp &&
-				op.targetIp <= site.endIp
-			)
-				fail();
-		}
+		for (let ip = site.instructionIp + 1; ip <= site.endIp; ip++)
+			if (jumpTargets.has(ip)) fail();
 	}
 }
 
@@ -1370,6 +1404,25 @@ export function compactProgramImageConstants(
 	}
 	const functions = definition.native.functions.map((fn) => ({
 		...fn,
+		...(fn.literalSwitches === undefined
+			? {}
+			: {
+					literalSwitches: fn.literalSwitches.map((site) =>
+						site.kind === "number"
+							? site
+							: {
+									...site,
+									cases: site.cases.map((label) => {
+										const stringIndex = compacted.stringOldToNew.get(label.stringIndex);
+										if (stringIndex === undefined)
+											throw new Error(
+												`RuntimeImage removed switch label ${label.stringIndex}`,
+											);
+										return { ...label, stringIndex };
+									}),
+								},
+					),
+				}),
 		directEntries: fn.directEntries.map((entry) => ({
 			...entry,
 			...(entry.fieldParameters === undefined
@@ -3804,17 +3857,28 @@ function lowerExecutionFunctionToNativePlan(
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 		registerRepresentations: [...fn.registerRepresentations],
 		directEntries,
-		...(fn.numericSwitches === undefined
+		...(fn.literalSwitches === undefined
 			? {}
 			: {
-					numericSwitches: fn.numericSwitches.map((site) => ({
+					literalSwitches: fn.literalSwitches.map((site) => ({
 						instructionIp: instructionIndexByTargetInstruction.get(site.first)!,
 						endIp: instructionIndexByTargetInstruction.get(site.last)!,
 						selector: site.selector,
-						cases: site.cases.map((label) => ({
-							value: label.value,
-							targetIp: blockStartIps.get(label.block)!,
-						})),
+						...(site.kind === "number"
+							? {
+									kind: "number" as const,
+									cases: site.cases.map((label) => ({
+										value: label.value,
+										targetIp: blockStartIps.get(label.block)!,
+									})),
+								}
+							: {
+									kind: "string" as const,
+									cases: site.cases.map((label) => ({
+										stringIndex: label.stringIndex,
+										targetIp: blockStartIps.get(label.block)!,
+									})),
+								}),
 						defaultIp: blockStartIps.get(site.defaultBlock)!,
 					})),
 				}),

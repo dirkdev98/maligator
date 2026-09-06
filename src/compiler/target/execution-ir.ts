@@ -130,13 +130,29 @@ export interface ExecutionFunction {
 	readonly registerRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	/** Bounded native-only ordinary-call ABIs; bytecode continues to use boxed entry. */
 	readonly directEntries: ReadonlyArray<ExecutionDirectEntry>;
-	readonly numericSwitches?: ReadonlyArray<{
-		readonly first: CompilerInstruction;
-		readonly last: CompilerInstruction;
-		readonly selector: number;
-		readonly cases: ReadonlyArray<{ readonly value: number; readonly block: number }>;
-		readonly defaultBlock: number;
-	}>;
+	readonly literalSwitches?: ReadonlyArray<
+		{
+			readonly first: CompilerInstruction;
+			readonly last: CompilerInstruction;
+			readonly selector: number;
+			readonly defaultBlock: number;
+		} & (
+			| {
+					readonly kind: "number";
+					readonly cases: ReadonlyArray<{
+						readonly value: number;
+						readonly block: number;
+					}>;
+			  }
+			| {
+					readonly kind: "string";
+					readonly cases: ReadonlyArray<{
+						readonly stringIndex: number;
+						readonly block: number;
+					}>;
+			  }
+		)
+	>;
 	readonly fieldCalls?: ReadonlyArray<{
 		readonly allocation: CompilerInstruction;
 		readonly call: CompilerInstruction;

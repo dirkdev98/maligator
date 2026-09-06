@@ -45,6 +45,10 @@ import type {
 	CompilerInstruction,
 	CompilerIntrinsic,
 } from "../shared/compiler-instruction.ts";
+import {
+	NATIVE_STRING_SWITCH_CASE_LIMIT,
+	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
+} from "../shared/native-string-switch.ts";
 import { coreProgramDataFromSemantic } from "./core-compilation.ts";
 import type {
 	CoreCapturedSlotRef,
@@ -623,7 +627,7 @@ interface CoreFrontendCursor {
 }
 
 const unboundCoreEmitter: CoreInstructionEmitter = {
-	emitNumericSwitch() {
+	emitLiteralSwitch() {
 		throw new Error("Core frontend block is not attached to a function");
 	},
 	emit() {
@@ -6196,9 +6200,9 @@ function compileSwitchStatement(
 	const cursor: CoreFrontendCursor = { block };
 	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
 	resetEvalCompletion(fn, cursor.block);
+	const scope = fn.semanticFile.nodeToScope.get(statement);
+	if (scope) emitTdzHoleInits(program, fn, cursor.block, scope.bindings);
 
-	// Case bodies first, chained for fall-through, so the dispatch tests can
-	// reference their block indexes.
 	const bodyStarts: Array<number> = [];
 	let previousTail: CoreFrontendBlock | undefined;
 	for (const switchCase of statement.cases) {
@@ -6214,7 +6218,6 @@ function compileSwitchStatement(
 		previousTail = fn.blocks.at(-1)!;
 	}
 
-	// The last body and the all-misses path both continue at the exit.
 	const lastBodyExitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
@@ -6222,10 +6225,24 @@ function compileSwitchStatement(
 	previousTail?.emitter.emit(lastBodyExitJump);
 
 	const numericCases: Array<{ value: number; block: number }> = [];
+	const stringCases: Array<{ value: string; block: number }> = [];
 	let allNumeric = true;
+	let allStrings = true;
+	let stringCodeUnits = 0;
 	for (const [i, switchCase] of statement.cases.entries()) {
 		const test = switchCase.test;
 		if (test === null) continue;
+		if (allStrings) {
+			if (
+				test.type === "Literal" &&
+				typeof test.value === "string" &&
+				stringCases.length < NATIVE_STRING_SWITCH_CASE_LIMIT &&
+				test.value.length <= NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT - stringCodeUnits
+			) {
+				stringCases.push({ value: test.value, block: bodyStarts[i]! });
+				stringCodeUnits += test.value.length;
+			} else allStrings = false;
+		}
 		const value =
 			test.type === "Literal" && typeof test.value === "number"
 				? test.value
@@ -6245,6 +6262,7 @@ function compileSwitchStatement(
 		else numericCases.push({ value: value === 0 ? 0 : value, block: bodyStarts[i]! });
 	}
 	const nativeNumeric = allNumeric && numericCases.length >= 4;
+	const nativeStrings = allStrings && stringCases.length >= 2;
 	let defaultCase = -1;
 	for (let i = 0; i < statement.cases.length; i++) {
 		const switchCase = statement.cases[i]!;
@@ -6253,7 +6271,7 @@ function compileSwitchStatement(
 			continue;
 		}
 
-		if (nativeNumeric) continue;
+		if (nativeNumeric || nativeStrings) continue;
 		const test = compileExpression(program, fn, cursor, switchCase.test);
 		const matches = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -6272,10 +6290,18 @@ function compileSwitchStatement(
 		type: "jump",
 		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
 	};
-	if (nativeNumeric)
-		cursor.block.emitter.emitNumericSwitch({
+	if (nativeNumeric || nativeStrings)
+		cursor.block.emitter.emitLiteralSwitch({
 			selector: discriminant,
-			cases: numericCases,
+			cases: nativeNumeric
+				? numericCases.map(({ value, block }) => ({
+						value: { kind: "number", value },
+						block,
+					}))
+				: stringCases.map(({ value, block }) => ({
+						value: { kind: "string", index: getOrCreateStringConstant(program, value) },
+						block,
+					})),
 			defaultTarget: missJump,
 		});
 	else cursor.block.emitter.emit(missJump);

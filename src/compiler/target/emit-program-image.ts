@@ -617,6 +617,7 @@ function emitNativeFunctions(
 			availability.directCompiledEntries,
 			options.relocatable === true,
 			strictCompiledTargets,
+			image.runtime.stringConstants,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		return {

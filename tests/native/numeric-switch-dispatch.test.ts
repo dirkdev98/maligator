@@ -16,7 +16,7 @@ describe("numeric native switch dispatch", () => {
 			outDir: mkdtempSync(join(tmpdir(), "mal-numeric-switch-")),
 		});
 		expect(
-			programImage.native.functions.flatMap((fn) => fn.numericSwitches ?? []).length,
+			programImage.native.functions.flatMap((fn) => fn.literalSwitches ?? []).length,
 		).toBeGreaterThan(0);
 		for (const binary of [compiled, interpreted])
 			expect(runToStdout(binary, { env: STRESS_ENV })).toBe(

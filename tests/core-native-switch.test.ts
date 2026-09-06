@@ -18,22 +18,26 @@ describe("native numeric switch certificate", () => {
 		);
 		const decoded = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		const native = decoded.native.functions.find(
-			(fn) => (fn.numericSwitches?.length ?? 0) > 0,
+			(fn) => (fn.literalSwitches?.length ?? 0) > 0,
 		)!;
-		expect(native.numericSwitches).toEqual(
-			image.native.functions[native.functionIndex]!.numericSwitches,
+		expect(native.literalSwitches).toEqual(
+			image.native.functions[native.functionIndex]!.literalSwitches,
 		);
 		const fn = decoded.runtime.functions[native.functionIndex]!;
 		const emitted = emitCompiledFunction(fn, native, native.functionIndex, "", false)!;
 		expect(emitted.source).toContain("switch ((i32)");
 		const malformed = {
 			...native,
-			numericSwitches: native.numericSwitches!.map((site) => ({
-				...site,
-				cases: site.cases.map((label, i) =>
-					i === 0 ? { ...label, targetIp: site.endIp } : label,
-				),
-			})),
+			literalSwitches: native.literalSwitches!.map((site) =>
+				site.kind === "string"
+					? site
+					: {
+							...site,
+							cases: site.cases.map((label, i) =>
+								i === 0 ? { ...label, targetIp: site.endIp } : label,
+							),
+						},
+			),
 		};
 		expect(() =>
 			emitCompiledFunction(fn, malformed, native.functionIndex, "", false),

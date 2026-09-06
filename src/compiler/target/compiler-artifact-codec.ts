@@ -11,7 +11,7 @@ import {
 	nativeFrameRootRegisters,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
-	validateNativeNumericSwitches,
+	validateNativeLiteralSwitches,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
@@ -36,7 +36,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 56;
+export const COMPILER_ARTIFACT_VERSION = 57;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -557,7 +557,7 @@ function writeCompilerArtifact(
 			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
-		validateNativeNumericSwitches(fn, native);
+		validateNativeLiteralSwitches(fn, native);
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
 				? 0
@@ -598,17 +598,24 @@ function writeCompilerArtifact(
 		if (native.directEntries.length > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
 		}
-		w.u32(native.numericSwitches?.length ?? 0);
-		for (const site of native.numericSwitches ?? []) {
+		w.u32(native.literalSwitches?.length ?? 0);
+		for (const site of native.literalSwitches ?? []) {
+			w.u8(site.kind === "number" ? 0 : 1);
 			w.u32(site.instructionIp);
 			w.u32(site.endIp);
 			w.u32(site.selector);
 			w.u32(site.defaultIp);
 			w.u32(site.cases.length);
-			for (const label of site.cases) {
-				w.i32(label.value);
-				w.u32(label.targetIp);
-			}
+			if (site.kind === "number")
+				for (const label of site.cases) {
+					w.i32(label.value);
+					w.u32(label.targetIp);
+				}
+			else
+				for (const label of site.cases) {
+					w.u32(label.stringIndex);
+					w.u32(label.targetIp);
+				}
 		}
 		w.u32(native.fieldCalls?.length ?? 0);
 		for (const site of native.fieldCalls ?? []) {
@@ -2741,17 +2748,35 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
-		const numericSwitchCount = r.count(20);
-		const numericSwitches = Array.from({ length: numericSwitchCount }, () => ({
-			instructionIp: r.u32(),
-			endIp: r.u32(),
-			selector: r.u32(),
-			defaultIp: r.u32(),
-			cases: Array.from({ length: r.count(8) }, () => ({
-				value: r.i32(),
-				targetIp: r.u32(),
-			})),
-		}));
+		const literalSwitchCount = r.count(6);
+		const literalSwitches = Array.from({ length: literalSwitchCount }, () => {
+			const kind = r.u8();
+			if (kind !== 0 && kind !== 1)
+				throw new RangeError("Invalid native literal switch kind");
+			const site = {
+				instructionIp: r.u32(),
+				endIp: r.u32(),
+				selector: r.u32(),
+				defaultIp: r.u32(),
+			};
+			return kind === 0
+				? {
+						...site,
+						kind: "number" as const,
+						cases: Array.from({ length: r.count(2) }, () => ({
+							value: r.i32(),
+							targetIp: r.u32(),
+						})),
+					}
+				: {
+						...site,
+						kind: "string" as const,
+						cases: Array.from({ length: r.count(2) }, () => ({
+							stringIndex: r.u32(),
+							targetIp: r.u32(),
+						})),
+					};
+		});
 		const fieldCallCount = r.count(12);
 		const fieldCalls = Array.from({ length: fieldCallCount }, () => ({
 			allocationIp: r.u32(),
@@ -4091,7 +4116,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			registerRepresentations,
 			directEntries,
 			...(fieldCallCount === 0 ? {} : { fieldCalls }),
-			...(numericSwitchCount === 0 ? {} : { numericSwitches }),
+			...(literalSwitchCount === 0 ? {} : { literalSwitches }),
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
@@ -4102,7 +4127,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	for (const native of nativeFunctions) {
 		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
-		validateNativeNumericSwitches(functions[native.functionIndex]!, native);
+		validateNativeLiteralSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;
 			if (plan.directEntryId !== undefined) {

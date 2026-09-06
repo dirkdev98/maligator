@@ -48,6 +48,7 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
 	coreInstructionNeedsOperationSafepoint,
 	requireCoreTargetOperationContract,
@@ -1709,8 +1710,8 @@ function lowerFunctionToTarget(
 	const blocks: Array<{ instructions: Array<CompilerInstruction> }> = blockOrder.map(
 		() => ({ instructions: [] }),
 	);
-	const numericSwitches: Array<
-		NonNullable<ExecutionFunction["numericSwitches"]>[number]
+	const literalSwitches: Array<
+		NonNullable<ExecutionFunction["literalSwitches"]>[number]
 	> = [];
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
@@ -2154,8 +2155,14 @@ function lowerFunctionToTarget(
 			}
 			case "switch": {
 				const start = instructions.length;
+				const immediates = new Map<CoreRepresentation, number>();
+				let matches: number | undefined;
 				const cases: Array<{ value: number; block: number }> = [];
+				const stringCases: Array<{ stringIndex: number; block: number }> = [];
 				let numeric = terminatorEdgeCount >= 5;
+				let strings =
+					terminatorEdgeCount >= 3 &&
+					terminatorEdgeCount <= NATIVE_STRING_SWITCH_CASE_LIMIT + 1;
 				for (let index = 0; index < terminatorEdgeCount - 1; index++) {
 					const edge = terminatorEdgeStart + index;
 					const caseValue = kernel.terminatorEdgeCaseValue(edge);
@@ -2163,6 +2170,9 @@ function lowerFunctionToTarget(
 						throw new Error(`Core switch in b${blockId} has no case value`);
 					}
 					const targetBlock = lowerTerminatorEdge(edge);
+					if (strings && caseValue.kind === "string")
+						stringCases.push({ stringIndex: caseValue.index, block: targetBlock });
+					else strings = false;
 					if (
 						caseValue.kind !== "number" ||
 						!Number.isInteger(caseValue.value) ||
@@ -2175,18 +2185,25 @@ function lowerFunctionToTarget(
 							value: caseValue.value === 0 ? 0 : caseValue.value,
 							block: targetBlock,
 						});
-					const immediate = nextRegister.value++;
-					const matches = nextRegister.value++;
-					temporaryRegisters.push(immediate, matches);
-					registerRepresentations.set(
-						immediate,
+					const representation =
 						caseValue.kind === "number"
 							? "f64"
 							: caseValue.kind === "boolean"
 								? "boolean"
-								: "boxed",
-					);
-					registerRepresentations.set(matches, "boolean");
+								: "boxed";
+					// Reuse scratch within this dispatch block; Core edges cannot carry it out.
+					let immediate = immediates.get(representation);
+					if (immediate === undefined) {
+						immediate = nextRegister.value++;
+						immediates.set(representation, immediate);
+						temporaryRegisters.push(immediate);
+						registerRepresentations.set(immediate, representation);
+					}
+					if (matches === undefined) {
+						matches = nextRegister.value++;
+						temporaryRegisters.push(matches);
+						registerRepresentations.set(matches, "boolean");
+					}
 					instructions.push(
 						lowerCoreImmediate(caseValue, immediate),
 						{
@@ -2212,14 +2229,19 @@ function lowerFunctionToTarget(
 					type: "jump",
 					blocks: [defaultBlock],
 				});
-				if (numeric)
-					numericSwitches.push({
+				if (numeric || strings) {
+					const site = {
 						first: instructions[start]!,
 						last: instructions.at(-1)!,
 						selector: registerForValue(kernel.operandAt(terminatorOperandStart)),
-						cases,
 						defaultBlock,
-					});
+					};
+					literalSwitches.push(
+						numeric
+							? { ...site, kind: "number", cases }
+							: { ...site, kind: "string", cases: stringCases },
+					);
+				}
 				break;
 			}
 			case "unreachable":
@@ -2265,7 +2287,7 @@ function lowerFunctionToTarget(
 		allocatedRegisterCount,
 		registerRepresentations: physicalRepresentations,
 		directEntries: [],
-		...(numericSwitches.length === 0 ? {} : { numericSwitches }),
+		...(literalSwitches.length === 0 ? {} : { literalSwitches }),
 		capturedCount: coreFunction.metadata.capturedCount,
 		strict: coreFunction.metadata.strict,
 		isClassConstructor: coreFunction.metadata.isClassConstructor,
