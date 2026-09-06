@@ -67,7 +67,7 @@ describe("compileEntrypoint build policy", () => {
 		]);
 	});
 
-	test("keeps the portable image identical to generic native lowering", () => {
+	test("keeps the portable image identical when native entries specialize arguments", () => {
 		const entry = entrypoint(`
 			function format(left, right, scale) {
 				let total = 0;
@@ -80,9 +80,7 @@ describe("compileEntrypoint build policy", () => {
 		const portable = compileEntrypointToBuffer(entry, options);
 		const native = compileEntrypoint(entry, options);
 
-		expect(native.native.functions.every((fn) => fn.directEntries.length === 0)).toBe(
-			true,
-		);
+		expect(native.native.functions.some((fn) => fn.directEntries.length > 0)).toBe(true);
 		expect(portable).toEqual(serializeRuntimeImage(native.runtime));
 	});
 

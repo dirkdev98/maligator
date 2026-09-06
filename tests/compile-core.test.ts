@@ -294,7 +294,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 
 	it("seals the constructed store in place and records dense function relocation", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
-			"function nested() { return 42; } globalThis.result = nested();",
+			"function nested(value) { return value; } globalThis.result = nested(globalThis.input);",
 			"empty-optimizer.js",
 		);
 		const constructed = lowerSemanticProgramToCore(semantic);

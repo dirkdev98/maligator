@@ -10,18 +10,19 @@ import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import type { CoreFunctionStore } from "./core-store.ts";
+import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
+import type { CoreFunctionStore, CoreFunctionVersions } from "./core-store.ts";
 
 const representationProofs = new WeakMap<
 	ReadonlyArray<CorePlanRepresentation>,
 	{
 		readonly fn: CoreFunctionStore;
-		readonly versions: string;
-		readonly parameters: string;
-		readonly arguments: string | undefined;
+		readonly versions: CoreFunctionVersions;
+		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
+		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
-		readonly calls: string;
-		readonly fields: string | undefined;
+		readonly calls: CoreDirectEntryPlan["callSites"];
+		readonly fields: CoreDirectEntryPlan["fieldParameters"];
 	}
 >();
 
@@ -98,18 +99,15 @@ export function analyzeCoreNativeEntry(
 			: "boxed";
 	representationProofs.set(valueRepresentations, {
 		fn,
-		versions: JSON.stringify(fn.versions),
-		parameters: parameters.join(","),
-		arguments: arguments_?.join(","),
+		versions: fn.versions,
+		parameters: [...parameters],
+		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
-		fields: fields === undefined ? undefined : JSON.stringify(fields),
-		calls: callSites
-			.map(
-				(site) =>
-					`${site.caller}:${site.instruction}:${site.guarded === true}:${site.fieldObject}`,
-			)
-			.sort()
-			.join(","),
+		fields:
+			fields === undefined
+				? undefined
+				: { keys: [...fields.keys], loads: fields.loads.map((load) => ({ ...load })) },
+		calls: callSites.map((site) => ({ ...site })),
 	});
 	return {
 		valueRepresentations,
@@ -129,24 +127,40 @@ export function coreNativeEntryProofIsCurrent(
 			entry.fieldParameters === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
+	const same = <T>(
+		left: ReadonlyArray<T> | undefined,
+		right: ReadonlyArray<T> | undefined,
+	) =>
+		left === undefined
+			? right === undefined
+			: right !== undefined &&
+				left.length === right.length &&
+				left.every((value, i) => value === right[i]);
 	return (
 		proof?.fn === fn &&
-		proof.versions === JSON.stringify(fn.versions) &&
-		proof.parameters === entry.parameterRepresentations.join(",") &&
-		proof.arguments === entry.argumentRepresentations?.join(",") &&
+		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
+		same(proof.parameters, entry.parameterRepresentations) &&
+		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
-		proof.fields ===
-			(entry.fieldParameters === undefined
-				? undefined
-				: JSON.stringify(entry.fieldParameters)) &&
-		proof.calls ===
-			entry.callSites
-				.map(
-					(site) =>
-						`${site.caller}:${site.instruction}:${site.guarded === true}:${site.fieldObject}`,
-				)
-				.sort()
-				.join(",")
+		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
+		(proof.fields === undefined ||
+			(entry.fieldParameters !== undefined &&
+				proof.fields.loads.length === entry.fieldParameters.loads.length &&
+				proof.fields.loads.every(
+					(load, i) =>
+						load.instruction === entry.fieldParameters!.loads[i]!.instruction &&
+						load.field === entry.fieldParameters!.loads[i]!.field,
+				))) &&
+		proof.calls.length === entry.callSites.length &&
+		proof.calls.every((site, i) => {
+			const current = entry.callSites[i]!;
+			return (
+				site.caller === current.caller &&
+				site.instruction === current.instruction &&
+				(site.guarded === true) === (current.guarded === true) &&
+				site.fieldObject === current.fieldObject
+			);
+		})
 	);
 }
 

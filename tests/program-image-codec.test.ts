@@ -1249,7 +1249,7 @@ describe("program-image-codec", () => {
 					return { ...instruction, stringIndex: 3 };
 				}
 				if (instruction.opcode === "CALL") {
-					return { ...instruction, exactFunctionIndex: 0 };
+					return { ...instruction, exactFunctionIndex: 1 };
 				}
 				return instruction;
 			},
@@ -1270,7 +1270,7 @@ describe("program-image-codec", () => {
 				if (instruction.opcode === "CALL") {
 					return {
 						kind: "call",
-						directFunctionIndex: 0,
+						directFunctionIndex: 1,
 						directEntryId: 0,
 						directFunctionCall: true,
 						directCallTargetFunctionIndex: 0,
@@ -1303,6 +1303,17 @@ describe("program-image-codec", () => {
 					),
 				],
 			},
+			{
+				...mainFn,
+				registerCount: 2,
+				capturedCount: 0,
+				instructions: [
+					{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
+					{ opcode: "RETURN", value: 1 },
+				],
+				handlers: [],
+				positions: [],
+			},
 		];
 		const cachedDefinition = withNativeFunctionPlan(
 			withBytecodeFunctions(
@@ -1321,40 +1332,25 @@ describe("program-image-codec", () => {
 					(representation, register) =>
 						register === 1 ? ("string" as const) : representation,
 				),
-				directEntries: [
-					{
-						id: 0,
-						parameterRepresentations: ["int32"],
-						resultRepresentation: "string",
-						registerRepresentations: plan.registerRepresentations.map(
-							(representation, register) =>
-								register === 0
-									? ("int32" as const)
-									: register === 1
-										? ("string" as const)
-										: representation,
-						),
-						gc: {
-							safepoints: plan.gc.safepoints.map((safepoint) => ({
-								...safepoint,
-								kind:
-									safepoint.kind === "conservative"
-										? ("operation" as const)
-										: safepoint.kind,
-								rootRegisters: safepoint.rootRegisters.filter(
-									(register) => register !== 0,
-								),
-							})),
-						},
-					},
-				],
 				instructions: nativeInstructions,
 			}),
 		);
 
-		expect(
-			deserializeCompilerArtifact(serializeCompilerArtifact(cachedDefinition)),
-		).toEqual(cachedDefinition);
+		const withEntry = withNativeFunctionPlan(cachedDefinition, 1, (plan) => ({
+			...plan,
+			directEntries: [
+				{
+					id: 0,
+					parameterRepresentations: ["int32"],
+					resultRepresentation: "string",
+					registerRepresentations: ["int32", "string"],
+					gc: { safepoints: [] },
+				},
+			],
+		}));
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(withEntry))).toEqual(
+			withEntry,
+		);
 	});
 
 	it("validates fresh dense indexed-fill reserve metadata", () => {

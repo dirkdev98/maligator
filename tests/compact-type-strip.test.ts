@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vitest";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule, parseScript } from "../src/compiler/frontend/parser.ts";
@@ -45,9 +46,8 @@ describe("stripCompactTypes", () => {
 		const source = `let sum = 0; for (let index = 0; index < 4; index++) { sum += index; } const cache = new Map<string, number>(); globalThis.stripResult = sum;`;
 		const stripped = strip(source);
 		expect(() => parseModule(stripped)).not.toThrow();
-		const run = new Function(stripped + "return globalThis.stripResult;");
-		expect(run()).toBe(6);
-		Reflect.deleteProperty(globalThis, "stripResult");
+		const result: unknown = runInNewContext(stripped);
+		expect(result).toBe(6);
 	});
 
 	test("erases type spans in place, keeping length, newlines, and columns", () => {

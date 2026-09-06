@@ -100,6 +100,22 @@ export interface CoreFunctionVersions {
 	readonly specializationInputs: number;
 }
 
+export function coreFunctionVersionsAreCurrent(
+	fn: CoreFunctionStore,
+	snapshot: CoreFunctionVersions,
+): boolean {
+	return (
+		snapshot.body === fn.version("body") &&
+		snapshot.cfg === fn.version("cfg") &&
+		snapshot.exceptionFlow === fn.version("exceptionFlow") &&
+		snapshot.calls === fn.version("calls") &&
+		snapshot.memoryEffects === fn.version("memoryEffects") &&
+		snapshot.facts === fn.version("facts") &&
+		snapshot.representations === fn.version("representations") &&
+		snapshot.specializationInputs === fn.version("specializationInputs")
+	);
+}
+
 export interface CoreProgramVersions {
 	readonly functions: number;
 	readonly data: number;

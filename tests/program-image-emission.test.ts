@@ -1613,7 +1613,15 @@ describe("native update-expression representation", () => {
 		).toBe(false);
 
 		const emitted = emitProgramImage(definition, { compiled: true });
-		expect(emitted).toContain("mal_vm_contained_fixed_numeric_typed_array_load(");
+		expect(
+			plans
+				.filter((plan) => plan?.kind === "contained-fixed-typed-array-element")
+				.every(
+					(plan) => plan?.kind === "contained-fixed-typed-array-element" && plan.inBounds,
+				),
+		).toBe(true);
+		expect(emitted).toContain("mal_scalar_load_native_u32(");
+		expect(emitted).not.toContain("mal_vm_typed_array_numeric_index(");
 		expect(emitted).toContain("mal_value_to_typed_array_object(");
 	});
 
@@ -2279,14 +2287,14 @@ describe("native update-expression representation", () => {
 		expect(entry).not.toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 	});
 
-	it("uses the canonical boxed ABI for exact script calls", () => {
+	it("uses the canonical boxed ABI when exact calls enumerate arguments", () => {
 		const output = emit(`
 			"use strict";
 			const values = [3, 5];
 			const large = function large(index) {
 				let total = 0;
 				for (let i = 0; i < 24; i++) total += values[index];
-				return total + index + arguments.length;
+				return total + index + Object.keys(arguments).length;
 			};
 			globalThis.result = large(1);
 		`);

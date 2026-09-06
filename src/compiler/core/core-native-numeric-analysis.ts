@@ -3,7 +3,12 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
+import type {
+	CoreFunctionVersions,
+	CoreFunctionStore,
+	CoreProgram,
+} from "./core-store.ts";
 
 export interface CoreUnsignedArithmeticPlan {
 	readonly function: CoreFunctionId;
@@ -12,7 +17,7 @@ export interface CoreUnsignedArithmeticPlan {
 
 const proofs = new WeakMap<
 	CoreUnsignedArithmeticPlan,
-	{ fn: CoreFunctionStore; versions: string }
+	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
 >();
 
 export function coreUnsignedArithmeticProofIsCurrent(
@@ -22,7 +27,7 @@ export function coreUnsignedArithmeticProofIsCurrent(
 	const proof = proofs.get(plan);
 	return (
 		proof?.fn === program.function(plan.function) &&
-		proof.versions === JSON.stringify(proof.fn.versions)
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
 	);
 }
 
@@ -84,7 +89,7 @@ export function coreUnsignedArithmeticPlans(
 		}
 		for (const instruction of admitted) {
 			const plan = Object.freeze({ function: functionId, instruction });
-			proofs.set(plan, { fn, versions: JSON.stringify(fn.versions) });
+			proofs.set(plan, { fn, versions: fn.versions });
 			plans.push(plan);
 		}
 	}
