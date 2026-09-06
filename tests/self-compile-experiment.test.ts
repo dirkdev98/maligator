@@ -49,7 +49,11 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 			writeFileSync(path.join(directory, name), contents);
 		}
 		const manifest = {
-			schema: 2,
+			schema: 3,
+			closure: {
+				scope: { kind: "whole-program", entry: "fixture" },
+				sourceClosure: { kind: "known", value: "closed" },
+			},
 			status: "complete",
 			source: { commit: label, digest: label },
 			files: Object.fromEntries(
@@ -189,6 +193,38 @@ it("rejects different source preparation even when each capture is internally in
 	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
 		"capture preparation or native toolchain/build plans differ",
 	);
+});
+
+it("refuses an uncertified capture before running an oracle", () => {
+	const test = fixture();
+	const manifest = path.join(test.candidate, "capture.json");
+	const capture = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+	delete capture.closure;
+	writeFileSync(manifest, JSON.stringify(capture));
+	expect(test.run().status).toBe(2);
+	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+		"capture lacks certified source closure",
+	);
+	expect(existsSync(path.join(test.output, "node-reference"))).toBe(false);
+});
+
+it("rejects a modified frozen program before building another compiler", () => {
+	const test = fixture();
+	writeFileSync(path.join(test.base, "source/bench/self-compile.mts"), "tampered");
+	const result = spawnSync(
+		process.execPath,
+		[script, "capture", test.output, "--program", test.base],
+		{
+			encoding: "utf8",
+			timeout: 20_000,
+		},
+	);
+	expect(result.status, result.stderr).toBe(2);
+	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+		"capture contents changed",
+	);
+	expect(existsSync(path.join(test.output, "source"))).toBe(false);
+	expect(existsSync(path.join(test.output, "compiler"))).toBe(false);
 });
 
 it("kills a timed-out compiler process group and retains only complete pairs in statistics", async () => {

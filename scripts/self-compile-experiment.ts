@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
 	closeSync,
 	copyFileSync,
+	cpSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -17,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createCacheLease } from "../src/cache-management.ts";
+import type { ProgramClosureCertificate } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	digestSelfCompileOutput,
 	prepareSelfCompileSource,
@@ -30,6 +32,7 @@ const HELP = `Usage: npm run bench:self-compile-experiment -- <command> [options
                                     run both captures on the same frozen BASE input
 
 Options:
+  --program CAPTURE                 compile an existing capture's frozen source (capture only)
   --host native|node                compiler host (default: native)
   --workload parser|shape|full       frozen input cone (default: parser)
   --pairs N                         alternating measured pairs (default: 5)
@@ -39,8 +42,9 @@ Options:
 Capture uses a fresh module frontend and development O2/no-LTO closed native code
 without instrumentation, keeping portable GC-root trust independent of cache hits.
 Compare runs a BASE Node output oracle and one warmup per compiler before timing.
-Every output must match that oracle exactly; use semantic benchmarks for changes
-that intentionally alter emitted C. This measures JS-to-C execution, not C builds.
+Every output must match that oracle exactly. Use --program with the same capture
+before and after a code-generation change to measure its effect on one program.
+This measures JS-to-C execution, not C builds.
 Directories must be new. All logs, outputs, identities, and partial pairs are kept.
 Exit 2 means failed or incomplete. Completion alone is not a performance verdict.
 `;
@@ -56,6 +60,7 @@ interface Options {
 	output: string;
 	base?: string;
 	candidate?: string;
+	program?: string;
 	host: "native" | "node";
 	workload: keyof typeof TARGETS;
 	pairs: number;
@@ -64,10 +69,12 @@ interface Options {
 }
 
 interface Capture {
-	schema: 2;
+	schema: 3;
 	status: "complete";
 	capturedAt: string;
 	source: { commit: string; digest: string };
+	programSource?: { capturePath: string; captureManifestSha256: string };
+	closure: ProgramClosureCertificate;
 	files: Record<string, string>;
 	preparation: string;
 	lockfile: string;
@@ -158,19 +165,58 @@ function cleanEnvironment(): NodeJS.ProcessEnv {
 	return environment;
 }
 
-async function captureCompiler(directory: string): Promise<void> {
-	const { buildNativeBinaryResult } = await import("../src/test-harness.ts");
+async function captureCompiler(options: Options): Promise<void> {
+	const directory = options.output;
+	const program =
+		options.program === undefined ? undefined : readCapture(options.program);
+	const programSource =
+		options.program === undefined
+			? undefined
+			: {
+					capturePath: options.program,
+					captureManifestSha256: sha256(
+						readFileSync(path.join(options.program, "capture.json")),
+					),
+				};
+	const { buildNativeProgramImageResult } = await import("../src/test-harness.ts");
+	const { compileEntrypoint } =
+		await import("../src/compiler/pipeline/compile-program.ts");
+	const { stripCompactTypes } =
+		await import("../src/compiler/frontend/compact-type-strip.ts");
 	const source = sourceIdentity();
 	writeFileSync(path.join(directory, "source.patch"), git(["diff", "--binary", "HEAD"]));
 	console.log("prepare stripped compiler source");
-	prepareSelfCompileSource(path.join(directory, "source"));
+	if (options.program === undefined)
+		prepareSelfCompileSource(path.join(directory, "source"));
+	else
+		cpSync(path.join(options.program, "source"), path.join(directory, "source"), {
+			recursive: true,
+			verbatimSymlinks: true,
+		});
 	const events: Array<unknown> = [];
 	const started = performance.now();
 	console.log("build closed native compiler");
-	const built = buildNativeBinaryResult({
-		fixture: "bench/self-compile.mts",
-		// Cached artifacts deliberately lose precise VM-root trust across serialization.
-		entryGoal: "module",
+	let closure: ProgramClosureCertificate | undefined;
+	const image = compileEntrypoint(
+		path.resolve(
+			options.program === undefined
+				? "bench/self-compile.mts"
+				: path.join(options.program, "source/bench/self-compile.mts"),
+		),
+		{
+			buildConfig: SELF_COMPILE_CONFIG,
+			stripTypes: stripCompactTypes,
+			entryGoal: "module",
+			coreInstrumentation: "off",
+			onProgramFacts(facts) {
+				closure = facts.closure;
+			},
+		},
+	);
+	if (closure?.scope.kind !== "whole-program" || closure.sourceClosure.kind !== "known") {
+		throw new Error("native compiler source closure was not certified");
+	}
+	const built = buildNativeProgramImageResult(image, {
 		name: "self-compile-experiment",
 		config: SELF_COMPILE_CONFIG,
 		compiled: true,
@@ -187,16 +233,28 @@ async function captureCompiler(directory: string): Promise<void> {
 	if (!isDeepStrictEqual(source, sourceIdentity())) {
 		throw new Error("source changed during capture; discard this capture and retry");
 	}
+	if (
+		programSource !== undefined &&
+		(!isDeepStrictEqual(program, readCapture(programSource.capturePath)) ||
+			programSource.captureManifestSha256 !==
+				sha256(readFileSync(path.join(programSource.capturePath, "capture.json"))))
+	) {
+		throw new Error("program capture changed during build");
+	}
 	const capture: Capture = {
-		schema: 2,
+		schema: 3,
 		status: "complete",
 		capturedAt: new Date().toISOString(),
 		source,
+		programSource,
+		closure,
 		files: captureFiles(directory),
-		preparation: sha256(
-			readFileSync("scripts/self-compile-workload.ts", "utf8") +
-				readFileSync("src/compiler/frontend/compact-type-strip.ts", "utf8"),
-		),
+		preparation:
+			program?.preparation ??
+			sha256(
+				readFileSync("scripts/self-compile-workload.ts", "utf8") +
+					readFileSync("src/compiler/frontend/compact-type-strip.ts", "utf8"),
+			),
 		lockfile: sha256(readFileSync("package-lock.json")),
 		host: currentHost(),
 		build: {
@@ -212,8 +270,14 @@ function readCapture(directory: string): Capture {
 	const capture = JSON.parse(
 		readFileSync(path.join(directory, "capture.json"), "utf8"),
 	) as Capture;
-	if (capture.schema !== 2 || capture.status !== "complete") {
+	if (capture.schema !== 3 || capture.status !== "complete") {
 		throw new Error(`incomplete or unsupported capture: ${directory}`);
+	}
+	if (
+		capture.closure?.scope.kind !== "whole-program" ||
+		capture.closure.sourceClosure.kind !== "known"
+	) {
+		throw new Error(`capture lacks certified source closure: ${directory}`);
 	}
 	if (!isDeepStrictEqual(capture.files, captureFiles(directory))) {
 		throw new Error(`capture contents changed: ${directory}`);
@@ -411,6 +475,8 @@ function parseOptions(args: Array<string>): Options | undefined {
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") options.plan = true;
+		else if (option === "--program" && command === "capture")
+			options.program = path.resolve(take());
 		else if (option === "--output" && command === "compare")
 			options.output = path.resolve(take());
 		else if (option === "--host" && command === "compare") {
@@ -544,7 +610,7 @@ if (import.meta.main) {
 	try {
 		if (process.argv[2] === "--worker") {
 			const options = JSON.parse(process.argv[3]!) as Options;
-			if (options.command === "capture") await captureCompiler(options.output);
+			if (options.command === "capture") await captureCompiler(options);
 			else compareCapturedCompilers(options);
 		} else {
 			const options = parseOptions(process.argv.slice(2));
@@ -556,7 +622,9 @@ if (import.meta.main) {
 							work:
 								options.command === "capture"
 									? [
-											"prepare identical stripped Node source",
+											options.program === undefined
+												? "prepare stripped Node source"
+												: "verify and reuse frozen program capture",
 											"build and preserve native compiler",
 											"verify source identity",
 										]

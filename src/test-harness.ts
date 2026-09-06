@@ -228,18 +228,26 @@ export function buildNativeProgramImage(
 	image: ProgramImage,
 	options: Omit<BuildOptions, "fixture">,
 ): string {
+	return buildNativeProgramImageResult(image, options).binaryPath;
+}
+
+export function buildNativeProgramImageResult(
+	image: ProgramImage,
+	options: Omit<BuildOptions, "fixture">,
+): BuildNativeBinaryResult {
 	const harnessOptions: BuildOptions = {
 		...options,
 		fixture: image.runtime.entrypointPath,
 	};
 	const config = resolveHarnessBuildConfig(harnessOptions);
-	return linkProgramImage(
+	const linked = linkProgramImage(
 		harnessOptions,
 		config,
 		image,
 		options.compiled ?? true,
 		options.name,
-	).binaryPath;
+	);
+	return { ...linked, programImage: image };
 }
 
 function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {

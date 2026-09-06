@@ -121,6 +121,8 @@ for larger inputs, and `--host node` for a separate Node-hosted comparison.
 Both Node compiler snapshots use the same source preparation. Native captures use
 a fresh explicit module frontend because cached artifacts deliberately lose trusted
 precise VM root maps on deserialization. This keeps their GC policy consistent.
+The actual module graph must certify whole-program source closure; the certificate
+is recorded with the capture rather than inferred from runtime settings.
 They use closed development O2/no-LTO builds without instrumentation; this is an inner
 loop, not the production-plan JavaScript/HTTP benchmark matrix.
 
@@ -128,8 +130,15 @@ Capture records HEAD plus a digest of pending changes, the tracked patch, exact
 prepared source and binary hashes, lockfile, Node/host identity, and native build
 plan/toolchain. Comparison refuses modified captures or different preparation,
 dependencies, hosts, and native plans. Every run compiles the baseline capture's
-input and must exactly match its Node output oracle. Changes that intentionally
-alter emitted C need semantic benchmarks instead of this strict output comparison.
+input and must exactly match its Node output oracle.
+
+To measure code-generation changes, first capture `.cache/compiler-program`, then
+capture both baseline and candidate with `--program .cache/compiler-program`.
+Both host compilers compile that same frozen JavaScript source at the same path,
+so the resulting native executables can still be checked against an exact Node
+oracle. Each capture preserves the frozen source and its original manifest digest.
+This isolates the speed of the generated native program; measuring a changed
+compiler's own output still requires semantic benchmarks when emitted C differs.
 
 The budget includes the oracle, two warmups, and all measured pairs. Only complete
 pairs enter the elapsed-time summary; individual peak-RSS readings and raw resource
