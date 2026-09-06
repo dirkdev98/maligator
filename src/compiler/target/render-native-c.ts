@@ -438,14 +438,24 @@ export function nativeInactiveRootMasks(
 	safepoints: NativeFunctionPlan["gc"]["safepoints"],
 	slotOfRegister: ReadonlyMap<number, number>,
 ): ReadonlyMap<number, bigint> {
+	if (safepoints.length === 0) return new Map();
+	const slotBits = new Map<number, bigint>();
+	let allSlots = 0n;
+	for (const [register, slot] of slotOfRegister) {
+		if (slot >= 64) continue;
+		const bit = 1n << BigInt(slot);
+		slotBits.set(register, bit);
+		allSlots |= bit;
+	}
+	if (allSlots === 0n) return new Map();
 	const masks = new Map<number, bigint>();
 	let removesAnyRoot = false;
 	for (const safepoint of safepoints) {
-		const roots = new Set(safepoint.rootRegisters);
-		let mask = 0n;
-		for (const [register, slot] of slotOfRegister) {
-			if (slot < 64 && !roots.has(register)) mask |= 1n << BigInt(slot);
+		let liveSlots = 0n;
+		for (const register of safepoint.rootRegisters) {
+			liveSlots |= slotBits.get(register) ?? 0n;
 		}
+		const mask = allSlots & ~liveSlots;
 		masks.set(safepoint.instructionIp, mask);
 		removesAnyRoot ||= mask !== 0n;
 	}

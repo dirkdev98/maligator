@@ -299,6 +299,39 @@ describe("Core target construction", () => {
 		]);
 	});
 
+	it("masks only assigned register slots within the 64-bit publication width", () => {
+		const slots = new Map([
+			[2, 0],
+			[4, 63],
+			[8, 64],
+			[9, 65],
+		]);
+		expect([
+			...nativeInactiveRootMasks(
+				[
+					{
+						kind: "operation",
+						instructionIp: 0,
+						rootRegisters: [2, 4, 8, 9, 100],
+					},
+					{ kind: "operation", instructionIp: 1, rootRegisters: [2, 8] },
+					{ kind: "operation", instructionIp: 2, rootRegisters: [] },
+				],
+				slots,
+			),
+		]).toEqual([
+			[0, 0n],
+			[1, 1n << 63n],
+			[2, (1n << 63n) | 1n],
+		]);
+		expect(
+			nativeInactiveRootMasks(
+				[{ kind: "operation", instructionIp: 0, rootRegisters: [2, 4] }],
+				slots,
+			).size,
+		).toBe(0);
+	});
+
 	it("constrains two-address operations to one register", () => {
 		for (const [source, type] of [
 			[SUPER_SOURCE, "constructSuperExplicit"],
