@@ -839,6 +839,80 @@ describe("emit-program-image instruction packing", () => {
 		expect(malFunctionRows(output)[0]?.[6]).toBe("nullptr");
 	});
 
+	it("keeps canonical and typed entry size limits independent at call sites", () => {
+		const seed = { ...fn, capturedCount: 0, registerCount: 3 };
+		const functions: Array<BytecodeFunction> = [
+			{
+				...seed,
+				instructions: [
+					{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 },
+					{ opcode: "CREATE_UNDEFINED", dst: 1 },
+					{
+						opcode: "CALL",
+						dst: 2,
+						callee: 0,
+						thisValue: 1,
+						argumentCount: 0,
+						arguments: [],
+						exactFunctionIndex: 1,
+					},
+					{ opcode: "RETURN", value: 2 },
+				],
+			},
+			{
+				...seed,
+				instructions: [
+					{ opcode: "CREATE_F64", dst: 0, value: 3 },
+					{ opcode: "CREATE_F64", dst: 1, value: 7 },
+					...Array.from(
+						{ length: 150 },
+						() =>
+							({ opcode: "BINARY", operator: "+", dst: 0, left: 0, right: 1 }) as const,
+					),
+					{ opcode: "RETURN", value: 0 },
+				],
+			},
+		];
+		let image = testProgramImage({ ...definition.runtime, functions, functionCount: 2 });
+		image = withNativeFunctionPlan(image, 0, (plan) => ({
+			...plan,
+			instructions: plan.instructions.with(2, {
+				kind: "call",
+				directFunctionIndex: 1,
+				directEntryId: 0,
+			}),
+		}));
+		image = withNativeFunctionPlan(image, 1, (plan) => ({
+			...plan,
+			registerRepresentations: ["number", "number", "boxed"],
+			gc: { safepoints: [] },
+			directEntries: [
+				{
+					id: 0,
+					parameterRepresentations: [],
+					resultRepresentation: "number",
+					registerRepresentations: ["boxed", "boxed", "boxed"],
+					gc: plan.gc,
+				},
+			],
+		}));
+		const emit = (value: ProgramImage, budget: number) =>
+			emitProgramTranslationUnits(value, {}, budget).join("\n");
+		expect(emit(image, 60_000)).toContain("mal_direct_1_0(vm,");
+		const bounded = emit(image, 15_000);
+		expect(bounded).not.toContain("mal_direct_1_0");
+		expect(bounded).toContain("mal_compiled_1(vm,");
+		const boxed = withNativeFunctionPlan(image, 1, (plan) => ({
+			...plan,
+			registerRepresentations: ["boxed", "boxed", "boxed"],
+			gc: plan.directEntries[0]!.gc,
+		}));
+		const rejected = emit(boxed, 15_000);
+		expect(rejected).not.toContain("mal_compiled_1");
+		expect(rejected).not.toContain("mal_direct_1_0");
+		expect(rejected).toContain("mal_vm_call_direct(vm,");
+	});
+
 	it("rejects an invalid translation-unit budget", () => {
 		expect(() => emitProgramTranslationUnits(definition, {}, 0)).toThrow(
 			/positive integer/,

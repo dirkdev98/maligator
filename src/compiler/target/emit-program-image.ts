@@ -560,7 +560,34 @@ function emitNativeFunctions(
 	const fits = (source: string): boolean =>
 		options.maxCodeUnits === undefined ||
 		source.length + headerCodeUnits <= options.maxCodeUnits;
-	const emit = (
+	const references = image.native.functions.map((native) => {
+		const targets = new Set<number>();
+		const entries = new Set<string>();
+		for (const instruction of native.instructions) {
+			if (instruction?.kind !== "call") continue;
+			for (const target of [
+				instruction.directFunctionIndex,
+				instruction.directCallbackFunctionIndex,
+				...(instruction.guardedFunctionIndices ?? []),
+			]) {
+				if (target !== undefined) targets.add(target);
+			}
+			if (
+				instruction.directFunctionIndex !== undefined &&
+				instruction.directEntryId !== undefined
+			) {
+				entries.add(
+					directCompiledEntryKey(
+						instruction.directFunctionIndex,
+						instruction.directEntryId,
+					),
+				);
+			}
+		}
+		return { targets: [...targets], entries: [...entries] };
+	});
+	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
+	const render = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
@@ -584,6 +611,25 @@ function emitNativeFunctions(
 			// bounded so duplicating a large body can never evict the canonical ABI.
 			directEntries: emitted.directEntries.filter((entry) => fits(entry.source)),
 		};
+	};
+
+	const emit = (
+		functionIndex: number,
+		availability: NativeCompilationAvailability,
+	): CompiledFunction | null => {
+		const referenced = references[functionIndex]!;
+		const key =
+			referenced.targets
+				.map((target) => (availability.directCompiledTargets.has(target) ? "1" : "0"))
+				.join("") +
+			referenced.entries
+				.map((entry) => (availability.directCompiledEntries.has(entry) ? "1" : "0"))
+				.join("");
+		const previous = cached[functionIndex];
+		if (previous?.key === key) return previous.emitted;
+		const emitted = render(functionIndex, availability);
+		cached[functionIndex] = { key, emitted };
+		return emitted;
 	};
 
 	const unavailable: NativeCompilationAvailability = {
