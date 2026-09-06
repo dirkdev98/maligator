@@ -83,6 +83,10 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
  */
 type RegisterRep = VmRegisterRepresentation;
 
+function isNumericRep(rep: RegisterRep): boolean {
+	return rep === "number" || rep === "int32";
+}
+
 export interface BackendProfileDecision {
 	instructionIndex: number;
 	operation: string;
@@ -353,31 +357,28 @@ function producesNumberFromNumbers(operator: string): boolean {
 	);
 }
 
-/**
- * The native C expression (an f64) computing `left <op> right` for a
- * number-producing operator over two f64 operand expressions, or null if the
- * operator does not produce a Number from Numbers. Bitwise/shift ops go through
- * ToInt32 (mal_ops_number_to_i32) with the shift count masked to 5 bits; `>>>`
- * yields a uint32; `%` uses the integer-fast-path remainder. Shared by both the
- * pure-`number` result path (raw) and the mixed-rep guarded fast path (which
- * re-boxes with mal_ops_number_value), so the two never drift.
- */
+function nativeInt32Expr(operator: string, left: string, right: string): string | null {
+	const bitwise = NATIVE_BITWISE[operator];
+	if (bitwise === undefined) return null;
+	if (operator === "<<") {
+		// Unsigned shifting preserves the low 32 bits without signed-overflow UB.
+		return `mal_ops_u32_to_i32((u32) ${left} << (${right} & 0x1F))`;
+	}
+	const right32 = operator === ">>" ? `(${right} & 0x1F)` : right;
+	return `${left} ${bitwise} ${right32}`;
+}
+
 function nativeNumberExpr(operator: string, left: string, right: string): string | null {
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
-	const bitwise = NATIVE_BITWISE[operator];
-	if (bitwise !== undefined) {
-		if (operator === "<<") {
-			return `(f64) mal_ops_u32_to_i32((u32) mal_ops_number_to_i32(${left}) << (mal_ops_number_to_i32(${right}) & 0x1F))`;
-		}
-		const right32 =
-			operator === ">>"
-				? `(mal_ops_number_to_i32(${right}) & 0x1F)`
-				: `mal_ops_number_to_i32(${right})`;
-		return `(f64) (mal_ops_number_to_i32(${left}) ${bitwise} ${right32})`;
-	}
+	const bitwise = nativeInt32Expr(
+		operator,
+		`mal_ops_number_to_i32(${left})`,
+		`mal_ops_number_to_i32(${right})`,
+	);
+	if (bitwise !== null) return `(f64) (${bitwise})`;
 	if (operator === ">>>") {
 		return `(f64) ((u32) mal_ops_number_to_i32(${left}) >> (mal_ops_number_to_i32(${right}) & 0x1F))`;
 	}
@@ -512,7 +513,7 @@ function emitCompiledVariant(
 	const rootRegisters = new Set(nativeFrameRootRegisters(fn, nativeContract));
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
-		const isBoxed = reps[i] !== "number" && reps[i] !== "boolean";
+		const isBoxed = !isNumericRep(reps[i]!) && reps[i] !== "boolean";
 		if (isBoxed && rootRegisters.has(i)) {
 			valueRegs.push(i);
 		}
@@ -2838,8 +2839,6 @@ function emitInstruction(
 			coro,
 			genericContext,
 		);
-	// Read register r as a boxed MalValue (boxing a number-rep double or a
-	// boolean-rep bool).
 	const boxed = (r: number): string =>
 		reps[r] === "int32"
 			? `mal_value_from_i32(r${r})`
@@ -2868,11 +2867,7 @@ function emitInstruction(
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
-			return reps[decoded.register] === "int32"
-				? `(f64) r${decoded.register}`
-				: reps[decoded.register] === "number"
-					? `r${decoded.register}`
-					: null;
+			return isNumericRep(reps[decoded.register]!) ? num(decoded.register) : null;
 		}
 		return decoded.kind === "number" ? cF64Literal(decoded.value) : null;
 	};
@@ -2894,7 +2889,6 @@ function emitInstruction(
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
-	// Read register r as a raw double (only valid for a number-rep register).
 	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
 	// Read register r as a raw C bool (ToBoolean). A boolean-rep register is the
 	// bool itself; a number-rep one is truthy iff nonzero and not NaN; a boxed
@@ -3004,8 +2998,8 @@ function emitInstruction(
 		const kind = nativeTypedArrayKind(nativePlan.elementKind);
 		const elementSize = nativeTypedArrayElementSize(nativePlan.elementKind);
 		if (instruction.opcode === "LOAD_PROPERTY") {
-			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
-			if (reps[instruction.key] === "number") {
+			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
+			if (isNumericRep(reps[instruction.key]!)) {
 				return [
 					"MAL_PERF_COUNT(exact_typed_array_loads);",
 					`r${instruction.dst} = ${exactLoad};`,
@@ -3022,8 +3016,8 @@ function emitInstruction(
 			];
 		}
 		if (instruction.opcode === "STORE_PROPERTY") {
-			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
-			if (reps[instruction.key] === "number") return [exactStore, throwCheck];
+			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
+			if (isNumericRep(reps[instruction.key]!)) return [exactStore, throwCheck];
 			return [
 				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
 				`  ${exactStore}`,
@@ -3399,10 +3393,14 @@ function emitInstruction(
 				const { chain } = nativeStringCharCodeAtChainAction;
 				const captured = `__string_char_code_at_${chain.callIp}_captured`;
 				const receiver = boxed(instruction.object);
+				const primitive =
+					reps[instruction.object] === "string"
+						? "true"
+						: `mal_value_is_string(${receiver})`;
 				const capture =
 					chain.methodIdentity === "authority-invariant"
-						? `mal_value_is_string(${receiver})`
-						: `mal_value_is_string(${receiver}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
+						? primitive
+						: `${primitive} && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
 				return [
 					`${captured} = ${capture};`,
 					`if (${captured}) {`,
@@ -3619,22 +3617,21 @@ function emitInstruction(
 			// the try_* helper inlines.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "LOAD_PROPERTY") {
-				const ordinary =
-					reps[instruction.key] === "number"
-						? [
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-								`MalValue __v_${ip};`,
-								`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
-								`  r${instruction.dst} = __v_${ip};`,
-								`} else {`,
-								`  r${instruction.dst} = mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-								`  ${throwCheck}`,
-								`}`,
-							]
-						: [
-								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-								throwCheck,
-							];
+				const ordinary = isNumericRep(reps[instruction.key]!)
+					? [
+							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+							`MalValue __v_${ip};`,
+							`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+							`  r${instruction.dst} = __v_${ip};`,
+							`} else {`,
+							`  r${instruction.dst} = mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+							`  ${throwCheck}`,
+							`}`,
+						]
+					: [
+							`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+							throwCheck,
+						];
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "load"
@@ -3729,10 +3726,9 @@ function emitInstruction(
 			if (nativeStringSplitCursorAction?.role === "length") {
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.callIp;
-				const index =
-					reps[site.cursor.index] === "number"
-						? `r${site.cursor.index}`
-						: `mal_ops_number_as_f64(r${site.cursor.index})`;
+				const index = isNumericRep(reps[site.cursor.index]!)
+					? num(site.cursor.index)
+					: `mal_ops_number_as_f64(${boxed(site.cursor.index)})`;
 				const value = `${index} + (__string_split_cursor_${id}_has ? 1.0 : 0.0)`;
 				return [
 					`if (__string_split_cursor_${id}_active) {`,
@@ -3784,9 +3780,18 @@ function emitInstruction(
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				nativePlan?.kind === "primitive-string-length"
 			) {
+				const length = `mal_string_length(mal_value_to_string(${boxed(instruction.object)}))`;
+				const direct = `r${instruction.dst} = ${
+					reps[instruction.dst] === "number"
+						? `(f64) ${length}`
+						: reps[instruction.dst] === "int32"
+							? `(i32) ${length}`
+							: `mal_value_from_i32((i32) ${length})`
+				};`;
+				if (reps[instruction.object] === "string") return [direct];
 				return [
 					`if (mal_value_is_string(${boxed(instruction.object)})) {`,
-					`  r${instruction.dst} = mal_value_from_i32((i32) mal_string_length(mal_value_to_string(${boxed(instruction.object)})));`,
+					`  ${direct}`,
 					`} else {`,
 					...ordinary.map((line) => `  ${line}`),
 					`}`,
@@ -3810,19 +3815,18 @@ function emitInstruction(
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "STORE_PROPERTY") {
-				const ordinary =
-					reps[instruction.key] === "number"
-						? [
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-								`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-								`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-								`  ${throwCheck}`,
-								`}`,
-							]
-						: [
-								`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-								throwCheck,
-							];
+				const ordinary = isNumericRep(reps[instruction.key]!)
+					? [
+							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+							`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+							`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							`  ${throwCheck}`,
+							`}`,
+						]
+					: [
+							`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							throwCheck,
+						];
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "store"
@@ -3926,8 +3930,8 @@ function emitInstruction(
 			];
 		case "BINARY": {
 			const { dst, left, right, operator } = instruction;
-			const leftIsNum = reps[left] === "int32" || reps[left] === "number";
-			const rightIsNum = reps[right] === "int32" || reps[right] === "number";
+			const leftIsNum = isNumericRep(reps[left]!);
+			const rightIsNum = isNumericRep(reps[right]!);
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = numericFusionAction;
@@ -3999,10 +4003,8 @@ function emitInstruction(
 				const first = fusion.first;
 				const firstOnLeft = left === first.dst;
 				const firstOnRight = right === first.dst;
-				const firstLeftIsNum =
-					reps[first.left] === "int32" || reps[first.left] === "number";
-				const firstRightIsNum =
-					reps[first.right] === "int32" || reps[first.right] === "number";
+				const firstLeftIsNum = isNumericRep(reps[first.left]!);
+				const firstRightIsNum = isNumericRep(reps[first.right]!);
 				const firstExpr = nativeNumberExpr(
 					first.operator,
 					firstLeftIsNum
@@ -4014,7 +4016,7 @@ function emitInstruction(
 				);
 				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
 					const external = firstOnLeft ? right : left;
-					const externalIsNum = reps[external] === "int32" || reps[external] === "number";
+					const externalIsNum = isNumericRep(reps[external]!);
 					const externalExpr = externalIsNum
 						? num(external)
 						: `mal_ops_number_as_f64(${boxed(external)})`;
@@ -4082,8 +4084,12 @@ function emitInstruction(
 				) {
 					return null;
 				}
-				const expr = nativeNumberExpr(operator, num(left), num(right));
-				return expr === null ? null : [`r${dst} = (i32) (${expr});`];
+				const expr = nativeInt32Expr(
+					operator,
+					nativeInt32Operand(left)!,
+					nativeInt32Operand(right)!,
+				);
+				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (reps[dst] === "number") {
 				// Bail defensively if the lattice invariant ever breaks.
@@ -4294,14 +4300,13 @@ function emitInstruction(
 			// proof directly instead of boxing the scalar only to classify it again.
 			// Boxed values retain the generic classifier because their precise
 			// primitive/object/callable kind is not represented by this lattice yet.
-			const proven =
-				reps[src] === "int32" || reps[src] === "number"
-					? "number"
-					: reps[src] === "boolean"
-						? "boolean"
-						: reps[src] === "string"
-							? "string"
-							: undefined;
+			const proven = isNumericRep(reps[src]!)
+				? "number"
+				: reps[src] === "boolean"
+					? "boolean"
+					: reps[src] === "string"
+						? "string"
+						: undefined;
 			if (proven !== undefined) {
 				const value = (proven === expected) !== negated;
 				return [
@@ -4321,13 +4326,13 @@ function emitInstruction(
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
 			if (reps[dst] === "int32") {
-				if (operator !== "~" || (reps[src] !== "int32" && reps[src] !== "number")) {
+				if (operator !== "~" || !isNumericRep(reps[src]!)) {
 					return null;
 				}
 				return [`r${dst} = ~mal_ops_number_to_i32(${num(src)});`];
 			}
 			if (reps[dst] === "number") {
-				if (reps[src] !== "int32" && reps[src] !== "number") {
+				if (!isNumericRep(reps[src]!)) {
 					return null;
 				}
 				// `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the interpreter's
@@ -4601,8 +4606,8 @@ function emitInstruction(
 				const boundedPosition =
 					callPlan?.directStringCharCodeAtPosition === "inBounds" &&
 					boundedArgument?.kind === "register" &&
-					reps[boundedArgument.register] === "number"
-						? `r${boundedArgument.register}`
+					isNumericRep(reps[boundedArgument.register]!)
+						? num(boundedArgument.register)
 						: undefined;
 				if (boundedPosition !== undefined) {
 					const direct = `mal_builtin_string_char_code_at_in_bounds(${boxedOperand(instruction.thisValue)}, (usize) ${boundedPosition})`;
@@ -4772,15 +4777,20 @@ function emitInstruction(
 					const fast = `__regexp_exec_${site.projection.callIp}_char_${ip}_fast`;
 					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
 					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
-					const value = `(${end} > ${start} ? mal_value_from_i32(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}]))[${start}]) : mal_value_new_nan())`;
-					const direct =
+					const codeUnit = `mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}]))[${start}]`;
+					const value =
 						reps[instruction.dst] === "number"
-							? `mal_ops_number_as_f64(${value})`
-							: value;
-					const fallbackValue =
+							? `(f64) ${codeUnit}`
+							: reps[instruction.dst] === "int32"
+								? `(i32) ${codeUnit}`
+								: `mal_value_from_i32(${codeUnit})`;
+					const empty =
 						reps[instruction.dst] === "number"
-							? `mal_ops_number_as_f64(${tmp}.value)`
-							: `${tmp}.value`;
+							? "NAN"
+							: reps[instruction.dst] === "int32"
+								? "0"
+								: "mal_value_new_nan()";
+					const direct = `(${end} > ${start} ? ${value} : ${empty})`;
 					return [
 						`static MalCallCache __cc_${ip};`,
 						`if (${fast}) {`,
@@ -4788,7 +4798,7 @@ function emitInstruction(
 						`} else {`,
 						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${fallbackValue};`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 						poll,
 					];
@@ -5021,8 +5031,8 @@ function emitInstruction(
 				const boundedPosition =
 					callPlan?.directStringCharCodeAtPosition === "inBounds" &&
 					boundedArgument?.kind === "register" &&
-					reps[boundedArgument.register] === "number"
-						? `r${boundedArgument.register}`
+					isNumericRep(reps[boundedArgument.register]!)
+						? num(boundedArgument.register)
 						: null;
 				if (boundedPosition !== null) {
 					return [
@@ -5053,11 +5063,21 @@ function emitInstruction(
 			if (callPlan?.guardedFunctionIndices !== undefined) {
 				const guardedCallee = `__guarded_callee_${ip}`;
 				const guardedIndex = `__guarded_index_${ip}`;
-				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => [
-					`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
-					`  ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`}`,
-				]);
+				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => {
+					const exact = `__guarded_compiled_${ip}_${target}`;
+					return [
+						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
+						...(directCompiledTargets.has(target)
+							? [
+									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${target}, .compiled_callback = mal_compiled_${target}${suffix}, .function = &vm->runtime_image->functions[${target}], .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
+									`  ${tmp} = mal_vm_call_exact_script_compiled_callback(vm, &${exact}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+								]
+							: [
+									`  ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+								]),
+						`}`,
+					];
+				});
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalValue ${guardedCallee} = ${boxedOperand(instruction.callee)};`,

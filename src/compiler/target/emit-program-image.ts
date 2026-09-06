@@ -503,6 +503,7 @@ function nativeCompilationAvailability(
 			for (const target of [
 				instruction.directFunctionIndex,
 				instruction.directCallbackFunctionIndex,
+				...(instruction.guardedFunctionIndices ?? []),
 			]) {
 				if (
 					target !== undefined &&

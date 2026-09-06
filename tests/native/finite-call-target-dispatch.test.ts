@@ -66,13 +66,15 @@ describe("finite script call-target dispatch", () => {
 	);
 
 	it("keeps guarded identities and arguments live across collection", () => {
-		assertExactLines(
-			runToStdout(interpreted, {
-				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-				timeoutMs: 60_000,
-			}),
-			expected,
-		);
+		for (const binary of [compiled, interpreted]) {
+			assertExactLines(
+				runToStdout(binary, {
+					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+					timeoutMs: 60_000,
+				}),
+				expected,
+			);
+		}
 	});
 });
 

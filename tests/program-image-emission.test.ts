@@ -1236,6 +1236,127 @@ describe("native update-expression representation", () => {
 		});
 	}
 
+	it("uses available ordinary compiled entries after a function-family guard", () => {
+		const output = emit(`
+			function invoke(value) {
+				const target = value
+					? function first(input) { return input + arguments.length; }
+					: function second(input) { return input - arguments.length; };
+				return target(value);
+			}
+			globalThis.invoke = invoke;
+		`);
+		expect(output).toContain("mal_vm_call_exact_script_compiled_callback(vm,");
+		expect(output).toContain(".compiled_callback = mal_compiled_");
+		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps class-call rejection outside the ordinary compiled-entry path", () => {
+		const output = emit(`
+			class Target {}
+			function invoke() { return Target(); }
+			globalThis.invoke = invoke;
+		`);
+		expect(output).not.toContain("mal_vm_call_exact_script_compiled_callback(vm,");
+	});
+
+	it.each([
+		"ordinary",
+		"exact-typed-array-element",
+		"contained-fixed-typed-array-element",
+	] as const)("honors int32 index operands in %s native access", (kind) => {
+		const indexed: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			parameterCount: 1,
+			registerCount: 4,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 2 },
+				{ opcode: "CREATE_NUMBER", dst: 2, value: 17 },
+				{ opcode: "STORE_PROPERTY", object: 0, key: 1, value: 2, icIndex: 0 },
+				{ opcode: "LOAD_PROPERTY", dst: 3, object: 0, key: 1, icIndex: 1 },
+				{ opcode: "RETURN", value: 3 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({ ...definition.runtime, functions: [indexed] }),
+			0,
+			(plan) => ({
+				...plan,
+				registerRepresentations: ["boxed", "int32", "int32", "boxed"],
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 2, rootRegisters: [0] },
+						{ kind: "operation", instructionIp: 3, rootRegisters: [0] },
+					],
+				},
+				instructions: plan.instructions.map((instruction, index) =>
+					kind !== "ordinary" && (index === 2 || index === 3)
+						? { kind, elementKind: "Uint32Array" }
+						: instruction,
+				),
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+		if (kind === "ordinary") {
+			expect(output).toContain("mal_vm_array_try_load(");
+			expect(output).toContain("mal_vm_array_try_store(");
+			expect(output).toContain("mal_vm_indexed_fast_load_index(");
+			expect(output).toContain("mal_vm_indexed_fast_store_index(");
+		} else {
+			expect(output).toContain(
+				kind === "exact-typed-array-element"
+					? "mal_vm_exact_numeric_typed_array_load("
+					: "mal_vm_contained_fixed_numeric_typed_array_load(",
+			);
+			expect(output).toContain("mal_vm_numeric_typed_array_store_known_receiver(");
+			expect(output).not.toContain("mal_ops_is_number(");
+		}
+	});
+
+	it.each(["int32", "number"] as const)(
+		"converts bitwise operands only when their representation is %s",
+		(representation) => {
+			const bitwise: BytecodeFunction = {
+				...fn,
+				capturedCount: 0,
+				registerCount: 3,
+				instructions: [
+					{ opcode: "CREATE_NUMBER", dst: 0, value: -1 },
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 33 },
+					...(["&", "|", "^", "<<", ">>"] as const).map(
+						(operator): BytecodeInstruction => ({
+							opcode: "BINARY",
+							dst: 2,
+							left: 0,
+							right: 1,
+							operator,
+						}),
+					),
+					{ opcode: "RETURN", value: 2 },
+				],
+			};
+			const image = withNativeFunctionPlan(
+				testProgramImage({ ...definition.runtime, functions: [bitwise] }),
+				0,
+				(plan) => ({
+					...plan,
+					registerRepresentations: [representation, representation, "int32"],
+					gc: { safepoints: [] },
+				}),
+			);
+			const output = emitProgramImage(image, { compiled: true });
+			if (representation === "int32") {
+				expect(output).toMatch(/r\d+ = r\d+ & r\d+;/);
+				expect(output).not.toContain("mal_ops_number_to_i32(");
+			} else {
+				expect(output).toContain("mal_ops_number_to_i32(");
+			}
+			expect(output).toContain("mal_ops_u32_to_i32((u32)");
+			expect(output).toContain("& 0x1F");
+		},
+	);
+
 	it("carries exact fresh-array length reads into portable bytecode", () => {
 		const definition = lower(`
 			function readLength() {
