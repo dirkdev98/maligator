@@ -587,6 +587,9 @@ function emitNativeFunctions(
 		return { targets: [...targets], entries: [...entries] };
 	});
 	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
+	const strictCompiledTargets = new Set(
+		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
+	);
 	const render = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
@@ -603,6 +606,7 @@ function emitNativeFunctions(
 			image.native.semanticProtectors,
 			availability.directCompiledEntries,
 			options.relocatable === true,
+			strictCompiledTargets,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		return {

@@ -368,13 +368,7 @@ const NATIVE_BITWISE: Record<string, string> = {
 	">>": ">>",
 };
 
-/**
- * Whether a binary operator yields a JS Number from two Number operands — native
- * arithmetic, the bitwise/shift operators, unsigned shift, and remainder. Such a
- * result is `number`-rep (the integer-valued ones held exactly as a double).
- * `**` is excluded: it stays boxed (its Number::exponentiate special cases are
- * not worth inlining yet).
- */
+// Exponentiation has a separate proven-input path because its target representation stays boxed.
 function producesNumberFromNumbers(operator: string): boolean {
 	return (
 		operator in NATIVE_ARITH ||
@@ -482,6 +476,7 @@ function emitCompiledVariant(
 	directCompiledEntries: DirectCompiledEntries = new Map(),
 	relocatable = false,
 	directEntry?: NativeDirectEntryPlan,
+	strictCompiledTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -854,6 +849,7 @@ function emitCompiledVariant(
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 		relocation,
+		strictCompiledTargets,
 	);
 	if (body === null) {
 		return null;
@@ -1057,6 +1053,7 @@ export function emitCompiledFunction(
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
 	relocatable = false,
+	strictCompiledTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -1069,6 +1066,8 @@ export function emitCompiledFunction(
 		semanticProtectors,
 		directCompiledEntries,
 		relocatable,
+		undefined,
+		strictCompiledTargets,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1085,6 +1084,7 @@ export function emitCompiledFunction(
 			directCompiledEntries,
 			false,
 			entry,
+			strictCompiledTargets,
 		);
 		return emitted === null ? [] : [{ entry, emitted }];
 	});
@@ -1754,6 +1754,7 @@ function emitBody(
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
+	strictCompiledTargets: ReadonlySet<number> = new Set(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2366,6 +2367,7 @@ function emitBody(
 				stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
 				directCompiledTargets,
 				directCompiledEntries,
+				strictCompiledTargets,
 				directResultRepresentation,
 				mathUnaryCall: mathUnaryCalls.has(ip),
 				mathBinaryCall: mathBinaryCalls.has(ip),
@@ -2672,6 +2674,7 @@ interface NativeInstructionContext {
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
+	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
@@ -2800,6 +2803,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
 		directResultRepresentation,
@@ -2848,6 +2852,20 @@ function emitInstruction(
 				return relocation.stringValue(decoded.index, suffix);
 		}
 	};
+	const operandRep = (operand: number): RegisterRep => {
+		const decoded = decodeVmValueOperand(operand);
+		return decoded.kind === "register"
+			? reps[decoded.register]!
+			: decoded.kind === "number"
+				? "int32"
+				: decoded.kind === "boolean" || decoded.kind === "string"
+					? decoded.kind
+					: "boxed";
+	};
+	const storeNumber = (dst: number, expression: string): string =>
+		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
+	const storeBoolean = (dst: number, expression: string): string =>
+		`r${dst} = ${reps[dst] === "boolean" ? expression : profileCall("boxing", `mal_value_new_boolean(${expression})`)};`;
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
@@ -3992,7 +4010,10 @@ function emitInstruction(
 				];
 			}
 			if (operator === "+" && reps[left] === "string" && reps[right] === "string") {
-				return [`r${dst} = mal_vm_add(vm, r${left}, r${right});`, throwCheck()];
+				return [
+					`r${dst} = ${profileCall("string", `mal_vm_concat_strings_known(vm, mal_value_to_string(r${left}), mal_value_to_string(r${right}))`)};`,
+					throwCheck(),
+				];
 			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {
 				const nativeExpr = nativeNumberExpr(
@@ -4130,6 +4151,9 @@ function emitInstruction(
 				const expr = nativeNumberExpr(operator, num(left), num(right));
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
+			if (operator === "**" && leftIsNum && rightIsNum) {
+				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
+			}
 			const slow = profileCall(
 				"binary",
 				`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
@@ -4231,6 +4255,17 @@ function emitInstruction(
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
 					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
+				}
+				if (
+					reps[left] === "string" &&
+					reps[right] === "string" &&
+					RELATIONAL_COMPARE.has(operator)
+				) {
+					return [
+						storeBool(
+							`${profileCall("string", `mal_string_compare(mal_value_to_string(r${left}), mal_value_to_string(r${right}))`)} ${compare} 0`,
+						),
+					];
 				}
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
 					const equal = `mal_ops_strict_equal_bool(${boxed(left)}, ${boxed(right)})`;
@@ -4351,29 +4386,32 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
-			if (reps[dst] === "int32") {
-				if (operator !== "~" || !isNumericRep(reps[src]!)) {
-					return null;
-				}
-				return [`r${dst} = ~mal_ops_number_to_i32(${num(src)});`];
-			}
-			if (reps[dst] === "number") {
-				if (!isNumericRep(reps[src]!)) {
-					return null;
-				}
-				// `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the interpreter's
-				// MAL_UNARY_BIT_NOT), its int result held as a double.
+			if (isNumericRep(reps[src]!) && operator !== "!") {
 				if (operator === "~") {
-					return [`r${dst} = (f64) (~mal_ops_number_to_i32(${num(src)}));`];
+					const expression = `~${nativeInt32Operand(src)!}`;
+					return [
+						`r${dst} = ${reps[dst] === "int32" ? expression : reps[dst] === "number" ? `(f64) (${expression})` : `mal_value_from_i32(${expression})`};`,
+					];
 				}
-				if (operator === "increment" || operator === "decrement") {
-					if (dst === src) {
-						return [`r${dst} ${operator === "increment" ? "+=" : "-="} 1.0;`];
-					}
-					return [`r${dst} = ${num(src)} ${operator === "increment" ? "+" : "-"} 1.0;`];
+				if (
+					dst === src &&
+					reps[dst] === "number" &&
+					(operator === "increment" || operator === "decrement")
+				) {
+					return [`r${dst} ${operator === "increment" ? "+=" : "-="} 1.0;`];
 				}
-				return [operator === "-" ? `r${dst} = -${num(src)};` : `r${dst} = ${num(src)};`];
+				const expression =
+					operator === "-"
+						? `-${num(src)}`
+						: operator === "increment" || operator === "decrement"
+							? `${num(src)} ${operator === "increment" ? "+" : "-"} 1.0`
+							: operator === "+" || operator === "tonumeric"
+								? num(src)
+								: null;
+				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
+					return [storeNumber(dst, expression)];
 			}
+			if (isNumericRep(reps[dst]!)) return null;
 			// Logical not yields a boolean: !ToBoolean(src). This is exactly
 			// mal_vm_unary_op(NOT) = mal_value_new_boolean(!mal_value_is_truthy(.)).
 			if (operator === "!") {
@@ -4439,6 +4477,22 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "Object.is") {
+				const [left, right] = instruction.arguments;
+				if (left !== undefined && right !== undefined) {
+					const a = nativeNumberOperand(left),
+						b = nativeNumberOperand(right);
+					if (a !== null && b !== null) {
+						const expression =
+							operandRep(left) === "int32" && operandRep(right) === "int32"
+								? `${a} == ${b}`
+								: `(${a} == ${b} ? (${a} != 0.0 || !!signbit(${a}) == !!signbit(${b})) : (isnan(${a}) && isnan(${b})))`;
+						return [storeBoolean(instruction.dst, expression)];
+					}
+					const aBool = nativeBooleanOperand(left),
+						bBool = nativeBooleanOperand(right);
+					if (aBool !== null && bBool !== null)
+						return [storeBoolean(instruction.dst, `${aBool} == ${bBool}`)];
+				}
 				return [
 					`r${instruction.dst} = mal_builtin_object_is_known(${argsExpr}, ${instruction.arguments.length});`,
 				];
@@ -4458,6 +4512,15 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
+				const positionOperand = instruction.arguments[0];
+				const position =
+					positionOperand === undefined ? "0.0" : nativeNumberOperand(positionOperand);
+				if (operandRep(instruction.thisValue) === "string" && position !== null) {
+					return [
+						`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_number(${boxedOperand(instruction.thisValue)}, ${position})`)};`,
+						poll,
+					];
+				}
 				return [
 					`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
 					throwCheck(),
@@ -4512,6 +4575,44 @@ function emitInstruction(
 					throwCheck(),
 					poll,
 				];
+			}
+			if (
+				[
+					"Number.isNaN",
+					"Number.isFinite",
+					"Number.isInteger",
+					"Number.isSafeInteger",
+				].includes(instruction.operation)
+			) {
+				const argument = instruction.arguments[0];
+				const decoded =
+					argument === undefined ? undefined : decodeVmValueOperand(argument);
+				const representation = argument === undefined ? undefined : operandRep(argument);
+				if (
+					decoded === undefined ||
+					(decoded.kind !== "register" && decoded.kind !== "number") ||
+					representation === "string" ||
+					representation === "boolean"
+				) {
+					return [storeBoolean(instruction.dst, "false")];
+				}
+				if (representation === "int32")
+					return [
+						storeBoolean(
+							instruction.dst,
+							instruction.operation === "Number.isNaN" ? "false" : "true",
+						),
+					];
+				const value = nativeNumberOperand(argument!);
+				if (value !== null) {
+					const expression =
+						instruction.operation === "Number.isNaN"
+							? `isnan(${value})`
+							: instruction.operation === "Number.isFinite"
+								? `isfinite(${value})`
+								: `isfinite(${value}) && trunc(${value}) == ${value}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${value}) <= 9007199254740991.0` : ""}`;
+					return [storeBoolean(instruction.dst, expression)];
+				}
 			}
 			if (instruction.operation === "Number.isNaN") {
 				return [
@@ -5155,6 +5256,16 @@ function emitInstruction(
 			}
 			if (callPlan?.directFunctionIndex !== undefined) {
 				const target = callPlan.directFunctionIndex;
+				const directFunction = `__direct_function_${ip}`;
+				const targetIsStrict = context.strictCompiledTargets.has(target);
+				const thisArgument = targetIsStrict
+					? boxedOperand(instruction.thisValue)
+					: `mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})`;
+				const functionDeclaration = targetIsStrict
+					? []
+					: [
+							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+						];
 				const directEntry =
 					callPlan.directEntryId === undefined
 						? undefined
@@ -5163,7 +5274,6 @@ function emitInstruction(
 							);
 				if (directEntry !== undefined) {
 					const directCallee = `__direct_callee_${ip}`;
-					const directFunction = `__direct_function_${ip}`;
 					const directValue = `__direct_value_${ip}`;
 					const parameters = directEntry.parameterRepresentations.map(
 						(representation, parameter): string | null => {
@@ -5219,8 +5329,8 @@ function emitInstruction(
 							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 							`MAL_PERF_COUNT(direct_entry_hits);`,
 							`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
-							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
-							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+							...functionDeclaration,
+							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
 							`mal_vm_leave_compiled(vm);`,
 							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 							`r${instruction.dst} = ${directResult};`,
@@ -5231,13 +5341,12 @@ function emitInstruction(
 				if (directCompiledTargets.has(target)) {
 					nativeCallDecision(context.profile, ip, "call.direct-compiled", "applied");
 					const directCallee = `__direct_callee_${ip}`;
-					const directFunction = `__direct_function_${ip}`;
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
-						`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
-						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						...functionDeclaration,
+						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`mal_vm_leave_compiled(vm);`,
 						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
@@ -5262,8 +5371,17 @@ function emitInstruction(
 								callPlan?.guardedBuiltinCall?.operation ?? "",
 								nativeArgument,
 							);
-				if (reps[instruction.dst] === "number" && nativeExpression !== null) {
-					return [`r${instruction.dst} = ${nativeExpression};`, mathPoll];
+				if (
+					nativeExpression !== null &&
+					(reps[instruction.dst] === "number" ||
+						(callPlan?.guardedBuiltinCall !== undefined &&
+							callPlan.guardedBuiltinCall.guard.dependencies.length > 0 &&
+							callPlan.guardedBuiltinCall.guard.dependencies.every(
+								(dependency) =>
+									dependency.kind === "world" && dependency.fact === "primordials.locked",
+							)))
+				) {
+					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
 					`static MalMathUnaryOp __math_${ip};`,
@@ -5293,8 +5411,17 @@ function emitInstruction(
 								nativeLeft,
 								nativeRight,
 							);
-				if (reps[instruction.dst] === "number" && nativeExpression !== null) {
-					return [`r${instruction.dst} = ${nativeExpression};`, mathPoll];
+				if (
+					nativeExpression !== null &&
+					(reps[instruction.dst] === "number" ||
+						(callPlan?.guardedBuiltinCall !== undefined &&
+							callPlan.guardedBuiltinCall.guard.dependencies.length > 0 &&
+							callPlan.guardedBuiltinCall.guard.dependencies.every(
+								(dependency) =>
+									dependency.kind === "world" && dependency.fact === "primordials.locked",
+							)))
+				) {
+					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
 					`static MalMathBinaryOp __math_${ip};`,
