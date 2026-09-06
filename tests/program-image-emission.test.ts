@@ -25,6 +25,10 @@ import {
 } from "../src/compiler/target/program-image.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+import {
+	directCompiledEntryKey,
+	emitCompiledFunction,
+} from "../src/compiler/target/render-native-c.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -138,6 +142,65 @@ const definition: ProgramImage = testProgramImage({
 	cjsModuleFunctionIndices: [],
 	hostInstalls: [],
 });
+
+function nativeEntryBudgetImage(): ProgramImage {
+	const seed = { ...fn, capturedCount: 0, registerCount: 3 };
+	const functions: Array<BytecodeFunction> = [
+		{
+			...seed,
+			instructions: [
+				{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 },
+				{ opcode: "CREATE_UNDEFINED", dst: 1 },
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 0,
+					thisValue: 1,
+					argumentCount: 0,
+					arguments: [],
+					exactFunctionIndex: 1,
+				},
+				{ opcode: "RETURN", value: 2 },
+			],
+		},
+		{
+			...seed,
+			instructions: [
+				{ opcode: "CREATE_F64", dst: 0, value: 3 },
+				{ opcode: "CREATE_F64", dst: 1, value: 7 },
+				...Array.from(
+					{ length: 150 },
+					() => ({ opcode: "BINARY", operator: "+", dst: 0, left: 0, right: 1 }) as const,
+				),
+				{ opcode: "RETURN", value: 0 },
+			],
+		},
+	];
+	let image = testProgramImage({ ...definition.runtime, functions, functionCount: 2 });
+	image = withNativeFunctionPlan(image, 0, (plan) => ({
+		...plan,
+		instructions: plan.instructions.with(2, {
+			kind: "call",
+			directFunctionIndex: 1,
+			directEntryId: 0,
+		}),
+	}));
+	image = withNativeFunctionPlan(image, 1, (plan) => ({
+		...plan,
+		registerRepresentations: ["number", "number", "boxed"],
+		gc: { safepoints: [] },
+		directEntries: [
+			{
+				id: 0,
+				parameterRepresentations: [],
+				resultRepresentation: "number",
+				registerRepresentations: ["boxed", "boxed", "boxed"],
+				gc: plan.gc,
+			},
+		],
+	}));
+	return image;
+}
 
 function specializations(definition: ProgramImage) {
 	return definition.native.functions.flatMap((fn) => fn.specializations);
@@ -840,62 +903,7 @@ describe("emit-program-image instruction packing", () => {
 	});
 
 	it("keeps canonical and typed entry size limits independent at call sites", () => {
-		const seed = { ...fn, capturedCount: 0, registerCount: 3 };
-		const functions: Array<BytecodeFunction> = [
-			{
-				...seed,
-				instructions: [
-					{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 },
-					{ opcode: "CREATE_UNDEFINED", dst: 1 },
-					{
-						opcode: "CALL",
-						dst: 2,
-						callee: 0,
-						thisValue: 1,
-						argumentCount: 0,
-						arguments: [],
-						exactFunctionIndex: 1,
-					},
-					{ opcode: "RETURN", value: 2 },
-				],
-			},
-			{
-				...seed,
-				instructions: [
-					{ opcode: "CREATE_F64", dst: 0, value: 3 },
-					{ opcode: "CREATE_F64", dst: 1, value: 7 },
-					...Array.from(
-						{ length: 150 },
-						() =>
-							({ opcode: "BINARY", operator: "+", dst: 0, left: 0, right: 1 }) as const,
-					),
-					{ opcode: "RETURN", value: 0 },
-				],
-			},
-		];
-		let image = testProgramImage({ ...definition.runtime, functions, functionCount: 2 });
-		image = withNativeFunctionPlan(image, 0, (plan) => ({
-			...plan,
-			instructions: plan.instructions.with(2, {
-				kind: "call",
-				directFunctionIndex: 1,
-				directEntryId: 0,
-			}),
-		}));
-		image = withNativeFunctionPlan(image, 1, (plan) => ({
-			...plan,
-			registerRepresentations: ["number", "number", "boxed"],
-			gc: { safepoints: [] },
-			directEntries: [
-				{
-					id: 0,
-					parameterRepresentations: [],
-					resultRepresentation: "number",
-					registerRepresentations: ["boxed", "boxed", "boxed"],
-					gc: plan.gc,
-				},
-			],
-		}));
+		const image = nativeEntryBudgetImage();
 		const emit = (value: ProgramImage, budget: number) =>
 			emitProgramTranslationUnits(value, {}, budget).join("\n");
 		expect(emit(image, 60_000)).toContain("mal_direct_1_0(vm,");
@@ -911,6 +919,40 @@ describe("emit-program-image instruction packing", () => {
 		expect(rejected).not.toContain("mal_compiled_1");
 		expect(rejected).not.toContain("mal_direct_1_0");
 		expect(rejected).toContain("mal_vm_call_direct(vm,");
+	});
+
+	it("reports exact typed calls without inventing a callee identity guard", () => {
+		const image = nativeEntryBudgetImage();
+		const caller = { ...image.runtime.functions[0]!, profileSiteIds: [-1, -1, 0, -1] };
+		const plan = image.native.functions[0]!;
+		const entry = image.native.functions[1]!.directEntries[0]!;
+		const compiled = emitCompiledFunction(
+			caller,
+			plan,
+			0,
+			"",
+			false,
+			"static",
+			new Set([1]),
+			[],
+			new Map([[directCompiledEntryKey(1, entry.id), entry]]),
+		);
+		expect(compiled?.profileDecisions).toContainEqual({
+			instructionIndex: 2,
+			operation: "call",
+			code: "call.direct-native",
+			outcome: "applied",
+			details: { opcode: "CALL" },
+		});
+		const fallback = emitCompiledFunction(caller, plan, 0, "", false);
+		expect(fallback?.profileDecisions).toContainEqual({
+			instructionIndex: 2,
+			operation: "call",
+			code: "call.direct-compiled",
+			outcome: "guarded",
+			reasonCode: "callee-identity-guard",
+			details: { opcode: "CALL" },
+		});
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
