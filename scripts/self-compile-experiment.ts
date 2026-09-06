@@ -549,6 +549,7 @@ async function runBoundedWorker(options: Options): Promise<void> {
 				}
 			};
 			const stop = () => {
+				if (interrupted) return;
 				interrupted = true;
 				kill();
 			};
@@ -559,7 +560,6 @@ async function runBoundedWorker(options: Options): Promise<void> {
 				clearTimeout(timer);
 				process.removeListener("SIGINT", stop);
 				process.removeListener("SIGTERM", stop);
-				if (interrupted) kill();
 			};
 			child.once("error", (error) => {
 				cleanup();

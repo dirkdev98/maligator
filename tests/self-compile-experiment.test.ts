@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
@@ -75,31 +75,43 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 	const base = capture("base");
 	const candidate = capture("candidate");
 	const output = path.join(root, "result");
+	const command = [
+		script,
+		"compare",
+		base,
+		candidate,
+		"--host",
+		"node",
+		"--pairs",
+		"2",
+		"--output",
+		output,
+	];
 	const run = (...args: Array<string>) =>
-		spawnSync(
-			process.execPath,
-			[
-				script,
-				"compare",
-				base,
-				candidate,
-				"--host",
-				"node",
-				"--pairs",
-				"2",
-				"--output",
-				output,
-				...args,
-			],
-			{ encoding: "utf8", timeout: 20_000 },
-		);
+		spawnSync(process.execPath, [...command, ...args], {
+			encoding: "utf8",
+			timeout: 20_000,
+		});
 	const report = () =>
 		JSON.parse(readFileSync(path.join(output, "report.json"), "utf8")) as {
 			samples: Array<{ label: string; digest: string }>;
 			pairs: Array<unknown>;
 			target: string;
 		};
-	return { root, base, candidate, output, run, report };
+	return { root, base, candidate, output, command, run, report };
+}
+
+async function expectProcessStopped(pid: number): Promise<void> {
+	await expect
+		.poll(() => {
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		})
+		.toBe(false);
 }
 
 it("plans the oracle, warmups and paired work without writing or leasing a cache", () => {
@@ -240,14 +252,39 @@ it("kills a timed-out compiler process group and retains only complete pairs in 
 		readFileSync(path.join(test.output, "pair-1-base/stdout.json"), "utf8"),
 	).toContain("controlled unfinished compiler output");
 	const pid = Number(readFileSync(path.join(test.root, "descendant.pid"), "utf8"));
-	await expect
-		.poll(() => {
-			try {
-				process.kill(pid, 0);
-				return true;
-			} catch {
-				return false;
-			}
-		})
-		.toBe(false);
+	await expectProcessStopped(pid);
 });
+
+it.each(["SIGINT", "SIGTERM"] as const)(
+	"retains an incomplete report and stops descendants on %s",
+	async (signal) => {
+		const test = fixture({ hang: "pair-1-base" });
+		const child = spawn(process.execPath, [...test.command, "--budget-seconds", "20"], {
+			stdio: ["ignore", "ignore", "pipe"],
+		});
+		let stderr = "";
+		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+		const closed = new Promise<number | null>((resolve, reject) => {
+			child.once("close", resolve);
+			child.once("error", reject);
+		});
+		onTestFinished(async () => {
+			if (child.exitCode === null) child.kill("SIGTERM");
+			await closed;
+		});
+		const pidFile = path.join(test.root, "descendant.pid");
+		await expect.poll(() => existsSync(pidFile)).toBe(true);
+		const pid = Number(readFileSync(pidFile, "utf8"));
+		child.kill(signal);
+		const code = await closed;
+		expect(code, stderr).toBe(2);
+		expect(test.report()).toMatchObject({
+			status: "incomplete",
+			complete: false,
+			summary: { pairs: 1 },
+		});
+		await expectProcessStopped(pid);
+	},
+);
