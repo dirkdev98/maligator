@@ -1971,7 +1971,7 @@ describe("native update-expression representation", () => {
 		);
 
 		const lockedOutput = emitLocked(source);
-		expect(lockedOutput).toContain("mal_builtin_math_unary_number_known");
+		expect(lockedOutput).not.toContain("mal_builtin_math_unary_number_known");
 		expect(lockedOutput).toContain("mal_builtin_math_binary_number_known");
 	});
 
@@ -2043,7 +2043,7 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toMatch(
-			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = mal_builtin_math_unary_number_known\(MAL_MATH_UNARY_FLOOR, r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \}\n\s+MAL_ROOT_MASK\(0x1\);/,
+			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \}\n\s+MAL_ROOT_MASK\(0x1\);/,
 		);
 	});
 
@@ -2092,7 +2092,7 @@ describe("native update-expression representation", () => {
 		expect(mutableOutput).toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
 
 		const lockedOutput = emitLocked(source);
-		expect(lockedOutput).toContain("mal_builtin_math_unary_number_known");
+		expect(lockedOutput).not.toContain("mal_builtin_math_unary_number_known");
 		expect(lockedOutput).not.toContain("mal_vm_op_load_property_ic");
 		expect(lockedOutput).not.toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
 	});

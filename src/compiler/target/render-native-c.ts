@@ -96,35 +96,52 @@ export interface BackendProfileDecision {
 	details?: Record<string, string | number | boolean>;
 }
 
-const MATH_UNARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
-	["Math.abs", "MAL_MATH_UNARY_ABS"],
-	["Math.floor", "MAL_MATH_UNARY_FLOOR"],
-	["Math.ceil", "MAL_MATH_UNARY_CEIL"],
-	["Math.round", "MAL_MATH_UNARY_ROUND"],
-	["Math.trunc", "MAL_MATH_UNARY_TRUNC"],
-	["Math.sqrt", "MAL_MATH_UNARY_SQRT"],
-	["Math.cbrt", "MAL_MATH_UNARY_CBRT"],
-	["Math.sign", "MAL_MATH_UNARY_SIGN"],
-	["Math.log", "MAL_MATH_UNARY_LOG"],
-	["Math.log2", "MAL_MATH_UNARY_LOG2"],
-	["Math.log10", "MAL_MATH_UNARY_LOG10"],
-	["Math.exp", "MAL_MATH_UNARY_EXP"],
-	["Math.sin", "MAL_MATH_UNARY_SIN"],
-	["Math.cos", "MAL_MATH_UNARY_COS"],
-	["Math.tan", "MAL_MATH_UNARY_TAN"],
-	["Math.asin", "MAL_MATH_UNARY_ASIN"],
-	["Math.acos", "MAL_MATH_UNARY_ACOS"],
-	["Math.atan", "MAL_MATH_UNARY_ATAN"],
-	["Math.sinh", "MAL_MATH_UNARY_SINH"],
-	["Math.cosh", "MAL_MATH_UNARY_COSH"],
-	["Math.tanh", "MAL_MATH_UNARY_TANH"],
-	["Math.asinh", "MAL_MATH_UNARY_ASINH"],
-	["Math.acosh", "MAL_MATH_UNARY_ACOSH"],
-	["Math.atanh", "MAL_MATH_UNARY_ATANH"],
-	["Math.log1p", "MAL_MATH_UNARY_LOG1P"],
-	["Math.expm1", "MAL_MATH_UNARY_EXPM1"],
-	["Math.fround", "MAL_MATH_UNARY_FROUND"],
+const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Map([
+	["Math.abs", "fabs"],
+	["Math.floor", "floor"],
+	["Math.ceil", "ceil"],
+	["Math.round", null],
+	["Math.trunc", "trunc"],
+	["Math.sqrt", "sqrt"],
+	["Math.cbrt", "cbrt"],
+	["Math.sign", null],
+	["Math.log", "log"],
+	["Math.log2", "log2"],
+	["Math.log10", "log10"],
+	["Math.exp", "exp"],
+	["Math.sin", "sin"],
+	["Math.cos", "cos"],
+	["Math.tan", "tan"],
+	["Math.asin", "asin"],
+	["Math.acos", "acos"],
+	["Math.atan", "atan"],
+	["Math.sinh", "sinh"],
+	["Math.cosh", "cosh"],
+	["Math.tanh", "tanh"],
+	["Math.asinh", "asinh"],
+	["Math.acosh", "acosh"],
+	["Math.atanh", "atanh"],
+	["Math.log1p", "log1p"],
+	["Math.expm1", "expm1"],
+	["Math.fround", null],
 ] as const);
+
+function nativeMathUnaryExpr(operation: string, argument: string): string | null {
+	const nativeCall = MATH_UNARY_NATIVE_CALL.get(operation);
+	if (nativeCall === undefined) return null;
+	if (nativeCall !== null) return `${nativeCall}(${argument})`;
+	switch (operation) {
+		case "Math.sign":
+			return `(${argument} > 0.0 ? 1.0 : (${argument} < 0.0 ? -1.0 : ${argument}))`;
+		case "Math.fround":
+			return `(f64) (f32) ${argument}`;
+		case "Math.round":
+			// Adding 0.5 first can round twice; preserve signed zero and already-integral large values.
+			return `(${argument} == 0.0 || !(fabs(${argument}) < 0x1p52) ? ${argument} : (${argument} >= -0.5 && ${argument} < 0.0 ? -0.0 : (${argument} - floor(${argument}) < 0.5 ? floor(${argument}) : floor(${argument}) + 1.0)))`;
+		default:
+			return null;
+	}
+}
 
 const MATH_BINARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
 	["Math.min", "MAL_MATH_BINARY_MIN"],
@@ -1948,7 +1965,7 @@ function emitBody(
 		if (
 			operation !== undefined &&
 			instruction.arguments.length === 1 &&
-			MATH_UNARY_NATIVE_OP.has(operation)
+			MATH_UNARY_NATIVE_CALL.has(operation)
 		) {
 			mathUnaryCalls.add(ip);
 		} else if (
@@ -4371,11 +4388,9 @@ function emitInstruction(
 			return lowered;
 		}
 		case "MATH_UNARY_NUMBER": {
-			const operation = MATH_UNARY_NATIVE_OP.get(instruction.operation);
-			if (operation === undefined || reps[instruction.src] !== "number") return null;
-			return [
-				`r${instruction.dst} = mal_builtin_math_unary_number_known(${operation}, ${num(instruction.src)});`,
-			];
+			if (reps[instruction.src] !== "number") return null;
+			const expression = nativeMathUnaryExpr(instruction.operation, num(instruction.src));
+			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
 		case "MATH_BINARY_NUMBER": {
 			const operation = MATH_BINARY_NATIVE_OP.get(instruction.operation);
@@ -5191,19 +5206,16 @@ function emitInstruction(
 			}
 			if (mathUnaryCall) {
 				const argument = instruction.arguments[0]!;
-				const nativeOperation = MATH_UNARY_NATIVE_OP.get(
-					callPlan?.guardedBuiltinCall?.operation ?? "",
-				);
 				const nativeArgument = nativeNumberOperand(argument);
-				if (
-					reps[instruction.dst] === "number" &&
-					nativeOperation !== undefined &&
-					nativeArgument !== null
-				) {
-					return [
-						`r${instruction.dst} = mal_builtin_math_unary_number_known(${nativeOperation}, ${nativeArgument});`,
-						mathPoll,
-					];
+				const nativeExpression =
+					nativeArgument === null
+						? null
+						: nativeMathUnaryExpr(
+								callPlan?.guardedBuiltinCall?.operation ?? "",
+								nativeArgument,
+							);
+				if (reps[instruction.dst] === "number" && nativeExpression !== null) {
+					return [`r${instruction.dst} = ${nativeExpression};`, mathPoll];
 				}
 				return [
 					`static MalMathUnaryOp __math_${ip};`,
