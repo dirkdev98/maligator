@@ -862,7 +862,7 @@ function emitCompiledVariant(
 	// Defensive: a register operand of -1 (a "no register" sentinel beyond the
 	// RETURN case handled below) would emit invalid C like `r-1`. Bail to the
 	// interpreter rather than emit broken code.
-	if (body.some((line) => /\br-\d/.test(line))) {
+	if (body.lines.some((line) => /\br-\d/.test(line))) {
 		return null;
 	}
 
@@ -897,32 +897,20 @@ function emitCompiledVariant(
 			lines.push(`    (void) entry_state;`);
 		}
 	}
-	if (directEntry !== undefined && body.some((line) => line.includes("new_target"))) {
+	if (directEntry !== undefined && body.resources.has("newTarget")) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
-	if (
-		body.some(
-			(line) =>
-				line.includes("__property_ic") ||
-				line.includes("__property_function_index") ||
-				line.includes("__literal_shapes"),
-		)
-	) {
+	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
 		lines.push(
 			`    mal_vm_ensure_function_caches(vm, ${relocation.functionIndex(index)});`,
 		);
 	}
-	if (body.some((line) => line.includes("__property_ic"))) {
+	if (body.resources.has("propertyCache")) {
 		lines.push(
 			`    MalInlineCache *__property_ic = vm->property_cache[${relocation.functionIndex(index)}].sites;`,
 		);
 	}
-	if (body.some((line) => line.includes("__property_function_index"))) {
-		lines.push(
-			`    const i32 __property_function_index = ${relocation.functionIndex(index)};`,
-		);
-	}
-	if (body.some((line) => line.includes("__literal_shapes"))) {
+	if (body.resources.has("literalShapes")) {
 		lines.push(
 			`    MalShape **__literal_shapes = vm->literal_shape_cache[${relocation.functionIndex(index)}];`,
 		);
@@ -1018,7 +1006,7 @@ function emitCompiledVariant(
 		);
 	}
 
-	for (const line of body) {
+	for (const line of body.lines) {
 		lines.push(line);
 	}
 
@@ -1039,7 +1027,7 @@ function emitCompiledVariant(
 	// throw pending (the dispatch caller observes vm->completion). Reached only by
 	// `goto` from a no-handler throw; placed after the unconditional fall-off return
 	// so control never falls into it. Omitted when nothing routes here.
-	if (bodyUsesThrowExit(body)) {
+	if (body.resources.has("throwExit")) {
 		lines.push(
 			`__throw_exit:;`,
 			`    ${gcUnlink}return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
@@ -1205,20 +1193,14 @@ function emitResumableFunction(
 	if (body === null) {
 		return null;
 	}
-	if (body.some((line) => /\br-\d/.test(line))) {
+	if (body.lines.some((line) => /\br-\d/.test(line))) {
 		return null;
 	}
 	// A resume dispatch jumps directly into `body`, so any function-wide state
 	// declared at its head would otherwise be skipped and read uninitialized after
 	// an await/yield. Reacquire the semantic epoch on every C invocation before the
 	// dispatch; register-backed JavaScript state remains in the coroutine buffer.
-	const resumablePreamble: Array<string> = [];
-	const watchedMethodsEpoch = body.findIndex((line) =>
-		line.startsWith("u64 __watched_methods_epoch = "),
-	);
-	if (watchedMethodsEpoch >= 0) {
-		resumablePreamble.push(...body.splice(watchedMethodsEpoch, 1));
-	}
+	const resumablePreamble = body.invocationPreamble;
 
 	const resumePoints = resumePointsOf(fn);
 	const symbol = `mal_compiled_${index}${suffix}`;
@@ -1229,23 +1211,13 @@ function emitResumableFunction(
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
-	if (
-		body.some(
-			(line) =>
-				line.includes("__property_ic") ||
-				line.includes("__property_function_index") ||
-				line.includes("__literal_shapes"),
-		)
-	) {
+	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
 		lines.push(`    mal_vm_ensure_function_caches(vm, ${index});`);
 	}
-	if (body.some((line) => line.includes("__property_ic"))) {
+	if (body.resources.has("propertyCache")) {
 		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
 	}
-	if (body.some((line) => line.includes("__property_function_index"))) {
-		lines.push(`    const i32 __property_function_index = ${index};`);
-	}
-	if (body.some((line) => line.includes("__literal_shapes"))) {
+	if (body.resources.has("literalShapes")) {
 		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
 	}
 	lines.push(...resumablePreamble);
@@ -1316,7 +1288,7 @@ function emitResumableFunction(
 	}
 	lines.push(`    }`);
 
-	for (const line of body) {
+	for (const line of body.lines) {
 		lines.push(line);
 	}
 
@@ -1330,7 +1302,7 @@ function emitResumableFunction(
 	// throw by kind) before leaving the frame. __coro is null if the parameter
 	// prologue threw before GENERATOR_START — then the raw buffer is released and the
 	// throw propagates synchronously. Reached only by `goto`; omitted when unused.
-	if (bodyUsesThrowExit(body)) {
+	if (body.resources.has("throwExit")) {
 		lines.push(
 			`__throw_exit:;`,
 			`    mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); ${gcUnlink}return ${fallReturn};`,
@@ -1347,15 +1319,6 @@ function emitResumableFunction(
 		profileDecisions,
 		directEntries: [],
 	};
-}
-
-/**
- * Whether an emitted body references the shared per-function throw-exit label —
- * i.e. some fallible op outside a try/catch routed its throw to `__throw_exit`.
- * When false the label (and its epilogue) is omitted so no unused-label is emitted.
- */
-function bodyUsesThrowExit(body: Array<string>): boolean {
-	return body.some((line) => line.includes("__throw_exit"));
 }
 
 /** The C type a register of the given rep is held in. */
@@ -1734,6 +1697,29 @@ interface IndexedLengthLoopAction {
 	>["sites"][number]["elements"][number];
 }
 
+type NativeBodyResource = "propertyCache" | "literalShapes" | "newTarget" | "throwExit";
+
+interface EmittedBody {
+	readonly lines: Array<string>;
+	readonly invocationPreamble: Array<string>;
+	readonly resources: ReadonlySet<NativeBodyResource>;
+}
+
+const NATIVE_BODY_REFERENCES: Readonly<Record<NativeBodyResource, string>> = {
+	propertyCache: "__property_ic",
+	literalShapes: "__literal_shapes",
+	newTarget: "new_target",
+	throwExit: "__throw_exit",
+};
+
+function nativeBodyReference(
+	resources: Set<NativeBodyResource>,
+	resource: NativeBodyResource,
+): string {
+	resources.add(resource);
+	return NATIVE_BODY_REFERENCES[resource];
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -1768,7 +1754,7 @@ function emitBody(
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
-): Array<string> | null {
+): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
@@ -2146,6 +2132,8 @@ function emitBody(
 		});
 	}
 	const lines: Array<string> = [];
+	const resources = new Set<NativeBodyResource>();
+	const invocationPreamble: Array<string> = [];
 	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
 		if (action.role !== "call") continue;
 		lines.push(`bool __string_char_code_at_${action.chain.callIp}_captured = false;`);
@@ -2254,7 +2242,9 @@ function emitBody(
 				: watchedMethodsAdmission === "false"
 					? "0"
 					: `${watchedMethodsAdmission} ? vm->semantic_epochs.watched_methods : 0`;
-		lines.push(`u64 __watched_methods_epoch = ${watchedMethodsEpoch};`);
+		(coro === null ? lines : invocationPreamble).push(
+			`u64 __watched_methods_epoch = ${watchedMethodsEpoch};`,
+		);
 	}
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a
@@ -2359,6 +2349,7 @@ function emitBody(
 			coro,
 			{
 				nativePlan: nativeInstructions[ip],
+				resources,
 				gcSafepoint: safepointKind !== undefined,
 				loopBackedgeInactiveRootMask,
 				mathCallInactiveRootMask,
@@ -2455,7 +2446,7 @@ function emitBody(
 		}
 	}
 
-	return lines;
+	return { lines, resources, invocationPreamble };
 }
 
 function profileOperationInstruction(instruction: BytecodeInstruction): boolean {
@@ -2725,6 +2716,7 @@ function instrumentProfileExpressions(
  * forms) is the main way this backend grows.
  */
 interface NativeInstructionContext {
+	readonly resources: Set<NativeBodyResource>;
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
 	readonly loopBackedgeInactiveRootMask?: bigint;
@@ -2819,6 +2811,7 @@ function emitInstruction(
 ): Array<string> | null {
 	const {
 		nativePlan,
+		resources,
 		stackObjectSite,
 		stackObjectAccess,
 		stackObjectMaterialization,
@@ -2847,6 +2840,7 @@ function emitInstruction(
 	} = context;
 	const genericContext: NativeInstructionContext = {
 		nativePlan,
+		resources,
 		gcSafepoint: context.gcSafepoint,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
 		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
@@ -2956,8 +2950,12 @@ function emitInstruction(
 		coro !== null && coro.isAsyncFunction
 			? "__async_result_promise"
 			: "MAL_VALUE_UNDEFINED";
-	const onThrow = handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
-	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
+	const onThrow = (): string =>
+		handlerIp !== undefined
+			? `goto L${handlerIp};`
+			: `goto ${nativeBodyReference(resources, "throwExit")};`;
+	const throwCheck = (): string =>
+		`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`;
 	// A poll without corresponding exact-root metadata can expose dead slots or clear
 	// a just-produced result under the preceding instruction's mask.
 	const poll =
@@ -3047,8 +3045,8 @@ function emitInstruction(
 				"  MAL_PERF_COUNT(exact_typed_array_loads);",
 				`  r${instruction.dst} = ${exactLoad};`,
 				"} else {",
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				"}",
 			];
 		}
@@ -3077,14 +3075,14 @@ function emitInstruction(
 				];
 			}
 			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
-			if (isNumericRep(reps[instruction.key]!)) return [exactStore, throwCheck];
+			if (isNumericRep(reps[instruction.key]!)) return [exactStore, throwCheck()];
 			return [
 				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
 				`  ${exactStore}`,
-				`  ${throwCheck}`,
+				`  ${throwCheck()}`,
 				"} else {",
-				`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				"}",
 			];
 		}
@@ -3132,7 +3130,7 @@ function emitInstruction(
 					? []
 					: [`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask)};`]),
 				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${relocation.stringIndex(instruction.nameStringIndex)});`,
-				`  ${throwCheck}`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		case "IS_EMPTY":
@@ -3174,7 +3172,7 @@ function emitInstruction(
 			];
 		case "CREATE_OBJECT":
 			if (stackObjectSite === undefined) {
-				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
+				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck()];
 			}
 			if (stackObjectSite.elided === true) {
 				return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
@@ -3195,8 +3193,8 @@ function emitInstruction(
 				.join(", ");
 			const values = instruction.valueRegisters.map((r) => boxed(r)).join(", ");
 			const shape = [
-				`MalShape *__oshape_${ip} = __literal_shapes[${instruction.shapeCacheIndex}];`,
-				`if (__oshape_${ip} == nullptr) { __oshape_${ip} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${instruction.count}); __literal_shapes[${instruction.shapeCacheIndex}] = __oshape_${ip}; }`,
+				`MalShape *__oshape_${ip} = ${nativeBodyReference(resources, "literalShapes")}[${instruction.shapeCacheIndex}];`,
+				`if (__oshape_${ip} == nullptr) { __oshape_${ip} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${instruction.count}); ${nativeBodyReference(resources, "literalShapes")}[${instruction.shapeCacheIndex}] = __oshape_${ip}; }`,
 			];
 			if (stackObjectSite === undefined) {
 				return [
@@ -3212,7 +3210,7 @@ function emitInstruction(
 				const prototypeName = `${objectName}_prototype`;
 				return [
 					...shape,
-					`MalInlineCache *${icName} = &__property_ic[${stackObjectSite.inheritedIcIndex}];`,
+					`MalInlineCache *${icName} = &${nativeBodyReference(resources, "propertyCache")}[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
 					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
 					`if (${fastName}) {`,
@@ -3255,7 +3253,7 @@ function emitInstruction(
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return [
 				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "CREATE_FUNCTION":
 			// The closure captures this frame's environment. Only reachable when
@@ -3286,23 +3284,23 @@ function emitInstruction(
 			// Object spread `{...src}`: a source getter can throw, so propagate.
 			return [
 				`mal_vm_op_merge_data_properties(vm, ${boxed(instruction.target)}, ${boxed(instruction.src)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "DELETE_PROPERTY":
 			// `delete object[key]`; a strict-mode failed delete throws.
 			return [
 				`r${instruction.dst} = mal_vm_op_delete_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${strict});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "LOAD_THIS":
 			// A derived constructor's `this` is in a TDZ until super() binds it, so a
 			// read before then is a ReferenceError; an ordinary function's `this` is
 			// always initialized and reads straight from the parameter.
 			return thisSlot >= 0
-				? [`r${instruction.dst} = mal_vm_op_get_this(vm, ${thisRef});`, throwCheck]
+				? [`r${instruction.dst} = mal_vm_op_get_this(vm, ${thisRef});`, throwCheck()]
 				: [`r${instruction.dst} = this_value;`];
 		case "LOAD_NEW_TARGET":
-			return [`r${instruction.dst} = new_target;`];
+			return [`r${instruction.dst} = ${nativeBodyReference(resources, "newTarget")};`];
 		case "GUARD_FUNCTION_INDEX":
 			// Speculative-inline guard → boolean-rep dst (a raw C bool feeding the jumpIf).
 			return [
@@ -3356,7 +3354,7 @@ function emitInstruction(
 			return [
 				`MalValue __known_own_slot_${ip};`,
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
-				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
+				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = __known_own_slot_${ip};`,
 				`} else {`,
 				...(context.knownOwnSlotLoadInactiveRootMask === undefined
@@ -3364,8 +3362,8 @@ function emitInstruction(
 					: [
 							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask)};`,
 						]),
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		}
@@ -3393,8 +3391,8 @@ function emitInstruction(
 				`if (mal_vm_try_load_shape_case(${boxed(instruction.object)}, ${selected}, ${instruction.slots.length}, __shape_case_slots_${ip}, &__shape_case_value_${ip})) {`,
 				`  r${instruction.dst} = __shape_case_value_${ip};`,
 				`} else {`,
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		}
@@ -3412,9 +3410,9 @@ function emitInstruction(
 			]);
 			return [
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
-				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
-				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		}
@@ -3427,8 +3425,8 @@ function emitInstruction(
 				`if (mal_value_is_heap_type(${boxed(instruction.object)}, MAL_HEAP_ARRAY_OBJECT)) {`,
 				`  r${instruction.dst} = ${direct};`,
 				`} else {`,
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		}
@@ -3460,7 +3458,7 @@ function emitInstruction(
 				const capture =
 					chain.methodIdentity === "authority-invariant"
 						? primitive
-						: `${primitive} && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
+						: `${primitive} && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &r${instruction.dst})`;
 				return [
 					`${captured} = ${capture};`,
 					`if (${captured}) {`,
@@ -3468,8 +3466,8 @@ function emitInstruction(
 						? [`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`]
 						: []),
 					`} else {`,
-					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${receiver}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
+					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${receiver}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+					`  ${throwCheck()}`,
 					`}`,
 				];
 			}
@@ -3498,7 +3496,7 @@ function emitInstruction(
 					const lower = `__regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}`;
 					const summary = authorityInvariant
 						? `mal_builtin_string_ascii_case_chain_length_span_locked(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length})`
-						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${load.consumer.lowerIcIndex}], &${lower}) && mal_builtin_string_ascii_case_chain_length_span(vm, r${instruction.dst}, ${lower}, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length})`;
+						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &r${instruction.dst}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${load.consumer.lowerIcIndex}], &${lower}) && mal_builtin_string_ascii_case_chain_length_span(vm, r${instruction.dst}, ${lower}, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length})`;
 					return [
 						...(authorityInvariant ? [] : [`MalValue ${lower};`]),
 						`${fast} = __regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && ${summary};`,
@@ -3507,8 +3505,8 @@ function emitInstruction(
 						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end});`,
 						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 						`  }`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3524,8 +3522,8 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3546,8 +3544,8 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3563,8 +3561,8 @@ function emitInstruction(
 						`if (__regexp_iter_${site.projection.stepIp}_projected) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3586,8 +3584,8 @@ function emitInstruction(
 						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3604,7 +3602,7 @@ function emitInstruction(
 					const identityCheck =
 						load.consumer.methodIdentity === "authority-invariant"
 							? ""
-							: ` && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
+							: ` && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &r${instruction.dst})`;
 					return [
 						`${fast} = false;`,
 						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0${identityCheck}) {`,
@@ -3614,8 +3612,8 @@ function emitInstruction(
 						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, __regexp_exec_${site.projection.callIp}_ends[${slot}]);`,
 						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 						`  }`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3631,8 +3629,8 @@ function emitInstruction(
 						`if (__regexp_exec_${site.projection.callIp}_projected) {`,
 						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-						`  ${throwCheck}`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -3677,21 +3675,22 @@ function emitInstruction(
 			// the try_* helper inlines.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "LOAD_PROPERTY") {
-				const ordinary = isNumericRep(reps[instruction.key]!)
-					? [
-							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-							`MalValue __v_${ip};`,
-							`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
-							`  r${instruction.dst} = __v_${ip};`,
-							`} else {`,
-							`  r${instruction.dst} = mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-							`  ${throwCheck}`,
-							`}`,
-						]
-					: [
-							`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-							throwCheck,
-						];
+				const ordinary = (): Array<string> =>
+					isNumericRep(reps[instruction.key]!)
+						? [
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalValue __v_${ip};`,
+								`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+								`  r${instruction.dst} = __v_${ip};`,
+								`} else {`,
+								`  r${instruction.dst} = mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								`  ${throwCheck()}`,
+								`}`,
+							]
+						: [
+								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								throwCheck(),
+							];
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "load"
@@ -3704,7 +3703,7 @@ function emitInstruction(
 						`} else if (__indexed_length_${id}_kind == 2) {`,
 						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${num(instruction.key)}));`,
 						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
+						...ordinary().map((line) => `  ${line}`),
 						`}`,
 					];
 				}
@@ -3724,14 +3723,14 @@ function emitInstruction(
 								]
 							: [
 									`  MalValue __string_split_cursor_${id}_trim_callee;`,
-									`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+									`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
 								];
 					return [
 						`if (__string_split_cursor_${id}_active) {`,
 						...trim,
 						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = mal_builtin_string_split_cursor_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end);`,
 						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
+						...ordinary().map((line) => `  ${line}`),
 						`}`,
 					];
 				}
@@ -3743,18 +3742,19 @@ function emitInstruction(
 							`if (__string_split_${site.projection.callIp}_fast) {`,
 							`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 							`} else {`,
-							...ordinary.map((line) => `  ${line}`),
+							...ordinary().map((line) => `  ${line}`),
 							`}`,
 						];
 					}
 				}
-				return ordinary;
+				return ordinary();
 			}
-			const probe = `mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
-			const ordinary = [
+			const probe = (): string =>
+				`mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
+			const ordinary = (): Array<string> => [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
-				`if (${probe}) {`,
+				`if (${probe()}) {`,
 				`  r${instruction.dst} = __v_${ip};`,
 				`} else {`,
 				...(context.staticPropertyLoadInactiveRootMask === undefined
@@ -3762,8 +3762,8 @@ function emitInstruction(
 					: [
 							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask)};`,
 						]),
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 			if (indexedLengthLoopAction?.role === "load") {
@@ -3779,7 +3779,7 @@ function emitInstruction(
 					`  __indexed_length_${id}_kind = 2;`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 					`} else {`,
-					...ordinary.map((line) => `  ${line}`),
+					...ordinary().map((line) => `  ${line}`),
 					`}`,
 				];
 			}
@@ -3796,7 +3796,7 @@ function emitInstruction(
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : `mal_ops_number_value(${value})`};`,
 					`  if (!__string_split_cursor_${id}_has) { __gc_slots[${site.subjectSlot}] = MAL_VALUE_UNDEFINED; __gc_slots[${site.separatorSlot}] = MAL_VALUE_UNDEFINED; }`,
 					`} else {`,
-					...ordinary.map((line) => `  ${line}`),
+					...ordinary().map((line) => `  ${line}`),
 					`}`,
 				];
 			}
@@ -3806,7 +3806,7 @@ function emitInstruction(
 					`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
-					...ordinary.map((line) => `  ${line}`),
+					...ordinary().map((line) => `  ${line}`),
 					`}`,
 				];
 			}
@@ -3821,7 +3821,7 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __string_split_${site.projection.callIp}_length` : `mal_value_from_i32((i32) __string_split_${site.projection.callIp}_length)`};`,
 						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
+						...ordinary().map((line) => `  ${line}`),
 						`}`,
 					];
 				}
@@ -3831,7 +3831,7 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
+						...ordinary().map((line) => `  ${line}`),
 						`}`,
 					];
 				}
@@ -3853,11 +3853,11 @@ function emitInstruction(
 					`if (mal_value_is_string(${boxed(instruction.object)})) {`,
 					`  ${direct}`,
 					`} else {`,
-					...ordinary.map((line) => `  ${line}`),
+					...ordinary().map((line) => `  ${line}`),
 					`}`,
 				];
 			}
-			return ordinary;
+			return ordinary();
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
@@ -3875,18 +3875,19 @@ function emitInstruction(
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "STORE_PROPERTY") {
-				const ordinary = isNumericRep(reps[instruction.key]!)
-					? [
-							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-							`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-							`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-							`  ${throwCheck}`,
-							`}`,
-						]
-					: [
-							`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-							throwCheck,
-						];
+				const ordinary = (): Array<string> =>
+					isNumericRep(reps[instruction.key]!)
+						? [
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								`  ${throwCheck()}`,
+								`}`,
+							]
+						: [
+								`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								throwCheck(),
+							];
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "store"
@@ -3896,27 +3897,28 @@ function emitInstruction(
 						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_store(__indexed_length_${id}_array, ${num(instruction.key)}, ${boxed(instruction.value)})) {`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
 						`  mal_vm_numeric_typed_array_store_known_receiver(vm, __indexed_length_${id}_typed_array, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
-						`  ${throwCheck}`,
+						`  ${throwCheck()}`,
 						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
+						...ordinary().map((line) => `  ${line}`),
 						`}`,
 					];
 				}
-				return ordinary;
+				return ordinary();
 			}
-			const probe = `${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
+			const probe = (): string =>
+				`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`;
 			return [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
-				`if (!(${probe})) {`,
-				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-				`  ${throwCheck}`,
+				`if (!(${probe()})) {`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`  ${throwCheck()}`,
 				`}`,
 			];
 		}
 		case "TO_PROPERTY_KEY":
 			return [
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "LOAD_GLOBAL":
 			return [
@@ -3930,12 +3932,12 @@ function emitInstruction(
 			// A var/function declaration that becomes a property of globalThis.
 			return [
 				`mal_vm_op_store_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "INIT_GLOBAL_VARS":
 			return [
 				`mal_vm_op_init_global_vars(vm, ${instruction.nameStringIndices.length}, (const i32[]){ ${instruction.nameStringIndices.map((index) => relocation.stringIndex(index)).join(", ")} }, ${instruction.declarationConfigurable});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "CREATE_ARGUMENTS_OBJECT":
 			return [
@@ -3961,7 +3963,7 @@ function emitInstruction(
 				`  }`,
 				`  r${instruction.dst} = mal_vm_op_load_property(vm, r${instruction.fallback}, mal_value_from_i32(${instruction.index}));`,
 				`}`,
-				throwCheck,
+				throwCheck(),
 			];
 		}
 		case "CREATE_REST_ARGUMENTS":
@@ -3975,14 +3977,14 @@ function emitInstruction(
 			// or a throwing element read propagates.
 			return [
 				`r${instruction.dst} = mal_array_rest(vm, ${boxed(instruction.src)}, ${instruction.startIndex});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "FOR_IN_KEYS":
 			// `for (k in source)`: build the enumeration key array; a proxy trap on
 			// the source can throw, so propagate.
 			return [
 				`r${instruction.dst} = mal_for_in_keys(vm, ${boxed(instruction.source)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "LOAD_INTRINSIC":
 			return [
@@ -4028,12 +4030,12 @@ function emitInstruction(
 					dstIsBool
 						? `  r${dst} = mal_value_to_boolean(mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)}));`
 						: `  r${dst} = mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)});`,
-					`  ${throwCheck}`,
+					`  ${throwCheck()}`,
 					`}`,
 				];
 			}
 			if (operator === "+" && reps[left] === "string" && reps[right] === "string") {
-				return [`r${dst} = mal_vm_add(vm, r${left}, r${right});`, throwCheck];
+				return [`r${dst} = mal_vm_add(vm, r${left}, r${right});`, throwCheck()];
 			}
 
 			if (fusion?.role === "start" && reps[dst] !== "number") {
@@ -4053,7 +4055,7 @@ function emitInstruction(
 						`  __nf_${fusion.id}_value = ${nativeExpr};`,
 						`} else {`,
 						`  r${dst} = ${slow};`,
-						`  ${throwCheck}`,
+						`  ${throwCheck()}`,
 						`}`,
 					];
 				}
@@ -4099,7 +4101,7 @@ function emitInstruction(
 							reps[dst] === "boolean"
 								? `  r${dst} = mal_value_to_boolean(${slow});`
 								: `  r${dst} = ${slow};`,
-							...(binaryOpCanThrow(operator) ? [`  ${throwCheck}`] : []),
+							...(binaryOpCanThrow(operator) ? [`  ${throwCheck()}`] : []),
 							`}`,
 						];
 					}
@@ -4125,7 +4127,7 @@ function emitInstruction(
 							`} else {`,
 							`  if (__nf_${fusion.id}_ok) r${first.dst} = mal_ops_number_value(__nf_${fusion.id}_value);`,
 							`  r${dst} = ${slow};`,
-							`  ${throwCheck}`,
+							`  ${throwCheck()}`,
 							`}`,
 						];
 					}
@@ -4167,7 +4169,7 @@ function emitInstruction(
 			}
 
 			const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
-			const completionCheck = throwCheck;
+			const completionCheck = throwCheck();
 			// Store a C bool into the dst: raw for a boolean-rep register, boxed
 			// otherwise. Comparisons (and the boolean cases below) flow through here.
 			const storeBool = (boolExpr: string): string =>
@@ -4430,7 +4432,7 @@ function emitInstruction(
 				`r${dst} = mal_vm_unary_op(vm, ${emitUnaryOperator(operator)}, ${boxed(src)});`,
 			];
 			if (THROWING_UNARY_OPERATORS.has(operator)) {
-				lowered.push(throwCheck);
+				lowered.push(throwCheck());
 			}
 			return lowered;
 		}
@@ -4458,21 +4460,21 @@ function emitInstruction(
 			if (instruction.operation === "Array.prototype.push") {
 				return [
 					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Array.prototype.pop") {
 				return [
 					`r${instruction.dst} = mal_builtin_array_pop_contained(vm, ${boxedOperand(instruction.thisValue)});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Object.hasOwn") {
 				return [
 					`r${instruction.dst} = mal_builtin_object_has_own_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
@@ -4484,70 +4486,70 @@ function emitInstruction(
 			if (instruction.operation === "Object.keys") {
 				return [
 					`r${instruction.dst} = mal_builtin_object_keys_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Object.values") {
 				return [
 					`r${instruction.dst} = mal_builtin_object_values_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
 				return [
 					`r${instruction.dst} = mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Map.prototype.get") {
 				return [
 					`r${instruction.dst} = mal_builtin_map_get_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Map.prototype.set") {
 				return [
 					`r${instruction.dst} = mal_builtin_map_set_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Map.prototype.has") {
 				return [
 					`r${instruction.dst} = mal_builtin_map_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Map.prototype.delete") {
 				return [
 					`r${instruction.dst} = mal_builtin_map_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Set.prototype.add") {
 				return [
 					`r${instruction.dst} = mal_builtin_set_add_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Set.prototype.has") {
 				return [
 					`r${instruction.dst} = mal_builtin_set_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Set.prototype.delete") {
 				return [
 					`r${instruction.dst} = mal_builtin_set_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
@@ -4587,14 +4589,14 @@ function emitInstruction(
 			if (instruction.operation === "Date.parse") {
 				return [
 					`r${instruction.dst} = mal_builtin_date_parse_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			if (instruction.operation === "Date.UTC") {
 				return [
 					`r${instruction.dst} = mal_builtin_date_utc_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
@@ -4609,7 +4611,7 @@ function emitInstruction(
 					`} else {`,
 					`  r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
 					`}`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
@@ -4628,13 +4630,13 @@ function emitInstruction(
 					`} else {`,
 					`  r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
 					`}`,
-					throwCheck,
+					throwCheck(),
 					poll,
 				];
 			}
 			return [
 				`r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
-				throwCheck,
+				throwCheck(),
 				poll,
 			];
 		}
@@ -4678,7 +4680,7 @@ function emitInstruction(
 						`} else {`,
 						`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 						poll,
@@ -4690,12 +4692,12 @@ function emitInstruction(
 						`static MalCallCache __cc_${ip};`,
 						`if (${captured}) {`,
 						`  MalValue ${value} = mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  ${throwCheck}`,
+						`  ${throwCheck()}`,
 						`  r${instruction.dst} = ${callResult(value)};`,
 						`} else {`,
 						`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 						poll,
@@ -4710,7 +4712,7 @@ function emitInstruction(
 					`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
 					`  ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`}`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
@@ -4725,7 +4727,7 @@ function emitInstruction(
 				const trimIdentity =
 					site.trimCalleeSlot === undefined
 						? "true"
-						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__gc_slots[${site.trimCalleeSlot}]) && mal_builtin_string_trim_identity(vm, __gc_slots[${site.trimCalleeSlot}])`;
+						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${site.cursor.trimIcIndex}], &__gc_slots[${site.trimCalleeSlot}]) && mal_builtin_string_trim_identity(vm, __gc_slots[${site.trimCalleeSlot}])`;
 				const initialize = site.lockedIdentity
 					? `mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`
 					: `${admission} && ${trimIdentity} && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`;
@@ -4738,11 +4740,11 @@ function emitInstruction(
 					...(propertyLoad === undefined
 						? []
 						: [
-								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
-								`  ${throwCheck}`,
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${propertyLoad.icIndex}]);`,
+								`  ${throwCheck()}`,
 							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
 					poll,
@@ -4756,7 +4758,7 @@ function emitInstruction(
 					`  r${instruction.dst} = ${boxedOperand(instruction.thisValue)};`,
 					`} else {`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
 					poll,
@@ -4775,7 +4777,7 @@ function emitInstruction(
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`} else {`,
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${tmp}.value;`,
 						`}`,
 						poll,
@@ -4799,7 +4801,7 @@ function emitInstruction(
 						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
 						`} else {`,
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
 						`}`,
 						poll,
@@ -4823,7 +4825,7 @@ function emitInstruction(
 						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
 						`} else {`,
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
 						`}`,
 						poll,
@@ -4857,7 +4859,7 @@ function emitInstruction(
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
 						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 						poll,
@@ -4880,7 +4882,7 @@ function emitInstruction(
 					return [
 						`__regexp_exec_${projection.callIp}_projected = false;`,
 						`mal_regexp_exec_capture_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst});`,
-						throwCheck,
+						throwCheck(),
 						`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
 						poll,
 					];
@@ -4891,11 +4893,11 @@ function emitInstruction(
 					`__regexp_exec_${projection.callIp}_projected = false;`,
 					`${fast} = ${project};`,
 					`if (${fast}) {`,
-					`  ${throwCheck}`,
+					`  ${throwCheck()}`,
 					`  __regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
 					`} else {`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
 					poll,
@@ -4920,11 +4922,11 @@ function emitInstruction(
 						...(propertyLoad === undefined
 							? []
 							: [
-									`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
-									`  ${throwCheck}`,
+									`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${propertyLoad.icIndex}]);`,
+									`  ${throwCheck()}`,
 								]),
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${tmp}.value;`,
 						`  ${poll}`,
 						`}`,
@@ -4937,7 +4939,7 @@ function emitInstruction(
 					`  ${poll}`,
 					`} else {`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
 					`  ${poll}`,
 					`}`,
@@ -4964,11 +4966,11 @@ function emitInstruction(
 					...(propertyLoad === undefined
 						? []
 						: [
-								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
-								`  ${throwCheck}`,
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${propertyLoad.icIndex}]);`,
+								`  ${throwCheck()}`,
 							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`  ${poll}`,
 					`}`,
@@ -5000,7 +5002,7 @@ function emitInstruction(
 				}[operation];
 				return [
 					`r${instruction.dst} = ${helper}(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					throwCheck,
+					throwCheck(),
 					...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
 						? [poll]
 						: []),
@@ -5047,7 +5049,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
@@ -5071,7 +5073,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,
 				];
@@ -5080,7 +5082,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,
 				];
@@ -5098,7 +5100,7 @@ function emitInstruction(
 					return [
 						`static MalCallCache __cc_${ip};`,
 						`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct_in_bounds(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition});`,
-						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${tmp}.value;`,
 						poll,
 					];
@@ -5106,7 +5108,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,
 				];
@@ -5115,7 +5117,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${callPlan.directCallTargetFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallTargetFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
@@ -5147,7 +5149,7 @@ function emitInstruction(
 					`else {`,
 					`  ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`}`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
@@ -5216,11 +5218,11 @@ function emitInstruction(
 						return [
 							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 							`MAL_PERF_COUNT(direct_entry_hits);`,
-							`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+							`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
 							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
 							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
 							`mal_vm_leave_compiled(vm);`,
-							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 							`r${instruction.dst} = ${directResult};`,
 							poll,
 						];
@@ -5232,11 +5234,11 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
 						`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
 						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`mal_vm_leave_compiled(vm);`,
-						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
 						poll,
 					];
@@ -5244,7 +5246,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${relocation.functionIndex(callPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
@@ -5271,7 +5273,7 @@ function emitInstruction(
 					...mathFallbackRootPublication,
 					`  static MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
 					mathPoll,
@@ -5302,7 +5304,7 @@ function emitInstruction(
 					...mathFallbackRootPublication,
 					`  static MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
 					mathPoll,
@@ -5314,7 +5316,7 @@ function emitInstruction(
 			return [
 				`static MalCallCache __cc_${ip};`,
 				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 				poll, // call-return safepoint
 			];
@@ -5336,7 +5338,7 @@ function emitInstruction(
 					: `mal_vm_construct_direct(vm, ${relocation.functionIndex(constructPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
 			];
@@ -5347,19 +5349,19 @@ function emitInstruction(
 			// MAL_OP_THROW + the interpreter's unwinder do.
 			return [
 				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_THROW, .value = ${boxed(instruction.value)} };`,
-				onThrow,
+				onThrow(),
 			];
 		case "LOAD_UNDECLARED":
 			// An undeclared reference always throws ReferenceError; the helper sets
 			// the throw completion, so route it to the handler / out of the frame.
 			return [
 				`mal_vm_op_load_undeclared(vm, ${relocation.stringIndex(instruction.nameStringIndex)});`,
-				onThrow,
+				onThrow(),
 			];
 		case "TRY_BEGIN":
 		case "TRY_END":
 			// Markers only: the protected range becomes the per-instruction handler
-			// target computed in emitBody (the `onThrow` goto), so no code is needed.
+			// target computed in emitBody (the `onThrow()` goto), so no code is needed.
 			return [];
 		case "CATCH":
 			// Handler entry: bind the pending thrown value and clear the completion,
@@ -5370,12 +5372,15 @@ function emitInstruction(
 			];
 		case "REQUIRE_COERCIBLE":
 			// Destructuring / member-base coercibility: null or undefined throws.
-			return [`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`, throwCheck];
+			return [
+				`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`,
+				throwCheck(),
+			];
 		case "GET_ITERATOR": {
 			const rec = `iter_rec_${ip}`;
 			const lines = [
 				`MalIteratorRecord ${rec};`,
-				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
+				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow()}`,
 				`r${instruction.iteratorDst} = ${rec}.iterator;`,
 				`r${instruction.nextDst} = ${rec}.next_method;`,
 			];
@@ -5404,7 +5409,7 @@ function emitInstruction(
 			const rec = `aiter_rec_${ip}`;
 			return [
 				`MalIteratorRecord ${rec};`,
-				`if (!mal_vm_get_async_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
+				`if (!mal_vm_get_async_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow()}`,
 				`r${instruction.iteratorDst} = ${rec}.iterator;`,
 				`r${instruction.nextDst} = ${rec}.next_method;`,
 			];
@@ -5420,7 +5425,7 @@ function emitInstruction(
 					`MalValue ${val} = MAL_VALUE_UNDEFINED; bool ${done};`,
 					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(&${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
 					`if (__iter_entry_pair_${ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
-					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
+					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
 					`r${instruction.valueDst} = __iter_entry_pair_${ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,
 					reps[instruction.doneDst] === "boolean"
 						? `r${instruction.doneDst} = ${done};`
@@ -5476,8 +5481,8 @@ function emitInstruction(
 					`MalValue ${val}; bool ${done};`,
 					`__regexp_iter_${site.projection.stepIp}_projected = false;`,
 					`int ${status} = ${admission} ? mal_regexp_try_exact_iterator_capture_projection(vm, ${boxed(instruction.iterator)}, ${boxed(instruction.next)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, __regexp_iter_${site.projection.stepIp}_starts, __regexp_iter_${site.projection.stepIp}_ends, &__gc_slots[${site.subjectSlot}], &${val}, &${done}) : 0;`,
-					`if (${status} < 0) ${onThrow}`,
-					`if (${status} == 0 && !(${step})) ${onThrow}`,
+					`if (${status} < 0) ${onThrow()}`,
+					`if (${status} == 0 && !(${step})) ${onThrow()}`,
 					`__regexp_iter_${site.projection.stepIp}_projected = ${status} > 0 && mal_value_is_boolean(${val});`,
 					`r${instruction.valueDst} = ${val};`,
 					reps[instruction.doneDst] === "boolean"
@@ -5488,7 +5493,7 @@ function emitInstruction(
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,
-				`if (!(${step})) ${onThrow}`,
+				`if (!(${step})) ${onThrow()}`,
 				`r${instruction.valueDst} = ${val};`,
 				reps[instruction.doneDst] === "boolean"
 					? `r${instruction.doneDst} = ${done};`
@@ -5512,13 +5517,13 @@ function emitInstruction(
 				// on a non-object result.
 				return [
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
-					`if (!mal_vm_iterator_close_normal(vm, &${rec})) ${onThrow}`,
+					`if (!mal_vm_iterator_close_normal(vm, &${rec})) ${onThrow()}`,
 				];
 			}
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
 				`mal_vm_iterator_close(vm, &${rec});`,
-				throwCheck,
+				throwCheck(),
 			];
 		}
 		case "JUMP":
@@ -5564,7 +5569,7 @@ function emitInstruction(
 				const materialized = `materialized_ret_${ip}`;
 				materialize.push(
 					`MalValue ${materialized} = mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName});`,
-					throwCheck,
+					throwCheck(),
 				);
 				value = materialized;
 			}
@@ -5585,7 +5590,7 @@ function emitInstruction(
 				return [
 					...materialize,
 					`MalValue ${ret} = mal_vm_op_derived_construct_return(vm, ${value}, ${thisRef});`,
-					throwCheck,
+					throwCheck(),
 					`${gcUnlink}return ${ret};`,
 				];
 			}
@@ -5597,7 +5602,7 @@ function emitInstruction(
 			// plain call passes the value through unchanged.
 			return [
 				...materialize,
-				`${gcUnlink}return mal_ops_construct_result(${value}, this_value, new_target);`,
+				`${gcUnlink}return mal_ops_construct_result(${value}, this_value, ${nativeBodyReference(resources, "newTarget")});`,
 			];
 		}
 		case "LOAD_GLOBAL_PROPERTY":
@@ -5605,7 +5610,7 @@ function emitInstruction(
 			// throws ReferenceError and a global getter can throw, so propagate.
 			return [
 				`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "LOAD_PROTOTYPE":
 			// Reads the internal [[Prototype]] slot directly (no proxy trap) — never throws.
@@ -5615,7 +5620,7 @@ function emitInstruction(
 		case "LOAD_SUPER_PROPERTY":
 			return [
 				`r${instruction.dst} = mal_vm_op_load_super_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.receiver)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "SET_FUNCTION_NAME":
 			// Installs the "name" data property from an already-evaluated key; no user code.
@@ -5628,7 +5633,7 @@ function emitInstruction(
 			const tmp = `iter_next_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_call_value(vm, ${boxed(instruction.next)}, ${boxed(instruction.iterator)}, nullptr, 0);`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.resultDst} = ${tmp}.value;`,
 				poll, // call-return safepoint
 			];
@@ -5671,7 +5676,7 @@ function emitInstruction(
 					: "nullptr";
 			return [
 				`r${instruction.dst} = mal_vm_op_copy_data_properties(vm, ${boxed(instruction.src)}, ${excluded}, ${instruction.excludedCount});`,
-				throwCheck,
+				throwCheck(),
 			];
 		}
 		case "CREATE_PRIVATE_NAME":
@@ -5685,24 +5690,24 @@ function emitInstruction(
 			// AddPrivateName on a fresh instance/class object; a duplicate install throws.
 			return [
 				`mal_vm_op_define_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "INIT_PRIVATE_FIELDS":
 			return [
 				`mal_vm_op_init_private_fields(vm, ${boxed(instruction.object)}, ${instruction.keyRegisters.length}, (const MalValue[]){ ${instruction.keyRegisters.map((key) => boxed(key)).join(", ")} });`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "LOAD_PRIVATE":
 			// PrivateGet; an unbranded receiver throws.
 			return [
 				`r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "STORE_PRIVATE":
 			// PrivateSet; the name must already be installed, else throws.
 			return [
 				`mal_vm_op_store_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "HAS_PRIVATE":
 			// Ergonomic brand check `#x in obj`; a non-object receiver throws.
@@ -5710,14 +5715,14 @@ function emitInstruction(
 				reps[instruction.dst] === "boolean"
 					? `r${instruction.dst} = mal_value_to_boolean(mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}));`
 					: `r${instruction.dst} = mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "CALL_SPREAD": {
 			// `f(...args)`: marshal the spread array and dispatch, mirroring CALL.
 			const tmp = `call_spread_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_op_call_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.argumentsArray)});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
 			];
@@ -5726,7 +5731,7 @@ function emitInstruction(
 			const tmp = `call_rest_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${instruction.apply});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll,
 			];
@@ -5737,7 +5742,7 @@ function emitInstruction(
 			const tmp = `call_spread_iterable_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
 			];
@@ -5747,7 +5752,7 @@ function emitInstruction(
 			const tmp = `construct_spread_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_op_construct_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.argumentsArray)});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
 			];
@@ -5761,7 +5766,7 @@ function emitInstruction(
 			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
 			return [
 				`MalEnv *${tmp} = mal_vm_op_with_enter(vm, env, ${boxed(instruction.object)});`,
-				throwCheck,
+				throwCheck(),
 				`env = ${tmp};${frameUpdate}`,
 			];
 		}
@@ -5776,33 +5781,33 @@ function emitInstruction(
 			// can throw.
 			return [
 				`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "WITH_RESOLVE_BASE":
 			// The reference base (the with-object itself) for a read/write through it.
 			return [
 				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "WITH_SET":
 			// Assign through the with-envs; `found` (always boxed-rep) reports whether a
 			// binding matched so the IR can fall back to the static binding on a miss.
 			return [
 				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)}, ${boxed(instruction.value)}));`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "CHECK_SUPER_CLASS":
 			// ClassDefinitionEvaluation heritage check; a bad `extends` value throws.
 			return [
 				`mal_vm_op_check_super_class(vm, ${boxed(instruction.parent)});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "STORE_SUPER_PROPERTY":
 			// `super.p = v`: the base descriptor governs, the write hits `receiver`.
 			// A setter or a strict-mode rejection throws.
 			return [
 				`mal_vm_op_store_super_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${boxed(instruction.receiver)}, ${strict});`,
-				throwCheck,
+				throwCheck(),
 			];
 		case "CONSTRUCT_SUPER": {
 			// `super(...args)`: construct the parent, bind the result as this activation's
@@ -5810,8 +5815,8 @@ function emitInstruction(
 			// constructors, so `thisRef` is always the rooted this-slot.
 			const tmp = `construct_super_${ip}`;
 			return [
-				`MalCompletion ${tmp} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, new_target, ${thisRef}, &${thisRef});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`MalCompletion ${tmp} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, ${nativeBodyReference(resources, "newTarget")}, ${thisRef}, &${thisRef});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${thisRef};`,
 				poll, // call-return safepoint
 			];
@@ -5822,7 +5827,7 @@ function emitInstruction(
 			return [
 				`MalValue ${boundThis};`,
 				`MalCompletion ${completion} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, ${boxed(instruction.newTarget)}, ${boxed(instruction.dst)}, &${boundThis});`,
-				`if (${completion}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`if (${completion}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${boundThis};`,
 				poll,
 			];
