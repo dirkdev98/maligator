@@ -3033,6 +3033,29 @@ function emitInstruction(
 			];
 		}
 		if (instruction.opcode === "STORE_PROPERTY") {
+			// Containment prevents buffer exposure; numeric operands need no observable coercion.
+			if (
+				nativePlan.kind === "contained-fixed-typed-array-element" &&
+				nativePlan.elementKind !== "Uint8ClampedArray" &&
+				isNumericRep(reps[instruction.key]!) &&
+				isNumericRep(reps[instruction.value]!)
+			) {
+				const array = `__typed_store_${ip}`;
+				const index = `__typed_store_index_${ip}`;
+				const storedBits =
+					nativePlan.elementKind === "Float64Array"
+						? `mal_scalar_f64_to_bits(${num(instruction.value)})`
+						: nativePlan.elementKind === "Float32Array"
+							? `mal_scalar_f32_to_bits((f32) ${num(instruction.value)})`
+							: `(u${elementSize * 8}) ${nativeInt32Operand(instruction.value)!}`;
+				return [
+					`MalTypedArrayObject *${array} = mal_value_to_typed_array_object(${boxed(instruction.object)});`,
+					`u32 ${index} = mal_vm_typed_array_numeric_index(${num(instruction.key)});`,
+					`if (${index} < ${array}->length) {`,
+					`  mal_scalar_store_native_u${elementSize * 8}(${array}->buffer->data + ${array}->byte_offset + (usize) ${index} * ${elementSize}, ${storedBits});`,
+					`}`,
+				];
+			}
 			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
 			if (isNumericRep(reps[instruction.key]!)) return [exactStore, throwCheck];
 			return [

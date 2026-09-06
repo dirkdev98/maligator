@@ -1309,7 +1309,12 @@ describe("native update-expression representation", () => {
 					? "mal_vm_exact_numeric_typed_array_load("
 					: "mal_vm_contained_fixed_numeric_typed_array_load(",
 			);
-			expect(output).toContain("mal_vm_numeric_typed_array_store_known_receiver(");
+			if (kind === "contained-fixed-typed-array-element") {
+				expect(output).toContain("mal_scalar_store_native_u32(");
+				expect(output).not.toContain("mal_vm_numeric_typed_array_store_known_receiver(");
+			} else {
+				expect(output).toContain("mal_vm_numeric_typed_array_store_known_receiver(");
+			}
 			expect(output).not.toContain("mal_ops_is_number(");
 		}
 	});
