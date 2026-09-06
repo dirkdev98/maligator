@@ -2424,7 +2424,6 @@ function retainExecutionSourcePositions(
 		retainedIds.map((positionId, index) => [positionId, index]),
 	);
 	for (const { bytecode } of functionPlans) {
-		const trustedSafepoints = vmSafepointRootMapsAreTrusted(bytecode);
 		bytecode.positions = bytecode.positions.map((positionId) => {
 			if (positionId < 0) return -1;
 			const relocated = relocatedIds.get(positionId);
@@ -2433,12 +2432,6 @@ function retainExecutionSourcePositions(
 			}
 			return relocated;
 		});
-		if (trustedSafepoints) {
-			trustedVmSafepointRootMaps.set(
-				bytecode,
-				vmSafepointRootMapTrustFingerprint(bytecode),
-			);
-		}
 	}
 	return retainedIds.map((positionId) => {
 		const position = program.core.sourcePositions[positionId]!;
@@ -2510,6 +2503,10 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		sourcePositions,
 	};
 	validateRuntimeImageMetadata(runtime);
+	// These functions remain private until source relocation and validation finish.
+	for (const fn of functions) {
+		trustedVmSafepointRootMaps.set(fn, vmSafepointRootMapTrustFingerprint(fn));
+	}
 	return { runtime, functions: functionPlans };
 }
 
@@ -2821,7 +2818,6 @@ function lowerExecutionFunctionToBytecode(
 		fileIndex,
 		positions,
 	};
-	trustedVmSafepointRootMaps.set(bytecode, vmSafepointRootMapTrustFingerprint(bytecode));
 	return {
 		bytecode,
 		blockStartIps,

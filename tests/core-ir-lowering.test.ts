@@ -17,7 +17,10 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
-import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
+import {
+	lowerVerifiedExecutionToRuntimePlan,
+	vmSafepointRootMapsAreTrusted,
+} from "../src/compiler/target/runtime-image.ts";
 import {
 	inspectCoreBlockHandler,
 	inspectCoreBlockParameters,
@@ -473,6 +476,27 @@ describe("Core IR lowering", () => {
 				),
 			),
 		).toBe(true);
+	});
+
+	it("trusts completed runtime plans and revokes trust after source-position mutation", () => {
+		const compilation = optimize(`
+			function* keep(value) {
+				const live = { value };
+				yield live;
+				return live.value;
+			}
+			globalThis.keep = keep;
+		`);
+		const execution = lowerCoreCompilationToExecution(compilation);
+		const { runtime } = lowerVerifiedExecutionToRuntimePlan(execution);
+		const generator = runtime.functions.find((fn) => fn.isGenerator)!;
+		expect(generator.gcSafepoints?.length).toBeGreaterThan(0);
+		expect(generator.positions.some((position) => position >= 0)).toBe(true);
+		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
+		expect(vmSafepointRootMapsAreTrusted(structuredClone(generator))).toBe(false);
+		const ip = generator.positions.findIndex((position) => position >= 0);
+		generator.positions[ip] = -1;
+		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
 	});
 
 	it("resolves known shaped origins to dense VM cache rows", () => {
