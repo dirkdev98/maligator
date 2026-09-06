@@ -178,6 +178,7 @@ describe("incremental Core call graph", () => {
 			functions: [2],
 			anyScript: true,
 			opaque: true,
+			nonCallable: true,
 		});
 
 		const editor = CoreEditor.open(program, factoryFunction);
@@ -191,6 +192,7 @@ describe("incremental Core call graph", () => {
 			functions: [3],
 			anyScript: true,
 			opaque: true,
+			nonCallable: true,
 		});
 	});
 
@@ -286,6 +288,7 @@ describe("incremental Core call graph", () => {
 		const [backedge] = builder.appendInstruction(body, "createFunction", [], {
 			attributes: { functionIndex: 2 },
 		});
+		const [backedgeInstruction] = builder.bodyInstructionIds(body);
 		builder.setTerminator(body, {
 			kind: "jump",
 			edge: { block: header, arguments: [backedge!] },
@@ -308,6 +311,22 @@ describe("incremental Core call graph", () => {
 			anyScript: false,
 			opaque: false,
 		});
+		const sameTarget = CoreEditor.open(program, caller);
+		sameTarget.replaceInstruction(backedgeInstruction!, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		sameTarget.commit();
+		const closed = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(closed.site(caller, call!)?.open).toBe(false);
+		const nonCallable = CoreEditor.open(program, caller);
+		nonCallable.replaceInstruction(backedgeInstruction!, "createUndefined", []);
+		nonCallable.commit();
+		const guarded = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(guarded.site(caller, call!)).toMatchObject({
+			open: true,
+			targets: { functions: [1], anyScript: false, opaque: false, nonCallable: true },
+		});
+		expect(guarded.changedCallSites).toHaveLength(1);
 	});
 
 	it("propagates a closed-cell target edit only to dependent readers", () => {

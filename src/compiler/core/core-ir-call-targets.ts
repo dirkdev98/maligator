@@ -63,30 +63,42 @@ export interface CoreCalleeTargets {
 	readonly functions: ReadonlyArray<CoreFunctionId>;
 	readonly anyScript: boolean;
 	readonly opaque: boolean;
+	readonly nonCallable: boolean;
 }
 
 export const CORE_CALLEE_TARGETS_BOTTOM: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: false,
 	opaque: false,
+	nonCallable: false,
+});
+
+const CORE_CALLEE_TARGETS_NON_CALLABLE: CoreCalleeTargets = Object.freeze({
+	functions: Object.freeze([]),
+	anyScript: false,
+	opaque: false,
+	nonCallable: true,
 });
 
 export const CORE_CALLEE_TARGETS_ANY_SCRIPT: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: true,
 	opaque: false,
+	nonCallable: false,
 });
 
 export const CORE_CALLEE_TARGETS_OPAQUE: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: false,
 	opaque: true,
+	nonCallable: true,
 });
 
 const CORE_CALLEE_TARGETS_OPEN: CoreCalleeTargets = Object.freeze({
 	functions: Object.freeze([]),
 	anyScript: true,
 	opaque: true,
+	nonCallable: true,
 });
 
 export function coreCalleeTargetsFunction(functionId: number): CoreCalleeTargets {
@@ -94,15 +106,21 @@ export function coreCalleeTargetsFunction(functionId: number): CoreCalleeTargets
 		functions: Object.freeze([functionId as CoreFunctionId]),
 		anyScript: false,
 		opaque: false,
+		nonCallable: false,
 	});
 }
 
 export function coreCalleeTargetsIsBottom(targets: CoreCalleeTargets): boolean {
-	return targets.functions.length === 0 && !targets.anyScript && !targets.opaque;
+	return (
+		targets.functions.length === 0 &&
+		!targets.anyScript &&
+		!targets.opaque &&
+		!targets.nonCallable
+	);
 }
 
 export function coreCalleeTargetsAreOpen(targets: CoreCalleeTargets): boolean {
-	return targets.anyScript || targets.opaque;
+	return targets.anyScript || targets.opaque || targets.nonCallable;
 }
 
 export function coreCalleeTargetsSingleFunction(
@@ -122,6 +140,7 @@ export function coreCalleeTargetsEqual(
 	return (
 		left.anyScript === right.anyScript &&
 		left.opaque === right.opaque &&
+		left.nonCallable === right.nonCallable &&
 		left.functions.length === right.functions.length &&
 		left.functions.every((target, index) => target === right.functions[index])
 	);
@@ -143,6 +162,7 @@ export function joinCoreCalleeTargets(
 		functions: Object.freeze(anyScript ? [] : functions),
 		anyScript,
 		opaque: left.opaque || right.opaque,
+		nonCallable: left.nonCallable || right.nonCallable,
 	});
 }
 
@@ -210,7 +230,6 @@ const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
 	"createArray",
 	"createBigint",
 	"createBoolean",
-	"createEmpty",
 	"createF64",
 	"createModuleNamespace",
 	"createNull",
@@ -651,12 +670,16 @@ function analyzeFunctionTargets(
 									functions: returned.functions,
 									anyScript: true,
 									opaque: true,
+									nonCallable: true,
 								})
 							: returned;
 					}
 				}
-			} else if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode)) {
+			} else if (opcode === "createEmpty") {
+				// TDZ sentinels are rejected by throwIfTdz before an observable use.
 				resultTargets = CORE_CALLEE_TARGETS_BOTTOM;
+			} else if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode)) {
+				resultTargets = CORE_CALLEE_TARGETS_NON_CALLABLE;
 			}
 			for (let offset = 0; offset < resultCount; offset++) {
 				raise(fn.kernel.resultAt(resultStart + offset), resultTargets);
