@@ -703,6 +703,7 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-ic-stats] load_mono_hits=%llu load_inherited_hits=%llu "
+        "load_own_table_hits=%llu load_own_table_fills=%llu "
         "load_missing_hits=%llu load_missing_fills=%llu "
         "load_fallbacks=%llu load_slow_mono_hits=%llu "
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
@@ -725,6 +726,8 @@ static void mal_perf_stats_print(void) {
         "store_other_generic=%llu\n",
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
         (unsigned long long) mal_perf_stats.ic_load_inherited_hits,
+        (unsigned long long) mal_perf_stats.ic_load_own_table_hits,
+        (unsigned long long) mal_perf_stats.ic_load_own_table_fills,
         (unsigned long long) mal_perf_stats.ic_load_missing_hits,
         (unsigned long long) mal_perf_stats.ic_load_missing_fills,
         (unsigned long long) mal_perf_stats.ic_load_fallbacks,
@@ -781,8 +784,8 @@ static void mal_perf_stats_print(void) {
             u64 count = mal_perf_stats.ic_mode_replacements[from][to];
             replacements += count;
             if (from != to) cross_mode += count;
-            if (from == 0 && mal_perf_ic_mode_is_chain(to)) own_to_chain += count;
-            if (mal_perf_ic_mode_is_chain(from) && to == 0) chain_to_own += count;
+            if ((from == 0 || from == 9) && mal_perf_ic_mode_is_chain(to)) own_to_chain += count;
+            if (mal_perf_ic_mode_is_chain(from) && (to == 0 || to == 9)) chain_to_own += count;
             if (count != 0) {
                 fprintf(
                     stderr,

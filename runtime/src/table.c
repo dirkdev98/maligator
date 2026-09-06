@@ -691,6 +691,20 @@ bool mal_table_entry_matches(
         mal_key_value_equals(candidate->key, key.value);
 }
 
+bool mal_table_read_entry_hint(
+    const MalTable *table, const void *entry, MalValue key,
+    MalValue *value, u8 *property_flags
+) {
+    if (entry == nullptr) return false;
+    u32 index = mal_table_handle_index(entry);
+    if (index >= table->entry_count) return false;
+    const MalTableEntry *candidate = &table->entries[index];
+    if (!candidate->live || candidate->key != key) return false;
+    *value = candidate->value;
+    *property_flags = candidate->property_flags;
+    return true;
+}
+
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {
     iter->table = table;
     iter->kind = kind;

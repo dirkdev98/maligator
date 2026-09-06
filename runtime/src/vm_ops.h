@@ -898,6 +898,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_TABLE 6u
 #define MAL_IC_MODE_MISSING 7u
 #define MAL_IC_MODE_TRANSITION 8u
+#define MAL_IC_MODE_OWN_TABLE 9u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1205,16 +1206,17 @@ static inline bool mal_vm_try_load_known_own_slots(
     return false;
 }
 
-/**
- * Monomorphic shape-slot read of `object[key]` via the site's inline cache. Returns
- * true and writes *out on a primary or bounded-polymorphic shape hit. A miss
- * (unknown shape, computed-key mismatch, or value-slot/accessor entry) goes to
- * the out-of-line mega/refill path. A data-slot hit reads `slots[slot]` and runs
- * no user code, so a region access omits the throw check on the hit path. A
- * zero-initialized cache has shape==null and poly_count==0, so it misses.
- */
+// The caller has checked MAL_IC_MODE_OWN_TABLE; entry keys and attributes remain untrusted.
+bool mal_vm_own_table_try_load(
+    const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
+);
+
+// Own-data hits run no user code, so property regions can omit the throw check.
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
                                           MalValue *out) {
+    if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
+        return mal_vm_own_table_try_load(object, key, ic, out);
+    }
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
         ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_load_mono_hit();

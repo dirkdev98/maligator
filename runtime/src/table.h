@@ -164,6 +164,12 @@ bool mal_table_entry_matches(
     const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
 );
 
+// Cross-table hints require live key identity; equal strings with different identities miss.
+bool mal_table_read_entry_hint(
+    const MalTable *table, const void *entry, MalValue key,
+    MalValue *value, u8 *property_flags
+);
+
 /**
  * Initialize a live storage-order iterator.
  */

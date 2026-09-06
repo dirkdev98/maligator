@@ -4591,6 +4591,35 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
     }
 }
 
+bool mal_vm_own_table_try_load(
+    const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
+) {
+    if (object->header.type != MAL_HEAP_OBJECT || key != ic->key ||
+        object->shape->inline_count != 0 || object->overflow == nullptr) {
+        return false;
+    }
+    MalValue value;
+    u8 flags;
+    if (!mal_table_read_entry_hint(object->overflow, ic->entry, key, &value, &flags) ||
+        (flags & MAL_PROPERTY_ACCESSOR)) {
+        return false;
+    }
+    *out = value;
+    MAL_PERF_COUNT(ic_load_own_table_hits);
+    return true;
+}
+
+static void mal_ic_record_own_table(MalInlineCache *ic, MalValue key, void *entry) {
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_OWN_TABLE);
+    mal_ic_detach_prototype_cache(ic);
+    *ic = (MalInlineCache) {
+        .key = key,
+        .entry = entry,
+        .mode = MAL_IC_MODE_OWN_TABLE,
+    };
+    MAL_PERF_COUNT(ic_load_own_table_fills);
+}
+
 static void mal_ic_record_special(
     MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
     MalValue value, const MalObject *prototype
@@ -5080,6 +5109,11 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
     if (slot_object != nullptr) {
         MalObject *object = slot_object;
+        MalValue own_table_value;
+        if (ic->mode == MAL_IC_MODE_OWN_TABLE &&
+            mal_vm_own_table_try_load(object, key_value, ic, &own_table_value)) {
+            return own_table_value;
+        }
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
         if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {
@@ -5172,7 +5206,25 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 }
             }
         }
-        // Prototype / overflow / index / symbol key: resolve with the converted key.
+        if (object->header.type == MAL_HEAP_OBJECT &&
+            object->shape->inline_count == 0 && object->overflow != nullptr &&
+            key.kind == MAL_KEY_STRING) {
+            MalValue result = mal_value_new_undefined();
+            MalPropertyLookup own = mal_property_lookup(object->overflow, key);
+            if (own.present) {
+                if (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                    if (mal_ic_key_is_stable_string(key_value)) {
+                        mal_ic_record_own_table(ic, key_value, own.entry);
+                    }
+                    return own.desc.value;
+                }
+                mal_vm_desc_read(vm, own.desc, object_value, &result);
+            } else if (object->prototype != nullptr) {
+                mal_vm_get_property_with_receiver(
+                    vm, mal_value_from_object(object->prototype), key, object_value, &result);
+            }
+            return result;
+        }
         MAL_PERF_COUNT(ic_load_plain_generic);
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
