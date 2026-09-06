@@ -67,6 +67,11 @@ describe("Core control-flow analyses and passes", () => {
 			edges: [[1, 2], [3], [3, 5], [4], [1, 5], [2, 6], []],
 		},
 		{
+			name: "reversed successor order and parallel edges",
+			entry: 2,
+			edges: [[4, 1], [3, 3], [5, 0], [6, 1], [3, 5], [4, 6], []],
+		},
+		{
 			name: "nonzero entry and sparse reachable IDs",
 			entry: 2,
 			edges: [[0], [3], [1, 4], [5], [5], []],

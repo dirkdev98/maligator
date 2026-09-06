@@ -296,6 +296,7 @@ function immediateDominators(
 	entry: CoreBlockId,
 	reversePostorder: ReadonlyArray<CoreBlockId>,
 	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
 	scratch: CoreAnalysisScratchPool,
 ): Array<CoreBlockId | null> {
 	const length = predecessors.length;
@@ -310,12 +311,6 @@ function immediateDominators(
 		for (const [index, block] of reversePostorder.entries()) order[block] = index;
 		dominators.fill(-1, 0, length);
 		dominators[entry] = entry;
-		const successors = new Array<Array<CoreBlockId>>(length);
-		for (let block = 0; block < length; block++) {
-			for (const { from } of predecessors[block] ?? []) {
-				(successors[from] ??= []).push(coreBlockId(block));
-			}
-		}
 		// Parent links contain reachable block indices; IDs are checked when publishing the result.
 		const intersect = (left: number, right: number): number => {
 			let first = left;
@@ -341,7 +336,7 @@ function immediateDominators(
 			if (next === undefined) continue;
 			if (dominators[block] === next) continue;
 			dominators[block] = next;
-			for (const successor of successors[block] ?? []) {
+			for (const { to: successor } of successors[block] ?? []) {
 				if (successor === entry || queued[successor] !== 0) continue;
 				queued[successor] = 1;
 				queue.push(successor);
@@ -643,7 +638,7 @@ function buildFromStructural(
 ): CoreControlFlow {
 	const { successors, predecessors, reachable, reversePostorder } = structural;
 	const parents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-		immediateDominators(fn.entry, reversePostorder, predecessors, scratch),
+		immediateDominators(fn.entry, reversePostorder, predecessors, successors, scratch),
 	);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	let instructionDominatesBlock = dominates;
@@ -686,6 +681,7 @@ function buildFromStructural(
 				entryNode(fn.entry),
 				splitTraversal.reversePostorder,
 				splitPredecessors,
+				splitSuccessors,
 				scratch,
 			),
 		);
