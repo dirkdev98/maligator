@@ -575,12 +575,13 @@ function emitNativeFunctions(
 				if (target !== undefined) targets.add(target);
 			}
 			if (
-				instruction.directFunctionIndex !== undefined &&
+				(instruction.directFunctionIndex !== undefined ||
+					instruction.guardedFunctionIndices?.length === 1) &&
 				instruction.directEntryId !== undefined
 			) {
 				entries.add(
 					directCompiledEntryKey(
-						instruction.directFunctionIndex,
+						instruction.directFunctionIndex ?? instruction.guardedFunctionIndices![0]!,
 						instruction.directEntryId,
 					),
 				);

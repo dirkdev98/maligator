@@ -15,6 +15,7 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
+	validateNativeDirectEntry,
 	vmRegionActionsAreCurrent,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
@@ -493,6 +494,7 @@ function emitCompiledVariant(
 			semanticProtectors,
 		);
 	}
+	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	const nativeContract: NativeFunctionPlan =
 		directEntry === undefined
 			? native
@@ -851,6 +853,13 @@ function emitCompiledVariant(
 		profileDecisions,
 		relocation,
 		strictCompiledTargets,
+		directEntry?.argumentRepresentations,
+		new Map(
+			directEntry?.constantBooleans?.map(({ instructionIp, value }) => [
+				instructionIp,
+				value,
+			]),
+		),
 	);
 	if (body === null) {
 		return null;
@@ -872,7 +881,7 @@ function emitCompiledVariant(
 	const directParameters =
 		directEntry === undefined
 			? undefined
-			: directEntry.parameterRepresentations.map(
+			: (directEntry.argumentRepresentations ?? directEntry.parameterRepresentations).map(
 					(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
 				);
 	lines.push(
@@ -950,7 +959,10 @@ function emitCompiledVariant(
 		lines.push(
 			directEntry === undefined
 				? `    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`
-				: `    r${i} = p${i};`,
+				: directEntry.argumentRepresentations !== undefined &&
+					  i >= directEntry.argumentRepresentations.length
+					? `    r${i} = MAL_VALUE_UNDEFINED;`
+					: `    r${i} = p${i};`,
 		);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
@@ -1095,7 +1107,8 @@ export function emitCompiledFunction(
 			id: entry.id,
 			symbol: emitted.symbol,
 			source: emitted.source,
-			parameterRepresentations: entry.parameterRepresentations,
+			parameterRepresentations:
+				entry.argumentRepresentations ?? entry.parameterRepresentations,
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
@@ -1758,6 +1771,8 @@ function emitBody(
 	profileDecisions: Array<BackendProfileDecision>,
 	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
+	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
+	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2382,6 +2397,8 @@ function emitBody(
 				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
 				strictCompiledTargets,
 				directResultRepresentation,
+				directArgumentRepresentations,
+				constantBoolean: directConstantBooleans.get(ip),
 				mathUnaryCall: mathUnaryCalls.has(ip),
 				mathBinaryCall: mathBinaryCalls.has(ip),
 				mappedArguments: fn.mappedArguments,
@@ -2692,6 +2709,8 @@ interface NativeInstructionContext {
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
+	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
+	readonly constantBoolean?: boolean;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly mappedArguments: boolean;
@@ -2822,6 +2841,8 @@ function emitInstruction(
 		directCompiledTargets,
 		directCompiledEntries,
 		directResultRepresentation,
+		directArgumentRepresentations: context.directArgumentRepresentations,
+		constantBoolean: context.constantBoolean,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -3990,12 +4011,55 @@ function emitInstruction(
 				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${mappedArguments}, ${mappedArgumentSlots.length}, ${mappedArgumentSlots.length > 0 ? `(const i32[]){ ${mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
 			];
 		case "LOAD_ARGUMENT_COUNT":
+			if (context.directArgumentRepresentations !== undefined)
+				return [
+					storeNumber(
+						instruction.dst,
+						String(context.directArgumentRepresentations.length),
+					),
+				];
 			return [`r${instruction.dst} = mal_value_from_i32(arg_count);`];
 		case "LOAD_ARGUMENT":
+			if (context.directArgumentRepresentations !== undefined) {
+				const representation = context.directArgumentRepresentations[instruction.index];
+				if (representation === undefined)
+					throw new Error("Direct entry reads an absent argument");
+				const value = `p${instruction.index}`;
+				return [
+					representation === "number" || representation === "int32"
+						? storeNumber(instruction.dst, value)
+						: representation === "boolean"
+							? storeBoolean(instruction.dst, value)
+							: `r${instruction.dst} = ${value};`,
+				];
+			}
 			return [
 				`r${instruction.dst} = arg_count > ${instruction.index} ? args[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 			];
 		case "LOAD_STATIC_ARGUMENT": {
+			if (context.directArgumentRepresentations !== undefined) {
+				const representation = context.directArgumentRepresentations[instruction.index];
+				if (representation === undefined || instruction.direct < 0)
+					throw new Error("Direct entry lacks a supplied argument snapshot");
+				const value = boxed(instruction.direct);
+				return [
+					representation === "number" || representation === "int32"
+						? storeNumber(
+								instruction.dst,
+								isNumericRep(reps[instruction.direct]!)
+									? num(instruction.direct)
+									: `mal_ops_number_as_f64(${value})`,
+							)
+						: representation === "boolean"
+							? storeBoolean(
+									instruction.dst,
+									reps[instruction.direct] === "boolean"
+										? `r${instruction.direct}`
+										: `mal_value_to_boolean(${value})`,
+								)
+							: `r${instruction.dst} = ${value};`,
+				];
+			}
 			const direct =
 				instruction.direct >= 0
 					? boxed(instruction.direct)
@@ -4037,6 +4101,10 @@ function emitInstruction(
 				`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,
 			];
 		case "BINARY": {
+			if (context.constantBoolean !== undefined)
+				return [
+					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
+				];
 			const { dst, left, right, operator } = instruction;
 			const leftIsNum = isNumericRep(reps[left]!);
 			const rightIsNum = isNumericRep(reps[right]!);
@@ -5264,6 +5332,39 @@ function emitInstruction(
 					poll,
 				];
 			}
+			const directEntryParameters = (directEntry: NativeDirectEntryPlan) =>
+				(directEntry.argumentRepresentations ?? directEntry.parameterRepresentations).map(
+					(representation, parameter): string | null => {
+						const operand = args[parameter];
+						if (operand === undefined) {
+							return representation === "boxed" ? "MAL_VALUE_UNDEFINED" : null;
+						}
+						const decoded = decodeVmValueOperand(operand);
+						const boxedScalar =
+							decoded?.kind === "register" && reps[decoded.register] === "boxed";
+						if (representation === "number") {
+							return (
+								nativeNumberOperand(operand) ??
+								(boxedScalar ? `mal_ops_number_as_f64(${boxedOperand(operand)})` : null)
+							);
+						}
+						if (representation === "int32") {
+							return (
+								nativeInt32Operand(operand) ??
+								(boxedScalar
+									? `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxedOperand(operand)}))`
+									: null)
+							);
+						}
+						if (representation === "boolean") {
+							return (
+								nativeBooleanOperand(operand) ??
+								(boxedScalar ? `mal_value_to_boolean(${boxedOperand(operand)})` : null)
+							);
+						}
+						return boxedOperand(operand);
+					},
+				);
 			if (callPlan?.guardedFunctionIndices !== undefined) {
 				nativeCallDecision(
 					context.profile,
@@ -5280,6 +5381,49 @@ function emitInstruction(
 				const guardedIndex = `__guarded_index_${ip}`;
 				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => {
 					const exact = `__guarded_compiled_${ip}_${target}`;
+					const entry =
+						callPlan.directEntryId === undefined ||
+						callPlan.guardedFunctionIndices!.length !== 1
+							? undefined
+							: directCompiledEntries.get(
+									directCompiledEntryKey(target, callPlan.directEntryId),
+								);
+					const parameters =
+						entry === undefined ? undefined : directEntryParameters(entry);
+					if (
+						entry !== undefined &&
+						parameters?.every((parameter) => parameter !== null)
+					) {
+						const value = `__guarded_entry_value_${ip}`;
+						const result =
+							entry.resultRepresentation === "number"
+								? `mal_ops_number_value(${value})`
+								: entry.resultRepresentation === "int32"
+									? `mal_value_from_i32(${value})`
+									: entry.resultRepresentation === "boolean"
+										? `mal_value_new_boolean(${value})`
+										: value;
+						const receiver = context.strictCompiledTargets.has(target)
+							? boxedOperand(instruction.thisValue)
+							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${target}], ${boxedOperand(instruction.thisValue)})`;
+						return [
+							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${target}) {`,
+							`#if MAL_REALMS`,
+							`  MalRealm *__entry_realm = vm->current_realm;`,
+							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
+							`#endif`,
+							`  if (mal_vm_enter_compiled(vm, ${target})) {`,
+							`    MAL_PERF_COUNT(direct_entry_hits);`,
+							`    ${cTypeOf(entry.resultRepresentation)} ${value} = mal_direct_${target}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
+							`    mal_vm_leave_compiled(vm);`,
+							`    ${tmp} = vm->completion.kind == MAL_COMPLETION_THROW ? vm->completion : (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = ${result} };`,
+							`  } else { ${tmp} = vm->completion; }`,
+							`#if MAL_REALMS`,
+							`  mal_vm_realm_switch_to(vm, __entry_realm);`,
+							`#endif`,
+							`}`,
+						];
+					}
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
 						...(directCompiledTargets.has(target)
@@ -5328,38 +5472,7 @@ function emitInstruction(
 				if (directEntry !== undefined) {
 					const directCallee = `__direct_callee_${ip}`;
 					const directValue = `__direct_value_${ip}`;
-					const parameters = directEntry.parameterRepresentations.map(
-						(representation, parameter): string | null => {
-							const operand = args[parameter];
-							if (operand === undefined) {
-								return representation === "boxed" ? "MAL_VALUE_UNDEFINED" : null;
-							}
-							const decoded = decodeVmValueOperand(operand);
-							const boxedScalar =
-								decoded?.kind === "register" && reps[decoded.register] === "boxed";
-							if (representation === "number") {
-								return (
-									nativeNumberOperand(operand) ??
-									(boxedScalar ? `mal_ops_number_as_f64(${boxedOperand(operand)})` : null)
-								);
-							}
-							if (representation === "int32") {
-								return (
-									nativeInt32Operand(operand) ??
-									(boxedScalar
-										? `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxedOperand(operand)}))`
-										: null)
-								);
-							}
-							if (representation === "boolean") {
-								return (
-									nativeBooleanOperand(operand) ??
-									(boxedScalar ? `mal_value_to_boolean(${boxedOperand(operand)})` : null)
-								);
-							}
-							return boxedOperand(operand);
-						},
-					);
+					const parameters = directEntryParameters(directEntry);
 					if (parameters.every((parameter) => parameter !== null)) {
 						nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
 						const directResult =

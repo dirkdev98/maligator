@@ -90,6 +90,11 @@ export interface ExecutionDirectEntry {
 	readonly id: number;
 	readonly parameterRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	readonly resultRepresentation: ExecutionRegisterRepresentation;
+	readonly argumentRepresentations?: ReadonlyArray<ExecutionRegisterRepresentation>;
+	readonly constantBooleans?: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly value: boolean;
+	}>;
 	readonly registerRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<ExecutionSafepoint>;

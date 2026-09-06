@@ -44,6 +44,7 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 function planSpecializations(
@@ -56,14 +57,19 @@ function withPlanSpecializations(
 	plan: CoreOptimizationPlan,
 	specializations: ReadonlyArray<CorePlanSpecialization>,
 ): CoreOptimizationPlan {
-	return { ...plan, recipes: buildCoreSpecializationRecipeTable(specializations) };
+	return {
+		...plan,
+		recipes: buildCoreSpecializationRecipeTable(specializations),
+	};
 }
 
 function planning(program: CoreProgram, liveFunctions: ReadonlyArray<CoreFunctionId>) {
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
 	const analyses = new CoreAnalysisManager(program, context, report);
-	const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+	const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+		scope: "program",
+	});
 	return {
 		context,
 		analyses,
@@ -123,7 +129,9 @@ function numericProgram(
 	readonly first: CoreInstructionId;
 	readonly finish: CoreInstructionId;
 } {
-	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[]],
+	});
 	const builder = new CoreFunctionBuilder(program, {
 		metadata: { sourcePath: "/entry.js" },
 	});
@@ -150,14 +158,22 @@ function numericProgram(
 		(instruction) =>
 			program.function(functionId).instructionOpcodeName(instruction) === "binary",
 	);
-	return { program, function: functionId, block: entry, first: first!, finish: finish! };
+	return {
+		program,
+		function: functionId,
+		block: entry,
+		first: first!,
+		finish: finish!,
+	};
 }
 
 function numericFanOutProgram(): {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionId;
 } {
-	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[]],
+	});
 	const builder = new CoreFunctionBuilder(program, {
 		metadata: { sourcePath: "/entry.js" },
 	});
@@ -236,7 +252,9 @@ function directEntryProgram(): {
 	readonly callee: CoreFunctionId;
 	readonly omittedCall: CoreInstructionId;
 } {
-	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[]],
+	});
 	const callerBuilder = new CoreFunctionBuilder(program, {
 		metadata: { sourcePath: "/entry.js" },
 	});
@@ -280,7 +298,10 @@ function directEntryProgram(): {
 			},
 		},
 	);
-	callerBuilder.setTerminator(omitted, { kind: "return", value: omittedResult! });
+	callerBuilder.setTerminator(omitted, {
+		kind: "return",
+		value: omittedResult!,
+	});
 	const { function: caller } = callerBuilder.finish(callerEntry);
 	const omittedCall = [...program.function(caller).bodyInstructionIds(omitted)].find(
 		(instruction) =>
@@ -301,7 +322,9 @@ function directEntryProgram(): {
 }
 
 function admissionIntervalProgram(interiorCall: boolean) {
-	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[]],
+	});
 	const builder = new CoreFunctionBuilder(program, {
 		metadata: { sourcePath: "/entry.js" },
 	});
@@ -993,11 +1016,11 @@ describe("late Core specialization plan", () => {
 		expect(directTargets).toEqual([1, 2]);
 	});
 
-	it("keeps functions that observe the argument slice on the canonical ABI", () => {
+	it("keeps functions that enumerate the argument slice on the canonical ABI", () => {
 		let directEntryCount = -1;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
-				`function observesArguments() { return arguments.length === 0; }
+				`function observesArguments() { return Object.keys(arguments).length === 0; }
 				observesArguments();`,
 				"direct-entry-arguments.js",
 			),
@@ -1009,5 +1032,72 @@ describe("late Core specialization plan", () => {
 		);
 
 		expect(directEntryCount).toBe(0);
+	});
+
+	it("specializes the real object benchmark's four-argument observation", () => {
+		const definition = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				readFileSync("bench/javascript.mjs", "utf8"),
+				"argument-edges-benchmark.js",
+			),
+		);
+		const index = definition.runtime.functions.findIndex((fn) =>
+			fn.instructions.some(
+				(instruction) =>
+					instruction.opcode === "LOAD_STATIC_ARGUMENT" && instruction.index === 3,
+			),
+		);
+		expect(index).toBeGreaterThanOrEqual(0);
+		expect(definition.native.functions[index]!.directEntries).toMatchObject([
+			{
+				argumentRepresentations: ["number", "number", "number", "number"],
+				resultRepresentation: "number",
+			},
+		]);
+		const emitted = emitCompiledFunction(
+			definition.runtime.functions[index]!,
+			definition.native.functions[index]!,
+			index,
+			"",
+			false,
+		);
+		expect(emitted?.directEntries).toHaveLength(1);
+		expect(emitted!.directEntries[0]!.source).not.toMatch(
+			/arg_count|mal_create_arguments_object|mal_vm_binary_op/,
+		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(definition)).native.functions[
+				index
+			]!.directEntries,
+		).toEqual(definition.native.functions[index]!.directEntries);
+	});
+
+	it("specializes numeric arguments despite a mixed canonical return", () => {
+		const definition = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+				(function () {
+					const add = function (left, right) { let result = left; for (let index = 0; index < 16; index++) result = result + right; return result; };
+					const external = [add];
+					globalThis.result = add(3, 7);
+					globalThis.mixed = external[0]("left", "right");
+				})();`,
+				"typed-entry.js",
+			),
+		);
+		const index = definition.native.functions.findIndex((fn) =>
+			fn.directEntries.some(
+				(entry) => entry.parameterRepresentations.join(",") === "number,number",
+			),
+		);
+		expect(index).toBeGreaterThanOrEqual(0);
+		const fn = definition.native.functions[index]!;
+		expect(fn.registerRepresentations.slice(0, 2)).toEqual(["boxed", "boxed"]);
+		expect(fn.directEntries[0]!.resultRepresentation).toBe("number");
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(definition)).native.functions[
+				index
+			]!.directEntries,
+		).toEqual(fn.directEntries);
 	});
 });

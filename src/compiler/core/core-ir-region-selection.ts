@@ -42,6 +42,7 @@ import type {
 	CorePlanSpecializationKind,
 } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
+import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -49,6 +50,10 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import {
+	coreArgumentObservation,
+	analyzeCoreNativeEntry,
+} from "./core-native-entry-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import {
@@ -73,6 +78,9 @@ interface PendingDirectEntry {
 	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
+	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
 }
 
 type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
@@ -1137,15 +1145,26 @@ function directEntryCandidates(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	live: ReadonlySet<CoreFunctionId>,
+	analyses: CoreAnalysisManager,
 ): ReadonlyArray<PendingDirectEntry> {
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
 	for (const caller of [...live].sort((left, right) => left - right)) {
 		for (const site of summaries.targets.outgoing(caller)) {
-			if (site.open || site.targets.functions.length !== 1) continue;
+			if (
+				site.targets.functions.length !== 1 ||
+				program.function(caller).instructionOpcodeName(site.instruction) !== "call"
+			)
+				continue;
 			const target = site.targets.functions[0]!;
 			if (!live.has(target)) continue;
 			const calls = callsByTarget.get(target) ?? [];
-			calls.push(Object.freeze({ caller, instruction: site.instruction }));
+			calls.push(
+				Object.freeze({
+					caller,
+					instruction: site.instruction,
+					...(site.open ? { guarded: true as const } : {}),
+				}),
+			);
 			callsByTarget.set(target, calls);
 		}
 	}
@@ -1155,43 +1174,123 @@ function directEntryCandidates(
 	)) {
 		const fn = program.function(target);
 		const summary = summaries.summary(target);
-		const resultRepresentation = planRepresentation(
+		let resultRepresentation = planRepresentation(
 			summary?.returnRepresentation ?? "none",
 		);
+		const observation = coreArgumentObservation(fn);
 		if (
-			resultRepresentation === undefined ||
-			resultRepresentation === "boxed" ||
 			fn.isGenerator ||
 			fn.isAsync ||
 			fn.metadata.isClassConstructor ||
-			[...fn.instructionIds()].some((instruction) => {
-				if (fn.instructionKind(instruction) !== "operation") return false;
-				const opcode = fn.instructionOpcodeName(instruction);
-				return (
-					opcode === "loadArgumentCount" ||
-					opcode === "loadArgument" ||
-					opcode === "createArgumentsObject" ||
-					opcode === "createRestArguments" ||
-					opcode === "callRestArguments"
-				);
-			})
+			fn.metadata.isDerivedConstructor ||
+			observation.kind === "general"
 		)
 			continue;
-		const parameterRepresentations = Object.freeze(
-			Array.from({ length: fn.parameterCount }, () => "boxed" as const),
+		const needsArity = observation.readsCount || observation.indices.length > 0;
+		let parameterRepresentations: ReadonlyArray<CorePlanRepresentation> = Array.from(
+			{ length: fn.parameterCount },
+			() => "boxed",
 		);
+		let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
+		let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
+		let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
+		let selectedCalls = callSites;
+		if ((fn.parameterCount > 0 || needsArity) && [...fn.instructionIds()].length <= 512) {
+			const signatures = new Map<
+				string,
+				{
+					representations: Array<CorePlanRepresentation>;
+					calls: Array<CoreDirectEntryCallSite>;
+					scalars: number;
+				}
+			>();
+			for (const call of callSites) {
+				const site = summaries.targets.site(call.caller, call.instruction);
+				if (
+					needsArity &&
+					(site?.arguments === undefined ||
+						site.arguments.length > 16 ||
+						observation.indices.some((index) => index >= site.arguments!.length))
+				)
+					continue;
+				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+					scope: "function",
+					function: call.caller,
+				});
+				const representations = Array.from(
+					{ length: needsArity ? site!.arguments!.length : fn.parameterCount },
+					(_, index): CorePlanRepresentation => {
+						const argument = site?.arguments?.[index];
+						const scalar =
+							argument === undefined ? undefined : kinds.exactScalar(argument);
+						return scalar === "int32" || scalar === "number"
+							? "f64"
+							: (scalar ?? "boxed");
+					},
+				);
+				const key = representations.join(",");
+				const signature = signatures.get(key) ?? {
+					representations,
+					calls: [],
+					scalars:
+						representations.filter((representation) => representation !== "boxed")
+							.length + (needsArity ? 1 : 0),
+				};
+				signature.calls.push(call);
+				signatures.set(key, signature);
+			}
+			const signature = [...signatures.values()]
+				.filter(({ scalars }) => scalars > 0)
+				.sort(
+					(left, right) =>
+						right.calls.length * right.scalars - left.calls.length * left.scalars,
+				)[0];
+			if (signature !== undefined) {
+				argumentRepresentations = needsArity ? signature.representations : undefined;
+				parameterRepresentations = Array.from(
+					{ length: fn.parameterCount },
+					(_, index) => signature.representations[index] ?? "boxed",
+				);
+				selectedCalls = signature.calls;
+				const cfg = analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: target,
+					})
+					.exceptional();
+				const variant = analyzeCoreNativeEntry(
+					fn,
+					cfg,
+					parameterRepresentations,
+					argumentRepresentations,
+					selectedCalls,
+				);
+				valueRepresentations = variant.valueRepresentations;
+				constantBooleans = variant.constantBooleans;
+				resultRepresentation = variant.resultRepresentation;
+			}
+		}
+		if (
+			(needsArity && argumentRepresentations === undefined) ||
+			resultRepresentation === undefined ||
+			(resultRepresentation === "boxed" && valueRepresentations === undefined)
+		)
+			continue;
 		const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 		const compilerWork = generatedCode + fn.valueCapacity;
 		candidates.push({
 			function: target,
 			callSites: Object.freeze(
-				callSites.sort(
+				selectedCalls.sort(
 					(left, right) =>
 						left.caller - right.caller || left.instruction - right.instruction,
 				),
 			),
 			parameterRepresentations,
 			resultRepresentation,
+			...(valueRepresentations === undefined ? {} : { valueRepresentations }),
+			...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
+			...(constantBooleans === undefined ? {} : { constantBooleans }),
 			budget: {
 				kind: "direct-entry",
 				caller: target,
@@ -1307,7 +1406,7 @@ export function buildCoreOptimizationPlan(
 	}
 	if (options.discoverCandidates !== false) {
 		pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
-		pending.push(...directEntryCandidates(program, summaries, live));
+		pending.push(...directEntryCandidates(program, summaries, live, analyses));
 	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
@@ -1386,6 +1485,15 @@ export function buildCoreOptimizationPlan(
 					callSites: candidate.callSites,
 					parameterRepresentations: candidate.parameterRepresentations,
 					resultRepresentation: candidate.resultRepresentation,
+					...(candidate.valueRepresentations === undefined
+						? {}
+						: { valueRepresentations: candidate.valueRepresentations }),
+					...(candidate.argumentRepresentations === undefined
+						? {}
+						: { argumentRepresentations: candidate.argumentRepresentations }),
+					...(candidate.constantBooleans === undefined
+						? {}
+						: { constantBooleans: candidate.constantBooleans }),
 					target: "native",
 					fallback: "canonical-core",
 					cost: Object.freeze({

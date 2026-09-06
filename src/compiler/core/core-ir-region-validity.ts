@@ -24,9 +24,14 @@ import type {
 	CoreEffectDomain,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreValueId,
 	CoreRepresentation,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
+import {
+	coreArgumentObservation,
+	coreNativeEntryProofIsCurrent,
+} from "./core-native-entry-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
 import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
@@ -631,7 +636,10 @@ function verifySpecialization(
 		CoreFunctionId,
 		Map<
 			CoreInstructionId,
-			{ exclusive: boolean; readonly overlays: Set<CorePlanSpecialization["kind"]> }
+			{
+				exclusive: boolean;
+				readonly overlays: Set<CorePlanSpecialization["kind"]>;
+			}
 		>
 	>,
 	blocks: CorePlanBlockProof,
@@ -707,7 +715,10 @@ function verifySpecialization(
 			}
 		>();
 	for (const instruction of claims) {
-		const state = owned.get(instruction) ?? { exclusive: false, overlays: new Set() };
+		const state = owned.get(instruction) ?? {
+			exclusive: false,
+			overlays: new Set(),
+		};
 		if (
 			(selection.kind === "guarded-direct-call" && state.exclusive) ||
 			(selection.composition === "exclusive" &&
@@ -1782,7 +1793,10 @@ export function verifyCoreOptimizationPlan(
 		CoreFunctionId,
 		Map<
 			CoreInstructionId,
-			{ exclusive: boolean; readonly overlays: Set<CorePlanSpecialization["kind"]> }
+			{
+				exclusive: boolean;
+				readonly overlays: Set<CorePlanSpecialization["kind"]>;
+			}
 		>
 	>();
 	const localCandidates = new Map<
@@ -1808,6 +1822,30 @@ export function verifyCoreOptimizationPlan(
 			fail(`direct entry targets dead function ${entry.function}`);
 		}
 		const fn = program.function(entry.function);
+		if (!coreNativeEntryProofIsCurrent(fn, entry))
+			fail(
+				`direct entry ${entry.function}:${entry.id} has no current representation proof`,
+			);
+		if (entry.argumentRepresentations !== undefined) {
+			const observation = coreArgumentObservation(fn);
+			if (
+				entry.argumentRepresentations.length > 16 ||
+				entry.argumentRepresentations.some(
+					(representation) => !validPlanRepresentation(representation),
+				) ||
+				observation.kind === "general" ||
+				observation.indices.some(
+					(index) => index >= entry.argumentRepresentations!.length,
+				) ||
+				entry.parameterRepresentations.some(
+					(representation, index) =>
+						representation !== (entry.argumentRepresentations![index] ?? "boxed"),
+				)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has invalid argument observations`,
+				);
+		}
 		if (fn.isGenerator || fn.isAsync || fn.metadata.isClassConstructor) {
 			fail(`direct entry targets unsupported function ${entry.function}`);
 		}
@@ -1829,9 +1867,23 @@ export function verifyCoreOptimizationPlan(
 			fail(`direct entry ${entry.function}:${entry.id} has an invalid ABI`);
 		}
 		let parameterRepresentationMismatch = false;
+		if (
+			entry.valueRepresentations !== undefined &&
+			(entry.valueRepresentations.length !== fn.valueCapacity ||
+				entry.valueRepresentations.some(
+					(representation) => !validPlanRepresentation(representation),
+				))
+		) {
+			fail(
+				`direct entry ${entry.function}:${entry.id} has invalid value representations`,
+			);
+		}
+		const representationForValue = (value: CoreValueId) =>
+			entry.valueRepresentations?.[value] ??
+			planRepresentation(fn.valueRepresentation(value));
 		for (let index = 0; index < fn.parameterCount; index++) {
 			if (
-				planRepresentation(fn.valueRepresentation(fn.kernel.functionParameter(index))) !==
+				representationForValue(fn.kernel.functionParameter(index)) !==
 				entry.parameterRepresentations[index]
 			) {
 				parameterRepresentationMismatch = true;
@@ -1845,10 +1897,9 @@ export function verifyCoreOptimizationPlan(
 			const terminator = fn.blockTerminator(block);
 			if (
 				fn.instructionKind(terminator) === "return" &&
-				planRepresentation(
-					fn.valueRepresentation(
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-					),
+				entry.resultRepresentation !== "boxed" &&
+				representationForValue(
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 				) !== entry.resultRepresentation
 			) {
 				resultRepresentationMismatch = true;

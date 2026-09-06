@@ -356,6 +356,7 @@ export type CorePlanSpecialization =
 export interface CoreDirectEntryCallSite {
 	readonly caller: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
+	readonly guarded?: true;
 }
 
 export interface CoreDirectEntryPlan {
@@ -364,6 +365,12 @@ export interface CoreDirectEntryPlan {
 	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
+	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	readonly constantBooleans?: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly value: boolean;
+	}>;
 	readonly target: "native";
 	readonly fallback: "canonical-core";
 	readonly cost: CorePlanCost;

@@ -921,8 +921,66 @@ export interface NativeDirectEntryPlan {
 	readonly id: number;
 	readonly parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
+	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
+	readonly constantBooleans?: ReadonlyArray<{
+		readonly instructionIp: number;
+		readonly value: boolean;
+	}>;
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly gc: NativeFunctionPlan["gc"];
+}
+
+export function validateNativeDirectEntry(
+	fn: BytecodeFunction,
+	entry: NativeDirectEntryPlan,
+): void {
+	const representations = ["boxed", "int32", "number", "boolean", "string"];
+	if (
+		entry.argumentRepresentations !== undefined &&
+		(entry.argumentRepresentations.length > 16 ||
+			fn.mappedArguments ||
+			entry.argumentRepresentations.some(
+				(representation) => !representations.includes(representation),
+			) ||
+			entry.parameterRepresentations.some(
+				(representation, parameter) =>
+					representation !== (entry.argumentRepresentations![parameter] ?? "boxed"),
+			))
+	) {
+		throw new RangeError("Native direct entry has an invalid argument signature");
+	}
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "LOAD_ARGUMENT_COUNT" &&
+			entry.argumentRepresentations === undefined
+		)
+			throw new RangeError("Native direct entry loses argument count");
+		if (
+			(instruction.opcode === "LOAD_ARGUMENT" ||
+				instruction.opcode === "LOAD_STATIC_ARGUMENT") &&
+			(entry.argumentRepresentations?.[instruction.index] === undefined ||
+				(instruction.opcode === "LOAD_STATIC_ARGUMENT" && instruction.direct < 0))
+		)
+			throw new RangeError("Native direct entry loses an argument snapshot");
+		if (
+			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
+			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
+			instruction.opcode === "CALL_REST_ARGUMENTS"
+		)
+			throw new RangeError("Native direct entry observes the general argument slice");
+	}
+	const seen = new Set<number>();
+	for (const { instructionIp, value } of entry.constantBooleans ?? []) {
+		const instruction = fn.instructions[instructionIp];
+		if (
+			seen.has(instructionIp) ||
+			instruction?.opcode !== "BINARY" ||
+			!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(instruction.operator) ||
+			typeof value !== "boolean"
+		)
+			throw new RangeError("Native direct entry has an invalid constant comparison");
+		seen.add(instructionIp);
+	}
 }
 
 export type NativeInstructionPlan =
@@ -3523,6 +3581,17 @@ function lowerExecutionFunctionToNativePlan(
 		id: entry.id,
 		parameterRepresentations: [...entry.parameterRepresentations],
 		resultRepresentation: entry.resultRepresentation,
+		...(entry.argumentRepresentations === undefined
+			? {}
+			: { argumentRepresentations: [...entry.argumentRepresentations] }),
+		...(entry.constantBooleans === undefined
+			? {}
+			: {
+					constantBooleans: entry.constantBooleans.map(({ instruction, value }) => ({
+						instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+						value,
+					})),
+				}),
 		registerRepresentations: [...entry.registerRepresentations],
 		gc: {
 			safepoints: entry.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {

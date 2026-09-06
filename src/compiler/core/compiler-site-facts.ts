@@ -124,7 +124,10 @@ function shapeFact(
 		const indices = numberArray(attributes.keyStringIndices);
 		if (indices === undefined) return undefined;
 		return knownFact(
-			{ kind: "object", keys: indices.map((index) => decodeString(program, index)) },
+			{
+				kind: "object",
+				keys: indices.map((index) => decodeString(program, index)),
+			},
 			siteProof(fn, sourceSite, "static-literal-shape"),
 		);
 	}
@@ -219,7 +222,7 @@ function selectedCallTargets(
 	}
 	for (const entry of compilation.plan.directEntries) {
 		for (const site of entry.callSites) {
-			add(site.caller, site.instruction, [entry.function], false);
+			add(site.caller, site.instruction, [entry.function], site.guarded === true);
 		}
 	}
 	return new Map(

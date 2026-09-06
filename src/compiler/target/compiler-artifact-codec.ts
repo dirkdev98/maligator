@@ -9,6 +9,7 @@ import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
 	nativeFrameRootRegisters,
+	validateNativeDirectEntry,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
@@ -33,7 +34,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 52;
+export const COMPILER_ARTIFACT_VERSION = 53;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -605,21 +606,32 @@ function writeCompilerArtifact(
 						entry.registerRepresentations[register] !== representation,
 				) ||
 				entry.registerRepresentations.some(
-					(representation, register) =>
-						representationTag(representation) < 0 ||
-						(register >= fn.parameterCount &&
-							representation !== native.registerRepresentations[register]),
+					(representation) => representationTag(representation) < 0,
 				) ||
 				representationTag(entry.resultRepresentation) < 0
 			) {
 				throw new RangeError("program-image-codec: invalid native direct entry");
 			}
+			validateNativeDirectEntry(fn, entry);
 			nativeFrameRootRegisters(fn, entry);
 			w.u32(entry.id);
 			w.u8(representationTag(entry.resultRepresentation));
 			w.u32(entry.parameterRepresentations.length);
 			for (const representation of entry.parameterRepresentations) {
 				w.u8(representationTag(representation));
+			}
+			w.i32(entry.argumentRepresentations?.length ?? -1);
+			for (const representation of entry.argumentRepresentations ?? [])
+				w.u8(representationTag(representation));
+			w.u32(entry.constantBooleans?.length ?? 0);
+			for (const { instructionIp, value } of entry.constantBooleans ?? []) {
+				if (
+					fn.instructions[instructionIp]?.opcode !== "BINARY" ||
+					typeof value !== "boolean"
+				)
+					throw new Error("program-image-codec: invalid direct-entry comparison");
+				w.i32(instructionIp);
+				w.u8(value ? 1 : 0);
 			}
 			w.u32(entry.registerRepresentations.length);
 			for (const representation of entry.registerRepresentations) {
@@ -687,12 +699,13 @@ function writeCompilerArtifact(
 									(index > 0 && target <= guardedFunctionIndices[index - 1]!),
 							))) ||
 					(plan.directEntryId !== undefined &&
-						(plan.directFunctionIndex === undefined ||
+						((plan.directFunctionIndex === undefined &&
+							guardedFunctionIndices?.length !== 1) ||
 							!Number.isInteger(plan.directEntryId) ||
 							plan.directEntryId < 0 ||
-							compiler.native.functions[plan.directFunctionIndex]?.directEntries[
-								plan.directEntryId
-							]?.id !== plan.directEntryId)) ||
+							compiler.native.functions[
+								plan.directFunctionIndex ?? guardedFunctionIndices![0]!
+							]?.directEntries[plan.directEntryId]?.id !== plan.directEntryId)) ||
 					(plan.directCallTargetFunctionIndex !== undefined &&
 						(!Number.isInteger(plan.directCallTargetFunctionIndex) ||
 							plan.directCallTargetFunctionIndex < 0 ||
@@ -2718,6 +2731,21 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				{ length: parameterCount },
 				readRepresentation,
 			);
+			const argumentCount = r.i32();
+			if (argumentCount < -1 || argumentCount > 16)
+				throw new Error("program-image-codec: invalid direct-entry arity");
+			const argumentRepresentations =
+				argumentCount < 0
+					? undefined
+					: Array.from({ length: argumentCount }, readRepresentation);
+			const constantCount = r.count(5);
+			const constantBooleans = Array.from({ length: constantCount }, () => {
+				const instructionIp = r.i32();
+				const value = r.u8();
+				if (fn.instructions[instructionIp]?.opcode !== "BINARY" || value > 1)
+					throw new Error("program-image-codec: invalid direct-entry comparison");
+				return { instructionIp, value: value === 1 };
+			});
 			const directRegisterCount = r.count(1);
 			if (directRegisterCount !== fn.registerCount) {
 				throw new Error("program-image-codec: direct-entry register count mismatch");
@@ -2730,11 +2758,6 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				parameterRepresentations.some(
 					(representation, register) =>
 						directRegisterRepresentations[register] !== representation,
-				) ||
-				directRegisterRepresentations.some(
-					(representation, register) =>
-						register >= fn.parameterCount &&
-						representation !== registerRepresentations[register],
 				)
 			) {
 				throw new Error("program-image-codec: invalid direct-entry register classes");
@@ -2767,9 +2790,12 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				id,
 				parameterRepresentations,
 				resultRepresentation,
+				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
+				...(constantCount === 0 ? {} : { constantBooleans }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
 			};
+			validateNativeDirectEntry(fn, entry);
 			nativeFrameRootRegisters(fn, entry);
 			directEntries.push(entry);
 		}
@@ -2826,7 +2852,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					directCallbackFunctionIndex < -1 ||
 					directCallbackFunctionIndex >= functions.length ||
 					directEntryId < -1 ||
-					(directEntryId >= 0 && (directFunctionIndex < 0 || directEntryId >= 4)) ||
+					(directEntryId >= 0 &&
+						((directFunctionIndex < 0 && guardedFunctionIndices.length !== 1) ||
+							directEntryId >= 4)) ||
 					(flags & 24) !== 0 ||
 					((flags & 32) !== 0 && (flags & 4) === 0) ||
 					(directCallTargetFunctionIndex >= 0 && (flags & 1) === 0) ||
@@ -2883,7 +2911,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
 					...((flags & 128) === 0
 						? {}
-						: { exactCollectionReceiver: guardedBuiltinCallBrandTag(collectionTag)! }),
+						: {
+								exactCollectionReceiver: guardedBuiltinCallBrandTag(collectionTag)!,
+							}),
 					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
 				};
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
@@ -2973,7 +3003,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						"program-image-codec: invalid primitive-String length hint",
 					);
 				}
-				nativeInstructions[instructionIndex] = { kind: "primitive-string-length" };
+				nativeInstructions[instructionIndex] = {
+					kind: "primitive-string-length",
+				};
 			} else if (
 				tag === 13 &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -3349,7 +3381,11 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 								...(zeroIp < 0 ? {} : { zeroIp }),
 							};
 						} else if (consumerTag === 3) {
-							consumer = { kind: "number", intrinsicIp: r.i32(), callIp: r.i32() };
+							consumer = {
+								kind: "number",
+								intrinsicIp: r.i32(),
+								callIp: r.i32(),
+							};
 						} else if (consumerTag === 4) {
 							const upperPropertyIp = r.i32();
 							const upperCallIp = r.i32();
@@ -3983,10 +4019,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;
 			if (plan.directEntryId !== undefined) {
+				const target =
+					plan.directFunctionIndex ??
+					(plan.guardedFunctionIndices?.length === 1
+						? plan.guardedFunctionIndices[0]
+						: undefined);
 				if (
-					plan.directFunctionIndex === undefined ||
-					nativeFunctions[plan.directFunctionIndex]?.directEntries[plan.directEntryId]
-						?.id !== plan.directEntryId
+					target === undefined ||
+					nativeFunctions[target]?.directEntries[plan.directEntryId]?.id !==
+						plan.directEntryId
 				) {
 					throw new RangeError(
 						"program-image-codec: direct-entry call names an unknown ABI",

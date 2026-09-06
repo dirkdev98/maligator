@@ -15,6 +15,7 @@ import type {
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
 } from "../core/core-ir-regions.ts";
+import { coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreAttributeValue,
@@ -244,11 +245,23 @@ function lowerCoreImmediate(
 		case "null":
 			return { type: "createNull", registers: [destination] };
 		case "boolean":
-			return { type: "createBoolean", registers: [destination], value: value.value };
+			return {
+				type: "createBoolean",
+				registers: [destination],
+				value: value.value,
+			};
 		case "number":
-			return { type: "createNumber", registers: [destination], value: value.value };
+			return {
+				type: "createNumber",
+				registers: [destination],
+				value: value.value,
+			};
 		case "string":
-			return { type: "createString", registers: [destination], stringIndex: value.index };
+			return {
+				type: "createString",
+				registers: [destination],
+				stringIndex: value.index,
+			};
 	}
 }
 
@@ -1004,7 +1017,11 @@ function lowerCoreSpecializations(
 						instruction,
 						key,
 						captureIndex: load.captureIndex,
-						consumer: { kind: "number" as const, intrinsic, call: consumerCall },
+						consumer: {
+							kind: "number" as const,
+							intrinsic,
+							call: consumerCall,
+						},
 					};
 				}
 				if (consumer.kind === "charCodeAtZero") {
@@ -1335,6 +1352,7 @@ export function coreRegisterClasses(
 	reuseRegisters = true,
 	reservedAbiColors: ReadonlySet<number> = new Set(),
 	blockOrder: ReadonlyArray<CoreBlockId> = [...fn.blockIds()],
+	variantRepresentations: ReadonlyArray<ReadonlyArray<CorePlanRepresentation>> = [],
 ): {
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: ReadonlyMap<CoreValueId, number>;
@@ -1490,7 +1508,10 @@ export function coreRegisterClasses(
 		}
 		const range = interval.blockRanges.get(block);
 		if (range === undefined) {
-			interval.blockRanges.set(block, { start: blockPosition, end: blockPosition });
+			interval.blockRanges.set(block, {
+				start: blockPosition,
+				end: blockPosition,
+			});
 		} else {
 			range.start = Math.min(range.start, blockPosition);
 			range.end = Math.max(range.end, blockPosition);
@@ -1582,6 +1603,9 @@ export function coreRegisterClasses(
 	}
 	const registers = new Map<CoreValueId, number>();
 	const registerRepresentations = new Map<number, CoreRepresentation>();
+	const variantClasses = new Map<number, string>();
+	const variantClass = (value: CoreValueId): string =>
+		variantRepresentations.map((representations) => representations[value]).join(",");
 	const rangesByRegister = new Map<
 		number,
 		Map<CoreBlockId, Array<{ start: number; end: number }>>
@@ -1612,6 +1636,7 @@ export function coreRegisterClasses(
 	const assign = (interval: LiveInterval, register: number): void => {
 		registers.set(interval.value, register);
 		registerRepresentations.set(register, fn.valueRepresentation(interval.value));
+		variantClasses.set(register, variantClass(interval.value));
 		addRanges(register, interval);
 	};
 	for (const interval of liveIntervals) {
@@ -1633,6 +1658,8 @@ export function coreRegisterClasses(
 				reservedAbiColors.has(register) ||
 				(registerRepresentations.has(register) &&
 					registerRepresentations.get(register) !== representation) ||
+				(variantClasses.has(register) &&
+					variantClasses.get(register) !== variantClass(interval.value)) ||
 				overlaps(register, interval)
 			) {
 				register++;
@@ -1649,7 +1676,10 @@ function lowerFunctionToTarget(
 	executionFunction: number,
 	functionMap: ExecutionFunctionMap,
 	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
-	directEntryTargets: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
+	directEntryTargets: ReadonlyMap<
+		CoreInstructionId,
+		{ target: CoreFunctionId; guarded: boolean }
+	>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
@@ -1685,9 +1715,9 @@ function lowerFunctionToTarget(
 			exactCallTargets.add(coreSpecializationRecipeAnchorsAt(recipeTable, row)[0]!);
 		}
 	}
-	for (const [instruction, target] of directEntryTargets) {
+	for (const [instruction, { target, guarded }] of directEntryTargets) {
 		guardedTargets.set(instruction, [target]);
-		exactCallTargets.add(instruction);
+		if (!guarded) exactCallTargets.add(instruction);
 	}
 	const denseReserveLengths = new Map<CoreInstructionId, number>();
 	const plannedBuiltinCalls = new Map<CoreInstructionId, CoreAttributeValue>();
@@ -1824,7 +1854,7 @@ function lowerFunctionToTarget(
 	}
 
 	const reservedAbiColors = new Set<number>();
-	if (coreSupportsDirectEntries(coreFunction)) {
+	if (directEntryPlans.length > 0 || coreSupportsDirectEntries(coreFunction)) {
 		for (let index = 0; index < coreFunction.parameterCount; index++) {
 			reservedAbiColors.add(index);
 		}
@@ -1834,6 +1864,9 @@ function lowerFunctionToTarget(
 		reuseRegisters,
 		reservedAbiColors,
 		blockOrder,
+		directEntryPlans.flatMap((entry) =>
+			entry.valueRepresentations === undefined ? [] : [entry.valueRepresentations],
+		),
 	);
 	const registerRepresentations = new Map(allocation.registerRepresentations);
 	const allocatedRegisterCount = Math.max(-1, ...allocation.registers.values()) + 1;
@@ -1910,7 +1943,10 @@ function lowerFunctionToTarget(
 			if (parameterCount === 0 || kernel.blockParameterRole(parameterStart) !== 1) {
 				throw new Error(`Core handler b${handler} has no exception parameter`);
 			}
-			instructions.push({ type: "tryBegin", blocks: [targetBlock, loweredBlock] });
+			instructions.push({
+				type: "tryBegin",
+				blocks: [targetBlock, loweredBlock],
+			});
 			const argumentStart = kernel.blockHandlerArgumentStart(blockId);
 			const argumentCount = kernel.blockHandlerArgumentCount(blockId);
 			if (argumentCount !== parameterCount - 1) {
@@ -1995,7 +2031,10 @@ function lowerFunctionToTarget(
 					const constrained = nextRegister.value++;
 					registerRepresentations.set(constrained, "boxed");
 					temporaryRegisters.push(constrained);
-					instructions.push({ type: "move", registers: [constrained, operand] });
+					instructions.push({
+						type: "move",
+						registers: [constrained, operand],
+					});
 					registers[twoAddress.result] = constrained;
 					registers[twoAddress.operand] = constrained;
 					resultMove = { type: "move", registers: [destination, constrained] };
@@ -2073,7 +2112,10 @@ function lowerFunctionToTarget(
 						registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
 						blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
 					},
-					{ type: "jump", blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)] },
+					{
+						type: "jump",
+						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)],
+					},
 				);
 				break;
 			case "return":
@@ -2210,15 +2252,114 @@ function lowerFunctionToTarget(
 				instructionOrder.get(left.instruction)! -
 				instructionOrder.get(right.instruction)!,
 		);
-	const directEntries = directEntryPlans.map((entry) => ({
-		id: entry.id,
-		parameterRepresentations: entry.parameterRepresentations.map(
-			planExecutionRepresentation,
-		),
-		resultRepresentation: planExecutionRepresentation(entry.resultRepresentation),
-		registerRepresentations: physicalRepresentations,
-		gc: { safepoints },
-	}));
+	const directEntries = directEntryPlans.map((entry) => {
+		const representations = [...physicalRepresentations];
+		if (entry.valueRepresentations !== undefined) {
+			const assigned = new Map<number, ExecutionRegisterRepresentation>();
+			for (const [value, register] of allocation.registers) {
+				let representation = planExecutionRepresentation(
+					entry.valueRepresentations[value]!,
+				);
+				if (coreFunction.kernel.valueDefinitionKind(value) === 1) {
+					const instruction = coreInstructionId(
+						coreFunction.kernel.valueDefinitionOwner(value),
+					);
+					if (
+						![
+							"binary",
+							"unary",
+							"move",
+							"createNumber",
+							"createBoolean",
+							"createString",
+							...(entry.argumentRepresentations === undefined
+								? []
+								: ["loadArgumentCount", "loadArgument", "loadStaticArgument"]),
+						].includes(coreFunction.instructionOpcodeName(instruction))
+					)
+						representation = physicalRepresentations[register]!;
+				}
+				const previous = assigned.get(register);
+				assigned.set(
+					register,
+					previous === undefined || previous === representation
+						? representation
+						: "boxed",
+				);
+			}
+			for (const [register, representation] of assigned) {
+				if (representations[register] === "boxed")
+					representations[register] = representation;
+			}
+			// A reused boxed source cannot be unboxed by an ordinary edge copy.
+			const outgoing = new Map<number, Array<number>>();
+			for (const block of blocks)
+				for (const instruction of block.instructions) {
+					if (
+						instruction.type !== "move" ||
+						instruction.exactScalarAfterTdz !== undefined
+					)
+						continue;
+					const [destination, source] = instruction.registers;
+					const destinations = outgoing.get(source) ?? [];
+					destinations.push(destination);
+					outgoing.set(source, destinations);
+				}
+			const pending = [...outgoing.keys()];
+			for (let cursor = 0; cursor < pending.length; cursor++) {
+				const source = pending[cursor]!;
+				for (const destination of outgoing.get(source) ?? []) {
+					if (
+						representations[destination] === "boxed" ||
+						representations[destination] === representations[source] ||
+						(representations[source] === "int32" &&
+							representations[destination] === "number")
+					)
+						continue;
+					if (physicalRepresentations[destination] !== "boxed") continue;
+					representations[destination] = "boxed";
+					pending.push(destination);
+				}
+			}
+		}
+		const variant = {
+			...analysisFunction,
+			registerRepresentations: representations,
+		};
+		const variantRoots = executionSafepointRootRegisters(
+			variant,
+			new Set(safepoints.map(({ instruction }) => instruction)),
+		);
+		return {
+			id: entry.id,
+			parameterRepresentations: entry.parameterRepresentations.map(
+				planExecutionRepresentation,
+			),
+			resultRepresentation: planExecutionRepresentation(entry.resultRepresentation),
+			...(entry.argumentRepresentations === undefined
+				? {}
+				: {
+						argumentRepresentations: entry.argumentRepresentations.map(
+							planExecutionRepresentation,
+						),
+					}),
+			...(entry.constantBooleans === undefined
+				? {}
+				: {
+						constantBooleans: entry.constantBooleans.map(({ instruction, value }) => ({
+							instruction: loweredInstructions.get(instruction)!,
+							value,
+						})),
+					}),
+			registerRepresentations: representations,
+			gc: {
+				safepoints: safepoints.map((safepoint) => ({
+					...safepoint,
+					rootRegisters: variantRoots.get(safepoint.instruction) ?? [],
+				})),
+			},
+		};
+	});
 	return { ...fnWithoutGc, directEntries, gc: { safepoints } };
 }
 
@@ -2239,7 +2380,10 @@ export function lowerCoreCompilationToExecutionProgram(
 	const functionMap = createExecutionFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
-	const directEntryTargets = new Map<number, Map<CoreInstructionId, CoreFunctionId>>();
+	const directEntryTargets = new Map<
+		number,
+		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
+	>();
 	const specializationRows = new Map<CoreFunctionId, Array<number>>();
 	const blockOrders = new Map(
 		compilation.plan.blockOrders.map(({ function: functionId, blocks }) => [
@@ -2264,8 +2408,11 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryIds.set(site.caller, calls);
 			const targets =
 				directEntryTargets.get(site.caller) ??
-				new Map<CoreInstructionId, CoreFunctionId>();
-			targets.set(site.instruction, entry.function);
+				new Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>();
+			targets.set(site.instruction, {
+				target: entry.function,
+				guarded: site.guarded === true,
+			});
 			directEntryTargets.set(site.caller, targets);
 		}
 	}
