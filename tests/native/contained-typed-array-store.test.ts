@@ -71,8 +71,20 @@ describe("contained numeric TypedArray stores", () => {
 		});
 		({ compiled, interpreted } = pair);
 		const directKinds = new Set<string>();
+		const boundedLoadKinds = new Set<string>();
 		pair.programImage.runtime.functions.forEach((fn, index) => {
 			const plan = pair.programImage.native.functions[index]!;
+			for (const [ip, instruction] of fn.instructions.entries()) {
+				const access = plan.instructions[ip];
+				if (
+					instruction.opcode === "LOAD_PROPERTY" &&
+					access?.kind === "contained-fixed-typed-array-element" &&
+					access.inBounds
+				) {
+					boundedLoadKinds.add(access.elementKind);
+					expect(plan.registerRepresentations[instruction.dst]).toBe("number");
+				}
+			}
 			const stores = fn.instructions.flatMap((instruction, ip) => {
 				const native = plan.instructions[ip];
 				return instruction.opcode === "STORE_PROPERTY" &&
@@ -87,6 +99,7 @@ describe("contained numeric TypedArray stores", () => {
 			for (const kind of stores) directKinds.add(kind);
 		});
 		expect([...directKinds].sort()).toEqual(kinds.toSorted());
+		expect([...boundedLoadKinds].sort()).toEqual(kinds.toSorted());
 	});
 
 	it("matches Node for wrapping, fractions, non-finite values, signed zero, and bounds", () => {

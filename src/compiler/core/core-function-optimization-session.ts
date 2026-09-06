@@ -33,7 +33,10 @@ import type {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
-import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
+import {
+	CORE_PROOF_PASSES,
+	CORE_SCALAR_REPRESENTATION_PASSES,
+} from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 export type CoreFunctionOptimizationPhaseRunner = <Result>(
@@ -195,12 +198,12 @@ export class CoreFunctionOptimizationSession {
 				(!this.#ablates("memory-ssa-load-store") ||
 					!CORE_MEMORY_SSA_PASSES.includes(pass)),
 		);
-		lateCanonicalizationChanges.push(
-			...runPhase("memory-and-provenance-optimization", () =>
-				memoryPasses.length === 0
-					? []
-					: this.#passes.runComponent("memory", memoryPasses),
-			),
+		const memoryChanges = runPhase("memory-and-provenance-optimization", () =>
+			memoryPasses.length === 0 ? [] : this.#passes.runComponent("memory", memoryPasses),
+		);
+		lateCanonicalizationChanges.push(...memoryChanges);
+		const memoryRepresentationChanges = memoryChanges.filter((change) =>
+			change.domains.includes("representations"),
 		);
 		runPhase("late-local-cleanup", () => {
 			if (lateCanonicalizationChanges.length === 0) return;
@@ -210,6 +213,19 @@ export class CoreFunctionOptimizationSession {
 						"control-flow",
 						CORE_LATE_REPRESENTATION_PASSES,
 						lateCanonicalizationChanges,
+						false,
+					),
+				);
+			}
+			if (
+				memoryRepresentationChanges.length > 0 &&
+				!this.#ablates("proof-value-kind-representation")
+			) {
+				lateCanonicalizationChanges.push(
+					...this.#passes.runComponent(
+						"proofs",
+						CORE_SCALAR_REPRESENTATION_PASSES,
+						memoryRepresentationChanges,
 						false,
 					),
 				);
@@ -285,10 +301,22 @@ export class CoreFunctionOptimizationSession {
 				memoryChanges,
 				false,
 			);
+			const memoryRepresentationChanges = memoryChanges.filter((change) =>
+				change.domains.includes("representations"),
+			);
+			const scalarChanges =
+				memoryRepresentationChanges.length === 0
+					? []
+					: this.#passes.runComponent(
+							"proofs",
+							CORE_SCALAR_REPRESENTATION_PASSES,
+							memoryRepresentationChanges,
+							false,
+						);
 			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
-				[...memoryChanges, ...representationChanges],
+				[...memoryChanges, ...representationChanges, ...scalarChanges],
 				false,
 			);
 		}

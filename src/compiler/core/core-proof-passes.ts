@@ -464,6 +464,24 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"rootUse",
 ]);
 
+function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	return (
+		SCALAR_PRODUCERS.has(opcode) ||
+		(opcode === "loadProperty" &&
+			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true)
+	);
+}
+
+function scalarConsumer(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	return (
+		SCALAR_CONSUMERS.has(opcode) ||
+		((opcode === "loadProperty" || opcode === "storeProperty") &&
+			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true)
+	);
+}
+
 function scalarConsumersOnly(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -474,7 +492,7 @@ function scalarConsumersOnly(
 		const instruction = fn.kernel.useInstruction(use);
 		if (
 			fn.instructionKind(instruction) === "operation" &&
-			!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))
+			!scalarConsumer(fn, instruction)
 		)
 			return false;
 		use = fn.kernel.useNext(use);
@@ -531,9 +549,7 @@ function scalarCandidate(
 	const representation = scalarRepresentation(kind);
 	if (
 		fn.kernel.valueDefinitionKind(value) !== 1 ||
-		!SCALAR_PRODUCERS.has(
-			fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value))),
-		) ||
+		!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) ||
 		!scalarConsumersOnly(fn, value, edgeUses)
 	)
 		return undefined;
@@ -554,10 +570,7 @@ function hasLocalScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean
 		)
 			continue;
 		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (
-			SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition)) &&
-			scalarConsumersOnly(fn, value, edgeUses)
-		)
+		if (scalarProducer(fn, definition) && scalarConsumersOnly(fn, value, edgeUses))
 			return true;
 	}
 	return false;
@@ -659,7 +672,7 @@ function hasFlowScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean 
 			}
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
-			if (!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))) continue;
+			if (!scalarConsumer(fn, instruction)) continue;
 			let values = 0;
 			let boxed = false;
 			const operandStart = fn.kernel.instructionOperandStart(instruction);
@@ -745,7 +758,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 				}
 			}
 			for (const instruction of fn.bodyInstructionIds(block)) {
-				if (!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))) continue;
+				if (!scalarConsumer(fn, instruction)) continue;
 				const byFamily: Array<Array<CoreValueId> | undefined> = [];
 				const includeValue = (value: CoreValueId): void => {
 					const scalar = kinds.exactScalar(value);
@@ -794,11 +807,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 			const rejected = component.some((value) => {
 				const definitionKind = fn.kernel.valueDefinitionKind(value);
 				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				if (
-					definitionKind === 1 &&
-					!SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition))
-				)
-					return true;
+				if (definitionKind === 1 && !scalarProducer(fn, definition)) return true;
 				if (
 					definitionKind === 1 &&
 					!scalarProducerInputsSupportRepresentation(
@@ -814,7 +823,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 					const instruction = fn.kernel.useInstruction(use);
 					if (
 						fn.instructionKind(instruction) === "operation" &&
-						!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))
+						!scalarConsumer(fn, instruction)
 					)
 						return true;
 					use = fn.kernel.useNext(use);
@@ -834,6 +843,11 @@ const materializeFlowScalars: CoreFunctionPass = {
 		return undefined;
 	},
 };
+
+export const CORE_SCALAR_REPRESENTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	materializeLocalScalars,
+	materializeFlowScalars,
+];
 
 export const CORE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeFacts,

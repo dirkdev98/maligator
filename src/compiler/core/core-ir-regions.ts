@@ -8,6 +8,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreUnsignedArithmeticPlan } from "./core-native-numeric-analysis.ts";
 import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
@@ -401,6 +402,7 @@ export interface CoreOptimizationPlan {
 		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
+	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly recipes: CoreSpecializationRecipeTable;
 	readonly statistics: CoreOptimizationPlanStatistics;
 }

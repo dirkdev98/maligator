@@ -1681,6 +1681,7 @@ function lowerFunctionToTarget(
 		{ target: CoreFunctionId; guarded: boolean }
 	>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
+	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
@@ -2010,6 +2011,11 @@ function lowerFunctionToTarget(
 			let lowered: CompilerInstruction = rebuilt;
 			if (reserveLength !== undefined && rebuilt.type === "createArray") {
 				lowered = { ...rebuilt, freshDenseReserveLength: reserveLength };
+			}
+			if (unsignedArithmetic.has(instruction)) {
+				if (lowered.type !== "binary")
+					throw new Error("Unsigned arithmetic lost its operation");
+				lowered = { ...lowered, unsignedArithmetic: true };
 			}
 			loweredInstructions.set(instruction, lowered);
 			const site = siteFacts.get(
@@ -2424,6 +2430,11 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryIds.get(core) ?? new Map(),
 			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
+			new Set(
+				(compilation.plan.unsignedArithmetic ?? [])
+					.filter((operation) => operation.function === core)
+					.map((operation) => operation.instruction),
+			),
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],
 			blockOrders.get(core)!,

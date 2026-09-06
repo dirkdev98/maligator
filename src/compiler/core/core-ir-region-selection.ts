@@ -54,6 +54,7 @@ import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
 } from "./core-native-entry-analysis.ts";
+import { coreUnsignedArithmeticPlans } from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import {
@@ -1543,6 +1544,7 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
+		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,
 	});

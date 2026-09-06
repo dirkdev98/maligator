@@ -1795,6 +1795,11 @@ function emitBody(
 		) {
 			throw new Error("Invalid numeric-fusion region");
 		}
+		if (
+			nativeInstructions[pair.firstIp]?.kind === "unsigned-arithmetic" ||
+			nativeInstructions[pair.finishIp]?.kind === "unsigned-arithmetic"
+		)
+			continue;
 		const common = { id: pair.firstIp, first };
 		numericFusionActionByIp.set(action.ip, { ...common, role: action.role });
 	}
@@ -3068,6 +3073,28 @@ function emitInstruction(
 		const kind = nativeTypedArrayKind(nativePlan.elementKind);
 		const elementSize = nativeTypedArrayElementSize(nativePlan.elementKind);
 		if (instruction.opcode === "LOAD_PROPERTY") {
+			if (
+				nativePlan.kind === "contained-fixed-typed-array-element" &&
+				nativePlan.inBounds
+			) {
+				const array = `__typed_load_${ip}`;
+				const index = isNumericRep(reps[instruction.key]!)
+					? num(instruction.key)
+					: `mal_ops_number_as_f64(${boxed(instruction.key)})`;
+				const bits = `mal_scalar_load_native_u${elementSize * 8}(${array}->buffer->data + ${array}->byte_offset + (usize)(u32)(${index}) * ${elementSize})`;
+				const value =
+					nativePlan.elementKind === "Float64Array"
+						? `mal_scalar_f64_from_bits(${bits})`
+						: nativePlan.elementKind === "Float32Array"
+							? `mal_scalar_f32_from_bits(${bits})`
+							: nativePlan.elementKind.startsWith("Int")
+								? `mal_scalar_i${elementSize * 8}_from_bits(${bits})`
+								: bits;
+				return [
+					`MalTypedArrayObject *${array} = mal_value_to_typed_array_object(${boxed(instruction.object)});`,
+					storeNumber(instruction.dst, `(f64)(${value})`),
+				];
+			}
 			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
 			if (isNumericRep(reps[instruction.key]!)) {
 				return [
@@ -3089,7 +3116,7 @@ function emitInstruction(
 			// Containment prevents buffer exposure; numeric operands need no observable coercion.
 			if (
 				nativePlan.kind === "contained-fixed-typed-array-element" &&
-				isNumericRep(reps[instruction.key]!) &&
+				(nativePlan.inBounds || isNumericRep(reps[instruction.key]!)) &&
 				isNumericRep(reps[instruction.value]!)
 			) {
 				const array = `__typed_store_${ip}`;
@@ -3106,10 +3133,10 @@ function emitInstruction(
 								: `(u${elementSize * 8}) ${nativeInt32Operand(instruction.value)!}`;
 				return [
 					`MalTypedArrayObject *${array} = mal_value_to_typed_array_object(${boxed(instruction.object)});`,
-					`u32 ${index} = mal_vm_typed_array_numeric_index(${num(instruction.key)});`,
-					`if (${index} < ${array}->length) {`,
+					`u32 ${index} = ${nativePlan.inBounds ? `(u32)(${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`})` : `mal_vm_typed_array_numeric_index(${num(instruction.key)})`};`,
+					...(nativePlan.inBounds ? [] : [`if (${index} < ${array}->length) {`]),
 					`  mal_scalar_store_native_u${elementSize * 8}(${array}->buffer->data + ${array}->byte_offset + (usize) ${index} * ${elementSize}, ${storedBits});`,
-					`}`,
+					...(nativePlan.inBounds ? [] : [`}`]),
 				];
 			}
 			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
@@ -4106,6 +4133,18 @@ function emitInstruction(
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
 				];
 			const { dst, left, right, operator } = instruction;
+			if (nativePlan?.kind === "unsigned-arithmetic") {
+				const number = (register: number) =>
+					isNumericRep(reps[register]!)
+						? num(register)
+						: `mal_ops_number_as_f64(${boxed(register)})`;
+				return [
+					storeNumber(
+						dst,
+						`(f64)((u32)(${number(left)}) ${operator} (u32)(${number(right)}))`,
+					),
+				];
+			}
 			const leftIsNum = isNumericRep(reps[left]!);
 			const rightIsNum = isNumericRep(reps[right]!);
 			const dstIsBool = reps[dst] === "boolean";

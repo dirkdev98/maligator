@@ -5,6 +5,7 @@ import {
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import type { CoreLocalFactIndex } from "./core-ir-provenance.ts";
 import type {
 	CoreFunctionId,
@@ -12,7 +13,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT =
@@ -138,11 +139,17 @@ function isLengthProperty(
 function numericPropertyKey(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
+	ranges?: () => CoreLoopInductionAnalysis,
 ): boolean {
 	if (fn.kernel.instructionOperandCount(instruction) < 2) return false;
 	const key = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1);
 	const representation = fn.valueRepresentation(key);
-	return representation === "i32" || representation === "f64";
+	return (
+		representation === "i32" ||
+		representation === "f64" ||
+		ranges?.().range(key, coreBlockId(fn.kernel.instructionBlock(instruction))) !==
+			undefined
+	);
 }
 
 function constructOwnsFixedTypedArrayStorage(
@@ -157,6 +164,11 @@ function constructOwnsFixedTypedArrayStorage(
 		fn.kernel.instructionOperandStart(instruction) + 1,
 	);
 	const argumentRoot = roots.get(argument) ?? argument;
+	if (
+		fn.valueRepresentation(argument) === "f64" ||
+		fn.valueRepresentation(argument) === "i32"
+	)
+		return true;
 	if (fn.kernel.valueDefinitionKind(argumentRoot) !== 1) return false;
 	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(argumentRoot));
 	const opcode = fn.instructionOpcodeName(definition);
@@ -169,6 +181,7 @@ export function analyzeCoreValueClasses(
 	context?: CoreCompilationContext,
 	canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>,
 	index?: CoreLocalFactIndex,
+	ranges?: () => CoreLoopInductionAnalysis,
 ): CoreValueClassAnalysis {
 	const fn = program.function(functionId);
 	const roots =
@@ -258,13 +271,14 @@ export function analyzeCoreValueClasses(
 			return;
 		}
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "move" || opcode === "rootUse") return;
+		if (opcode === "move" || opcode === "rootUse" || opcode === "requireCoercible")
+			return;
 		if (
 			coreNumericTypedArrayKind(brand) !== undefined &&
 			operand === 0 &&
 			((opcode === "loadPropertyStatic" && isLengthProperty(program, fn, instruction)) ||
 				((opcode === "loadProperty" || opcode === "storeProperty") &&
-					numericPropertyKey(fn, instruction)))
+					numericPropertyKey(fn, instruction, ranges)))
 		)
 			return;
 		if (opcode === "callBuiltin" && operand === 0) {

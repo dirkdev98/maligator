@@ -488,6 +488,7 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: Core additionally proved unexposed locally owned storage,
 			 * excluding detachment and resizing for this access. */
 			containedFixedTypedArrayKind?: CompilerNumericTypedArrayKind;
+			containedFixedTypedArrayInBounds?: true;
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -538,6 +539,7 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: Core additionally proved unexposed locally owned storage,
 			 * excluding detachment and resizing for this access. */
 			containedFixedTypedArrayKind?: CompilerNumericTypedArrayKind;
+			containedFixedTypedArrayInBounds?: true;
 	  }
 	| {
 			type: "storePropertyStatic";
@@ -965,7 +967,7 @@ export type CompilerInstruction =
 			// [destination, left, right]
 			registers: [number, number, number];
 
-			/** Verified semantic kind sets for exact native lowering. */
+			unsignedArithmetic?: true;
 			exactInputKindMasks?: readonly [CompilerValueKindMask, CompilerValueKindMask];
 
 			operator:

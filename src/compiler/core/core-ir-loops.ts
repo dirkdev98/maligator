@@ -438,9 +438,7 @@ export function analyzeCoreLoopInductions(
 		inductions.map((induction) => [root(induction.update), induction]),
 	);
 	const refinements: Array<PathRefinement> = [];
-	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-		const block = coreBlockId(blockIndex);
-		if (fn.kernel.blockLive(block) === 0) continue;
+	for (const block of fn.blockIds()) {
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "branch") continue;
 		const conditionValue = fn.kernel.operandAt(
@@ -491,43 +489,130 @@ export function analyzeCoreLoopInductions(
 			Math.min(left.maximum, right.maximum),
 		);
 	let hasI32 = false;
-	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
-		const value = valueIndex as CoreValueId;
-		if (fn.kernel.valueLive(value) === 0) continue;
+	for (const value of fn.valueIds()) {
 		if (numericRepresentation(value) === "i32") {
 			hasI32 = true;
 			break;
 		}
 	}
-	const result: CoreLoopInductionAnalysis = {
-		inductions: Object.freeze(inductions),
-		hasNumericRanges: inductions.length > 0 || refinements.length > 0 || hasI32,
-		induction(value) {
-			return byRoot.get(root(value));
-		},
-		range(value, block) {
-			const resolved = root(value);
-			const induction = byRoot.get(resolved) ?? byUpdate.get(resolved);
-			const exact = exactNumber(fn, value, root);
-			let range: CoreNumericRange | undefined =
-				induction?.range ??
-				(exact === undefined
-					? numericRepresentation(value) === "i32"
-						? I32_RANGE
-						: undefined
-					: numericRange(exact));
-			if (range === undefined || block === undefined) return range;
+	const memo = new Map<
+		CoreBlockId | undefined,
+		Map<CoreValueId, CoreNumericRange | undefined>
+	>();
+	const query = (
+		value: CoreValueId,
+		block: CoreBlockId | undefined,
+		budget: { remaining: number },
+	): CoreNumericRange | undefined => {
+		const resolved = root(value);
+		let cache = memo.get(block);
+		if (cache === undefined) {
+			cache = new Map();
+			memo.set(block, cache);
+		}
+		if (cache.has(resolved)) return cache.get(resolved);
+		if (budget.remaining-- <= 0) return undefined;
+		cache.set(resolved, undefined);
+		const induction = byRoot.get(resolved);
+		const update = byUpdate.get(resolved);
+		const exact = exactNumber(fn, resolved, root);
+		let range: CoreNumericRange | undefined;
+		if (induction?.range !== undefined) {
+			const body =
+				block !== undefined &&
+				induction.comparison !== undefined &&
+				induction.loop.blocks.has(block) &&
+				cfg.dominates(induction.comparison.body, block);
+			range = body
+				? induction.range
+				: numericRange(
+						Math.min(induction.range.minimum, induction.range.finalUpdate),
+						Math.max(induction.range.maximum, induction.range.finalUpdate),
+					);
+		} else if (update?.range !== undefined) {
+			range = numericRange(
+				update.range.minimum + update.step,
+				update.range.maximum + update.step,
+			);
+		} else if (exact !== undefined) range = numericRange(exact);
+		else {
+			const definition = definitionInstruction(fn, resolved);
+			if (definition !== undefined && fn.instructionOpcodeName(definition) === "binary") {
+				const left = operand(fn, definition, 0)!;
+				const right = operand(fn, definition, 1)!;
+				const constant = exactNumber(fn, right, root);
+				const operator = fn.instructionAttributes(definition).operator;
+				if (operator === ">>>") {
+					range = numericRange(
+						0,
+						constant === undefined ? 0xffff_ffff : 0xffff_ffff >>> (constant & 31),
+					);
+				} else if (
+					operator === "&" &&
+					constant !== undefined &&
+					Number.isInteger(constant) &&
+					constant >= 0 &&
+					constant <= 0x7fff_ffff
+				) {
+					range = numericRange(0, constant);
+				} else if (
+					constant !== undefined &&
+					Number.isSafeInteger(constant) &&
+					!Object.is(constant, -0)
+				) {
+					const input = query(left, block, budget);
+					if (input !== undefined) {
+						if (operator === "+")
+							range = numericRange(input.minimum + constant, input.maximum + constant);
+						else if (operator === "-")
+							range = numericRange(input.minimum - constant, input.maximum - constant);
+						else if (
+							operator === "*" &&
+							!(constant < 0 && input.minimum <= 0 && input.maximum >= 0) &&
+							!(constant === 0 && input.minimum < 0)
+						) {
+							range = numericRange(
+								Math.min(input.minimum * constant, input.maximum * constant),
+								Math.max(input.minimum * constant, input.maximum * constant),
+							);
+						} else if (operator === "%" && constant > 0 && input.minimum >= 0)
+							range = numericRange(0, Math.min(input.maximum, constant - 1));
+					}
+				}
+			}
+			if (range === undefined && numericRepresentation(resolved) === "i32")
+				range = I32_RANGE;
+		}
+		if (range !== undefined && block !== undefined) {
 			let current: CoreBlockId | null = block;
 			while (current !== null) {
 				for (const refinement of refinements) {
 					if (refinement.block !== current || refinement.subject !== resolved) continue;
-					const narrowed = intersect(range, refinement.range);
-					if (narrowed === undefined) return undefined;
-					range = narrowed;
+					range = intersect(range, refinement.range);
+					if (range === undefined) break;
 				}
+				if (range === undefined) break;
 				current = cfg.immediateDominators[current] ?? null;
 			}
-			return range;
+		}
+		cache.set(resolved, range);
+		return range;
+	};
+	const hasBoundedBinary = [...fn.instructionIds()].some(
+		(instruction) =>
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "binary" &&
+			["&", ">>>"].includes(fn.instructionAttributes(instruction).operator as string),
+	);
+	const result: CoreLoopInductionAnalysis = {
+		inductions: Object.freeze(inductions),
+		hasNumericRanges:
+			inductions.length > 0 || refinements.length > 0 || hasI32 || hasBoundedBinary,
+		induction(value) {
+			return byRoot.get(root(value));
+		},
+		range(value, block) {
+			return query(value, block, { remaining: 32 });
 		},
 	};
 	return Object.freeze(result);

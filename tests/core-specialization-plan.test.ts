@@ -1040,7 +1040,49 @@ describe("late Core specialization plan", () => {
 				readFileSync("bench/javascript.mjs", "utf8"),
 				"argument-edges-benchmark.js",
 			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 		);
+		const boundedLoads = definition.native.functions.flatMap((fn, index) =>
+			fn.instructions.flatMap((access, ip) => {
+				const instruction = definition.runtime.functions[index]!.instructions[ip]!;
+				return access?.kind === "contained-fixed-typed-array-element" &&
+					access.inBounds &&
+					instruction.opcode === "LOAD_PROPERTY"
+					? [fn.registerRepresentations[instruction.dst]]
+					: [];
+			}),
+		);
+		expect(boundedLoads).toEqual(["number", "number"]);
+		const histogramIndex = definition.native.functions.findIndex((fn) =>
+			fn.instructions.some(
+				(access) =>
+					access?.kind === "contained-fixed-typed-array-element" && access.inBounds,
+			),
+		);
+		const histogramSource = emitCompiledFunction(
+			definition.runtime.functions[histogramIndex]!,
+			definition.native.functions[histogramIndex]!,
+			histogramIndex,
+			"",
+			false,
+		)!.source;
+		expect(histogramSource).toContain("mal_scalar_store_native_u32");
+		expect(histogramSource).not.toContain("mal_vm_typed_array_numeric_index");
+		const integerSites = definition.native.functions.flatMap((fn) =>
+			fn.instructions.filter(
+				(instruction) => instruction?.kind === "unsigned-arithmetic",
+			),
+		);
+		expect(integerSites.length).toBeGreaterThan(0);
+		expect(
+			deserializeCompilerArtifact(
+				serializeCompilerArtifact(definition),
+			).native.functions.flatMap((fn) =>
+				fn.instructions.filter(
+					(instruction) => instruction?.kind === "unsigned-arithmetic",
+				),
+			),
+		).toEqual(integerSites);
 		const index = definition.runtime.functions.findIndex((fn) =>
 			fn.instructions.some(
 				(instruction) =>

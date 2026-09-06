@@ -342,6 +342,62 @@ describe("Core control-flow analyses and passes", () => {
 			step: 1,
 			range: { first: 0, last: 9, finalUpdate: 10 },
 		});
+		expect(loops.range(counter, latch)).toMatchObject({ minimum: 0, maximum: 9 });
+		expect(loops.range(counter, header)).toMatchObject({ minimum: 0, maximum: 10 });
+		expect(loops.range(counter)).toMatchObject({ minimum: 0, maximum: 10 });
+		expect(loops.range(next!, latch)).toMatchObject({ minimum: 1, maximum: 10 });
+	});
+
+	it("bounds short arithmetic chains without certifying negative zero or unsafe results", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const block = builder.createBlock([{ representation: "boxed" }]);
+		const unknown = inspectCoreBlockParameters(builder, block)[0]!.value;
+		const literal = (value: number) =>
+			builder.appendInstruction(block, "createF64", [], {
+				attributes: { value },
+				outputRepresentations: ["f64"],
+			})[0]!;
+		const binary = (operator: string, left: typeof unknown, right: typeof unknown) =>
+			builder.appendInstruction(block, "binary", [left, right], {
+				attributes: { operator },
+				outputRepresentations: ["f64"],
+			})[0]!;
+		const mask = binary("&", unknown, literal(15));
+		const product = binary("*", mask, literal(47));
+		const remainder = binary("%", product, literal(800));
+		const shifted = binary(">>>", unknown, literal(3));
+		const negativeZero = binary("%", literal(-8), literal(4));
+		const negative = binary("*", mask, literal(-1));
+		const zeroDivisor = binary("%", mask, literal(0));
+		const overflow = binary("+", literal(Number.MAX_SAFE_INTEGER), literal(1));
+		const signedZero = binary("+", literal(-0), literal(-0));
+		let longChain = unknown;
+		longChain = binary("&", longChain, literal(15));
+		for (let index = 0; index < 40; index++)
+			longChain = binary("+", longChain, literal(1));
+		builder.setTerminator(block, { kind: "return", value: remainder });
+		const id = builder.finish(block).function;
+		const fn = program.function(id);
+		const cfg = buildCoreControlFlow(program, id);
+		const ranges = analyzeCoreLoopInductions(fn, cfg, coreCanonicalValueRoots(fn, cfg));
+		expect(ranges.hasNumericRanges).toBe(true);
+		expect(ranges.range(mask, block)).toMatchObject({ minimum: 0, maximum: 15 });
+		expect(ranges.range(product, block)).toMatchObject({ minimum: 0, maximum: 705 });
+		expect(ranges.range(remainder, block)).toMatchObject({ minimum: 0, maximum: 705 });
+		expect(ranges.range(shifted, block)).toMatchObject({
+			minimum: 0,
+			maximum: 0x1fff_ffff,
+		});
+		for (const value of [
+			negativeZero,
+			negative,
+			zeroDivisor,
+			overflow,
+			signedZero,
+			longChain,
+		])
+			expect(ranges.range(value, block)).toBeUndefined();
 	});
 
 	it("recognizes a unique preheader with duplicate edges from one latch", () => {

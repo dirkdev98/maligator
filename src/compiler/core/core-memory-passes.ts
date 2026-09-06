@@ -16,6 +16,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
+import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
 	coreMemoryAccesses,
@@ -60,6 +61,7 @@ import { coreInstructionId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import { coreContainedTypedArrayIndexInBounds } from "./core-typed-array-bounds.ts";
 
 const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
 	"Array.prototype.push",
@@ -380,8 +382,13 @@ function hasUnrefinedTypedArrayAccess(
 			fn.instructionKind(instruction) === "operation" &&
 			(fn.instructionOpcodeName(instruction) === "loadProperty" ||
 				fn.instructionOpcodeName(instruction) === "storeProperty") &&
-			fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] ===
-				undefined
+			(fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] ===
+				undefined ||
+				(fn.instructionAttributes(instruction)[
+					CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE
+				] !== undefined &&
+					fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds !==
+						true))
 		)
 			return true;
 		if (
@@ -1011,14 +1018,16 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 			);
 		},
 	},
-	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "facts"],
-	changes: { cfg: false, calls: false, facts: true, representations: false },
+	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
+	wakesOn: ["body", "facts", "representations", "cfg"],
+	changes: { cfg: false, calls: false, facts: true, representations: true },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
+		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
+		const classes = facts.valueClasses;
+		const loops = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
@@ -1046,7 +1055,11 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 				isLengthString(program, attributes.stringIndex);
 			const containedAccess = opcode === "loadPropertyStatic" ? undefined : contained;
 			if (exact === undefined && !containedLength) continue;
+			const inBounds =
+				containedAccess !== undefined &&
+				coreContainedTypedArrayIndexInBounds(program, fn, facts, loops, instruction);
 			if (
+				inBounds === (attributes.containedFixedTypedArrayInBounds === true) &&
 				exact === attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] &&
 				containedAccess === attributes[CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE] &&
 				containedLength ===
@@ -1061,6 +1074,7 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 				{
 					attributes: {
 						...attributes,
+						containedFixedTypedArrayInBounds: inBounds,
 						...(exact === undefined
 							? {}
 							: { [CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact }),
@@ -1077,6 +1091,8 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
 			);
+			if (inBounds && opcode === "loadProperty")
+				editor.setValueRepresentation(instructionResultAt(fn, instruction, 0)!, "f64");
 		}
 		return editor?.commit();
 	},

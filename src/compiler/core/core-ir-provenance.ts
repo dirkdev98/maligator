@@ -667,7 +667,10 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 				get valueClasses() {
 					return (valueClassAnalysis ??= runOwner(
 						CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
-						() => analyzeCoreValueClasses(program, functionId, context, roots, index()),
+						() =>
+							analyzeCoreValueClasses(program, functionId, context, roots, index(), () =>
+								get(CORE_LOOP_INDUCTION_ANALYSIS, request),
+							),
 					));
 				},
 			});

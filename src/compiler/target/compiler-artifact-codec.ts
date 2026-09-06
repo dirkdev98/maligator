@@ -34,7 +34,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 53;
+export const COMPILER_ARTIFACT_VERSION = 54;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -806,6 +806,7 @@ function writeCompilerArtifact(
 			) {
 				w.u8(17);
 				w.u8(taggedNumericTypedArrayKind(plan.elementKind));
+				w.u8(plan.inBounds ? 1 : 0);
 			} else if (
 				plan.kind === "contained-fixed-typed-array-length" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -849,6 +850,12 @@ function writeCompilerArtifact(
 				}
 				w.u8(13);
 				w.u32(plan.slot);
+			} else if (
+				plan.kind === "unsigned-arithmetic" &&
+				instruction.opcode === "BINARY" &&
+				["+", "-", "*", "%"].includes(instruction.operator)
+			) {
+				w.u8(18);
 			} else if (
 				plan.kind === "exact-binary-input-kinds" &&
 				instruction.opcode === "BINARY"
@@ -2974,9 +2981,14 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				(instruction.opcode === "LOAD_PROPERTY" ||
 					instruction.opcode === "STORE_PROPERTY")
 			) {
+				const elementKind = numericTypedArrayKindFromTag(r.u8());
+				const inBounds = r.u8();
+				if (inBounds > 1)
+					throw new RangeError("program-image-codec: invalid typed array bounds proof");
 				nativeInstructions[instructionIndex] = {
 					kind: "contained-fixed-typed-array-element",
-					elementKind: numericTypedArrayKindFromTag(r.u8()),
+					elementKind,
+					...(inBounds === 1 ? { inBounds: true } : {}),
 				};
 			} else if (
 				tag === 18 &&
@@ -3017,6 +3029,12 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "exact-own-slot",
 					slot: r.u32(),
 				};
+			} else if (
+				tag === 18 &&
+				instruction.opcode === "BINARY" &&
+				["+", "-", "*", "%"].includes(instruction.operator)
+			) {
+				nativeInstructions[instructionIndex] = { kind: "unsigned-arithmetic" };
 			} else if (tag === 17 && instruction.opcode === "BINARY") {
 				const left = r.u8();
 				const right = r.u8();

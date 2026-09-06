@@ -32,6 +32,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
+import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "./core-ir.ts";
@@ -1079,7 +1080,7 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
@@ -1116,7 +1117,15 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 			const key = instructionOperand(fn, instruction, 1);
 			const result = instructionResult(fn, instruction, 0);
 			if (base === undefined || key === undefined || result === undefined) continue;
+			const indexRange = context
+				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
+				.range(key, fn.instructionBlock(instruction));
+			const compactIndex =
+				indexRange !== undefined &&
+				indexRange.minimum >= 0 &&
+				indexRange.maximum <= 0x7fff_ffff;
 			if (
+				!compactIndex &&
 				!compilerValueKindMaskIsSubset(
 					kinds.kindMask(key),
 					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,

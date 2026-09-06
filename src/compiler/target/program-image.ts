@@ -1005,6 +1005,7 @@ export type NativeInstructionPlan =
 	| {
 			readonly kind: "contained-fixed-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
+			readonly inBounds?: true;
 	  }
 	| {
 			readonly kind: "exact-typed-array-element";
@@ -1014,6 +1015,7 @@ export type NativeInstructionPlan =
 			readonly kind: "exact-binary-input-kinds";
 			readonly inputKindMasks: readonly [CompilerValueKindMask, CompilerValueKindMask];
 	  }
+	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" };
 
 /**
@@ -1356,6 +1358,7 @@ function nativeInstructionPlanFromExecution(
 					? {
 							kind: "contained-fixed-typed-array-element",
 							elementKind: instruction.containedFixedTypedArrayKind,
+							...(instruction.containedFixedTypedArrayInBounds ? { inBounds: true } : {}),
 						}
 					: instruction.exactTypedArrayKind === undefined
 						? undefined
@@ -1368,6 +1371,7 @@ function nativeInstructionPlanFromExecution(
 				? {
 						kind: "contained-fixed-typed-array-element",
 						elementKind: instruction.containedFixedTypedArrayKind,
+						...(instruction.containedFixedTypedArrayInBounds ? { inBounds: true } : {}),
 					}
 				: instruction.exactTypedArrayKind === undefined
 					? undefined
@@ -1380,6 +1384,7 @@ function nativeInstructionPlanFromExecution(
 				? undefined
 				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
 		case "binary":
+			if (instruction.unsignedArithmetic) return { kind: "unsigned-arithmetic" };
 			return instruction.exactInputKindMasks === undefined
 				? undefined
 				: {
