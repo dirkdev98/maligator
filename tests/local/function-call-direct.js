@@ -113,5 +113,22 @@ try {
 }
 ok("target throw", caught === thrown);
 
-ok("check count", checks === 13);
+ok("zero arguments", strictTarget.call()[0] === undefined);
+class ConstructorOnly {}
+let classError;
+try {
+	ConstructorOnly.call(null);
+} catch (error) {
+	classError = error;
+}
+ok("class rejects call", classError instanceof TypeError);
+let nonCallableError;
+try {
+	originalCall.call(17);
+} catch (error) {
+	nonCallableError = error;
+}
+ok("non-callable rejects call", nonCallableError instanceof TypeError);
+
+ok("check count", checks === 16);
 console.log("function-call-direct PASS");

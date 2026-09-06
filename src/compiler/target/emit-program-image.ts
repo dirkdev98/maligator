@@ -503,6 +503,7 @@ function nativeCompilationAvailability(
 			for (const target of [
 				instruction.directFunctionIndex,
 				instruction.directCallbackFunctionIndex,
+				instruction.directCallTargetFunctionIndex,
 				...(instruction.guardedFunctionIndices ?? []),
 			]) {
 				if (
@@ -568,6 +569,7 @@ function emitNativeFunctions(
 			for (const target of [
 				instruction.directFunctionIndex,
 				instruction.directCallbackFunctionIndex,
+				instruction.directCallTargetFunctionIndex,
 				...(instruction.guardedFunctionIndices ?? []),
 			]) {
 				if (target !== undefined) targets.add(target);

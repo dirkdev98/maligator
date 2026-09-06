@@ -2332,6 +2332,41 @@ mal_vm_call_exact_script_compiled_callback(
     return completion;
 }
 
+// The callback must match the guarded function index; keep it visible to C.
+static inline __attribute__((always_inline)) MalCompletion
+mal_vm_call_function_call_direct_compiled(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalCompiledFunction callback,
+    MalValue call_method,
+    MalValue target,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return vm->completion;
+    if (call_method == vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] &&
+        mal_value_is_native_function_object(call_method) &&
+        mal_value_is_function_object(target) &&
+        expected_function_index >= 0 &&
+        expected_function_index < vm->runtime_image->function_count &&
+        mal_function_object_function_index(mal_value_to_function_object(target)) == expected_function_index &&
+        !vm->runtime_image->functions[expected_function_index].is_class_constructor) {
+        const MalExactScriptCall exact = {
+            .callee = target,
+            .function_index = expected_function_index,
+            .compiled_callback = callback,
+            .function = &vm->runtime_image->functions[expected_function_index],
+            .env = mal_value_to_function_object(target)->creation_env,
+        };
+        return mal_vm_call_exact_script_compiled_callback(
+            vm, &exact, arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
+            arg_count > 1 ? args + 1 : nullptr, arg_count > 1 ? arg_count - 1 : 0);
+    }
+    return mal_vm_call_function_call_direct(
+        vm, fallback_cache, expected_function_index, call_method, target, args, arg_count);
+}
+
 /**
  * mal_vm_construct_value with an explicit new.target (whose `.prototype`
  * parents the new instance), implementing the spec [[Construct]](args, newTarget).

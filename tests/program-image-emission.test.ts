@@ -921,6 +921,33 @@ describe("emit-program-image instruction packing", () => {
 		expect(rejected).toContain("mal_vm_call_direct(vm,");
 	});
 
+	it("withdraws compiled .call callbacks when the target exceeds the emission budget", () => {
+		let image = nativeEntryBudgetImage();
+		image = withNativeFunctionPlan(image, 0, (plan) => ({
+			...plan,
+			instructions: plan.instructions.with(2, {
+				kind: "call",
+				directFunctionCall: true,
+				directCallTargetFunctionIndex: 1,
+			}),
+		}));
+		image = withNativeFunctionPlan(image, 1, (plan) => ({
+			...plan,
+			registerRepresentations: ["boxed", "boxed", "boxed"],
+			gc: plan.directEntries[0]!.gc,
+			directEntries: [],
+		}));
+		const emit = (budget: number) =>
+			emitProgramTranslationUnits(image, {}, budget).join("\n");
+		expect(emit(60_000)).toMatch(
+			/mal_vm_call_function_call_direct_compiled\(vm, &__cc_\d+, 1, mal_compiled_1,/,
+		);
+		const rejected = emit(15_000);
+		expect(rejected).not.toContain("mal_compiled_1");
+		expect(rejected).not.toContain("mal_vm_call_function_call_direct_compiled(");
+		expect(rejected).toMatch(/mal_vm_call_function_call_direct\(vm, &__cc_\d+, 1,/);
+	});
+
 	it("reports exact typed calls without inventing a callee identity guard", () => {
 		const image = nativeEntryBudgetImage();
 		const caller = { ...image.runtime.functions[0]!, profileSiteIds: [-1, -1, 0, -1] };
@@ -2271,10 +2298,11 @@ describe("native update-expression representation", () => {
 			const target = function target(value) { "use strict"; return this === null ? value : 0; };
 			globalThis.result = target.call(null, 1);
 		`);
-		expect(output).toContain("mal_vm_call_function_call_direct(vm, &__cc_");
-		expect(output).toMatch(/mal_vm_call_function_call_direct\(vm, &__cc_\d+, 1,/);
+		expect(output).toMatch(
+			/mal_vm_call_function_call_direct_compiled\(vm, &__cc_\d+, 1, mal_compiled_1,/,
+		);
 		expect(output).not.toMatch(
-			/mal_vm_call_function_call_direct\([^\n]+\);[\s\S]{0,80}mal_vm_call_cached/,
+			/mal_vm_call_function_call_direct_compiled\([^\n]+\);[\s\S]{0,80}mal_vm_call_cached/,
 		);
 	});
 
