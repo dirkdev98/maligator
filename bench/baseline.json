@@ -25,26 +25,26 @@
       "allocation": 77034407
     },
     "node": {
-      "wallMs": 356.314625,
+      "wallMs": 376.506375,
       "phaseMs": {
-        "core": 56,
-        "objects": 42,
-        "collections": 69,
-        "text": 69,
-        "async": 47,
-        "allocation": 44
+        "core": 58,
+        "objects": 44,
+        "collections": 72,
+        "text": 72,
+        "async": 48,
+        "allocation": 47
       }
     },
     "modes": {
       "closed-compiled": {
-        "wallMs": 2459.256916,
+        "wallMs": 1163.924333,
         "phaseMs": {
-          "core": 186,
-          "objects": 552,
-          "collections": 265,
-          "text": 308,
-          "async": 91,
-          "allocation": 1048
+          "core": 128,
+          "objects": 268,
+          "collections": 246,
+          "text": 312,
+          "async": 93,
+          "allocation": 116
         },
         "world": "closed",
         "backend": "compiled",
@@ -53,40 +53,49 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 6.90192527460808,
-        "balancedRatio": 5.705944490170558,
-        "binaryBytes": 2549432,
+        "ratio": 3.0913801472817024,
+        "balancedRatio": 3.136282013501245,
+        "binaryBytes": 2549512,
         "nativeBuild": {
           "phasesMs": {
-            "runtime": 13.92554199999995,
-            "rust": 6.02737500000012,
-            "write generated C": 0.7014999999998963,
-            "generated C objects": 3.9777500000000146,
-            "link": 5.704666999999972
+            "runtime C projection": 892.307667,
+            "runtime C object reuse": 0,
+            "runtime C object compile": 1457.9019159999998,
+            "runtime C · engine": 149.82349999999997,
+            "runtime C · host": 29.01150000000007,
+            "runtime C · runtime": 32.02624999999989,
+            "runtime": 2663.770958,
+            "rust": 6.218000000000302,
+            "write generated C": 1.2171669999997903,
+            "generated C objects": 449.1321670000002,
+            "link": 1788.0429999999997,
+            "strip": 13.294791999999688,
+            "publish binary": 5.059957999999824
           },
-          "totalMs": 30.336833999999953,
+          "totalMs": 7487.806874999999,
           "translationUnits": 1,
-          "generatedCBytes": 295301,
-          "objectBytes": 302784,
-          "cCompilationMs": 3.9777500000000146,
-          "linkMs": 5.704666999999972,
-          "stripMs": 0
+          "generatedCBytes": 313928,
+          "objectBytes": 330544,
+          "cCompilationMs": 449.1321670000002,
+          "linkMs": 1788.0429999999997,
+          "stripMs": 13.294791999999688,
+          "peakRssBytes": 246349824
         },
-        "collections": 144,
-        "allocatedMb": 604.0643920898438,
-        "peakLiveKb": 12411.859375,
-        "maxPauseMs": 1.866,
-        "rssMb": 42.5
+        "collections": 89,
+        "allocatedMb": 384.3370666503906,
+        "peakLiveKb": 11808.890625,
+        "maxPauseMs": 1.672,
+        "rssMb": 48.34375
       },
       "open-compiled": {
-        "wallMs": 2450.464958,
+        "wallMs": 1301.928625,
         "phaseMs": {
-          "core": 187,
-          "objects": 555,
-          "collections": 272,
-          "text": 283,
-          "async": 97,
-          "allocation": 1052
+          "core": 129,
+          "objects": 348,
+          "collections": 267,
+          "text": 290,
+          "async": 101,
+          "allocation": 150
         },
         "world": "open",
         "backend": "compiled",
@@ -95,49 +104,49 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 6.8772505703351365,
-        "balancedRatio": 5.724864715896389,
-        "binaryBytes": 31075432,
+        "ratio": 3.4579192052193006,
+        "balancedRatio": 3.4761700598826635,
+        "binaryBytes": 31279656,
         "nativeBuild": {
           "phasesMs": {
-            "runtime C projection": 1265.1678339999999,
+            "runtime C projection": 1330.491709,
             "runtime C object reuse": 0,
-            "runtime C object compile": 10649.466250000001,
-            "runtime C · engine": 443.81183299999975,
-            "runtime C · host": 27.777750000001106,
-            "runtime C · runtime": 30.08141699999942,
-            "runtime": 12945.263334,
-            "rust": 0.7163749999999709,
-            "write generated C": 0.25195800000074087,
-            "generated C objects": 333.23645900000156,
-            "link": 26416.616582999995,
-            "strip": 29.58520899999712,
-            "publish binary": 56.938666999994894
+            "runtime C object compile": 12664.438625,
+            "runtime C · engine": 273.1898329999967,
+            "runtime C · host": 29.103541999997105,
+            "runtime C · runtime": 31.75645899999654,
+            "runtime": 14721.753625,
+            "rust": 1.1972500000010768,
+            "write generated C": 0.4110839999993914,
+            "generated C objects": 423.15645799999766,
+            "link": 31198.046083000005,
+            "strip": 31.301707999999053,
+            "publish binary": 58.35833300000377
           },
-          "totalMs": 52198.913668999994,
+          "totalMs": 60763.204709,
           "translationUnits": 1,
-          "generatedCBytes": 305870,
-          "objectBytes": 301120,
-          "cCompilationMs": 333.23645900000156,
-          "linkMs": 26416.616582999995,
-          "stripMs": 29.58520899999712,
-          "peakRssBytes": 1877164032
+          "generatedCBytes": 320291,
+          "objectBytes": 322672,
+          "cCompilationMs": 423.15645799999766,
+          "linkMs": 31198.046083000005,
+          "stripMs": 31.301707999999053,
+          "peakRssBytes": 1886683136
         },
-        "collections": 146,
-        "allocatedMb": 612.8350219726562,
-        "peakLiveKb": 15117.859375,
-        "maxPauseMs": 1.743,
-        "rssMb": 44.03125
+        "collections": 128,
+        "allocatedMb": 539.5920715332031,
+        "peakLiveKb": 22630.84375,
+        "maxPauseMs": 3.251,
+        "rssMb": 44.859375
       },
       "closed-interpreted": {
-        "wallMs": 3905.377666,
+        "wallMs": 3938.980625,
         "phaseMs": {
-          "core": 629,
-          "objects": 1255,
-          "collections": 445,
-          "text": 379,
-          "async": 131,
-          "allocation": 1059
+          "core": 652,
+          "objects": 1201,
+          "collections": 459,
+          "text": 407,
+          "async": 143,
+          "allocation": 1076
         },
         "world": "closed",
         "backend": "interpreted",
@@ -146,40 +155,43 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 10.960475355172413,
-        "balancedRatio": 9.630063165970823,
+        "ratio": 10.46192278948796,
+        "balancedRatio": 9.540626071301002,
         "binaryBytes": 2402168,
         "nativeBuild": {
           "phasesMs": {
-            "runtime": 2.8854160000000775,
-            "rust": 0.3529160000000502,
-            "write generated C": 1.146750000000111,
-            "generated C objects": 2.793333000000075,
-            "link": 4.410875000000033
+            "runtime": 3.998916999999892,
+            "rust": 0.39245799999935116,
+            "write generated C": 1.3949579999998605,
+            "generated C objects": 40.862333000000035,
+            "link": 1656.3988330000002,
+            "strip": 13.273667000000387,
+            "publish binary": 4.53400000000056
           },
-          "totalMs": 11.589290000000346,
+          "totalMs": 1720.8551660000003,
           "translationUnits": 1,
           "generatedCBytes": 16,
           "objectBytes": 10288,
-          "cCompilationMs": 2.793333000000075,
-          "linkMs": 4.410875000000033,
-          "stripMs": 0
+          "cCompilationMs": 40.862333000000035,
+          "linkMs": 1656.3988330000002,
+          "stripMs": 13.273667000000387,
+          "peakRssBytes": 243417088
         },
         "collections": 160,
-        "allocatedMb": 666.0749816894531,
+        "allocatedMb": 666.074951171875,
         "peakLiveKb": 20933.546875,
-        "maxPauseMs": 2.542,
-        "rssMb": 43.90625
+        "maxPauseMs": 3.544,
+        "rssMb": 44.015625
       },
       "open-interpreted": {
-        "wallMs": 3883.802042,
+        "wallMs": 3935.026959,
         "phaseMs": {
-          "core": 615,
-          "objects": 1252,
-          "collections": 455,
-          "text": 358,
-          "async": 134,
-          "allocation": 1062
+          "core": 649,
+          "objects": 1247,
+          "collections": 473,
+          "text": 373,
+          "async": 141,
+          "allocation": 1056
         },
         "world": "open",
         "backend": "interpreted",
@@ -188,33 +200,33 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 10.899923184460924,
-        "balancedRatio": 9.57531033449633,
-        "binaryBytes": 30895432,
+        "ratio": 10.451421862378824,
+        "balancedRatio": 9.450321118055367,
+        "binaryBytes": 31099624,
         "nativeBuild": {
           "phasesMs": {
-            "runtime": 107.60162499999569,
-            "rust": 1.624458999998751,
-            "write generated C": 0.42749999999796273,
-            "generated C objects": 51.192541000003985,
-            "link": 26258.353958,
-            "strip": 26.68058299999393,
-            "publish binary": 56.94475000000966
+            "runtime": 100.10208299999795,
+            "rust": 0.8038750000050641,
+            "write generated C": 0.33716699999786215,
+            "generated C objects": 43.01166700000613,
+            "link": 31973.156749999995,
+            "strip": 31.877290999997058,
+            "publish binary": 68.45187499999884
           },
-          "totalMs": 26502.825416,
+          "totalMs": 32217.740707999998,
           "translationUnits": 1,
           "generatedCBytes": 16,
           "objectBytes": 10288,
-          "cCompilationMs": 51.192541000003985,
-          "linkMs": 26258.353958,
-          "stripMs": 26.68058299999393,
-          "peakRssBytes": 1942847488
+          "cCompilationMs": 43.01166700000613,
+          "linkMs": 31973.156749999995,
+          "stripMs": 31.877290999997058,
+          "peakRssBytes": 1881653248
         },
         "collections": 161,
         "allocatedMb": 674.8455963134766,
         "peakLiveKb": 9171.921875,
-        "maxPauseMs": 1.571,
-        "rssMb": 44.765625
+        "maxPauseMs": 1.725,
+        "rssMb": 44.875
       }
     }
   },
@@ -222,82 +234,98 @@
     "world": "closed",
     "runs": 5,
     "bare": {
-      "malRps": 162030.99545750843,
-      "nodeRps": 97808.45826109506,
-      "ratio": 1.656615371903464,
-      "malP99Ms": 0.78925,
-      "nodeP99Ms": 0.9914999999999999,
-      "binaryBytes": 3379456,
+      "malRps": 150624.42560876955,
+      "nodeRps": 93355.64692211583,
+      "ratio": 1.613447397932249,
+      "malP99Ms": 0.920875,
+      "nodeP99Ms": 1.0494160000000001,
+      "binaryBytes": 3380144,
       "nativeBuild": {
         "phasesMs": {
-          "runtime": 5.247875000000931,
-          "rust": 5.937541999999667,
-          "write generated C": 0.5084579999966081,
-          "generated C objects": 3.5815829999919515,
-          "link": 2.8079169999982696
+          "runtime C projection": 859.1395839999896,
+          "runtime C object reuse": 0,
+          "runtime C object compile": 2490.929708999989,
+          "runtime C · engine": 35.75733299998683,
+          "runtime C · host": 20.629625000001397,
+          "runtime C · runtime": 22.060916999995243,
+          "runtime": 3510.3910409999953,
+          "rust": 15.364458999974886,
+          "write generated C": 1.0436249999911524,
+          "generated C objects": 87.27579200000037,
+          "link": 54.37524999998277,
+          "publish binary": 6.24299999998766
         },
-        "totalMs": 18.083374999987427,
+        "totalMs": 7103.210334999894,
         "translationUnits": 1,
         "generatedCBytes": 15143,
         "objectBytes": 13640,
-        "cCompilationMs": 3.5815829999919515,
-        "linkMs": 2.8079169999982696,
-        "stripMs": 0
+        "cCompilationMs": 87.27579200000037,
+        "linkMs": 54.37524999998277,
+        "stripMs": 0,
+        "peakRssBytes": 110952448
       },
       "runtime": {
-        "collections": 2114,
-        "allocatedBytes": 8884924352,
-        "peakLiveBytes": 192464,
-        "maxPauseMs": 2.152,
+        "collections": 1962,
+        "allocatedBytes": 8247894384,
+        "peakLiveBytes": 198224,
+        "maxPauseMs": 2.72,
         "rssBytes": 24117248
       }
     },
     "express": {
-      "binaryBytes": 10558832,
+      "binaryBytes": 10576272,
       "nativeBuild": {
         "phasesMs": {
-          "runtime": 7.145625000004657,
-          "rust": 6.800375000020722,
-          "write generated C": 9.600624999991851,
-          "generated C objects": 11.172041000012541,
-          "link": 16.233457999973325
+          "runtime C projection": 1028.7512500000012,
+          "runtime C object reuse": 0,
+          "runtime C object compile": 2837.5680410000205,
+          "runtime C · engine": 42.85412500001257,
+          "runtime C · host": 24.880375000007916,
+          "runtime C · runtime": 30.693292000010842,
+          "runtime": 4074.312291999988,
+          "rust": 7.945542000001296,
+          "write generated C": 5.048666999995476,
+          "generated C objects": 22262.785417000006,
+          "link": 74.12904200001503,
+          "publish binary": 19.535250000015367
         },
-        "totalMs": 50.952124000003096,
+        "totalMs": 30408.503293000074,
         "translationUnits": 1,
-        "generatedCBytes": 10745433,
-        "objectBytes": 6540056,
-        "cCompilationMs": 11.172041000012541,
-        "linkMs": 16.233457999973325,
-        "stripMs": 0
+        "generatedCBytes": 10820226,
+        "objectBytes": 6551576,
+        "cCompilationMs": 22262.785417000006,
+        "linkMs": 74.12904200001503,
+        "stripMs": 0,
+        "peakRssBytes": 1128071168
       },
       "runtime": {
-        "collections": 2406,
-        "allocatedBytes": 10115350640,
-        "peakLiveBytes": 1703424,
-        "maxPauseMs": 2.012,
-        "rssBytes": 29933568
+        "collections": 2320,
+        "allocatedBytes": 9755190384,
+        "peakLiveBytes": 1558032,
+        "maxPauseMs": 2.579,
+        "rssBytes": 30015488
       },
       "workloads": {
         "routes": {
-          "malRps": 27219.331590368383,
-          "nodeRps": 45623.94069605927,
-          "ratio": 0.596601941329444,
-          "malP99Ms": 2.686791,
-          "nodeP99Ms": 2.1298329999999996
+          "malRps": 26824.736611918757,
+          "nodeRps": 43185.87935956523,
+          "ratio": 0.6211460090594949,
+          "malP99Ms": 2.9347079999999997,
+          "nodeP99Ms": 2.2417079999999996
         },
         "json": {
-          "malRps": 19878.671500444892,
-          "nodeRps": 44060.72999148929,
-          "ratio": 0.45116527811238333,
-          "malP99Ms": 3.396917,
-          "nodeP99Ms": 2.20025
+          "malRps": 18774.778924510552,
+          "nodeRps": 41854.493595131615,
+          "ratio": 0.44857259787021714,
+          "malP99Ms": 4.0396659999999995,
+          "nodeP99Ms": 2.311375
         },
         "form": {
-          "malRps": 16347.891929185469,
-          "nodeRps": 40355.3944489441,
-          "ratio": 0.4050980582005738,
-          "malP99Ms": 3.974625,
-          "nodeP99Ms": 2.398959
+          "malRps": 15578.345068248631,
+          "nodeRps": 38295.318889617054,
+          "ratio": 0.4067950214268189,
+          "malP99Ms": 4.5335,
+          "nodeP99Ms": 2.527667
         }
       }
     }
@@ -6939,10 +6967,10 @@
     }
   },
   "source": {
-    "commit": "c302603793887795439a6d47600a9ec064046c22",
+    "commit": "9af45d391d1d44355f62c78732e3944a91783b07",
     "dirty": false,
-    "digest": "eed35c4a2305a6ba3c4fceb062c2a924b7c0fe86c628c049b8097c83ab95dcad",
-    "benchmarkDigest": "dbe0164e0ebcba23903f050012fdd210c01385fc3f48f9111c5c2085fdfe4bd6",
+    "digest": "c39bd36a4cee8ed0bbb562553c8134b38b03e0c82b78bddb763cc4b97de7ecaa",
+    "benchmarkDigest": "173ee5c591ea8fb9a741f7fd1d5fb27407cca90ecdc79accbf9ff23e1ee7b6d7",
     "configurationDigest": "1509e8d492d351fcfb6821fda64cada15f933cc8591ba1c871f812c9728a051a"
   }
 }
