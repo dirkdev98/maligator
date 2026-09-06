@@ -357,6 +357,68 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		);
 	});
 
+	it.each(["binary", "unary"] as const)(
+		"preserves the numeric input contract when refining a %s stack cell",
+		(opcode) => {
+			for (const representation of ["boxed", "f64"] as const) {
+				const core = program();
+				const builder = new CoreFunctionBuilder(core);
+				const entry = builder.createBlock();
+				const [input] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: 7.5 },
+					outputRepresentations: [representation],
+				});
+				const [divisor] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: 2 },
+					outputRepresentations: ["f64"],
+				});
+				const [value] = builder.appendInstruction(
+					entry,
+					opcode,
+					opcode === "binary" ? [input!, divisor!] : [input!],
+					{ attributes: { operator: opcode === "binary" ? "/" : "-" } },
+				);
+				const [object] = builder.appendInstruction(
+					entry,
+					"createObjectShaped",
+					[value!],
+					{
+						attributes: { keyStringIndices: [0] },
+					},
+				);
+				const [loaded] = builder.appendInstruction(
+					entry,
+					"loadPropertyStatic",
+					[object!],
+					{
+						attributes: { stringIndex: 0 },
+					},
+				);
+				builder.setTerminator(entry, { kind: "return", value: loaded! });
+				const finished = builder.finish(entry);
+				const report = new CoreOptimizationReportBuilder(core);
+				const analyses = new CoreAnalysisManager(core, lockedContext, report);
+				const pass = CORE_MEMORY_PASSES.find(
+					({ name }) => name === "refine-stack-object-cell-representations",
+				)!;
+				new CoreFunctionPassScheduler(
+					core,
+					lockedContext,
+					analyses,
+					report,
+					finished.function,
+					{
+						verification: "per-pass",
+					},
+				).runComponent("memory", [pass]);
+				const fn = core.function(finished.function);
+				expect(fn.valueRepresentation(input!)).toBe(representation);
+				expect(fn.valueRepresentation(value!)).toBe(representation);
+				expect(fn.valueRepresentation(loaded!)).toBe(representation);
+			}
+		},
+	);
+
 	it("keeps a cell boxed when its exact value flows through a boxed block parameter", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);

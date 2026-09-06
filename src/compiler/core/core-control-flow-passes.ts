@@ -1060,8 +1060,11 @@ const LOOP_SCALAR_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 
 const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
+	"createObjectShaped",
+	"defineProperty",
 	"loadProperty",
 	"storeProperty",
+	"storePropertyStatic",
 	"throwIfTdz",
 ]);
 
@@ -1210,19 +1213,12 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 				const operand = fn.kernel.useOperand(use);
 				if (fn.instructionKind(instruction) !== "operation") continue;
 				const opcode = fn.instructionOpcodeName(instruction);
-				const builtin = fn.instructionAttributes(instruction).knownBuiltinCall;
-				const builtinOperation =
-					builtin !== null && typeof builtin === "object" && !Array.isArray(builtin)
-						? Object.entries(builtin).find(([key]) => key === "operation")?.[1]
-						: undefined;
-				const stringCharCodeAtPosition =
-					opcode === "call" &&
-					operand === 2 &&
-					builtinOperation === "String.prototype.charCodeAt";
+				// The target boxes numeric arguments at the ordinary JavaScript call boundary.
+				const callArgument = opcode === "call" && operand >= 2;
 				if (
 					!LOOP_SCALAR_OPERATIONS.has(opcode) &&
 					!LOOP_SCALAR_CONSUMERS.has(opcode) &&
-					!stringCharCodeAtPosition
+					!callArgument
 				)
 					return undefined;
 			}
@@ -1413,4 +1409,8 @@ export const CORE_CONTROL_FLOW_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectLoopScalarRepresentations,
 	foldPathComparisons,
 	reduceBoundedRemainders,
+];
+
+export const CORE_LATE_REPRESENTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	selectLoopScalarRepresentations,
 ];

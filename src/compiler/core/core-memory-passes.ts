@@ -1812,7 +1812,22 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 			if (seen.has(value)) return false;
 			if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-			if (fn.instructionOpcodeName(definition) !== "move") return true;
+			const opcode = fn.instructionOpcodeName(definition);
+			if (
+				(opcode === "binary" || opcode === "unary") &&
+				(representation === "i32" || representation === "f64")
+			) {
+				const start = fn.kernel.instructionOperandStart(definition);
+				const count = fn.kernel.instructionOperandCount(definition);
+				for (let index = 0; index < count; index++) {
+					const inputRepresentation = fn.valueRepresentation(
+						fn.kernel.operandAt(start + index),
+					);
+					if (inputRepresentation !== "i32" && inputRepresentation !== "f64")
+						return false;
+				}
+			}
+			if (opcode !== "move") return true;
 			const source = instructionOperandAt(fn, definition, 0);
 			return source === undefined
 				? false

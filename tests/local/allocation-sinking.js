@@ -2,15 +2,18 @@ const vector = (x, y, z) => ({ x, y, z });
 const add = (left, right) => vector(left.x + right.x, left.y + right.y, left.z + right.z);
 const scale = (value, factor) =>
 	vector(value.x * factor, value.y * factor, value.z * factor);
+const dot = (left, right) => left.x * right.x + left.y * right.y + left.z * right.z;
 
 function exercise(count) {
 	let checksum = 0;
 	const retained = [];
+	const progress = { index: 0 };
 	for (let index = 0; index < count; index++) {
+		progress.index = index;
 		const first = vector(index % 101, (index * 3) % 103, (index * 7) % 107);
 		const second = scale(first, 0.5);
 		const result = add(first, second);
-		checksum += result.x + result.y + result.z;
+		checksum += Math.round(dot(result, second));
 		if ((index & 255) === 0) retained.push({ index, result });
 	}
 
@@ -22,7 +25,14 @@ function exercise(count) {
 		entry.result.x += index;
 		retainedChecksum += entry.index + entry.result.x + entry.result.y + entry.result.z;
 	}
-	return { checksum, retainedChecksum, retained: retained.length, identity };
+	return {
+		checksum,
+		retainedChecksum,
+		retained: retained.length,
+		identity,
+		bounds: [0, count],
+		progress,
+	};
 }
 
 function sharedAcrossLoop(count) {

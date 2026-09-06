@@ -1,7 +1,10 @@
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CoreAnalysisScratchPool } from "./core-analysis-scratch.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
+import {
+	CORE_CONTROL_FLOW_PASSES,
+	CORE_LATE_REPRESENTATION_PASSES,
+} from "./core-control-flow-passes.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CoreFunctionFeatureIndex } from "./core-function-features.ts";
 import {
@@ -201,6 +204,16 @@ export class CoreFunctionOptimizationSession {
 		);
 		runPhase("late-local-cleanup", () => {
 			if (lateCanonicalizationChanges.length === 0) return;
+			if (!this.#ablates("cfg-loop-licm-pre")) {
+				lateCanonicalizationChanges.push(
+					...this.#passes.runComponent(
+						"control-flow",
+						CORE_LATE_REPRESENTATION_PASSES,
+						lateCanonicalizationChanges,
+						false,
+					),
+				);
+			}
 			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
@@ -260,7 +273,24 @@ export class CoreFunctionOptimizationSession {
 			const initial = [result.changes];
 			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, false);
 			this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, false);
-			this.#passes.runComponent("memory", CORE_MEMORY_PASSES, initial, false);
+			const memoryChanges = this.#passes.runComponent(
+				"memory",
+				CORE_MEMORY_PASSES,
+				initial,
+				false,
+			);
+			const representationChanges = this.#passes.runComponent(
+				"control-flow",
+				CORE_LATE_REPRESENTATION_PASSES,
+				memoryChanges,
+				false,
+			);
+			this.#passes.runComponent(
+				"canonicalize",
+				CORE_LATE_CANONICALIZATION_PASSES,
+				[...memoryChanges, ...representationChanges],
+				false,
+			);
 		}
 		return Object.freeze({
 			changes: result.changes,
