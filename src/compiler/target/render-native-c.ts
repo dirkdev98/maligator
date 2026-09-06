@@ -824,6 +824,7 @@ function emitCompiledVariant(
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
+		index,
 		nativeContract.specializations,
 		nativeContract.regionActions,
 		nativeContract.instructions,
@@ -1163,6 +1164,7 @@ function emitResumableFunction(
 	}
 	const body = emitBody(
 		fn,
+		index,
 		native.specializations,
 		native.regionActions,
 		native.instructions,
@@ -1726,6 +1728,7 @@ function nativeBodyReference(
  */
 function emitBody(
 	fn: BytecodeFunction,
+	functionIndex: number,
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
@@ -1938,7 +1941,16 @@ function emitBody(
 		}
 	}
 	const jumpTargets = new Set<number>();
+	let ownsCaptureEnvironment = coro === null && fn.capturedCount > 0;
 	for (const instruction of fn.instructions) {
+		switch (instruction.opcode) {
+			case "ENV_PUSH":
+			case "ENV_COPY":
+			case "ENV_POP":
+			case "WITH_ENTER":
+			case "WITH_EXIT":
+				ownsCaptureEnvironment = false;
+		}
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
 		}
@@ -2367,6 +2379,7 @@ function emitBody(
 				stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
 				directCompiledTargets,
 				directCompiledEntries,
+				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
 				strictCompiledTargets,
 				directResultRepresentation,
 				mathUnaryCall: mathUnaryCalls.has(ip),
@@ -2660,6 +2673,7 @@ function nativeProfileCall(
  * forms) is the main way this backend grows.
  */
 interface NativeInstructionContext {
+	readonly ownedCaptureFunctionIndex?: number;
 	readonly resources: Set<NativeBodyResource>;
 	readonly profileSiteId?: number;
 	readonly profile?: NativeInstructionProfile;
@@ -2803,6 +2817,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -2919,10 +2934,11 @@ function emitInstruction(
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
+	const coerciveNumberOperand = (operand: number): string | null => {
+		const boolean = nativeBooleanOperand(operand);
+		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
+	};
 	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
-	// Read register r as a raw C bool (ToBoolean). A boolean-rep register is the
-	// bool itself; a number-rep one is truthy iff nonzero and not NaN; a boxed
-	// one defers to mal_value_is_truthy.
 	const truthy = (r: number): string =>
 		reps[r] === "boolean"
 			? `r${r}`
@@ -2930,7 +2946,9 @@ function emitInstruction(
 				? `(r${r} != 0)`
 				: reps[r] === "number"
 					? `(r${r} != 0.0 && r${r} == r${r})`
-					: `mal_value_is_truthy(r${r})`;
+					: reps[r] === "string"
+						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
+						: `mal_value_is_truthy(r${r})`;
 	// Where control goes on a pending throw: into the innermost enclosing
 	// try/catch handler when this instruction is inside one (CATCH there reads
 	// vm->completion.value), otherwise out of the compiled frame (the dispatch
@@ -3132,7 +3150,8 @@ function emitInstruction(
 				`}`,
 			];
 		case "IS_EMPTY":
-			// Tests for the TDZ sentinel (used by default-value / with fallbacks).
+			if (reps[instruction.src] !== "boxed")
+				return [storeBoolean(instruction.dst, "false")];
 			return [
 				reps[instruction.dst] === "boolean"
 					? `r${instruction.dst} = mal_value_is_empty(${boxed(instruction.src)});`
@@ -3305,7 +3324,8 @@ function emitInstruction(
 		case "LOAD_NEW_TARGET":
 			return [`r${instruction.dst} = ${nativeBodyReference(resources, "newTarget")};`];
 		case "GUARD_FUNCTION_INDEX":
-			// Speculative-inline guard → boolean-rep dst (a raw C bool feeding the jumpIf).
+			if (reps[instruction.callee] !== "boxed")
+				return [storeBoolean(instruction.dst, "false")];
 			return [
 				`r${instruction.dst} = mal_vm_callee_has_index(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)});`,
 			];
@@ -3315,10 +3335,18 @@ function emitInstruction(
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED":
+			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
+				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
 			return [
 				`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
 			];
 		case "STORE_CAPTURED":
+			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
+				return [
+					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
+					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+					`mal_gc_card(&env->header, env->slots[${instruction.index}]);`,
+				];
 			return [
 				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
 			];
@@ -3922,6 +3950,18 @@ function emitInstruction(
 			];
 		}
 		case "TO_PROPERTY_KEY":
+			if (reps[instruction.key] === "string") {
+				const copy = `r${instruction.dst} = ${boxed(instruction.key)};`;
+				if (reps[instruction.object] !== "boxed") return [copy];
+				return [
+					`if (mal_value_is_nil(${boxed(instruction.object)})) {`,
+					`  r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+					`  ${throwCheck()}`,
+					"} else {",
+					`  ${copy}`,
+					"}",
+				];
+			}
 			return [
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				throwCheck(),
@@ -3968,8 +4008,8 @@ function emitInstruction(
 				`    r${instruction.fallback} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${mappedArguments}, ${mappedArgumentSlots.length}, ${mappedArgumentSlots.length > 0 ? `(const i32[]){ ${mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
 				`  }`,
 				`  r${instruction.dst} = mal_vm_op_load_property(vm, r${instruction.fallback}, mal_value_from_i32(${instruction.index}));`,
+				`  ${throwCheck()}`,
 				`}`,
-				throwCheck(),
 			];
 		}
 		case "CREATE_REST_ARGUMENTS":
@@ -4002,6 +4042,19 @@ function emitInstruction(
 			const rightIsNum = isNumericRep(reps[right]!);
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
+			if (reps[left] === "boolean" || reps[right] === "boolean") {
+				const a = coerciveNumberOperand(left),
+					b = coerciveNumberOperand(right);
+				if (a !== null && b !== null) {
+					if (compare !== undefined && operator !== "===" && operator !== "!==")
+						return [storeBoolean(dst, `${a} ${compare} ${b}`)];
+					const expression =
+						operator === "**"
+							? `mal_number_exponentiate(${a}, ${b})`
+							: nativeNumberExpr(operator, a, b);
+					if (expression !== null) return [storeNumber(dst, expression)];
+				}
+			}
 			const fusion = numericFusionAction;
 			const exactInputKinds =
 				nativePlan?.kind === "exact-binary-input-kinds"
@@ -4417,6 +4470,20 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (reps[src] === "boolean") {
+				const value = coerciveNumberOperand(src)!;
+				const expression =
+					operator === "-"
+						? `-${value}`
+						: operator === "+" || operator === "tonumeric"
+							? value
+							: operator === "~"
+								? `(f64) (~(r${src} ? 1 : 0))`
+								: operator === "increment" || operator === "decrement"
+									? `${value} ${operator === "increment" ? "+" : "-"} 1.0`
+									: null;
+				if (expression !== null) return [storeNumber(dst, expression)];
+			}
 			if (isNumericRep(reps[src]!) && operator !== "!") {
 				if (operator === "~") {
 					const expression = `~${nativeInt32Operand(src)!}`;
@@ -4624,11 +4691,15 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "Number.prototype.valueOf") {
+				const value = nativeNumberOperand(instruction.thisValue);
+				if (value !== null) return [storeNumber(instruction.dst, value)];
 				return [
 					`r${instruction.dst} = mal_builtin_number_value_of_known(${boxedOperand(instruction.thisValue)});`,
 				];
 			}
 			if (instruction.operation === "Boolean.prototype.valueOf") {
+				const value = nativeBooleanOperand(instruction.thisValue);
+				if (value !== null) return [storeBoolean(instruction.dst, value)];
 				return [
 					`r${instruction.dst} = mal_builtin_boolean_value_of_known(${boxedOperand(instruction.thisValue)});`,
 				];
@@ -5487,7 +5558,7 @@ function emitInstruction(
 				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };`,
 			];
 		case "REQUIRE_COERCIBLE":
-			// Destructuring / member-base coercibility: null or undefined throws.
+			if (reps[instruction.src] !== "boxed") return [];
 			return [
 				`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`,
 				throwCheck(),
