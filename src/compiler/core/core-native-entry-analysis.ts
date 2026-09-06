@@ -21,6 +21,7 @@ const representationProofs = new WeakMap<
 		readonly arguments: string | undefined;
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
 		readonly calls: string;
+		readonly fields: string | undefined;
 	}
 >();
 
@@ -30,6 +31,7 @@ export function analyzeCoreNativeEntry(
 	parameters: ReadonlyArray<CorePlanRepresentation>,
 	arguments_: ReadonlyArray<CorePlanRepresentation> | undefined,
 	callSites: CoreDirectEntryPlan["callSites"],
+	fields?: CoreDirectEntryPlan["fieldParameters"],
 ): {
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
@@ -46,6 +48,12 @@ export function analyzeCoreNativeEntry(
 	const kinds = analyzeCoreValueKinds(fn, cfg, {
 		parameterMasks: parameters.map(mask),
 		operationResultMask(instruction, result) {
+			if (
+				fields !== undefined &&
+				(fields.loads.some((load) => load.instruction === instruction) ||
+					fn.instructionOpcodeName(instruction) === "call")
+			)
+				return COMPILER_VALUE_KIND_NUMBER;
 			if (
 				arguments_ === undefined ||
 				result !== fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction))
@@ -94,8 +102,12 @@ export function analyzeCoreNativeEntry(
 		parameters: parameters.join(","),
 		arguments: arguments_?.join(","),
 		constants: constantBooleans,
+		fields: fields === undefined ? undefined : JSON.stringify(fields),
 		calls: callSites
-			.map((site) => `${site.caller}:${site.instruction}:${site.guarded === true}`)
+			.map(
+				(site) =>
+					`${site.caller}:${site.instruction}:${site.guarded === true}:${site.fieldObject}`,
+			)
 			.sort()
 			.join(","),
 	});
@@ -112,7 +124,9 @@ export function coreNativeEntryProofIsCurrent(
 ): boolean {
 	if (entry.valueRepresentations === undefined)
 		return (
-			entry.argumentRepresentations === undefined && entry.constantBooleans === undefined
+			entry.argumentRepresentations === undefined &&
+			entry.constantBooleans === undefined &&
+			entry.fieldParameters === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
 	return (
@@ -121,9 +135,16 @@ export function coreNativeEntryProofIsCurrent(
 		proof.parameters === entry.parameterRepresentations.join(",") &&
 		proof.arguments === entry.argumentRepresentations?.join(",") &&
 		proof.constants === entry.constantBooleans &&
+		proof.fields ===
+			(entry.fieldParameters === undefined
+				? undefined
+				: JSON.stringify(entry.fieldParameters)) &&
 		proof.calls ===
 			entry.callSites
-				.map((site) => `${site.caller}:${site.instruction}:${site.guarded === true}`)
+				.map(
+					(site) =>
+						`${site.caller}:${site.instruction}:${site.guarded === true}:${site.fieldObject}`,
+				)
 				.sort()
 				.join(",")
 	);

@@ -1821,7 +1821,13 @@ export function verifyCoreOptimizationPlan(
 			fail("unsigned arithmetic has no current range proof");
 	}
 	const entriesByFunction = new Map<CoreFunctionId, number>();
-	const callSites = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	const callSites = new Map<
+		string,
+		{
+			readonly fieldObject: CoreInstructionId | undefined;
+			readonly targets: Set<CoreFunctionId>;
+		}
+	>();
 	for (const entry of plan.directEntries) {
 		if (!plan.liveFunctions.includes(entry.function)) {
 			fail(`direct entry targets dead function ${entry.function}`);
@@ -1921,11 +1927,19 @@ export function verifyCoreOptimizationPlan(
 		}
 		for (const site of entry.callSites) {
 			const key = `${site.caller}:${site.instruction}`;
-			const callerSites = callSites.get(site.caller) ?? new Set<CoreInstructionId>();
-			if (callerSites.has(site.instruction))
-				fail(`callsite ${key} selects multiple direct entries`);
-			callerSites.add(site.instruction);
-			callSites.set(site.caller, callerSites);
+			const previous = callSites.get(key);
+			if (
+				(entry.fieldParameters === undefined) !== (site.fieldObject === undefined) ||
+				(previous !== undefined &&
+					(site.fieldObject === undefined ||
+						previous.fieldObject !== site.fieldObject ||
+						previous.targets.has(entry.function)))
+			)
+				fail(`callsite ${key} selects incompatible direct entries`);
+			const targets = previous?.targets ?? new Set<CoreFunctionId>();
+			targets.add(entry.function);
+			if (targets.size > 4) fail(`callsite ${key} selects too many direct entries`);
+			callSites.set(key, { fieldObject: site.fieldObject, targets });
 			if (!plan.liveFunctions.includes(site.caller))
 				fail(`direct entry callsite ${key} is dead`);
 			const caller = program.function(site.caller);

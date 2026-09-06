@@ -10,6 +10,7 @@ import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-cod
 import {
 	nativeFrameRootRegisters,
 	validateNativeDirectEntry,
+	validateNativeFieldCalls,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
@@ -34,7 +35,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 54;
+export const COMPILER_ARTIFACT_VERSION = 55;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -554,6 +555,7 @@ function writeCompilerArtifact(
 		if (native?.functionIndex !== functionIndex) {
 			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
+		validateNativeFieldCalls(fn, native, compiler.native.functions);
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
 				? 0
@@ -594,6 +596,16 @@ function writeCompilerArtifact(
 		if (native.directEntries.length > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
 		}
+		w.u32(native.fieldCalls?.length ?? 0);
+		for (const site of native.fieldCalls ?? []) {
+			w.u32(site.allocationIp);
+			w.u32(site.callIp);
+			w.u32(site.entries.length);
+			for (const entry of site.entries) {
+				w.u32(entry.functionIndex);
+				w.u32(entry.entryId);
+			}
+		}
 		w.u32(native.directEntries.length);
 		for (const [entryIndex, entry] of native.directEntries.entries()) {
 			if (
@@ -623,6 +635,13 @@ function writeCompilerArtifact(
 			w.i32(entry.argumentRepresentations?.length ?? -1);
 			for (const representation of entry.argumentRepresentations ?? [])
 				w.u8(representationTag(representation));
+			w.u32(entry.fieldParameters?.keys.length ?? 0);
+			for (const key of entry.fieldParameters?.keys ?? []) w.u32(key);
+			w.u32(entry.fieldParameters?.loads.length ?? 0);
+			for (const load of entry.fieldParameters?.loads ?? []) {
+				w.u32(load.instructionIp);
+				w.u32(load.field);
+			}
 			w.u32(entry.constantBooleans?.length ?? 0);
 			for (const { instructionIp, value } of entry.constantBooleans ?? []) {
 				if (
@@ -2708,6 +2727,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
+		const fieldCallCount = r.count(12);
+		const fieldCalls = Array.from({ length: fieldCallCount }, () => ({
+			allocationIp: r.u32(),
+			callIp: r.u32(),
+			entries: Array.from({ length: r.count(8) }, () => ({
+				functionIndex: r.u32(),
+				entryId: r.u32(),
+			})),
+		}));
 		const directEntryCount = r.count(1);
 		if (directEntryCount > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
@@ -2745,6 +2773,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				argumentCount < 0
 					? undefined
 					: Array.from({ length: argumentCount }, readRepresentation);
+			const fieldKeyCount = r.count(4);
+			if (fieldKeyCount > 4) throw new Error("program-image-codec: invalid field count");
+			const fieldKeys = Array.from({ length: fieldKeyCount }, () => r.u32());
+			const fieldLoads = Array.from({ length: r.count(8) }, () => ({
+				instructionIp: r.u32(),
+				field: r.u32(),
+			}));
+			if (fieldKeyCount === 0 && fieldLoads.length > 0)
+				throw new Error("program-image-codec: field loads lack keys");
+			const fieldParameters =
+				fieldKeyCount === 0 ? undefined : { keys: fieldKeys, loads: fieldLoads };
 			const constantCount = r.count(5);
 			const constantBooleans = Array.from({ length: constantCount }, () => {
 				const instructionIp = r.i32();
@@ -2799,6 +2838,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				resultRepresentation,
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 				...(constantCount === 0 ? {} : { constantBooleans }),
+				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
 			};
@@ -4025,6 +4065,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,
 			directEntries,
+			...(fieldCallCount === 0 ? {} : { fieldCalls }),
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
@@ -4034,6 +4075,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		nativeFunctions.push(nativeFunction);
 	}
 	for (const native of nativeFunctions) {
+		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;
 			if (plan.directEntryId !== undefined) {

@@ -564,6 +564,11 @@ function emitNativeFunctions(
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
+		for (const site of native.fieldCalls ?? [])
+			for (const entry of site.entries) {
+				targets.add(entry.functionIndex);
+				entries.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
+			}
 		for (const instruction of native.instructions) {
 			if (instruction?.kind !== "call") continue;
 			for (const target of [

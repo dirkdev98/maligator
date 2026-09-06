@@ -90,6 +90,13 @@ export interface ExecutionDirectEntry {
 	readonly id: number;
 	readonly parameterRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	readonly resultRepresentation: ExecutionRegisterRepresentation;
+	readonly fieldParameters?: {
+		readonly keys: ReadonlyArray<number>;
+		readonly loads: ReadonlyArray<{
+			readonly instruction: CompilerInstruction;
+			readonly field: number;
+		}>;
+	};
 	readonly argumentRepresentations?: ReadonlyArray<ExecutionRegisterRepresentation>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
@@ -123,6 +130,14 @@ export interface ExecutionFunction {
 	readonly registerRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	/** Bounded native-only ordinary-call ABIs; bytecode continues to use boxed entry. */
 	readonly directEntries: ReadonlyArray<ExecutionDirectEntry>;
+	readonly fieldCalls?: ReadonlyArray<{
+		readonly allocation: CompilerInstruction;
+		readonly call: CompilerInstruction;
+		readonly entries: ReadonlyArray<{
+			readonly functionIndex: number;
+			readonly entryId: number;
+		}>;
+	}>;
 	readonly capturedCount: number;
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;

@@ -903,6 +903,14 @@ export interface NativeFunctionPlan {
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	/** Native-only ordinary-call siblings selected by closed-world call facts. */
 	readonly directEntries: ReadonlyArray<NativeDirectEntryPlan>;
+	readonly fieldCalls?: ReadonlyArray<{
+		readonly allocationIp: number;
+		readonly callIp: number;
+		readonly entries: ReadonlyArray<{
+			readonly functionIndex: number;
+			readonly entryId: number;
+		}>;
+	}>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<{
 			readonly kind: "operation" | "loop-backedge" | "conservative";
@@ -921,6 +929,13 @@ export interface NativeDirectEntryPlan {
 	readonly id: number;
 	readonly parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
+	readonly fieldParameters?: {
+		readonly keys: ReadonlyArray<number>;
+		readonly loads: ReadonlyArray<{
+			readonly instructionIp: number;
+			readonly field: number;
+		}>;
+	};
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instructionIp: number;
@@ -934,6 +949,32 @@ export function validateNativeDirectEntry(
 	fn: BytecodeFunction,
 	entry: NativeDirectEntryPlan,
 ): void {
+	const fields = entry.fieldParameters;
+	if (fields !== undefined) {
+		if (
+			fn.parameterCount !== 1 ||
+			entry.argumentRepresentations !== undefined ||
+			fields.keys.length === 0 ||
+			fields.keys.length > 4 ||
+			new Set(fields.keys).size !== fields.keys.length ||
+			fields.loads.length === 0 ||
+			fields.loads.length > 64
+		)
+			throw new RangeError("Invalid native entry fields");
+		const seen = new Set<number>();
+		for (const load of fields.loads) {
+			const instruction = fn.instructions[load.instructionIp];
+			if (
+				seen.has(load.instructionIp) ||
+				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				instruction.object !== 0 ||
+				fields.keys[load.field] !== instruction.stringIndex
+			)
+				throw new RangeError("Invalid native entry field load");
+			seen.add(load.instructionIp);
+		}
+	}
+
 	const representations = ["boxed", "int32", "number", "boolean", "string"];
 	if (
 		entry.argumentRepresentations !== undefined &&
@@ -980,6 +1021,60 @@ export function validateNativeDirectEntry(
 		)
 			throw new RangeError("Native direct entry has an invalid constant comparison");
 		seen.add(instructionIp);
+	}
+}
+
+export function validateNativeFieldCalls(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+	functions: ReadonlyArray<NativeFunctionPlan>,
+): void {
+	const seen = new Set<number>();
+	const allocations = new Set<number>();
+	for (const site of native.fieldCalls ?? []) {
+		const allocation = fn.instructions[site.allocationIp];
+		const call = fn.instructions[site.callIp];
+		if (
+			seen.has(site.callIp) ||
+			allocations.has(site.allocationIp) ||
+			site.allocationIp >= site.callIp ||
+			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			allocation.count < 1 ||
+			allocation.count > 4 ||
+			call?.opcode !== "CALL" ||
+			call.arguments.length !== 1 ||
+			decodeVmValueOperand(call.arguments[0]!).kind !== "register"
+		)
+			throw new RangeError("Invalid native field call");
+		const argument = decodeVmValueOperand(call.arguments[0]!);
+		if (
+			argument.kind !== "register" ||
+			argument.register !== allocation.dst ||
+			site.entries.length === 0 ||
+			site.entries.length > 4
+		)
+			throw new RangeError("Invalid native field argument");
+		const targets = new Set<number>();
+		const plan = native.instructions[site.callIp];
+		for (const selected of site.entries) {
+			const entry = functions[selected.functionIndex]?.directEntries[selected.entryId];
+			if (
+				targets.has(selected.functionIndex) ||
+				entry?.fieldParameters === undefined ||
+				entry.fieldParameters.keys.some(
+					(key) => !allocation.keyStringIndices.includes(key),
+				) ||
+				plan?.kind !== "call" ||
+				(plan.directFunctionIndex !== selected.functionIndex &&
+					!plan.guardedFunctionIndices?.includes(selected.functionIndex))
+			)
+				throw new RangeError(
+					`Invalid native field entry target ${native.functionIndex}:${site.callIp} -> ${selected.functionIndex}:${selected.entryId}: ${JSON.stringify({ fields: entry?.fieldParameters, keys: allocation.keyStringIndices, plan })}`,
+				);
+			targets.add(selected.functionIndex);
+		}
+		seen.add(site.callIp);
+		allocations.add(site.allocationIp);
 	}
 }
 
@@ -1205,6 +1300,22 @@ export function compactProgramImageConstants(
 	}
 	const functions = definition.native.functions.map((fn) => ({
 		...fn,
+		directEntries: fn.directEntries.map((entry) => ({
+			...entry,
+			...(entry.fieldParameters === undefined
+				? {}
+				: {
+						fieldParameters: {
+							...entry.fieldParameters,
+							keys: entry.fieldParameters.keys.map((key) => {
+								const index = compacted.stringOldToNew.get(key);
+								if (index === undefined)
+									throw new Error(`RuntimeImage removed entry field ${key}`);
+								return index;
+							}),
+						},
+					}),
+		})),
 		specializations: fn.specializations.map((region) => {
 			if (region.kind !== "string-split-projection") return region;
 			const separatorStringIndex = compacted.stringOldToNew.get(
@@ -3585,6 +3696,17 @@ function lowerExecutionFunctionToNativePlan(
 	const directEntries: Array<NativeDirectEntryPlan> = fn.directEntries.map((entry) => ({
 		id: entry.id,
 		parameterRepresentations: [...entry.parameterRepresentations],
+		...(entry.fieldParameters === undefined
+			? {}
+			: {
+					fieldParameters: {
+						keys: entry.fieldParameters.keys,
+						loads: entry.fieldParameters.loads.map(({ instruction, field }) => ({
+							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+							field,
+						})),
+					},
+				}),
 		resultRepresentation: entry.resultRepresentation,
 		...(entry.argumentRepresentations === undefined
 			? {}
@@ -3612,6 +3734,15 @@ function lowerExecutionFunctionToNativePlan(
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 		registerRepresentations: [...fn.registerRepresentations],
 		directEntries,
+		...(fn.fieldCalls === undefined
+			? {}
+			: {
+					fieldCalls: fn.fieldCalls.map((site) => ({
+						allocationIp: instructionIndexByTargetInstruction.get(site.allocation)!,
+						callIp: instructionIndexByTargetInstruction.get(site.call)!,
+						entries: site.entries,
+					})),
+				}),
 		gc: { safepoints },
 		instructions: nativeInstructions,
 		specializations: regions,

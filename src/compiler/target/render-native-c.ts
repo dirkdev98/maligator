@@ -860,6 +860,8 @@ function emitCompiledVariant(
 				value,
 			]),
 		),
+		directEntry?.fieldParameters,
+		nativeContract.fieldCalls,
 	);
 	if (body === null) {
 		return null;
@@ -884,6 +886,10 @@ function emitCompiledVariant(
 			: (directEntry.argumentRepresentations ?? directEntry.parameterRepresentations).map(
 					(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
 				);
+	if (directEntry?.fieldParameters !== undefined)
+		directParameters!.push(
+			...directEntry.fieldParameters.keys.map((_, field) => `f64 fp${field}`),
+		);
 	lines.push(
 		directEntry === undefined
 			? `${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
@@ -1107,8 +1113,10 @@ export function emitCompiledFunction(
 			id: entry.id,
 			symbol: emitted.symbol,
 			source: emitted.source,
-			parameterRepresentations:
-				entry.argumentRepresentations ?? entry.parameterRepresentations,
+			parameterRepresentations: [
+				...(entry.argumentRepresentations ?? entry.parameterRepresentations),
+				...(entry.fieldParameters?.keys.map(() => "number" as const) ?? []),
+			],
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
@@ -1219,6 +1227,7 @@ function emitResumableFunction(
 
 	const resumePoints = resumePointsOf(fn);
 	const symbol = `mal_compiled_${index}${suffix}`;
+
 	const lines: Array<string> = [];
 
 	lines.push(
@@ -1773,6 +1782,8 @@ function emitBody(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
 	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
+	directFields?: NativeDirectEntryPlan["fieldParameters"],
+	fieldCalls?: NativeFunctionPlan["fieldCalls"],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2297,6 +2308,21 @@ function emitBody(
 	}
 	// Publish source positions only before operations that can synchronously capture
 	// this frame. Pure arithmetic/control-flow transitions need no native-frame write.
+	const fieldAllocations = new Map<number, NativeFieldCall>();
+	const fieldCallSites = new Map<number, NativeFieldCall>();
+	for (const site of fieldCalls ?? []) {
+		const allocation = fn.instructions[site.allocationIp];
+		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Invalid field call allocation");
+		const lowered = { ...site, allocation };
+		fieldAllocations.set(site.allocationIp, lowered);
+		fieldCallSites.set(site.callIp, lowered);
+		for (let field = 0; field < allocation.count; field++)
+			lines.push(`f64 __field_${site.allocationIp}_${field} = 0;`);
+	}
+	const fieldLoads = new Map(
+		directFields?.loads.map((load) => [load.instructionIp, load.field]),
+	);
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
@@ -2404,6 +2430,9 @@ function emitBody(
 				directResultRepresentation,
 				directArgumentRepresentations,
 				constantBoolean: directConstantBooleans.get(ip),
+				fieldLoad: fieldLoads.get(ip),
+				fieldAllocation: fieldAllocations.get(ip),
+				fieldCall: fieldCallSites.get(ip),
 				mathUnaryCall: mathUnaryCalls.has(ip),
 				mathBinaryCall: mathBinaryCalls.has(ip),
 				mappedArguments: fn.mappedArguments,
@@ -2694,6 +2723,16 @@ function nativeProfileCall(
  * box it through mal_ops_number_value. Adding an opcode here (and its unboxed
  * forms) is the main way this backend grows.
  */
+interface NativeFieldCall {
+	readonly allocationIp: number;
+	readonly callIp: number;
+	readonly allocation: Extract<BytecodeInstruction, { opcode: "CREATE_OBJECT_SHAPED" }>;
+	readonly entries: ReadonlyArray<{
+		readonly functionIndex: number;
+		readonly entryId: number;
+	}>;
+}
+
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly resources: Set<NativeBodyResource>;
@@ -2716,6 +2755,10 @@ interface NativeInstructionContext {
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly constantBoolean?: boolean;
+	readonly fieldLoad?: number;
+	readonly fieldAllocation?: NativeFieldCall;
+	readonly fieldCall?: NativeFieldCall;
+	readonly fieldEntryCall?: NativeFieldCall;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly mappedArguments: boolean;
@@ -2848,6 +2891,7 @@ function emitInstruction(
 		directResultRepresentation,
 		directArgumentRepresentations: context.directArgumentRepresentations,
 		constantBoolean: context.constantBoolean,
+		fieldEntryCall: context.fieldEntryCall,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -3151,6 +3195,59 @@ function emitInstruction(
 				"}",
 			];
 		}
+	}
+	if (context.fieldLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
+		return [storeNumber(instruction.dst, `fp${context.fieldLoad}`)];
+	if (
+		context.fieldAllocation !== undefined &&
+		instruction.opcode === "CREATE_OBJECT_SHAPED"
+	) {
+		return [
+			...instruction.valueRegisters.map(
+				(register, field) =>
+					`__field_${ip}_${field} = ${isNumericRep(reps[register]!) ? num(register) : `mal_ops_number_as_f64(${boxed(register)})`};`,
+			),
+			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+		];
+	}
+	if (context.fieldCall !== undefined && instruction.opcode === "CALL") {
+		const site = context.fieldCall;
+		const targets = site.entries.filter((entry) =>
+			directCompiledEntries.has(
+				directCompiledEntryKey(entry.functionIndex, entry.entryId),
+			),
+		);
+		const callee = boxedOperand(instruction.callee);
+		const index = `__field_target_${ip}`;
+		const shape = `__field_shape_${ip}`;
+		const keys = site.allocation.keyStringIndices
+			.map((key) => `vm->string_constant_atoms[${relocation.stringIndex(key)}]`)
+			.join(", ");
+		const values = site.allocation.keyStringIndices
+			.map((_, field) => `mal_ops_number_value(__field_${site.allocationIp}_${field})`)
+			.join(", ");
+		const rest = emitInstruction(
+			instruction,
+			ip,
+			suffix,
+			reps,
+			strict,
+			handlerIp,
+			gcUnlink,
+			thisSlot,
+			coro,
+			{ ...context, fieldCall: undefined, fieldEntryCall: site },
+		);
+		if (rest === null) return null;
+		return [
+			`i32 ${index} = mal_value_is_function_object(${callee}) ? mal_function_object_function_index(mal_value_to_function_object(${callee})) : -1;`,
+			`if (!(${targets.map((target) => `${index} == ${relocation.functionIndex(target.functionIndex)}`).join(" || ") || "false"})) {`,
+			`  MalShape *${shape} = ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}];`,
+			`  if (${shape} == nullptr) { ${shape} = mal_shape_from_string_keys(&vm->heap,(MalString *[]){${keys}},${site.allocation.count}); ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}] = ${shape}; }`,
+			`  r${site.allocation.dst} = mal_vm_create_object_shaped(vm,${shape},(MalValue[]){${values}},${site.allocation.count});`,
+			`}`,
+			...rest,
+		];
 	}
 	switch (instruction.opcode) {
 		case "MOVE": {
@@ -5372,8 +5469,8 @@ function emitInstruction(
 				];
 			}
 			const directEntryParameters = (directEntry: NativeDirectEntryPlan) =>
-				(directEntry.argumentRepresentations ?? directEntry.parameterRepresentations).map(
-					(representation, parameter): string | null => {
+				(directEntry.argumentRepresentations ?? directEntry.parameterRepresentations)
+					.map((representation, parameter): string | null => {
 						const operand = args[parameter];
 						if (operand === undefined) {
 							return representation === "boxed" ? "MAL_VALUE_UNDEFINED" : null;
@@ -5402,8 +5499,16 @@ function emitInstruction(
 							);
 						}
 						return boxedOperand(operand);
-					},
-				);
+					})
+					.concat(
+						directEntry.fieldParameters?.keys.map((key) => {
+							const site = context.fieldEntryCall;
+							const slot = site?.allocation.keyStringIndices.indexOf(key) ?? -1;
+							return site === undefined || slot < 0
+								? null
+								: `__field_${site.allocationIp}_${slot}`;
+						}) ?? [],
+					);
 			if (callPlan?.guardedFunctionIndices !== undefined) {
 				nativeCallDecision(
 					context.profile,
@@ -5420,12 +5525,19 @@ function emitInstruction(
 				const guardedIndex = `__guarded_index_${ip}`;
 				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => {
 					const exact = `__guarded_compiled_${ip}_${target}`;
+					const fieldEntry = context.fieldEntryCall?.entries.find(
+						(entry) => entry.functionIndex === target,
+					);
+					const selectedEntryId =
+						fieldEntry?.entryId ??
+						(callPlan.guardedFunctionIndices!.length === 1
+							? callPlan.directEntryId
+							: undefined);
 					const entry =
-						callPlan.directEntryId === undefined ||
-						callPlan.guardedFunctionIndices!.length !== 1
+						selectedEntryId === undefined
 							? undefined
 							: directCompiledEntries.get(
-									directCompiledEntryKey(target, callPlan.directEntryId),
+									directCompiledEntryKey(target, selectedEntryId),
 								);
 					const parameters =
 						entry === undefined ? undefined : directEntryParameters(entry);
@@ -5502,12 +5614,13 @@ function emitInstruction(
 					: [
 							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
 						];
+				const selectedEntryId =
+					context.fieldEntryCall?.entries.find((entry) => entry.functionIndex === target)
+						?.entryId ?? callPlan.directEntryId;
 				const directEntry =
-					callPlan.directEntryId === undefined
+					selectedEntryId === undefined
 						? undefined
-						: directCompiledEntries.get(
-								directCompiledEntryKey(target, callPlan.directEntryId),
-							);
+						: directCompiledEntries.get(directCompiledEntryKey(target, selectedEntryId));
 				if (directEntry !== undefined) {
 					const directCallee = `__direct_callee_${ip}`;
 					const directValue = `__direct_value_${ip}`;

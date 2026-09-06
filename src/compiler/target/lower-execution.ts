@@ -1671,6 +1671,12 @@ export function coreRegisterClasses(
 	return { roots, registers, registerRepresentations };
 }
 
+interface CoreFieldCall {
+	readonly allocation: CoreInstructionId;
+	readonly call: CoreInstructionId;
+	readonly entries: Array<{ readonly functionIndex: number; readonly entryId: number }>;
+}
+
 function lowerFunctionToTarget(
 	coreFunction: CoreFunctionStore,
 	executionFunction: number,
@@ -1681,6 +1687,7 @@ function lowerFunctionToTarget(
 		{ target: CoreFunctionId; guarded: boolean }
 	>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
+	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
@@ -1719,6 +1726,14 @@ function lowerFunctionToTarget(
 	for (const [instruction, { target, guarded }] of directEntryTargets) {
 		guardedTargets.set(instruction, [target]);
 		if (!guarded) exactCallTargets.add(instruction);
+	}
+	for (const site of fieldCallPlans) {
+		guardedTargets.set(site.call, [
+			...new Set([
+				...(guardedTargets.get(site.call) ?? []),
+				...site.entries.map((entry) => functionMap.executionToCore[entry.functionIndex]!),
+			]),
+		]);
 	}
 	const denseReserveLengths = new Map<CoreInstructionId, number>();
 	const plannedBuiltinCalls = new Map<CoreInstructionId, CoreAttributeValue>();
@@ -2278,6 +2293,9 @@ function lowerFunctionToTarget(
 							"createNumber",
 							"createBoolean",
 							"createString",
+							...(entry.fieldParameters === undefined
+								? []
+								: ["loadPropertyStatic", "call"]),
 							...(entry.argumentRepresentations === undefined
 								? []
 								: ["loadArgumentCount", "loadArgument", "loadStaticArgument"]),
@@ -2338,6 +2356,17 @@ function lowerFunctionToTarget(
 		);
 		return {
 			id: entry.id,
+			...(entry.fieldParameters === undefined
+				? {}
+				: {
+						fieldParameters: {
+							keys: entry.fieldParameters.keys,
+							loads: entry.fieldParameters.loads.map(({ instruction, field }) => ({
+								instruction: loweredInstructions.get(instruction)!,
+								field,
+							})),
+						},
+					}),
 			parameterRepresentations: entry.parameterRepresentations.map(
 				planExecutionRepresentation,
 			),
@@ -2366,7 +2395,20 @@ function lowerFunctionToTarget(
 			},
 		};
 	});
-	return { ...fnWithoutGc, directEntries, gc: { safepoints } };
+	return {
+		...fnWithoutGc,
+		directEntries,
+		...(fieldCallPlans.length === 0
+			? {}
+			: {
+					fieldCalls: fieldCallPlans.map((site) => ({
+						allocation: loweredInstructions.get(site.allocation)!,
+						call: loweredInstructions.get(site.call)!,
+						entries: site.entries,
+					})),
+				}),
+		gc: { safepoints },
+	};
 }
 
 function planExecutionRepresentation(
@@ -2386,6 +2428,7 @@ export function lowerCoreCompilationToExecutionProgram(
 	const functionMap = createExecutionFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
+	const fieldCallPlans = new Map<number, Map<CoreInstructionId, CoreFieldCall>>();
 	const directEntryTargets = new Map<
 		number,
 		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
@@ -2408,6 +2451,22 @@ export function lowerCoreCompilationToExecutionProgram(
 		entries.push(entry);
 		directEntryPlans.set(entry.function, entries);
 		for (const site of entry.callSites) {
+			if (site.fieldObject !== undefined) {
+				const calls =
+					fieldCallPlans.get(site.caller) ?? new Map<CoreInstructionId, CoreFieldCall>();
+				const call = calls.get(site.instruction) ?? {
+					allocation: site.fieldObject,
+					call: site.instruction,
+					entries: [],
+				};
+				call.entries.push({
+					functionIndex: functionMap.coreToExecution[entry.function]!,
+					entryId: entry.id,
+				});
+				calls.set(site.instruction, call);
+				fieldCallPlans.set(site.caller, calls);
+				continue;
+			}
 			const calls =
 				directEntryIds.get(site.caller) ?? new Map<CoreInstructionId, number>();
 			calls.set(site.instruction, entry.id);
@@ -2430,6 +2489,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryIds.get(core) ?? new Map(),
 			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
+			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			new Set(
 				(compilation.plan.unsignedArithmetic ?? [])
 					.filter((operation) => operation.function === core)

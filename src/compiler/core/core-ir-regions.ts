@@ -358,6 +358,15 @@ export interface CoreDirectEntryCallSite {
 	readonly caller: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
 	readonly guarded?: true;
+	readonly fieldObject?: CoreInstructionId;
+}
+
+export interface CoreEntryFields {
+	readonly keys: ReadonlyArray<number>;
+	readonly loads: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly field: number;
+	}>;
 }
 
 export interface CoreDirectEntryPlan {
@@ -366,6 +375,7 @@ export interface CoreDirectEntryPlan {
 	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
+	readonly fieldParameters?: CoreEntryFields;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly constantBooleans?: ReadonlyArray<{

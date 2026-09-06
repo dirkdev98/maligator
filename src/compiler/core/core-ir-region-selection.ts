@@ -27,6 +27,7 @@ import type {
 	CoreIteratorCursorCandidate,
 	CoreLocalSpecializationCandidate,
 } from "./core-ir-provenance.ts";
+import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import { coreTargetSupportsSpecialization } from "./core-ir-region-strategies.ts";
 import {
 	corePlanAdmissionMode,
@@ -43,6 +44,7 @@ import type {
 } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -54,6 +56,11 @@ import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
 } from "./core-native-entry-analysis.ts";
+import {
+	coreReadOnlyNumericParameterFields,
+	coreFieldEntryHasNumericComputations,
+	coreNumericFieldArgument,
+} from "./core-native-field-analysis.ts";
 import { coreUnsignedArithmeticPlans } from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
@@ -82,6 +89,7 @@ interface PendingDirectEntry {
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
+	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
 }
 
 type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
@@ -1149,24 +1157,56 @@ function directEntryCandidates(
 	analyses: CoreAnalysisManager,
 ): ReadonlyArray<PendingDirectEntry> {
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
+	const methods = new Map<number, Array<CoreFunctionId>>();
+	for (const target of live) {
+		const fn = program.function(target);
+		if (
+			fn.parameterCount !== 1 ||
+			fn.metadata.hasPrototype ||
+			fn.metadata.isClassConstructor ||
+			fn.isGenerator ||
+			fn.isAsync
+		)
+			continue;
+		const candidates = methods.get(fn.metadata.nameStringIndex) ?? [];
+		candidates.push(target);
+		methods.set(fn.metadata.nameStringIndex, candidates);
+	}
 	for (const caller of [...live].sort((left, right) => left - right)) {
+		const fn = program.function(caller);
 		for (const site of summaries.targets.outgoing(caller)) {
+			if (fn.instructionOpcodeName(site.instruction) !== "call") continue;
+			let targets = site.targets.functions;
+			let speculative = false;
 			if (
-				site.targets.functions.length !== 1 ||
-				program.function(caller).instructionOpcodeName(site.instruction) !== "call"
-			)
-				continue;
-			const target = site.targets.functions[0]!;
-			if (!live.has(target)) continue;
-			const calls = callsByTarget.get(target) ?? [];
-			calls.push(
-				Object.freeze({
-					caller,
-					instruction: site.instruction,
-					...(site.open ? { guarded: true as const } : {}),
-				}),
-			);
-			callsByTarget.set(target, calls);
+				targets.length === 0 &&
+				site.arguments?.length === 1 &&
+				fn.kernel.valueDefinitionKind(site.callee) === 1
+			) {
+				const load = coreInstructionId(fn.kernel.valueDefinitionOwner(site.callee));
+				if (fn.instructionOpcodeName(load) === "loadPropertyStatic") {
+					const key = fn.instructionAttributes(load).stringIndex;
+					if (typeof key === "number") {
+						targets = methods.get(key) ?? [];
+						speculative = true;
+					}
+				}
+			}
+			if (targets.length === 0 || targets.length > 4) continue;
+			for (const target of targets) {
+				if (!live.has(target)) continue;
+				const calls = callsByTarget.get(target) ?? [];
+				calls.push(
+					Object.freeze({
+						caller,
+						instruction: site.instruction,
+						...(speculative || site.open || targets.length > 1
+							? { guarded: true as const }
+							: {}),
+					}),
+				);
+				callsByTarget.set(target, calls);
+			}
 		}
 	}
 	const candidates: Array<PendingDirectEntry> = [];
@@ -1195,8 +1235,59 @@ function directEntryCandidates(
 		let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 		let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 		let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
-		let selectedCalls = callSites;
-		if ((fn.parameterCount > 0 || needsArity) && [...fn.instructionIds()].length <= 512) {
+		let selectedCalls = callSites.filter(
+			(call) =>
+				summaries.targets.site(call.caller, call.instruction)?.targets.functions
+					.length === 1,
+		);
+		let fieldParameters: CoreDirectEntryPlan["fieldParameters"];
+		if (!needsArity && fn.parameterCount === 1) {
+			const cfg = analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
+				.exceptional();
+			const fields = coreReadOnlyNumericParameterFields(fn, cfg);
+			if (fields !== undefined) {
+				const fieldCalls = callSites.flatMap((call) => {
+					const site = summaries.targets.site(call.caller, call.instruction);
+					if (site?.arguments?.length !== 1) return [];
+					const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: call.caller,
+					});
+					const fieldObject = coreNumericFieldArgument(
+						program.function(call.caller),
+						facts,
+						call.instruction,
+						site.arguments[0]!,
+						fields,
+					);
+					return fieldObject === undefined
+						? []
+						: [Object.freeze({ ...call, fieldObject })];
+				});
+				if (fieldCalls.length > 0) {
+					const variant = analyzeCoreNativeEntry(
+						fn,
+						cfg,
+						parameterRepresentations,
+						undefined,
+						fieldCalls,
+						fields,
+					);
+					if (coreFieldEntryHasNumericComputations(fn, variant.valueRepresentations)) {
+						fieldParameters = fields;
+						selectedCalls = fieldCalls;
+						valueRepresentations = variant.valueRepresentations;
+						resultRepresentation = variant.resultRepresentation;
+					}
+				}
+			}
+		}
+		if (
+			fieldParameters === undefined &&
+			(fn.parameterCount > 0 || needsArity) &&
+			[...fn.instructionIds()].length <= 512
+		) {
 			const signatures = new Map<
 				string,
 				{
@@ -1205,7 +1296,7 @@ function directEntryCandidates(
 					scalars: number;
 				}
 			>();
-			for (const call of callSites) {
+			for (const call of selectedCalls) {
 				const site = summaries.targets.site(call.caller, call.instruction);
 				if (
 					needsArity &&
@@ -1272,6 +1363,7 @@ function directEntryCandidates(
 			}
 		}
 		if (
+			selectedCalls.length === 0 ||
 			(needsArity && argumentRepresentations === undefined) ||
 			resultRepresentation === undefined ||
 			(resultRepresentation === "boxed" && valueRepresentations === undefined)
@@ -1292,6 +1384,7 @@ function directEntryCandidates(
 			...(valueRepresentations === undefined ? {} : { valueRepresentations }),
 			...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 			...(constantBooleans === undefined ? {} : { constantBooleans }),
+			...(fieldParameters === undefined ? {} : { fieldParameters }),
 			budget: {
 				kind: "direct-entry",
 				caller: target,
@@ -1485,6 +1578,9 @@ export function buildCoreOptimizationPlan(
 					function: candidate.function,
 					callSites: candidate.callSites,
 					parameterRepresentations: candidate.parameterRepresentations,
+					...(candidate.fieldParameters === undefined
+						? {}
+						: { fieldParameters: candidate.fieldParameters }),
 					resultRepresentation: candidate.resultRepresentation,
 					...(candidate.valueRepresentations === undefined
 						? {}
