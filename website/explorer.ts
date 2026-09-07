@@ -4,14 +4,11 @@ import {
 	EXPLORER_DEFAULT_CONFIG,
 	explorerBuildConfig,
 	normalizeExplorerConfig,
-	normalizeExplorerLanguage,
 	utf8ByteLength,
 } from "../src/explorer/config.ts";
 import type { ExplorerConfig } from "../src/explorer/config.ts";
 import type { ExplorerSiteData } from "../src/explorer/protocol.ts";
-import type { Sample, ViewId as SampleViewId } from "../src/explorer/samples.ts";
-
-type ViewId = SampleViewId | "strippedSource";
+import type { Sample, ViewId } from "../src/explorer/samples.ts";
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
 	const value = document.getElementById(id);
@@ -21,7 +18,6 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 
 const data = JSON.parse(element("explorer-data").textContent) as ExplorerSiteData;
 const source = element<HTMLTextAreaElement>("source");
-const language = element<HTMLSelectElement>("language");
 const examples = element<HTMLSelectElement>("example");
 const trails = element<HTMLSelectElement>("trail");
 const search = element<HTMLInputElement>("search");
@@ -37,19 +33,10 @@ const booleanSettings = [
 ] as const;
 const stages = [
 	{
-		id: "strippedSource",
-		label: "0 · Type stripping",
-		left: "source",
-		leftTitle: "Your TypeScript",
-		rightTitle: "JavaScript after type stripping",
-		explanation:
-			"Erasable types become spaces, preserving source positions. Types are not checked; syntax requiring JavaScript generation is rejected.",
-	},
-	{
 		id: "preCore",
 		label: "1 · Initial Core",
 		left: "source",
-		leftTitle: "JavaScript",
+		leftTitle: "Your source",
 		rightTitle: "Core before optimization",
 		explanation: "The source becomes an SSA graph before compiler optimizations.",
 	},
@@ -91,7 +78,7 @@ const stages = [
 	},
 ] as const;
 type Side = "left" | "right";
-let stage: number = 1;
+let stage: number = 0;
 let result: ExplorerResult | undefined;
 let compiledSource = "";
 let requestVersion = 0;
@@ -143,7 +130,6 @@ function refreshInput(): void {
 	const stale =
 		result !== undefined &&
 		(source.value !== compiledSource ||
-			language.value !== result.language ||
 			JSON.stringify(settings()) !== JSON.stringify(result.config));
 	const badge = element("result-state");
 	badge.textContent =
@@ -158,8 +144,7 @@ function refreshInput(): void {
 function loadSample(): void {
 	const sample = selectedSample();
 	source.value = sample.source;
-	language.value = sample.language ?? "javascript";
-	stage = language.value === "typescript" ? 0 : 1;
+	stage = 0;
 	applySettings(normalizeExplorerConfig(sample.config ?? EXPLORER_DEFAULT_CONFIG));
 	element("example-group").textContent = sample.group;
 	element("example-title").textContent = sample.title;
@@ -186,14 +171,8 @@ async function compile(): Promise<void> {
 	setBusy(true);
 	element("diagnostics").hidden = true;
 	try {
-		const output = await client.compile(
-			input,
-			settings(),
-			normalizeExplorerLanguage(language.value),
-		);
+		const output = await client.compile(input, settings());
 		if (version !== requestVersion) return;
-		if (result?.language !== output.result.language)
-			stage = output.result.language === "typescript" ? 0 : 1;
 		result = output.result;
 		compiledSource = input;
 		status(
@@ -232,7 +211,6 @@ async function compile(): Promise<void> {
 function viewText(view: ViewId, mode: "generic" | "full"): string {
 	if (result === undefined) return "Compile a snippet to inspect this stage.";
 	if (view === "source") return compiledSource;
-	if (view === "strippedSource") return result.strippedSource;
 	if (view === "preCore") return result.preCore;
 	if (view === "malw")
 		return `${result.modes[mode].malw}\n\nHex dump\n${result.modes[mode].hex}`;
@@ -241,7 +219,6 @@ function viewText(view: ViewId, mode: "generic" | "full"): string {
 
 function queryFor(view: ViewId): string {
 	if (search.value !== "") return search.value;
-	if (view === "strippedSource") return "";
 	if (trails.value === "") return "";
 	return selectedSample().trails[Number(trails.value)]?.queries[view] ?? "";
 }
@@ -303,12 +280,7 @@ function renderPane(
 }
 
 function render(focus = false): void {
-	const typed = result?.language === "typescript";
-	element("stage-0").hidden = !typed;
-	if (!typed && stage === 0) stage = 1;
 	const selected = stages[stage]!;
-	compare.disabled = stage === 0;
-	if (compare.disabled) compare.checked = false;
 	for (const [index] of stages.entries())
 		element(`stage-${index}`).setAttribute("aria-pressed", String(index === stage));
 	const trail =
@@ -317,11 +289,7 @@ function render(focus = false): void {
 		`${trail?.explanation ?? selected.explanation}${compare.checked ? " Generic uses the same optimized Core with late specialization disabled." : ""}`;
 	renderPane(
 		"left",
-		compare.checked
-			? selected.id
-			: selected.id === "preCore" && typed
-				? "strippedSource"
-				: selected.left,
+		compare.checked ? selected.id : selected.left,
 		compare.checked ? "generic" : "full",
 		compare.checked ? `Generic · ${selected.rightTitle}` : selected.leftTitle,
 		focus,
@@ -415,7 +383,6 @@ element("reset").onclick = () => {
 	void compile();
 };
 source.oninput = refreshInput;
-language.onchange = refreshInput;
 document.addEventListener("keydown", (event) => {
 	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
 		event.preventDefault();
@@ -458,15 +425,7 @@ for (const side of ["left", "right"] as const) {
 	element(`${side}-save`).onclick = () => {
 		const view = outputs[side].view;
 		download(
-			view === "c"
-				? "program.c"
-				: view === "source"
-					? result?.language === "typescript"
-						? "snippet.ts"
-						: "snippet.js"
-					: view === "strippedSource"
-						? "snippet.js"
-						: `${view}.txt`,
+			view === "c" ? "program.c" : view === "source" ? "snippet.ts" : `${view}.txt`,
 			outputs[side].text,
 		);
 	};
@@ -479,7 +438,7 @@ element("download-config").onclick = () => {
 	const config = explorerBuildConfig(settings());
 	download(
 		"maligator.build.ts",
-		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild(${JSON.stringify({ entry: language.value === "typescript" ? "snippet.ts" : "snippet.js", engine: config.engine, surface: config.surface }, null, 2)});\n`,
+		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild(${JSON.stringify({ entry: "snippet.ts", engine: config.engine, surface: config.surface }, null, 2)});\n`,
 	);
 };
 addEventListener("pagehide", () => client.dispose());

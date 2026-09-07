@@ -1,19 +1,7 @@
 import { resolveBuildConfig } from "../build-config-values.ts";
 
-export const EXPLORER_SCHEMA = 2;
-export type ExplorerLanguage = "javascript" | "typescript";
-
-export function normalizeExplorerLanguage(
-	value: unknown = "javascript",
-): ExplorerLanguage {
-	if (value !== "javascript" && value !== "typescript")
-		throw new Error("Invalid explorer language");
-	return value;
-}
-
-export function explorerSourcePath(language: ExplorerLanguage): string {
-	return `output-explorer/snippet.${language === "typescript" ? "ts" : "js"}`;
-}
+export const EXPLORER_SCHEMA = 3;
+export const EXPLORER_SOURCE_PATH = "output-explorer/snippet.ts";
 export const EXPLORER_LIMITS = Object.freeze({
 	sourceBytes: 64 * 1024,
 	outputBytes: 8 * 1024 * 1024,

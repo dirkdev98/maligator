@@ -33,8 +33,7 @@ import type {
 import type { BytecodeFunction, RuntimeImage } from "../compiler/target/runtime-image.ts";
 import {
 	EXPLORER_LIMITS,
-	explorerSourcePath,
-	normalizeExplorerLanguage,
+	EXPLORER_SOURCE_PATH,
 	explorerBuildConfig,
 	normalizeExplorerConfig,
 	utf8ByteLength,
@@ -267,19 +266,13 @@ function summarizeRuntime(image: RuntimeImage, wire: Uint8Array, c: string) {
 	};
 }
 
-export function compileExplorerCore(
-	source: string,
-	settings: unknown = {},
-	inputLanguage: unknown = "javascript",
-) {
+export function compileExplorerCore(source: string, settings: unknown = {}) {
 	if (utf8ByteLength(source) > EXPLORER_LIMITS.sourceBytes)
 		throw new RangeError("Source exceeds the 64 KiB UTF-8 limit");
 	const config = normalizeExplorerConfig(settings);
 	const buildConfig = explorerBuildConfig(config);
-	const language = normalizeExplorerLanguage(inputLanguage);
-	const sourcePath = explorerSourcePath(language);
-	const strippedSource =
-		language === "typescript" ? stripCompactTypes(source, sourcePath) : source;
+	const sourcePath = EXPLORER_SOURCE_PATH;
+	const strippedSource = stripCompactTypes(source, sourcePath);
 	const parsed = parseModule(strippedSource);
 	traverseEstree(parsed.ast, (node) => {
 		if (
@@ -330,7 +323,6 @@ export function compileExplorerCore(
 		config,
 		diagnostics,
 		facts,
-		language,
 		strippedSource,
 	};
 }

@@ -14,17 +14,11 @@ function outputMode(result: ReturnType<typeof compileMode>) {
 	};
 }
 
-export function compileExplorer(
-	source: string,
-	config: unknown = {},
-	language: unknown = "javascript",
-) {
-	const compiled = compileExplorerCore(source, config, language);
+export function compileExplorer(source: string, config: unknown = {}) {
+	const compiled = compileExplorerCore(source, config);
 	return {
 		schema: EXPLORER_SCHEMA,
 		config: compiled.config,
-		language: compiled.language,
-		strippedSource: compiled.strippedSource,
 		world: compiled.facts.world,
 		closure: compiled.facts.closure,
 		diagnostics: compiled.diagnostics,
@@ -52,12 +46,11 @@ export function compileExplorerRequest(input: string): string {
 			request.schema !== EXPLORER_SCHEMA ||
 			!("source" in request) ||
 			typeof request.source !== "string" ||
-			!("config" in request) ||
-			!("language" in request)
+			!("config" in request)
 		) {
 			throw new Error("Invalid explorer request or incompatible compiler version");
 		}
-		const result = compileExplorer(request.source, request.config, request.language);
+		const result = compileExplorer(request.source, request.config);
 		const output = JSON.stringify({
 			ok: true,
 			result,

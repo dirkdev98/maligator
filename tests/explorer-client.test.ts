@@ -105,17 +105,6 @@ describe("browser compiler lifecycle", () => {
 			ControlledWorker.instances[0]!.messages.filter((item) => item.type === "compile"),
 		).toHaveLength(3);
 	});
-	it("separates JavaScript and TypeScript requests in the result cache", async () => {
-		await compile("same source");
-		const typed = client.compile("same source", {}, "typescript");
-		const worker = await pendingWorker();
-		expect(worker.messages.at(-1)).toMatchObject({ language: "typescript" });
-		worker.finish();
-		expect((await typed).cached).toBe(false);
-		expect((await client.compile("same source", {}, "typescript")).cached).toBe(true);
-		expect((await client.compile("same source", {}, "javascript")).cached).toBe(true);
-	});
-
 	it("cancels loading and active work, ignores an old worker, and reuses the compiled module", async () => {
 		const first = client.compile("first", {});
 		const rejected = expect(first).rejects.toMatchObject({ kind: "cancelled" });

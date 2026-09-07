@@ -103,19 +103,12 @@ function writeArtifact(relativePath: string, content: string | Uint8Array): stri
 }
 
 const samples = SAMPLES.map((sample) => {
-	const compiled = compileExplorerCore(
-		sample.source,
-		sample.config ?? {},
-		sample.language,
-	);
+	const compiled = compileExplorerCore(sample.source, sample.config ?? {});
 	const full = compileMode(compiled, "full");
 	const generic = compileMode(compiled, "generic");
 	validateTrails(sample, generic, full);
 	const base = sample.id;
-	const sourcePath = writeArtifact(
-		path.join(base, sample.language === "typescript" ? "source.ts" : "source.js"),
-		`${sample.source}\n`,
-	);
+	const sourcePath = writeArtifact(path.join(base, "source.ts"), `${sample.source}\n`);
 	const preCorePath = writeArtifact(path.join(base, "pre-core.txt"), `${full.preCore}\n`);
 	const modeData = Object.fromEntries(
 		(["generic", "full"] as const).map((mode) => {

@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="color-scheme" content="light dark" />
+		<meta name="color-scheme" content="light" />
 		<meta
 			name="description"
 			content="Edit JavaScript and explore Maligator's compiler stages locally in your browser."
@@ -35,12 +35,8 @@
 				<div>
 					<p class="eyebrow">Inside the compiler</p>
 					<h1>Follow your JavaScript to C.</h1>
-					<p>
-						Edit a snippet and see what Maligator makes of it. Compilation stays in your
-						browser; your code is never run or uploaded.
-					</p>
+					<p>Paste JavaScript or TypeScript. Compilation stays in your browser.</p>
 				</div>
-				<p class="version" id="version"></p>
 			</div>
 			<section class="input-panel" aria-label="Source and build settings">
 				<div class="editor">
@@ -48,13 +44,8 @@
 						<label for="example"
 							>Example
 							<select id="example"></select></label
-						><button id="reset" type="button">Reset example</button
-						><label for="language"
-							>Language<select id="language">
-								<option value="javascript">JavaScript</option>
-								<option value="typescript">TypeScript (strip types)</option>
-							</select></label
-						><span id="source-size"></span>
+						><button id="reset" type="button">Reset example</button>
+						<span id="source-size"></span>
 					</div>
 					<label class="sr-only" for="source">Source code</label>
 					<textarea
@@ -66,45 +57,48 @@
 					></textarea>
 					<div class="editor-footer">
 						<p id="source-help">
-							One module · 64 KiB maximum · runtime imports unavailable · types not
-							checked
+							Types stripped automatically · 64 KiB maximum · single file
 						</p>
+					</div>
+				</div>
+				<aside class="editor-options">
+					<div class="compile-actions">
 						<button class="primary" id="compile" type="button">
 							Compile <kbd>⌘ / Ctrl ↵</kbd></button
 						><button id="cancel" type="button" disabled>Cancel</button>
 					</div>
-				</div>
-				<details class="settings" open>
-					<summary>Build settings</summary>
-					<p>Restrictive defaults. Features configure the emitted program.</p>
-					<label for="primordials"
-						>Primordials<select id="primordials">
-							<option value="locked">Locked</option>
-							<option value="mutable">Mutable</option>
-						</select></label
-					>
-					<label for="eval"
-						>Dynamic compilation<select id="eval">
-							<option value="compile-check">Reject visible eval / Function</option>
-							<option value="false">Disabled at runtime</option>
-							<option value="true">Enabled</option>
-						</select></label
-					>
-					<div class="toggles">
-						<label><input id="regexp" type="checkbox" />RegExp</label
-						><label><input id="realms" type="checkbox" />Realms</label
-						><label><input id="temporal" type="checkbox" />Temporal</label
-						><label><input id="intl" type="checkbox" />Intl (all)</label
-						><label><input id="webPlatform" type="checkbox" />Web platform</label
-						><label><input id="node" type="checkbox" />Node surface</label
-						><label><input id="maligator" type="checkbox" />Maligator surface</label>
-					</div>
-					<p>
-						Some settings affect runtime linking, so stage text may stay the same.
-						Enabling a surface does not enable imports.
-					</p>
-					<button id="download-config" type="button">Download build config</button>
-				</details>
+					<details class="settings">
+						<summary>Build settings</summary>
+						<p>Restrictive defaults. Features configure the emitted program.</p>
+						<label for="primordials"
+							>Primordials<select id="primordials">
+								<option value="locked">Locked</option>
+								<option value="mutable">Mutable</option>
+							</select></label
+						>
+						<label for="eval"
+							>Dynamic compilation<select id="eval">
+								<option value="compile-check">Reject visible eval / Function</option>
+								<option value="false">Disabled at runtime</option>
+								<option value="true">Enabled</option>
+							</select></label
+						>
+						<div class="toggles">
+							<label><input id="regexp" type="checkbox" />RegExp</label
+							><label><input id="realms" type="checkbox" />Realms</label
+							><label><input id="temporal" type="checkbox" />Temporal</label
+							><label><input id="intl" type="checkbox" />Intl (all)</label
+							><label><input id="webPlatform" type="checkbox" />Web platform</label
+							><label><input id="node" type="checkbox" />Node surface</label
+							><label><input id="maligator" type="checkbox" />Maligator surface</label>
+						</div>
+						<p>
+							Some settings affect runtime linking, so stage text may stay the same.
+							Enabling a surface does not enable imports.
+						</p>
+						<button id="download-config" type="button">Download build config</button>
+					</details>
+				</aside>
 			</section>
 			<div class="status" id="status" role="status" aria-live="polite">
 				Ready to compile.
@@ -196,7 +190,7 @@
 			</section>
 		</main>
 		<footer class="site-footer">
-			<span>Ahead of time. In your browser.</span
+			<span class="version" id="version"></span
 			><a href="__LICENSES__">Open-source licenses</a>
 		</footer>
 		<noscript

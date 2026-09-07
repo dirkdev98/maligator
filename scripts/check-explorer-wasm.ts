@@ -29,7 +29,6 @@ const cases = [
 		name: sample.id,
 		source: sample.source,
 		config: sample.config ?? {},
-		language: sample.language ?? "javascript",
 	})),
 	{
 		name: "exports-unicode",
@@ -56,7 +55,6 @@ const cases = [
 		name: "nonerasable-types",
 		source: "enum Color { Red }",
 		config: {},
-		language: "typescript",
 	},
 	{ name: "after-error", source: "globalThis.answer = 42;", config: {} },
 	{
@@ -76,7 +74,6 @@ try {
 			schema: EXPLORER_SCHEMA,
 			source: item.source,
 			config: item.config,
-			language: "language" in item ? item.language : "javascript",
 		});
 		const expected = compileExplorerRequest(input);
 		const start = performance.now();

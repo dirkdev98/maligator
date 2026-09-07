@@ -1,5 +1,5 @@
 import type { ExplorerResponse } from "./api.ts";
-import type { ExplorerConfig, ExplorerLanguage } from "./config.ts";
+import type { ExplorerConfig } from "./config.ts";
 import type { Sample } from "./samples.ts";
 
 export interface ExplorerSiteData {
@@ -26,7 +26,6 @@ export type ExplorerWorkerRequest =
 			identity: string;
 			source: string;
 			config: ExplorerConfig;
-			language: ExplorerLanguage;
 	  };
 
 export type ExplorerWorkerResponse =

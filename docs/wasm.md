@@ -119,9 +119,8 @@ HTML, scripts, styles, and license notices. Asset descriptors, alignment, and th
 serving implementation remain part of the server size. `website/site-meta.json`
 retains both the complete binary length and the excluded asset-byte total.
 
-The explorer accepts JavaScript or erasable TypeScript through its language selector.
-TypeScript uses the compiler's shared type stripper before parsing, with a separate
-Type stripping stage showing the JavaScript and preserving source positions. It does
-not type-check or generate JavaScript for enums or parameter properties. Type-only
-imports can disappear; runtime imports still require a multi-file build outside the
-explorer. Language is part of the worker protocol and result-cache identity.
+The explorer strips erasable TypeScript automatically before parsing. Paste JavaScript
+or TypeScript into the same editor; both follow the same five compiler stages. Types
+are not checked, and enums or parameter properties requiring JavaScript generation
+are rejected. Type-only imports disappear; runtime imports remain unavailable in the
+single-file explorer. Source downloads use `.ts`, which also accepts JavaScript.

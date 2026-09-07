@@ -1,4 +1,4 @@
-import type { ExplorerConfig, ExplorerLanguage } from "./config.ts";
+import type { ExplorerConfig } from "./config.ts";
 
 export interface Trail {
 	readonly title: string;
@@ -7,7 +7,6 @@ export interface Trail {
 }
 
 export interface Sample {
-	readonly language?: ExplorerLanguage;
 	readonly config?: Partial<ExplorerConfig>;
 	readonly id: string;
 	readonly group: string;
@@ -354,7 +353,6 @@ globalThis.iterator = sequence(3);`,
 		title: "Erasable types",
 		summary:
 			"Interfaces, annotations and assertions disappear before JavaScript enters the compiler. Types are not checked.",
-		language: "typescript",
 		source: `interface Point { x: number; y: number }
 type Coordinate = number;
 function sum(point: Point): Coordinate {

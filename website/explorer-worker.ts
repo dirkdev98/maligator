@@ -86,7 +86,6 @@ scope.onmessage = async (event: MessageEvent<ExplorerWorkerRequest>) => {
 					schema: EXPLORER_SCHEMA,
 					source: request.source,
 					config: request.config,
-					language: request.language,
 				}),
 			);
 			const response = JSON.parse(output) as ExplorerResponse;
