@@ -1251,12 +1251,8 @@ function emitModuleSyncEvaluationCall(
 			callee,
 			compileUndefined(fn, cursor),
 			initFn,
-			compileNumberLiteral(fn, cursor, getDynamicModuleStatusSlot(program, target.path)),
-			compileNumberLiteral(
-				fn,
-				cursor,
-				getModuleEvaluationErrorSlot(program, target.path),
-			),
+			compileGlobalIndex(fn, cursor, getDynamicModuleStatusSlot(program, target.path)),
+			compileGlobalIndex(fn, cursor, getModuleEvaluationErrorSlot(program, target.path)),
 			reentry,
 		],
 	});
@@ -2190,7 +2186,7 @@ function emitGlobalDeclarationChecks(
 ) {
 	for (const declaration of functionDeclarations) {
 		const binding = fn.semanticFile.nodeToBinding.get(declaration);
-		if (!binding || !isScriptGlobalProperty(fn.semanticFile, binding)) {
+		if (!binding || !isScriptGlobalProperty(program, fn.semanticFile, binding)) {
 			continue;
 		}
 		const location = getOrCreateBindingLocation(program, fn, binding);
@@ -2216,7 +2212,7 @@ function emitGlobalDeclarationChecks(
 			binding.kind !== "var" ||
 			binding.undeclared ||
 			binding.implicit ||
-			!isScriptGlobalProperty(fn.semanticFile, binding)
+			!isScriptGlobalProperty(program, fn.semanticFile, binding)
 		) {
 			continue;
 		}
@@ -3996,11 +3992,17 @@ function isSloppyFunction(fn: CoreFrontendFunction): boolean {
  * as `globalThis.x` — in BOTH strict and sloppy mode (GlobalDeclarationInstantiation
  * does not consult strictness here). `let`/`const`/`class` go to the global
  * declarative record (our flat slots), and a module's top-level bindings are
- * module-scoped (also flat slots), so both are excluded.
+ * module-scoped (also flat slots), so both are excluded. Strict eval declarations
+ * stay in the eval environment even when their names match global lexicals.
  */
-function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
+function isScriptGlobalProperty(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+	binding: Binding,
+): boolean {
 	return (
 		file.type === "script" &&
+		!(program.evalCompletion && file.strict && !binding.undeclared) &&
 		binding.scopedTo === "global" &&
 		(binding.kind === "var" || binding.declarationNode?.type === "FunctionDeclaration")
 	);
@@ -5532,6 +5534,35 @@ function compileStatementsToBlock(
 			);
 		}
 
+		if (
+			fn.semanticFile.type === "script" &&
+			!program.evalCompletion &&
+			declarationScopes.includes(fn.semanticFile.scopes[0]!)
+		) {
+			const lexicalBindings = fn.semanticFile.scopes[0]!.bindings.filter(
+				(binding) =>
+					!binding.undeclared &&
+					!binding.implicit &&
+					binding.scopedTo === "global" &&
+					(binding.kind === "let" || binding.kind === "const") &&
+					!isScriptGlobalProperty(program, fn.semanticFile, binding),
+			);
+			for (const checkOnly of [true, false]) {
+				for (const binding of lexicalBindings) {
+					const location = getOrCreateBindingLocation(program, fn, binding);
+					if (location.type !== "global")
+						throw new Error("Global lexical binding requires a global slot");
+					block.emitter.emit({
+						type: "declareGlobalLexical",
+						nameStringIndex: getOrCreateStringConstant(program, binding.name),
+						index: location.index,
+						immutable: binding.kind === "const",
+						checkOnly,
+					});
+				}
+			}
+		}
+
 		// Reserve this function's own captured-binding slots before compiling any
 		// hoisted function body. getOrCreateBindingLocation charges a captured slot
 		// to whichever function first *requests* it; hoisting lets a nested
@@ -6091,7 +6122,7 @@ function compileFunctionDeclaration(
 	if (
 		onlyUsedByDeclaration &&
 		!binding.annexBVarBinding &&
-		!isScriptGlobalProperty(fn.semanticFile, binding) &&
+		!isScriptGlobalProperty(program, fn.semanticFile, binding) &&
 		!(statement.id && isDirectEvalVarBinding(program, fn, statement.id))
 	) {
 		// Function is only used in its declaration, so we can skip it.
@@ -9589,18 +9620,12 @@ function compileIdentifierAssignment(
 		if (assignmentExpression.operator === "=") {
 			let initiallyPresent: number | undefined;
 			if (!isSloppyFunction(fn)) {
-				const global = nextCoreVariable(fn);
-				cursor.block.emitter.emit({
-					type: "loadIntrinsic",
-					registers: [global],
-					intrinsic: "globalThis",
-				});
-				const key = compileStaticString(program, fn, cursor, binding.name);
 				initiallyPresent = nextCoreVariable(fn);
 				cursor.block.emitter.emit({
-					type: "binary",
-					registers: [initiallyPresent, key, global],
-					operator: "in",
+					type: "globalBindingQuery",
+					registers: [initiallyPresent],
+					nameStringIndex: getOrCreateStringConstant(program, binding.name),
+					query: "has",
 				});
 			}
 			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
@@ -10203,29 +10228,14 @@ function compileUnaryExpression(
 				fn.semanticFile.withDynamicNodes.has(argument) ||
 				directEvalFreeIdentifierUsesDynamicEnvironment(program, fn, argument)
 			) {
-				// With-intercepted (or a direct-eval free identifier): consult the
-				// active with-object(s)/caller scope; only if none provide it is the
-				// result "undefined". (A global existing only on the global object is
-				// still reported "undefined" here — a known gap.)
 				return compileWithDynamicTypeof(program, fn, cursor, argument);
 			}
-			// typeof never throws on an unresolvable reference. Resolve the name
-			// against the global object at runtime: `typeof globalThis[name]` — an
-			// ordinary [[Get]] yields undefined for an absent property (so the result
-			// is "undefined"), the real type when the global exists (incl. ones added
-			// at runtime), and propagates a throwing getter, matching GetValue.
-			const global = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "loadIntrinsic",
-				registers: [global],
-				intrinsic: "globalThis",
-			});
-			const value = emitLoadProperty(program, fn, cursor, global, argument.name);
 			const destination = nextCoreVariable(fn);
 			cursor.block.emitter.emit({
-				type: "unary",
-				registers: [destination, value],
-				operator: "typeof",
+				type: "globalBindingQuery",
+				registers: [destination],
+				nameStringIndex: getOrCreateStringConstant(program, argument.name),
+				query: "typeof",
 			});
 			return destination;
 		}
@@ -10302,11 +10312,8 @@ function compileDeleteExpression(
 	return destination;
 }
 
-/**
- * `delete <identifier>` without dynamic (`with`) interception: an unresolved name
- * or intrinsic is a global-object property (delete it — true when absent /
- * configurable); a resolvable binding cannot be deleted (`delete x` is false).
- */
+// An unresolved name may still identify a non-deletable binding created by an earlier script.
+
 function compileStaticIdentifierDelete(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -10316,17 +10323,12 @@ function compileStaticIdentifierDelete(
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (binding?.undeclared) {
 		retainHostGlobal(program, binding);
-		const global = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "loadIntrinsic",
-			registers: [global],
-			intrinsic: "globalThis",
-		});
-		const key = compileStaticString(program, fn, cursor, binding.name);
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
-			type: "deleteProperty",
-			registers: [destination, global, key],
+			type: "globalBindingQuery",
+			registers: [destination],
+			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+			query: "delete",
 		});
 		return destination;
 	}
@@ -11575,6 +11577,7 @@ function compileSpreadArgumentsArray(
  * and globals backed by internal slots can be marshaled too.
  */
 function visibleBindingsForDirectEval(
+	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	callNode: ESTree.Node,
 ): Map<string, Binding> {
@@ -11591,7 +11594,7 @@ function visibleBindingsForDirectEval(
 				!binding.implicit &&
 				(!topLevelEval ||
 					fn.semanticFile.evalDirect ||
-					!isScriptGlobalProperty(fn.semanticFile, binding))
+					!isScriptGlobalProperty(program, fn.semanticFile, binding))
 			) {
 				result.set(binding.name, binding);
 			}
@@ -11641,7 +11644,7 @@ function inheritedContextForDirectEval(
 	const varEnvironmentNames = new Set(
 		program.evalDirect ? program.directEvalContext.varEnvironmentNames : [],
 	);
-	for (const binding of visibleBindingsForDirectEval(fn, callNode).values()) {
+	for (const binding of visibleBindingsForDirectEval(program, fn, callNode).values()) {
 		if (binding.kind !== "var" || binding.undeclared) continue;
 		const ownerScope = fn.semanticFile.scopes.find((scope) =>
 			scope.bindings.includes(binding),
@@ -11876,7 +11879,7 @@ function compileDirectEval(
 	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
-	const bindings = visibleBindingsForDirectEval(fn, callExpression);
+	const bindings = visibleBindingsForDirectEval(program, fn, callExpression);
 	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
 	const persistentScope =
 		!inheritedContext.varEnvironmentIsGlobal && isSloppyFunction(fn)
@@ -12246,7 +12249,13 @@ function emitDynamicImportCall(
 			? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports)
 			: compileUndefined(fn, cursor);
 		const statusSlot = path ? getDynamicModuleStatusSlot(program, path) : -1;
-		return [initFn, namespace, compileNumberLiteral(fn, cursor, statusSlot)];
+		return [
+			initFn,
+			namespace,
+			statusSlot < 0
+				? compileNumberLiteral(fn, cursor, -1)
+				: compileGlobalIndex(fn, cursor, statusSlot),
+		];
 	};
 
 	const callee = nextCoreVariable(fn);
@@ -12291,6 +12300,16 @@ function dynamicImportTargetPath(
 				dependency.kind === "dynamic" && dependency.specifier === source.value,
 		)?.resolvedPath ?? undefined
 	);
+}
+
+function compileGlobalIndex(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	index: number,
+): number {
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "loadGlobalIndex", registers: [destination], index });
+	return destination;
 }
 
 function getDynamicModuleStatusSlot(
@@ -12752,11 +12771,6 @@ function compileWithDynamicRead(
 	return result;
 }
 
-/**
- * `typeof name` where name is with-intercepted and has no static binding: probe
- * the with-object(s); a hit yields `typeof value`, a miss yields "undefined"
- * (never a ReferenceError — typeof of an unresolvable name does not throw).
- */
 function compileWithDynamicTypeof(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -12798,11 +12812,14 @@ function compileWithDynamicTypeof(
 	};
 	cursor.block.emitter.emit(hitJoin);
 
-	// Miss: the name resolves nowhere → "undefined".
 	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
-	const undefinedString = compileStaticString(program, fn, cursor, "undefined");
-	cursor.block.emitter.emit({ type: "move", registers: [result, undefinedString] });
+	cursor.block.emitter.emit({
+		type: "globalBindingQuery",
+		registers: [result],
+		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		query: "typeof",
+	});
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
@@ -12856,12 +12873,7 @@ function compileStaticIdentifier(
 	}
 
 	if (binding.undeclared) {
-		// A bare read of a statically-unresolved name resolves against the global
-		// object's property table in BOTH modes — GetValue on a global reference
-		// reads the property, throwing ReferenceError only if it is absent there.
-		// (Reading an undeclared name is a ReferenceError in strict AND sloppy; only
-		// assignment differs.) The compiler can't see runtime-added or host-declared
-		// globals, so a statically-undeclared name is not necessarily unresolvable.
+		// Bindings from earlier scripts are unavailable to this compilation and resolve at runtime.
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "loadGlobalProperty",
@@ -13081,12 +13093,12 @@ function emitDeferredModuleNamespaceInits(
 					compileUndefined(fn, cursor),
 					namespace,
 					initFn,
-					compileNumberLiteral(
+					compileGlobalIndex(
 						fn,
 						cursor,
 						getDynamicModuleStatusSlot(program, namespaceImport.module),
 					),
-					compileNumberLiteral(
+					compileGlobalIndex(
 						fn,
 						cursor,
 						getModuleEvaluationErrorSlot(program, namespaceImport.module),
@@ -13518,7 +13530,7 @@ function getOrCreateBindingLocation(
 				break;
 			}
 			case "global": {
-				if (isScriptGlobalProperty(fn.semanticFile, binding)) {
+				if (isScriptGlobalProperty(program, fn.semanticFile, binding)) {
 					location = {
 						type: "globalProperty",
 						nameStringIndex: getOrCreateStringConstant(program, binding.name),

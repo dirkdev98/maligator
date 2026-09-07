@@ -23,7 +23,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 36;
+export const WIRE_VERSION = 37;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -941,6 +941,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.scopeId);
 			w.i32(i.slotCount);
 			return;
+		case "LOAD_GLOBAL_INDEX":
 		case "LOAD_GLOBAL":
 			w.i32(i.dst);
 			w.i32(i.index);
@@ -1134,6 +1135,17 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.nameStringIndex);
 			w.u8(i.declaration ? 1 : 0);
 			w.u8(i.declarationConfigurable ? 1 : 0);
+			return;
+		case "DECLARE_GLOBAL_LEXICAL":
+			w.i32(i.nameStringIndex);
+			w.i32(i.index);
+			w.u8(i.immutable ? 1 : 0);
+			w.u8(i.checkOnly ? 1 : 0);
+			return;
+		case "GLOBAL_BINDING_QUERY":
+			w.i32(i.dst);
+			w.i32(i.nameStringIndex);
+			w.u8(["typeof", "has", "delete"].indexOf(i.query));
 			return;
 		case "INIT_GLOBAL_VARS":
 			if (i.nameStringIndices.length === 0) {
@@ -1734,6 +1746,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, scopeId: r.i32(), slotCount: r.i32() };
 		case "ENV_COPY":
 			return { opcode, scopeId: r.i32(), slotCount: r.i32() };
+		case "LOAD_GLOBAL_INDEX":
 		case "LOAD_GLOBAL":
 			return { opcode, dst: r.i32(), index: r.i32() };
 		case "STORE_GLOBAL":
@@ -1946,6 +1959,21 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				declaration: r.u8() !== 0,
 				declarationConfigurable: r.u8() !== 0,
 			};
+		case "DECLARE_GLOBAL_LEXICAL":
+			return {
+				opcode,
+				nameStringIndex: r.i32(),
+				index: r.i32(),
+				immutable: r.u8() !== 0,
+				checkOnly: r.u8() !== 0,
+			};
+		case "GLOBAL_BINDING_QUERY": {
+			const dst = r.i32();
+			const nameStringIndex = r.i32();
+			const query = (["typeof", "has", "delete"] as const)[r.u8()];
+			if (query === undefined) throw new RangeError("Invalid global binding query");
+			return { opcode, dst, nameStringIndex, query };
+		}
 		case "INIT_GLOBAL_VARS": {
 			const count = r.i32();
 			const instruction: Extract<BytecodeInstruction, { opcode: "INIT_GLOBAL_VARS" }> = {

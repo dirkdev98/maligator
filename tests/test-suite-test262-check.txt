@@ -140,7 +140,7 @@ test/built-ins/Symbol/for/cross-realm.js
 test/built-ins/TypedArrayConstructors/ctors/no-args/proto-from-ctor-realm.js
 test/language/expressions/tagged-template/cache-realm.js
 
-# Array length, index, and species semantics (30)
+# Array length, index, and species semantics (31)
 test/built-ins/Array/length/define-own-prop-length-coercion-order-set.js
 test/built-ins/Array/of/does-not-use-prototype-properties.js
 test/built-ins/Array/prototype/concat/arg-length-exceeding-integer-limit.js
@@ -172,7 +172,9 @@ test/built-ins/Array/prototype/unshift/length-near-integer-limit.js
 test/built-ins/Array/prototype/with/length-exceeding-array-length-limit.js
 test/built-ins/Object/defineProperties/15.2.3.7-6-a-179.js
 
-# Async completion and iterator closing (17)
+test/staging/sm/Array/with-dense.js
+
+# Async completion and iterator closing (19)
 test/built-ins/Array/fromAsync/sync-iterable-with-rejecting-thenable-closes.js
 test/built-ins/AsyncFromSyncIteratorPrototype/next/for-await-iterator-next-rejected-promise-close.js
 test/built-ins/AsyncFromSyncIteratorPrototype/next/yield-iterator-next-rejected-promise-close.js
@@ -191,6 +193,9 @@ test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-ca
 test/language/statements/for-of/dstr/array-elem-target-yield-expr.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
+test/language/expressions/dynamic-import/for-await-resolution-and-error-agen-yield.js
+test/language/module-code/top-level-await/module-graphs-does-not-hang.js
+
 # Explicit resource management (5)
 test/built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js
 test/language/statements/await-using/await-using-does-not-imply-await-if-not-evaluated.js
@@ -198,10 +203,12 @@ test/language/statements/await-using/initializer-Symbol.dispose-called-at-end-of
 test/language/statements/using/initializer-disposed-at-end-of-forstatement.js
 test/language/statements/using/throws-suppressederror-if-multiple-errors-during-disposal.js
 
-# Binding, coercion, and eval environments (47)
+# Binding, coercion, and eval environments (49)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
+test/language/eval-code/indirect/var-env-global-lex-strict.js
+test/language/eval-code/direct/cptn-nrml-expr-prim.js
 test/built-ins/global/S10.2.3_A1.3_T4.js
 test/language/arguments-object/cls-decl-meth-static-args-trailing-comma-single-args.js
 test/language/arguments-object/mapped/nonconfigurable-descriptors-define-failure.js

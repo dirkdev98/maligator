@@ -114,6 +114,12 @@ export type CompilerInstruction =
 			blocks: [number];
 	  }
 	| {
+			// Slot identities relocate with the image and cannot be folded as numeric literals.
+			type: "loadGlobalIndex";
+			registers: [number];
+			index: number;
+	  }
+	| {
 			type: "createNumber";
 
 			// [destination]
@@ -825,8 +831,7 @@ export type CompilerInstruction =
 			nameStringIndex: number;
 	  }
 	| {
-			// Runtime resolution of a statically undeclared name: the global object
-			// property, or ReferenceError if absent. This applies in both modes.
+			// Earlier scripts can introduce bindings absent from this compilation's scopes.
 			type: "loadGlobalProperty";
 			registers: [number];
 			nameStringIndex: number;
@@ -841,6 +846,19 @@ export type CompilerInstruction =
 			nameStringIndex: number;
 			declaration?: boolean;
 			declarationConfigurable?: boolean;
+	  }
+	| {
+			type: "declareGlobalLexical";
+			nameStringIndex: number;
+			index: number;
+			immutable: boolean;
+			checkOnly: boolean;
+	  }
+	| {
+			type: "globalBindingQuery";
+			registers: [number];
+			nameStringIndex: number;
+			query: "typeof" | "has" | "delete";
 	  }
 	| {
 			// Declaration-initialize a contiguous run of script `var` global

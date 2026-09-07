@@ -68,6 +68,8 @@ export const CORE_OPCODES = [
 	"getIterator",
 	"guardFunctionIndex",
 	"hasPrivate",
+	"declareGlobalLexical",
+	"globalBindingQuery",
 	"initGlobalVars",
 	"initPrivateFields",
 	"instantiateLiteralTemplate",
@@ -79,6 +81,7 @@ export const CORE_OPCODES = [
 	"loadArgumentCount",
 	"loadCallee",
 	"loadCaptured",
+	"loadGlobalIndex",
 	"loadGlobal",
 	"loadGlobalProperty",
 	"loadIntrinsic",
@@ -126,6 +129,7 @@ export const CORE_OPCODES = [
 export type CoreOpcode = (typeof CORE_OPCODES)[number];
 
 const NO_OUTPUT = new Set<CoreOpcode>([
+	"declareGlobalLexical",
 	"asyncStart",
 	"checkSuperClass",
 	"createPrivateNames",
@@ -178,6 +182,7 @@ const GC_FREE = new Set<CoreOpcode>([
 	"selectShapeCase",
 	"isEmpty",
 	"loadCaptured",
+	"loadGlobalIndex",
 	"loadGlobal",
 	"loadIntrinsic",
 	"loadLocal",
@@ -244,6 +249,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"iteratorNext",
 	"iteratorStep",
 	"loadGlobalProperty",
+	"globalBindingQuery",
 	"loadPrivate",
 	"loadProperty",
 	"loadPropertyStatic",
@@ -281,6 +287,7 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"selectShapeCase",
 	"isEmpty",
 	"loadCaptured",
+	"loadGlobalIndex",
 	"loadGlobal",
 	"loadIntrinsic",
 	"loadLocal",
@@ -341,6 +348,12 @@ const OPCODE_ACCESSES = {
 	loadGlobal: [read("global-slot", { attributes: ["index"] })],
 	storeGlobal: [write("global-slot", { attributes: ["index"], valueOperand: 0 })],
 	initGlobalVars: [write("global-slot")],
+	declareGlobalLexical: [read("global-slot"), write("global-property")],
+	globalBindingQuery: [
+		read("global-slot"),
+		read("global-property"),
+		write("global-property"),
+	],
 	// The namespace exotic object resolves each export from the global slot named
 	// in its `exports` attribute on every property get, so the object's existence
 	// keeps those slots read for as long as it is reachable. One attribute carries
@@ -355,8 +368,12 @@ const OPCODE_ACCESSES = {
 		read("global-slot", { attributes: ["cacheSlot"] }),
 		write("global-slot", { attributes: ["cacheSlot"] }),
 	],
-	loadGlobalProperty: [read("global-property", { keyAttribute: "nameStringIndex" })],
+	loadGlobalProperty: [
+		read("global-slot"),
+		read("global-property", { keyAttribute: "nameStringIndex" }),
+	],
 	storeGlobalProperty: [
+		write("global-slot"),
 		write("global-property", {
 			keyAttribute: "nameStringIndex",
 			valueOperand: 0,
@@ -614,6 +631,8 @@ const INPUT_ARITIES = {
 	selectShapeCase: [1, 1],
 	hasPrivate: [2, 2],
 	initGlobalVars: [0, 0],
+	declareGlobalLexical: [0, 0],
+	globalBindingQuery: [0, 0],
 	initPrivateFields: [1, 65_535],
 	instantiateLiteralTemplate: [0, 0],
 	isEmpty: [1, 1],
@@ -624,6 +643,7 @@ const INPUT_ARITIES = {
 	loadArgumentCount: [0, 0],
 	loadCallee: [0, 0],
 	loadCaptured: [0, 0],
+	loadGlobalIndex: [0, 0],
 	loadGlobal: [0, 0],
 	loadGlobalProperty: [0, 0],
 	loadIntrinsic: [0, 0],

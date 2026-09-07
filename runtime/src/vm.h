@@ -300,6 +300,10 @@ typedef struct MalInstruction {
         } load_global;
 
         struct {
+            i32 dst, index;
+        } load_global_index;
+
+        struct {
             i32 dst, intrinsic;
         } load_intrinsic;
 
@@ -542,8 +546,6 @@ typedef struct MalInstruction {
         } load_undeclared;
 
         struct {
-            // Sloppy-mode read of an otherwise-unresolved name: the global object
-            // property `name_string_index`, or ReferenceError if it is absent.
             i32 dst, name_string_index;
         } load_global_property;
 
@@ -563,6 +565,16 @@ typedef struct MalInstruction {
             i32 data_offset;
             bool declaration_configurable;
         } init_global_vars;
+
+        struct {
+            i32 name_string_index, index;
+            bool immutable, check_only;
+        } declare_global_lexical;
+
+        struct {
+            i32 dst, name_string_index;
+            u8 query;
+        } global_binding_query;
 
         struct {
             // Throw ReferenceError if `src` holds the uninitialized sentinel (the
@@ -1128,6 +1140,19 @@ typedef struct MalStackTrace {
 // for `eval` so their arenas outlive the spliced functions.
 typedef struct MalLoadedRuntimeImage MalLoadedRuntimeImage;
 
+typedef struct {
+    i32 name_string_index;
+    // Negative slots track object-record var declarations for redeclaration checks.
+    i32 global_index;
+    bool immutable;
+} MalGlobalBinding;
+
+typedef struct {
+    MalGlobalBinding *bindings;
+    i32 count;
+    i32 capacity;
+} MalGlobalEnvironment;
+
 #if MAL_REALMS
 /**
  * A realm: isolated global slots and intrinsics (%Object.prototype%, the error
@@ -1139,6 +1164,7 @@ typedef struct MalLoadedRuntimeImage MalLoadedRuntimeImage;
  * whole list is freed by mal_realm_free_all.
  */
 typedef struct MalRealm {
+    MalGlobalEnvironment global_environment;
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
     struct MalRealm *next;
@@ -1278,6 +1304,9 @@ typedef struct MalVm {
     i32 file_capacity;
     i32 source_position_capacity;
     i32 global_capacity;
+#if !MAL_REALMS
+    MalGlobalEnvironment global_environment;
+#endif
 
     /** Lazily atomized debug filenames, indexed with live_runtime_image.files. */
     MalString **file_string_atoms;

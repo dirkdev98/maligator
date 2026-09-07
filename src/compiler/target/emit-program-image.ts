@@ -1796,6 +1796,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_GUARD_FUNCTION_INDEX, .as.guard_function_index = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex} } }`;
 		case "SELECT_SHAPE_CASE":
 			return `{ .opcode = MAL_OP_SELECT_SHAPE_CASE, .as.select_shape_case = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .candidate_count = ${instruction.candidates.length} } }`;
+		case "LOAD_GLOBAL_INDEX":
+			return `{ .opcode = MAL_OP_LOAD_GLOBAL_INDEX, .as.load_global_index = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
 		case "LOAD_INTRINSIC":
@@ -1892,6 +1894,10 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL_PROPERTY, .as.load_global_property = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "STORE_GLOBAL_PROPERTY":
 			return `{ .opcode = MAL_OP_STORE_GLOBAL_PROPERTY, .as.store_global_property = { .src = ${instruction.src}, .name_string_index = ${instruction.nameStringIndex}, .declaration = ${instruction.declaration}, .declaration_configurable = ${instruction.declarationConfigurable} } }`;
+		case "DECLARE_GLOBAL_LEXICAL":
+			return `{ .opcode = MAL_OP_DECLARE_GLOBAL_LEXICAL, .as.declare_global_lexical = { .name_string_index = ${instruction.nameStringIndex}, .index = ${instruction.index}, .immutable = ${instruction.immutable}, .check_only = ${instruction.checkOnly} } }`;
+		case "GLOBAL_BINDING_QUERY":
+			return `{ .opcode = MAL_OP_GLOBAL_BINDING_QUERY, .as.global_binding_query = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex}, .query = ${["typeof", "has", "delete"].indexOf(instruction.query)} } }`;
 		case "INIT_GLOBAL_VARS":
 			return `{ .opcode = MAL_OP_INIT_GLOBAL_VARS, .as.init_global_vars = { .data_offset = ${sideDataOffset()}, .declaration_configurable = ${instruction.declarationConfigurable} } }`;
 		case "THROW_IF_TDZ":

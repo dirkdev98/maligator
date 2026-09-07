@@ -858,6 +858,11 @@ export type BytecodeInstruction =
 			functionIndex: number;
 	  }
 	| {
+			opcode: "LOAD_GLOBAL_INDEX";
+			dst: number;
+			index: number;
+	  }
+	| {
 			opcode: "LOAD_GLOBAL";
 			dst: number;
 			index: number;
@@ -1152,6 +1157,19 @@ export type BytecodeInstruction =
 			nameStringIndex: number;
 			declaration: boolean;
 			declarationConfigurable: boolean;
+	  }
+	| {
+			opcode: "DECLARE_GLOBAL_LEXICAL";
+			nameStringIndex: number;
+			index: number;
+			immutable: boolean;
+			checkOnly: boolean;
+	  }
+	| {
+			opcode: "GLOBAL_BINDING_QUERY";
+			dst: number;
+			nameStringIndex: number;
+			query: "typeof" | "has" | "delete";
 	  }
 	| {
 			opcode: "INIT_GLOBAL_VARS";
@@ -3212,6 +3230,12 @@ function lowerInstructionToBytecodeInstruction(
 			};
 		case "envPop":
 			return { opcode: "ENV_POP" };
+		case "loadGlobalIndex":
+			return {
+				opcode: "LOAD_GLOBAL_INDEX",
+				dst: instruction.registers[0],
+				index: instruction.index,
+			};
 		case "loadGlobal":
 			return {
 				opcode: "LOAD_GLOBAL",
@@ -3502,6 +3526,21 @@ function lowerInstructionToBytecodeInstruction(
 				nameStringIndex: instruction.nameStringIndex,
 				declaration: instruction.declaration ?? false,
 				declarationConfigurable: instruction.declarationConfigurable ?? false,
+			};
+		case "declareGlobalLexical":
+			return {
+				opcode: "DECLARE_GLOBAL_LEXICAL",
+				nameStringIndex: instruction.nameStringIndex,
+				index: instruction.index,
+				immutable: instruction.immutable,
+				checkOnly: instruction.checkOnly,
+			};
+		case "globalBindingQuery":
+			return {
+				opcode: "GLOBAL_BINDING_QUERY",
+				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+				query: instruction.query,
 			};
 		case "initGlobalVars":
 			return {

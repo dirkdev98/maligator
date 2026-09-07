@@ -4468,6 +4468,10 @@ function emitInstruction(
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				throwCheck(),
 			];
+		case "LOAD_GLOBAL_INDEX":
+			return [
+				`r${instruction.dst} = mal_value_from_i32(${relocation.globalIndex(instruction.index)});`,
+			];
 		case "LOAD_GLOBAL":
 			return [
 				`r${instruction.dst} = vm->globals[${relocation.globalIndex(instruction.index)}];`,
@@ -4480,6 +4484,16 @@ function emitInstruction(
 			// A var/function declaration that becomes a property of globalThis.
 			return [
 				`mal_vm_op_store_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
+				throwCheck(),
+			];
+		case "DECLARE_GLOBAL_LEXICAL":
+			return [
+				`mal_vm_op_declare_global_lexical(vm, ${relocation.stringIndex(instruction.nameStringIndex)}, ${relocation.globalIndex(instruction.index)}, ${instruction.immutable}, ${instruction.checkOnly});`,
+				throwCheck(),
+			];
+		case "GLOBAL_BINDING_QUERY":
+			return [
+				`r${instruction.dst} = mal_vm_op_global_binding_query(vm, ${relocation.stringIndex(instruction.nameStringIndex)}, ${["typeof", "has", "delete"].indexOf(instruction.query)});`,
 				throwCheck(),
 			];
 		case "INIT_GLOBAL_VARS":
@@ -6477,8 +6491,6 @@ function emitInstruction(
 			];
 		}
 		case "LOAD_GLOBAL_PROPERTY":
-			// Sloppy-mode read of an unresolved name off globalThis; a missing name
-			// throws ReferenceError and a global getter can throw, so propagate.
 			return [
 				`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				throwCheck(),

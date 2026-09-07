@@ -253,6 +253,7 @@ function cloneInstruction(
 			};
 		case "GUARD_FUNCTION_INDEX":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
+		case "LOAD_GLOBAL_INDEX":
 		case "LOAD_GLOBAL":
 		case "STORE_GLOBAL":
 			return { ...instruction, index: instruction.index + base.global };
@@ -289,6 +290,7 @@ function cloneInstruction(
 				templateOffset: instruction.templateOffset + base.template,
 			};
 		case "LOAD_UNDECLARED":
+		case "GLOBAL_BINDING_QUERY":
 		case "LOAD_GLOBAL_PROPERTY":
 		case "STORE_GLOBAL_PROPERTY":
 		case "THROW_IF_TDZ":
@@ -298,6 +300,12 @@ function cloneInstruction(
 			return {
 				...instruction,
 				nameStringIndex: instruction.nameStringIndex + base.string,
+			};
+		case "DECLARE_GLOBAL_LEXICAL":
+			return {
+				...instruction,
+				nameStringIndex: instruction.nameStringIndex + base.string,
+				index: instruction.index + base.global,
 			};
 		case "INIT_GLOBAL_VARS":
 			return {

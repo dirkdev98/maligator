@@ -661,6 +661,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     mal_vm_invalidate_map_get_set_cache(vm);
     vm->global_capacity = program->global_count > 0 ? program->global_count : 1;
 #if !MAL_REALMS
+    vm->global_environment = (MalGlobalEnvironment) {0};
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
 #endif
     // Fixed-capacity, never reallocated (see MAL_MAX_CALL_FRAMES): keeps every
@@ -995,6 +996,7 @@ void mal_vm_free(MalVm *vm) {
     free(vm->frames);
     free(vm->value_stack);
 #if !MAL_REALMS
+    free(vm->global_environment.bindings);
     free(vm->globals);
 #endif
     free(vm->cjs_registry);
@@ -1133,6 +1135,9 @@ static void mal_vm_rebase_instruction(
                 in->as.create_private_names.owner_function_index += fn_base;
             }
             break;
+        case MAL_OP_LOAD_GLOBAL_INDEX:
+            in->as.load_global_index.index += global_base;
+            break;
         case MAL_OP_LOAD_GLOBAL:
             in->as.load_global.index += global_base;
             break;
@@ -1196,6 +1201,13 @@ static void mal_vm_rebase_instruction(
             break;
         case MAL_OP_STORE_GLOBAL_PROPERTY:
             in->as.store_global_property.name_string_index += string_base;
+            break;
+        case MAL_OP_DECLARE_GLOBAL_LEXICAL:
+            in->as.declare_global_lexical.name_string_index += string_base;
+            in->as.declare_global_lexical.index += global_base;
+            break;
+        case MAL_OP_GLOBAL_BINDING_QUERY:
+            in->as.global_binding_query.name_string_index += string_base;
             break;
         case MAL_OP_INIT_GLOBAL_VARS: {
             i32 *data = instruction_data + in->as.init_global_vars.data_offset;
@@ -2400,6 +2412,10 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_STORE_GLOBAL:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_global(frame, instruction));
                 break;
+            case MAL_OP_LOAD_GLOBAL_INDEX:
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                registers[instruction->as.load_global_index.dst] = mal_value_from_i32(instruction->as.load_global_index.index);
+                continue;
             case MAL_OP_LOAD_GLOBAL: {
                 i32 dst = instruction->as.load_global.dst;
                 MalValue value = vm->globals[instruction->as.load_global.index];
@@ -2865,6 +2881,12 @@ static void mal_vm_run_until_frame_count(
                 break;
             case MAL_OP_STORE_GLOBAL_PROPERTY:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_global_property(frame, instruction));
+                break;
+            case MAL_OP_DECLARE_GLOBAL_LEXICAL:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_declare_global_lexical(frame, instruction));
+                break;
+            case MAL_OP_GLOBAL_BINDING_QUERY:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_global_binding_query(frame, instruction));
                 break;
             case MAL_OP_INIT_GLOBAL_VARS:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_init_global_vars(frame, instruction));

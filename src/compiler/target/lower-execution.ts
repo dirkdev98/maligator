@@ -95,6 +95,7 @@ const REGISTERLESS_CORE_OPERATIONS: ReadonlySet<string> = new Set([
 	"envPop",
 	"envPush",
 	"generatorStart",
+	"declareGlobalLexical",
 	"initGlobalVars",
 ]);
 

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 36u
+#define WIRE_VERSION 37u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -837,6 +837,11 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
         case WIRE_ENV_POP:
             o->opcode = MAL_OP_ENV_POP;
             return;
+        case WIRE_LOAD_GLOBAL_INDEX:
+            o->opcode = MAL_OP_LOAD_GLOBAL_INDEX;
+            o->as.load_global_index.dst = rd_i32(r);
+            o->as.load_global_index.index = rd_i32(r);
+            return;
         case WIRE_LOAD_GLOBAL:
             o->opcode = MAL_OP_LOAD_GLOBAL;
             o->as.load_global.dst = rd_i32(r);
@@ -1138,6 +1143,20 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.store_global_property.declaration = rd_u8(r) != 0;
             o->as.store_global_property.declaration_configurable = rd_u8(r) != 0;
             return;
+        case WIRE_DECLARE_GLOBAL_LEXICAL:
+            o->opcode = MAL_OP_DECLARE_GLOBAL_LEXICAL;
+            o->as.declare_global_lexical.name_string_index = rd_i32(r);
+            o->as.declare_global_lexical.index = rd_i32(r);
+            o->as.declare_global_lexical.immutable = rd_u8(r) != 0;
+            o->as.declare_global_lexical.check_only = rd_u8(r) != 0;
+            return;
+        case WIRE_GLOBAL_BINDING_QUERY:
+            o->opcode = MAL_OP_GLOBAL_BINDING_QUERY;
+            o->as.global_binding_query.dst = rd_i32(r);
+            o->as.global_binding_query.name_string_index = rd_i32(r);
+            o->as.global_binding_query.query = rd_u8(r);
+            if (o->as.global_binding_query.query > 2) r->ok = false;
+            return;
         case WIRE_INIT_GLOBAL_VARS: {
             o->opcode = MAL_OP_INIT_GLOBAL_VARS;
             i32 count = rd_i32(r);
@@ -1306,6 +1325,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
         MAL_WRITES_DST(MAL_OP_LOAD_CAPTURED, load_captured);
         MAL_WRITES_DST(MAL_OP_GUARD_FUNCTION_INDEX, guard_function_index);
+        MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_INDEX, load_global_index);
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL, load_global);
         MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY, load_property);
         MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY_STATIC, load_property_static);
@@ -1333,6 +1353,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CREATE_PRIVATE_NAME, create_private_name);
         MAL_WRITES_DST(MAL_OP_LOAD_UNDECLARED, load_undeclared);
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_PROPERTY, load_global_property);
+        MAL_WRITES_DST(MAL_OP_GLOBAL_BINDING_QUERY, global_binding_query);
         MAL_WRITES_DST(MAL_OP_WITH_GET, with_get);
         MAL_WRITES_DST(MAL_OP_WITH_RESOLVE_BASE, with_resolve_base);
         MAL_WRITES_DST(MAL_OP_IS_EMPTY, is_empty);

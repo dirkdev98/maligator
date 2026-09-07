@@ -6199,7 +6199,73 @@ static MalPropertyLookup mal_vm_global_dictionary_lookup(
     return lookup;
 }
 
+static MalGlobalEnvironment *mal_vm_global_environment(MalVm *vm) {
+#if MAL_REALMS
+    return &vm->current_realm->global_environment;
+#else
+    return &vm->global_environment;
+#endif
+}
+
+static MalGlobalBinding *mal_vm_global_binding(MalVm *vm, i32 name_string_index) {
+    MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
+    for (i32 i = 0; i < environment->count; i++) {
+        MalGlobalBinding *binding = &environment->bindings[i];
+        if (mal_string_equals(
+                vm->string_constant_atoms[binding->name_string_index],
+                vm->string_constant_atoms[name_string_index])) {
+            return binding;
+        }
+    }
+    return nullptr;
+}
+
+static void mal_vm_add_global_binding(MalVm *vm, i32 name_string_index, i32 index, bool immutable) {
+    MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
+    if (environment->count == environment->capacity) {
+        environment->capacity = environment->capacity ? environment->capacity * 2 : 16;
+        environment->bindings = realloc(
+            environment->bindings, (usize) environment->capacity * sizeof(MalGlobalBinding));
+    }
+    environment->bindings[environment->count++] = (MalGlobalBinding) {
+        .name_string_index = name_string_index, .global_index = index, .immutable = immutable,
+    };
+}
+
+void mal_vm_op_declare_global_lexical(
+    MalVm *vm, i32 name_string_index, i32 index, bool immutable, bool check_only
+) {
+    if (check_only) {
+        MalObject *global_object;
+        MalKey key;
+        MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+            vm, name_string_index, &global_object, &key);
+        if (mal_vm_global_binding(vm, name_string_index) != nullptr ||
+            (own.present && !(own.desc.flags & MAL_PROPERTY_CONFIGURABLE))) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot redeclare global lexical binding");
+        }
+        return;
+    }
+    mal_vm_add_global_binding(vm, name_string_index, index, immutable);
+}
+
+void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *instruction) {
+    mal_vm_op_declare_global_lexical(callable->vm, instruction->as.declare_global_lexical.name_string_index,
+        instruction->as.declare_global_lexical.index, instruction->as.declare_global_lexical.immutable,
+        instruction->as.declare_global_lexical.check_only);
+}
+
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
+    MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
+    if (binding != nullptr && binding->global_index >= 0) {
+        MalValue value = vm->globals[binding->global_index];
+        if (mal_value_is_empty(value)) {
+            mal_vm_op_load_undeclared(vm, name_string_index);
+            return mal_value_new_undefined();
+        }
+        return value;
+    }
     MalObject *global_object;
     MalKey key;
     MalPropertyLookup own = mal_vm_global_dictionary_lookup(
@@ -6229,6 +6295,20 @@ void mal_vm_op_store_global_property(
     MalVm *vm, i32 name_string_index, MalValue value, bool strict,
     bool declaration, bool declaration_configurable
 ) {
+    MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
+    if (binding != nullptr && binding->global_index >= 0) {
+        if (declaration) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot redeclare global lexical binding");
+        } else if (mal_value_is_empty(vm->globals[binding->global_index])) {
+            mal_vm_op_load_undeclared(vm, name_string_index);
+        } else if (binding->immutable) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Assignment to constant binding");
+        } else {
+            vm->globals[binding->global_index] = value;
+        }
+        return;
+    }
     MalObject *global_object;
     MalKey key;
     MalPropertyLookup own = mal_vm_global_dictionary_lookup(
@@ -6273,6 +6353,9 @@ void mal_vm_op_store_global_property(
                 }
             }
             return;
+        }
+        if (!function_check && !var_check && binding == nullptr) {
+            mal_vm_add_global_binding(vm, name_string_index, -1, false);
         }
         if (own.present && !function_initialization) {
             return;
@@ -6320,6 +6403,39 @@ void mal_vm_op_store_global_property(
         }
     }
     mal_vm_op_store_property(vm, global, key.value, value, strict);
+}
+
+MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 query) {
+    MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
+    bool lexical = binding != nullptr && binding->global_index >= 0;
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    MalKey key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(vm->string_constant_atoms[name_string_index]),
+    };
+    if (query == 1) return mal_value_new_boolean(lexical || mal_vm_has_property(vm, global, key));
+    if (query == 2) {
+        if (lexical) return mal_value_new_boolean(false);
+        bool deleted = mal_vm_delete_property(vm, global, key);
+        binding = mal_vm_global_binding(vm, name_string_index);
+        if (deleted && binding != nullptr) {
+            MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
+            i32 index = (i32) (binding - environment->bindings);
+            environment->bindings[index] = environment->bindings[--environment->count];
+        }
+        return mal_value_new_boolean(deleted);
+    }
+    MalValue value = mal_value_new_undefined();
+    if (lexical) value = mal_vm_op_load_global_property(vm, name_string_index);
+    else mal_vm_get_property(vm, global, key, &value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    const byte *tag = mal_vm_typeof_tag(mal_vm_typeof_result(value));
+    return mal_value_from_string(mal_intrinsic_ascii(vm, tag));
+}
+
+void mal_op_global_binding_query(MalCallable *callable, const MalInstruction *instruction) {
+    callable->registers[instruction->as.global_binding_query.dst] = mal_vm_op_global_binding_query(
+        callable->vm, instruction->as.global_binding_query.name_string_index, instruction->as.global_binding_query.query);
 }
 
 void mal_op_store_global_property(MalCallable *callable, const MalInstruction *instruction) {

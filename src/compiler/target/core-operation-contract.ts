@@ -43,6 +43,7 @@ const CORE_REGISTERLESS_OPERATIONS = [
 	"envPop",
 	"envPush",
 	"generatorStart",
+	"declareGlobalLexical",
 	"initGlobalVars",
 ] as const satisfies ReadonlyArray<CoreOpcode>;
 

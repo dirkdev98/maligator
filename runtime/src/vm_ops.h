@@ -2155,6 +2155,10 @@ void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototyp
  * `name_string_index`, or throw ReferenceError if it is absent.
  */
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
+void mal_vm_op_declare_global_lexical(MalVm *vm, i32 name_string_index, i32 index, bool immutable, bool check_only);
+MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 query);
+void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_global_binding_query(MalCallable *callable, const MalInstruction *instruction);
 
 /** Write or declaration-initialize a global object property. */
 void mal_vm_op_store_global_property(
