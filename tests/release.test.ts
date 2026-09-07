@@ -330,6 +330,7 @@ describe("npm launcher", () => {
 			"index.js",
 			"index.d.ts",
 			"test-api.d.ts",
+			"process-api.d.ts",
 			"README.md",
 			"LICENSE",
 		]);

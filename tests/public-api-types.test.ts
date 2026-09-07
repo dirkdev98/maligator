@@ -28,6 +28,10 @@ describe("@maligator/cli public TypeScript API", () => {
 			path.join(packageDirectory, "test-api.d.ts"),
 		);
 		copyFileSync(
+			path.resolve(import.meta.dirname, "../src/process-api.d.ts"),
+			path.join(packageDirectory, "process-api.d.ts"),
+		);
+		copyFileSync(
 			path.resolve(import.meta.dirname, "../npm/cli/index.js"),
 			path.join(packageDirectory, "index.js"),
 		);

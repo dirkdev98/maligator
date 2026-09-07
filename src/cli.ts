@@ -194,7 +194,6 @@ function parseBuild(args: Array<string>): CliCommand {
 		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
 			if (argument === "--profile=compiler") command.profileCompiler = true;
-			command.production = true;
 			continue;
 		}
 		if (argument === "--target") {

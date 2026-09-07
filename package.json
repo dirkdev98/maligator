@@ -34,6 +34,7 @@
 		"explore:outputs": "node ./scripts/output-explorer.ts",
 		"format": "node ./scripts/quality.ts format",
 		"generate:bytecode-operations": "node ./scripts/generate-bytecode-operations.ts",
+		"generate:platform-api": "node ./scripts/generate-platform-api.ts",
 		"lint": "node ./scripts/quality.ts lint",
 		"lint:ci": "node ./scripts/quality.ts lint-ci",
 		"release:build": "node ./scripts/release.ts build",

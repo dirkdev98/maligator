@@ -219,6 +219,7 @@ const launcherPackageFiles = [
 	"index.js",
 	"index.d.ts",
 	"test-api.d.ts",
+	"process-api.d.ts",
 	"README.md",
 	"LICENSE",
 ];
@@ -290,6 +291,10 @@ function stageLauncherPackage(version: string, selected: typeof targets): string
 	copyFileSync(
 		path.join(repositoryRoot, "src/test-api.d.ts"),
 		path.join(directory, "test-api.d.ts"),
+	);
+	copyFileSync(
+		path.join(repositoryRoot, "src/process-api.d.ts"),
+		path.join(directory, "process-api.d.ts"),
 	);
 	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
 	writeJson(

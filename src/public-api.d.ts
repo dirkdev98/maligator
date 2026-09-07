@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 
 import "./test-api.d.ts";
+import "./process-api.d.ts";
 
 export type MaligatorIntlFeature =
 	| "collator"
