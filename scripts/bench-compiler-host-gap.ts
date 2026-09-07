@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
@@ -17,11 +18,8 @@ import { buildNativeBinary } from "../src/test-harness.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FIXTURE = path.join(REPOSITORY_ROOT, "bench/compiler-host-gap.mjs");
-const DEFAULT_JSON = path.join(REPOSITORY_ROOT, "bench/core-opt4-host-gap-analysis.json");
-const DEFAULT_MARKDOWN = path.join(
-	REPOSITORY_ROOT,
-	"bench/core-opt4-host-gap-analysis.md",
-);
+const DEFAULT_JSON = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report.json");
+const DEFAULT_MARKDOWN = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report.md");
 const CONFIG = resolveBuildConfig({
 	engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
 	surface: { node: true, webPlatform: false, maligator: true },
@@ -152,11 +150,10 @@ Options:
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
   --group primitive|algorithm
   --case ID                  select a kernel; repeatable
-  --output PATH              JSON report path
-  --markdown PATH            Markdown report path
+  --output PATH              JSON report (default: .cache/compiler-host-gap/report.json)
+  --markdown PATH            Markdown report (default: .cache/compiler-host-gap/report.md)
   --skip-node-allocation     omit V8 sampled-allocation resource probes
   --self-compile PATH        merge a full self-compile owner artifact
-  --no-self-compile          do not merge the default owner artifact
 `;
 
 function requiredValue(args: ReadonlyArray<string>, index: number): string {
@@ -185,11 +182,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	const groups = new Set<KernelDescriptor["group"]>();
 	const cases = new Set<string>();
 	let skipNodeAllocation = false;
-	let selfCompile: string | undefined = existsSync(
-		path.join(REPOSITORY_ROOT, "bench/core-opt4-host-gap-start.json"),
-	)
-		? path.join(REPOSITORY_ROOT, "bench/core-opt4-host-gap-start.json")
-		: undefined;
+	let selfCompile: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
 		if (option === "--samples") {
@@ -219,8 +212,6 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		} else if (option === "--self-compile") {
 			selfCompile = path.resolve(requiredValue(args, index));
 			index++;
-		} else if (option === "--no-self-compile") {
-			selfCompile = undefined;
 		} else {
 			throw new Error(`unknown option: ${option}`);
 		}
@@ -758,7 +749,7 @@ ${Object.entries(report.fullCompiler.categoryFractions)
 
 The category association maps measured owner gaps to their representative kernels; it is a ranking model, not a claim that one primitive alone explains an owner's complete cost.
 `;
-	return `# Core opt4 compiler host-gap analysis
+	return `# Compiler host-gap analysis
 
 Source: \`${report.source.commit}\`${report.source.dirty ? " with benchmark changes" : ""}
 
@@ -909,6 +900,8 @@ function main(args: ReadonlyArray<string>): void {
 		...(fullCompiler === undefined ? {} : { fullCompiler }),
 		diagnosis,
 	};
+	mkdirSync(path.dirname(options.output), { recursive: true });
+	mkdirSync(path.dirname(options.markdown), { recursive: true });
 	writeFileSync(options.output, `${JSON.stringify(report, undefined, "\t")}\n`);
 	writeFileSync(options.markdown, markdownReport(report));
 	const formatter = path.join(REPOSITORY_ROOT, "node_modules/.bin/oxfmt");

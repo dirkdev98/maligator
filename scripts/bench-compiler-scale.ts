@@ -198,8 +198,11 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
 const REPOSITORY_URL_PREFIX = pathToFileURL(`${REPOSITORY_ROOT}${path.sep}`).href;
 const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "bench/compiler-scale-manifest.json");
-const DEFAULT_OUTPUT = path.join(REPOSITORY_ROOT, "bench/compiler-scale-baseline.json");
-const OPT4_START_OUTPUT = path.join(REPOSITORY_ROOT, "bench/core-opt4-start.json");
+const DEFAULT_OUTPUT = path.join(REPOSITORY_ROOT, ".cache/compiler-scale/report.json");
+const OPT4_START_OUTPUT = path.join(
+	REPOSITORY_ROOT,
+	".cache/compiler-scale/self-compile-start.json",
+);
 const WORKER_PREFIX = "COMPILER_SCALE_WORKER=";
 const OPTIMIZE_TRACE_START = "COMPILER_SCALE_OPTIMIZE_TRACE_START";
 const OPTIMIZE_TRACE_END = "COMPILER_SCALE_OPTIMIZE_TRACE_END";
@@ -217,11 +220,11 @@ tier 19 requires --include-test-check unless --core-opt3-start selects the compl
   --instrumentation MODE       off, phases, counters or full (default: counters)
   --compare-instrumentation    compare off, phases and counters on every selected tier
   --no-profile                 omit the separate V8 allocation/GC sample
-  --include-test-check         include tier 14 (npm run test:check)
+  --include-test-check         include tier 19 (npm run test:check)
   --quick                      one warm and one cold sample per case
   --core-opt3-start            exact Slice 0 self-compile measurement protocol
   --core-opt4-start            isolated opt4 Tier 17 measurement protocol
-  --output PATH                baseline JSON destination
+  --output PATH                report JSON destination (default: .cache/compiler-scale/report.json)
 
 Completed cases are checkpointed beside the output and resumed automatically.
 `;

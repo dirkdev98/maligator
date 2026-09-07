@@ -125,16 +125,39 @@ run directory. Exit 2 means failed or incomplete; exit 1 flags a classified regr
 A single pair or a zero exit code does not establish stable performance acceptance.
 Resume only with matching source/options/host, after a fresh environment check.
 
-Report what was exercised, failed, and left unverified. Preserve useful reports and
-raw samples; historical timings and old passes are not current validation. Retain a
-copy of a gate report when needed because `report-<tier>.json` is overwritten.
+Report what was exercised, failed, and left unverified. Retain the evidence needed
+to review the current change; historical timings and old passes are not current
+validation. Copy a gate report into the current run directory when needed because
+`report-<tier>.json` is overwritten.
+
+## Artifact hygiene
+
+- Keep generated profiles, benchmark outputs, logs, captures, and scratch scripts
+  out of tracked directories. Use one task-scoped directory under `.cache/` for
+  evidence that must survive the command; use an OS temporary directory with
+  cleanup in `finally` for disposable intermediates.
+- Tool defaults must write reports under `.cache/`, create their output directories,
+  and print the resulting paths. Read comparison inputs explicitly; never silently
+  adopt an old experiment output as a baseline. Baseline replacement remains an
+  explicit action.
+- Do not commit experiment journals, rejected-candidate reports, slice snapshots,
+  or one-off profiling scripts. Keep reusable tools in `scripts/`, regression
+  coverage in `tests/`, unfinished work in `TODO.md`, and lasting design decisions
+  in `docs/decisions/`. Remove scratch helpers when their investigation ends.
+- Before finishing a task, remove its disposable builds and superseded outputs.
+  Retain only evidence supporting the result or an unresolved failure, and report
+  its location. An ignored `.cache/` directory is not a permanent archive; never
+  force-add its contents. Do not delete another task's artifacts.
 
 ## Cleanup and delegation
 
 Audit ownership and activity before deleting artifacts. Remove only explicitly
 identified inactive scratch or superseded generated data; preserve source, baselines,
 useful failure evidence, and unrelated drafts. Use `cache prune --dry-run` before
-supported cache pruning, and respect live leases. Never reuse an old deletion list.
+supported cache pruning, and respect live leases. The default target is 15 GiB;
+family minimums and recent-entry protection can leave more than that. This command
+manages the user cache, not repository `.cache/` reports. Never reuse an old deletion
+list.
 
 Delegate only when requested. Use the requested available external harness, give each
 assignment a complete scope and a 30-minute wall-clock limit, and capture its output.

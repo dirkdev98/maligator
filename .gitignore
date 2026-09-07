@@ -16,3 +16,9 @@ tests/local/tmp*.js
 AGENTS.local.md
 scripts/local-gh-push.sh
 /error.log
+
+/bench/*.json
+!/bench/baseline.json
+!/bench/compiler-scale-manifest.json
+*.cpuprofile
+*.heapprofile

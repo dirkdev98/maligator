@@ -30,6 +30,25 @@ spans. Vitest forks write process-local JSONL while running, so telemetry does n
 serialize the native suite; reports count the contributing processes explicitly.
 Test verdicts and program output are still always recomputed.
 
+## Diagnostic artifacts
+
+Keep run evidence in a task-scoped directory under `.cache/`. Remove disposable
+builds and superseded outputs after review; retain only evidence supporting a result
+or an unresolved failure. Commit reusable fixtures and tools, not raw profiles,
+experiment journals, or historical timing snapshots.
+
+`bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default;
+`bench:compiler-host-gap` writes `.cache/compiler-host-gap/report.json` and
+`report.md`. Use `--output` (and host-gap's `--markdown`) to retain separate runs.
+Host-gap only incorporates a self-compile capture when passed `--self-compile PATH`.
+Neither command updates the canonical `bench/baseline.json`.
+
+`node ./src/index.ts cache prune --dry-run` previews pruning the managed user cache
+to its default 15 GiB target; omit `--dry-run` to apply it. Live commands block
+pruning, and per-family minimums and recent-entry protection can keep the cache
+above the target. Repository `.cache/` reports require a separate ownership and
+activity audit before removal.
+
 ## Paired performance comparisons
 
 Use a paired comparison for Maligator changes instead of reading a single delta
