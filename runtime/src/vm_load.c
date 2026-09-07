@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 37u
+#define WIRE_VERSION 38u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -38,7 +38,7 @@ static const MalBinaryOp wire_binops[] = {
 /* Wire tag -> MalUnaryOp. MUST match WIRE_UNOPS in program-image-codec.ts. */
 static const MalUnaryOp wire_unops[] = {
     MAL_UNARY_NOT, MAL_UNARY_NEGATE, MAL_UNARY_PLUS, MAL_UNARY_BIT_NOT, MAL_UNARY_TYPEOF,
-    MAL_UNARY_TO_NUMERIC, MAL_UNARY_INCREMENT, MAL_UNARY_DECREMENT,
+    MAL_UNARY_TO_NUMERIC, MAL_UNARY_INCREMENT, MAL_UNARY_DECREMENT, MAL_UNARY_TO_STRING,
 };
 
 /* Wire tags mirror VM_MATH_*_NUMBER_OPERATIONS in program-image.ts. */

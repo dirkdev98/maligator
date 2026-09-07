@@ -3519,6 +3519,13 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
                     &vm->heap, mal_bigint128_bit_not(mal_bigint_value(mal_value_to_bigint(value)))));
             }
             return mal_ops_bit_xor(value, mal_value_from_i32(-1));
+        case MAL_UNARY_TO_STRING: {
+            MalString *string;
+            if (!mal_vm_to_string(vm, value, &string)) {
+                return mal_value_new_undefined();
+            }
+            return mal_value_from_string(string);
+        }
         case MAL_UNARY_TYPEOF: {
             const byte *tag = mal_vm_typeof_tag(mal_vm_typeof_result(value));
             usize length = 0;

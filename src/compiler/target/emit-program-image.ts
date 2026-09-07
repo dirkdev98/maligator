@@ -2098,6 +2098,8 @@ export function emitUnaryOperator(
 			return "MAL_UNARY_TYPEOF";
 		case "tonumeric":
 			return "MAL_UNARY_TO_NUMERIC";
+		case "tostring":
+			return "MAL_UNARY_TO_STRING";
 		case "increment":
 			return "MAL_UNARY_INCREMENT";
 		case "decrement":

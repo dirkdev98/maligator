@@ -10081,10 +10081,6 @@ function compileConditionalExpression(
 	return result;
 }
 
-/**
- * Compile untagged template literals as a string concatenation chain. The
- * leading quasi keeps the chain string-typed so + coerces the expressions.
- */
 function compileTemplateLiteral(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -10105,10 +10101,17 @@ function compileTemplateLiteral(
 			cursor,
 			expression.expressions[i] as ESTree.Expression,
 		);
+		const stringPart = nextCoreVariable(fn);
+		// Template substitutions use the string hint and coerce before the next expression.
+		cursor.block.emitter.emit({
+			type: "unary",
+			registers: [stringPart, part],
+			operator: "tostring",
+		});
 		let next = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "binary",
-			registers: [next, result, part],
+			registers: [next, result, stringPart],
 			operator: "+",
 		});
 		result = next;

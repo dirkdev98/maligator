@@ -96,6 +96,7 @@ typedef enum MalUnaryOp {
     MAL_UNARY_TO_NUMERIC,
     MAL_UNARY_INCREMENT,
     MAL_UNARY_DECREMENT,
+    MAL_UNARY_TO_STRING,
 } MalUnaryOp;
 
 typedef enum MalTypeofResult {

@@ -265,7 +265,7 @@ function addOperationTransfer(
 		const constant =
 			operator === "!"
 				? COMPILER_VALUE_KIND_BOOLEAN
-				: operator === "typeof"
+				: operator === "typeof" || operator === "tostring"
 					? COMPILER_VALUE_KIND_STRING
 					: operator === "void"
 						? COMPILER_VALUE_KIND_UNDEFINED

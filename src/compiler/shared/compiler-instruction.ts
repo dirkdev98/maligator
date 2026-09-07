@@ -1034,6 +1034,7 @@ export type CompilerInstruction =
 				| "~"
 				| "typeof"
 				| "tonumeric"
+				| "tostring"
 				| "increment"
 				| "decrement";
 	  }
