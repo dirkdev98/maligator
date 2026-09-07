@@ -1722,6 +1722,14 @@ static void mal_ta_sort_default(MalTypedArrayObject *array) {
 
 static bool mal_ta_compare_callback(
     MalVm *vm, MalValue compare, MalValue left, MalValue right, i32 *order) {
+    f64 direct_order;
+    MalNumericSortComparison direct = mal_vm_try_numeric_sort_comparison(
+        vm, compare, left, right, &direct_order);
+    if (direct != MAL_NUMERIC_SORT_FALLBACK) {
+        if (direct == MAL_NUMERIC_SORT_THROW) return false;
+        *order = direct_order < 0 ? -1 : direct_order > 0 ? 1 : 0;
+        return true;
+    }
     MalValue call_args[2] = {left, right};
     MalRootSpan call_span;
     mal_gc_root(&call_span, call_args, 2);
@@ -1743,7 +1751,7 @@ static bool mal_ta_compare_callback(
     return true;
 }
 
-static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
     if (array == nullptr) {
@@ -1860,7 +1868,7 @@ static MalValue mal_ta_to_reversed(MalVm *vm, MalValue this_value, const MalValu
 // array's elements sorted. Validates the comparator first, copies into a fresh
 // array, then sorts that copy in place (so the comparator can never observe or
 // mutate the original through the sort). Same-type, not @@species.
-static MalValue mal_ta_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_typed_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalValue compare = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (!mal_value_is_undefined(compare) && !mal_value_is_callable(compare)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Comparator is not a function");
@@ -1872,12 +1880,15 @@ static MalValue mal_ta_to_sorted(MalVm *vm, MalValue this_value, const MalValue 
     }
     u32 length = mal_typed_array_object_length(array);
     MalValue result = mal_ta_create_uninitialized(vm, array->kind, length);
+    // Comparator entry can collect the fresh copy before it reaches a VM register.
+    MalRootSpan result_root;
+    mal_gc_root(&result_root, &result, 1);
     if (!mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, 0, length)) {
+        mal_gc_unroot(&result_root);
         return mal_value_new_undefined();
     }
-    // Sort the fresh copy in place; on a comparator throw this forwards the
-    // completion and returns undefined.
-    MalValue sorted = mal_ta_sort(vm, result, args, arg_count, new_target, callee);
+    MalValue sorted = mal_builtin_typed_array_sort(vm, result, args, arg_count, new_target, callee);
+    mal_gc_unroot(&result_root);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
         return mal_value_new_undefined();
     }
@@ -2746,9 +2757,9 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, ta_prototype, "lastIndexOf", 1, mal_ta_last_index_of);
     mal_intrinsic_define_method_n(vm, ta_prototype, "includes", 1, mal_ta_includes);
     mal_intrinsic_define_method_n(vm, ta_prototype, "reverse", 0, mal_ta_reverse);
-    mal_intrinsic_define_method_n(vm, ta_prototype, "sort", 1, mal_ta_sort);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "sort", 1, mal_builtin_typed_array_sort);
     mal_intrinsic_define_method_n(vm, ta_prototype, "toReversed", 0, mal_ta_to_reversed);
-    mal_intrinsic_define_method_n(vm, ta_prototype, "toSorted", 1, mal_ta_to_sorted);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toSorted", 1, mal_builtin_typed_array_to_sorted);
     mal_intrinsic_define_method_n(vm, ta_prototype, "with", 2, mal_ta_with);
     mal_intrinsic_define_method_n(vm, ta_prototype, "forEach", 1, mal_ta_for_each);
     mal_intrinsic_define_method_n(vm, ta_prototype, "map", 1, mal_ta_map);

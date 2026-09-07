@@ -222,6 +222,7 @@ function selectedCallTargets(
 	}
 	for (const entry of compilation.plan.directEntries) {
 		for (const site of entry.callSites) {
+			if (site.numericSortCallback !== undefined) continue;
 			add(site.caller, site.instruction, [entry.function], site.guarded === true);
 		}
 	}

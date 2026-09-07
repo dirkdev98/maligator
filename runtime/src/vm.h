@@ -762,6 +762,9 @@ typedef MalValue (*MalCompiledFunction)(
     void *entry_state
 );
 
+typedef f64 (*MalNumericSortComparator)(
+    MalVm *vm, MalValue this_value, f64 left, f64 right, MalEnv *env, MalValue callee);
+
 /** Program-local table bases used by a native overlay attached after a splice. */
 typedef struct MalNativeProgramRelocation {
     i32 function_base;
@@ -1243,6 +1246,7 @@ typedef struct MalExactScriptCall {
     MalValue callee;
     i32 function_index;
     MalCompiledFunction compiled_callback;
+    MalNumericSortComparator numeric_sort_comparator;
     const MalFunction *function;
     MalEnv *env;
 } MalExactScriptCall;

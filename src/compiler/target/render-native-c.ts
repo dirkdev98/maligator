@@ -4624,6 +4624,9 @@ function emitInstruction(
 					: undefined;
 			if (
 				exactInputKinds !== undefined &&
+				(!leftIsNum || !rightIsNum || operator === "**") &&
+				(fusion === undefined ||
+					reps[fusion.role === "start" ? dst : fusion.first.dst] === "number") &&
 				exactInputKinds.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 				)
@@ -5046,7 +5049,8 @@ function emitInstruction(
 			const { dst, src, operator } = instruction;
 			if (
 				nativePlan?.kind === "exact-operator-input-kinds" &&
-				nativePlan.inputKindMasks.length === 1
+				nativePlan.inputKindMasks.length === 1 &&
+				!isNumericRep(reps[src]!)
 			) {
 				const value = exactPrimitiveNumber(src, nativePlan.inputKindMasks[0]);
 				const expression =
@@ -5709,6 +5713,28 @@ function emitInstruction(
 					`  ${poll}`,
 					`}`,
 				];
+			}
+			const numericCallback = callPlan?.numericSortCallback;
+			if (numericCallback !== undefined && args.length === 1) {
+				const entry = directCompiledEntries.get(
+					directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
+				);
+				if (
+					entry !== undefined &&
+					entry.parameterRepresentations.length === 2 &&
+					entry.parameterRepresentations.every((rep) => rep === "number") &&
+					entry.resultRepresentation === "number" &&
+					entry.argumentRepresentations === undefined &&
+					entry.fieldParameters === undefined
+				) {
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						poll,
+					];
+				}
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (

@@ -2428,3 +2428,44 @@ void mal_vm_op_await_compiled(
 // throws before GENERATOR_START has created it — the throw then propagates
 // synchronously and `registers` (the orphaned buffer) is released here.
 void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers);
+
+typedef enum MalNumericSortComparison {
+    MAL_NUMERIC_SORT_FALLBACK,
+    MAL_NUMERIC_SORT_COMPLETE,
+    MAL_NUMERIC_SORT_THROW,
+} MalNumericSortComparison;
+
+// The pair check admits mixed arrays without assuming their other elements are numeric.
+static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
+    MalVm *vm, MalValue compare, MalValue left, MalValue right, f64 *out
+) {
+    MalExactScriptCall *exact = vm->exact_script_call;
+    if (exact == nullptr || exact->callee != compare ||
+        exact->numeric_sort_comparator == nullptr ||
+        !mal_ops_is_number(left) || !mal_ops_is_number(right)) return MAL_NUMERIC_SORT_FALLBACK;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, compare));
+#endif
+    bool entered = mal_vm_enter_compiled(vm, exact->function_index);
+    f64 result = 0;
+    if (entered) {
+        MAL_PERF_COUNT(direct_entry_hits);
+        MAL_PERF_COUNT(numeric_sort_callback_calls);
+        result = exact->numeric_sort_comparator(vm,
+            mal_vm_callee_this(vm, exact->function, MAL_VALUE_UNDEFINED),
+            mal_ops_number_as_f64(left), mal_ops_number_as_f64(right), exact->env, compare);
+        mal_vm_leave_compiled(vm);
+    }
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    if (!entered || vm->completion.kind == MAL_COMPLETION_THROW) return MAL_NUMERIC_SORT_THROW;
+    *out = isnan(result) ? 0 : result;
+    return MAL_NUMERIC_SORT_COMPLETE;
+}
+
+MalCompletion mal_builtin_sort_numeric(
+    MalVm *vm, MalCallCache *fallback_cache, bool copy, i32 function_index,
+    MalNumericSortComparator comparator, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count);

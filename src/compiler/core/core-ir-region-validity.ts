@@ -1737,10 +1737,24 @@ function total(counts: Readonly<Record<string, number>>): number {
 }
 
 function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
+	// These deeply frozen payloads retain proof identities across verified plan copies.
+	const proofPayloads = new Set<object>([
+		...(plan.operatorInputs ?? []),
+		...(plan.unsignedArithmetic ?? []),
+	]);
+	for (const entry of plan.directEntries) {
+		for (const payload of [
+			entry.valueRepresentations,
+			entry.operatorInputs,
+			entry.constantBooleans,
+		]) {
+			if (payload !== undefined) proofPayloads.add(payload);
+		}
+	}
 	const copies = new Map<object, object>();
 	const copy = (value: unknown): unknown => {
 		if (value === null || typeof value !== "object") return value;
-		if (value === plan.recipes) return value;
+		if (value === plan.recipes || proofPayloads.has(value)) return value;
 		const existing = copies.get(value);
 		if (existing !== undefined) return existing;
 		if (Array.isArray(value)) {
@@ -1933,6 +1947,22 @@ export function verifyCoreOptimizationPlan(
 			fail(`direct entry ${entry.function}:${entry.id} has no callsites`);
 		}
 		for (const site of entry.callSites) {
+			if (
+				site.numericSortCallback !== undefined &&
+				((site.numericSortCallback !== "sort" &&
+					site.numericSortCallback !== "toSorted") ||
+					site.guarded !== true ||
+					entry.parameterRepresentations.length !== 2 ||
+					entry.parameterRepresentations.some(
+						(representation) => representation !== "f64",
+					) ||
+					entry.resultRepresentation !== "f64" ||
+					entry.argumentRepresentations !== undefined ||
+					entry.fieldParameters !== undefined)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has an invalid numeric callback contract`,
+				);
 			const key = `${site.caller}:${site.instruction}`;
 			const previous = callSites.get(key);
 			if (

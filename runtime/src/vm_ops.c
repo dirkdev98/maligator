@@ -10,6 +10,7 @@
 #include "bound_function_object.h"
 #include "bigint128.h"
 #include "builtin_array.h"
+#include "builtin_typed_array.h"
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
 #include "builtin_boolean.h"
@@ -7317,4 +7318,38 @@ void mal_vm_op_await_compiled(
     // resumes this state. (If PromiseResolve throws, this resumes synchronously with
     // a throw — a nested resume of the same compiled function, which then returns.)
     mal_async_function_await(vm, state, awaited);
+}
+
+MalCompletion mal_builtin_sort_numeric(
+    MalVm *vm, MalCallCache *fallback_cache, bool copy, i32 function_index,
+    MalNumericSortComparator comparator, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count
+) {
+    MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
+        ? mal_native_function_object_callback(mal_value_to_native_function_object(callee)) : nullptr;
+    bool array_sort = expected == (copy ? mal_builtin_array_to_sorted : mal_builtin_array_sort);
+    bool typed_sort = expected == (copy ? mal_builtin_typed_array_to_sorted : mal_builtin_typed_array_sort);
+    bool admitted = comparator != nullptr && function_index >= 0 &&
+        function_index < vm->runtime_image->function_count && arg_count == 1 &&
+        ((array_sort && mal_value_is_array_object(receiver)) ||
+         (typed_sort && mal_value_is_typed_array_object(receiver) &&
+          mal_value_to_typed_array_object(receiver)->kind < MAL_TA_BIGINT64)) &&
+        mal_value_is_function_object(args[0]) &&
+        mal_function_object_function_index(mal_value_to_function_object(args[0])) == function_index;
+#if MAL_REALMS
+    admitted = admitted && mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#endif
+    if (!admitted) return mal_vm_call_cached(vm, fallback_cache, callee, receiver, args, arg_count);
+    MalExactScriptCall exact = {
+        .previous = vm->exact_script_call,
+        .callee = args[0],
+        .function_index = function_index,
+        .numeric_sort_comparator = comparator,
+        .function = &vm->runtime_image->functions[function_index],
+        .env = mal_value_to_function_object(args[0])->creation_env,
+    };
+    vm->exact_script_call = &exact;
+    MalCompletion completion = mal_vm_call_exact_native(vm, expected, callee, receiver, args, arg_count);
+    vm->exact_script_call = exact.previous;
+    return completion;
 }

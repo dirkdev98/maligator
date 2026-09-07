@@ -995,6 +995,32 @@ describe("late Core specialization plan", () => {
 		);
 	});
 
+	it("retains certified numeric payloads when a verified plan is verified again", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`
+			function compare(a, b) { return a - b; }
+			function arithmetic(flag) { const input = flag ? 2 : undefined; return input * 3; }
+			globalThis.result = [3, 1, 2].sort(compare);
+			globalThis.arithmetic = arithmetic;
+		`,
+			"reverified-numeric-plan.js",
+		);
+		const compilation = optimizeSemanticProgramToCore(semantic, {}, (_phase, run) =>
+			run(),
+		);
+		expect(compilation.plan.operatorInputs!.length).toBeGreaterThan(0);
+		expect(
+			compilation.plan.directEntries.some(
+				(entry) => entry.valueRepresentations !== undefined,
+			),
+		).toBe(true);
+		const verified = verifyCoreOptimizationPlan(compilation.program, {
+			...compilation.plan,
+		});
+		expect(verified.operatorInputs).toEqual(compilation.plan.operatorInputs);
+		expect(verified.directEntries).toEqual(compilation.plan.directEntries);
+	});
+
 	it("keeps direct-entry call sites scoped to their caller function", () => {
 		const definition = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

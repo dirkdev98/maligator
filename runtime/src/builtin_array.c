@@ -2974,6 +2974,9 @@ done:
  */
 static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValue left, MalValue right, f64 *order_out) {
     if (mal_value_is_callable(comparator)) {
+        MalNumericSortComparison direct = mal_vm_try_numeric_sort_comparison(
+            vm, comparator, left, right, order_out);
+        if (direct != MAL_NUMERIC_SORT_FALLBACK) return direct == MAL_NUMERIC_SORT_COMPLETE;
         MalValue args[] = {left, right};
         MalRootSpan args_span;
         mal_gc_root(&args_span, args, 2);
@@ -3250,7 +3253,7 @@ static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalVal
     return sorted;
 }
 
-static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalValue comparator;
     if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator)) {
         return mal_value_new_undefined();
@@ -3325,7 +3328,7 @@ done:
     return ret;
 }
 
-static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalValue comparator;
     if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator)) {
         return mal_value_new_undefined();

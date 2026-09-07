@@ -1700,13 +1700,21 @@ describe("native update-expression representation", () => {
 	});
 
 	it("proves numeric induction variables during direct Core construction", () => {
-		const output = emit(
+		const image = lower(
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
 		);
+		const output = emitProgramImage(image, { compiled: true });
+		const increments = image.runtime.functions.flatMap((fn, index) =>
+			fn.instructions.flatMap((instruction) =>
+				instruction.opcode === "UNARY" && instruction.operator === "increment"
+					? [image.native.functions[index]!.registerRepresentations[instruction.dst]]
+					: [],
+			),
+		);
+		expect(increments).toEqual(["number"]);
 		expect(output).toContain("mal_vm_array_try_load(");
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
-		expect(output).toContain("+= 1.0;");
 		expect(output).toMatch(
 			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
 		);

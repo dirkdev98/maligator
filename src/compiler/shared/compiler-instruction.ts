@@ -51,6 +51,12 @@ export interface CompilerShapeCaseCandidate {
 	readonly shapeInstruction: number;
 }
 
+export interface CompilerNumericSortCallback {
+	readonly operation: "sort" | "toSorted";
+	readonly functionIndex: number;
+	readonly entryId: number;
+}
+
 export type CompilerInstruction =
 	| {
 			/**
@@ -332,6 +338,7 @@ export type CompilerInstruction =
 			guardedFunctionIndices?: ReadonlyArray<number>;
 			/** Native-only ABI sibling selected for this exact direct target. */
 			directEntryId?: number;
+			numericSortCallback?: CompilerNumericSortCallback;
 			/**
 			 * COMPILE-ONLY: this is an exact `target.call(thisArg, ...args)` property-call
 			 * shape. Native lowering guards the loaded method against the retained

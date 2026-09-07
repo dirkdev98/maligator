@@ -1185,7 +1185,10 @@ function directEntryCandidates(
 			}
 			loopWeights.set(site.caller, weights);
 		}
-		return weights[caller.instructionBlock(site.instruction)]!;
+		return (
+			weights[caller.instructionBlock(site.instruction)]! *
+			(site.numericSortCallback === undefined ? 1 : 4)
+		);
 	};
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
 	const methods = new Map<number, Array<CoreFunctionId>>();
@@ -1207,6 +1210,50 @@ function directEntryCandidates(
 		const fn = program.function(caller);
 		for (const site of summaries.targets.outgoing(caller)) {
 			if (fn.instructionOpcodeName(site.instruction) !== "call") continue;
+			if (
+				site.targets.functions.length === 0 &&
+				site.arguments?.length === 1 &&
+				fn.kernel.valueDefinitionKind(site.callee) === 1
+			) {
+				const load = coreInstructionId(fn.kernel.valueDefinitionOwner(site.callee));
+				const key = fn.instructionAttributes(load).stringIndex;
+				const units = typeof key === "number" ? program.stringConstants[key] : undefined;
+				const operation =
+					units === undefined || units.length > 8
+						? undefined
+						: String.fromCharCode(...units);
+				if (
+					fn.instructionOpcodeName(load) === "loadPropertyStatic" &&
+					(operation === "sort" || operation === "toSorted")
+				) {
+					const callbackTargets = summaries.targets.targets(caller, site.arguments[0]!);
+					const target =
+						callbackTargets.functions.length === 1
+							? callbackTargets.functions[0]
+							: undefined;
+					if (target !== undefined && live.has(target)) {
+						const callback = program.function(target);
+						const observation = coreArgumentObservation(callback);
+						if (
+							callback.parameterCount === 2 &&
+							callback.metadata.capturedCount === 0 &&
+							observation.kind !== "general" &&
+							!observation.readsCount &&
+							observation.indices.length === 0
+						) {
+							const calls = callsByTarget.get(target) ?? [];
+							// Admission checks builtin, numeric receiver, and callback identities together.
+							calls.push({
+								caller,
+								instruction: site.instruction,
+								guarded: true,
+								numericSortCallback: operation,
+							});
+							callsByTarget.set(target, calls);
+						}
+					}
+				}
+			}
 			let targets = site.targets.functions;
 			let speculative = false;
 			if (
@@ -1269,6 +1316,7 @@ function directEntryCandidates(
 		let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
 		let selectedCalls = callSites.filter(
 			(call) =>
+				call.numericSortCallback !== undefined ||
 				summaries.targets.site(call.caller, call.instruction)?.targets.functions
 					.length === 1,
 		);
@@ -1346,6 +1394,7 @@ function directEntryCandidates(
 				const representations = Array.from(
 					{ length: needsArity ? site!.arguments!.length : fn.parameterCount },
 					(_, index): CorePlanRepresentation => {
+						if (call.numericSortCallback !== undefined) return "f64";
 						const argument = site?.arguments?.[index];
 						const scalar =
 							argument === undefined ? undefined : kinds.exactScalar(argument);
@@ -1400,6 +1449,8 @@ function directEntryCandidates(
 		}
 		if (
 			selectedCalls.length === 0 ||
+			(selectedCalls.some((call) => call.numericSortCallback !== undefined) &&
+				resultRepresentation !== "f64") ||
 			(needsArity && argumentRepresentations === undefined) ||
 			resultRepresentation === undefined ||
 			(resultRepresentation === "boxed" && valueRepresentations === undefined)

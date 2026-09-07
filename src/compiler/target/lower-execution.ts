@@ -47,6 +47,7 @@ import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
+	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
@@ -126,6 +127,7 @@ const FUNCTION_INDEX_ATTRIBUTES: ReadonlySet<string> = new Set([
 	"directFunctionIndex",
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",
+	"numericSortCallback",
 ]);
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
@@ -1684,6 +1686,7 @@ function lowerFunctionToTarget(
 	executionFunction: number,
 	functionMap: ExecutionFunctionMap,
 	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
+	numericSortCallbacks: ReadonlyMap<CoreInstructionId, CompilerNumericSortCallback>,
 	directEntryTargets: ReadonlyMap<
 		CoreInstructionId,
 		{ target: CoreFunctionId; guarded: boolean }
@@ -2025,6 +2028,9 @@ function lowerFunctionToTarget(
 				plannedDirectCallTargets.get(instruction),
 				!protectedInstructions.has(instruction),
 			);
+			const numericCallback = numericSortCallbacks.get(instruction);
+			if (numericCallback !== undefined && rebuilt.type === "call")
+				rebuilt.numericSortCallback = numericCallback;
 			const reserveLength = denseReserveLengths.get(instruction);
 			if (reserveLength !== undefined && rebuilt.type !== "createArray") {
 				throw new Error(`Core dense-array plan lost allocation @${instruction}`);
@@ -2497,6 +2503,10 @@ export function lowerCoreCompilationToExecutionProgram(
 	const functionMap = createExecutionFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
+	const numericSortCallbacks = new Map<
+		number,
+		Map<CoreInstructionId, CompilerNumericSortCallback>
+	>();
 	const fieldCallPlans = new Map<number, Map<CoreInstructionId, CoreFieldCall>>();
 	const directEntryTargets = new Map<
 		number,
@@ -2520,6 +2530,18 @@ export function lowerCoreCompilationToExecutionProgram(
 		entries.push(entry);
 		directEntryPlans.set(entry.function, entries);
 		for (const site of entry.callSites) {
+			if (site.numericSortCallback !== undefined) {
+				const calls =
+					numericSortCallbacks.get(site.caller) ??
+					new Map<CoreInstructionId, CompilerNumericSortCallback>();
+				calls.set(site.instruction, {
+					operation: site.numericSortCallback,
+					functionIndex: functionMap.coreToExecution[entry.function]!,
+					entryId: entry.id,
+				});
+				numericSortCallbacks.set(site.caller, calls);
+				continue;
+			}
 			if (site.fieldObject !== undefined) {
 				const calls =
 					fieldCallPlans.get(site.caller) ?? new Map<CoreInstructionId, CoreFieldCall>();
@@ -2556,6 +2578,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			execution,
 			functionMap,
 			directEntryIds.get(core) ?? new Map(),
+			numericSortCallbacks.get(core) ?? new Map(),
 			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
 			[...(fieldCallPlans.get(core)?.values() ?? [])],

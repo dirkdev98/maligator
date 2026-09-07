@@ -13,6 +13,7 @@ import {
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
 	validateNativeLiteralSwitches,
+	validateNativeNumericSortCallback,
 	vmRegionActions,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
@@ -37,7 +38,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 58;
+export const COMPILER_ARTIFACT_VERSION = 59;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -791,6 +792,21 @@ function writeCompilerArtifact(
 				w.i32(plan.directCallTargetFunctionIndex ?? -1);
 				w.i32(plan.directCallbackFunctionIndex ?? -1);
 				w.i32(plan.directEntryId ?? -1);
+				const numericCallback = plan.numericSortCallback;
+				if (numericCallback !== undefined)
+					validateNativeNumericSortCallback(numericCallback, compiler.native.functions);
+				w.u8(
+					numericCallback === undefined
+						? 0
+						: numericCallback.operation === "sort"
+							? 1
+							: 2,
+				);
+				if (numericCallback !== undefined) {
+					w.i32(numericCallback.functionIndex);
+					w.i32(numericCallback.entryId);
+				}
+
 				w.u8(
 					(plan.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
@@ -2948,6 +2964,19 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				const directCallTargetFunctionIndex = r.i32();
 				const directCallbackFunctionIndex = r.i32();
 				const directEntryId = r.i32();
+				const numericCallbackTag = r.u8();
+				if (numericCallbackTag > 2)
+					throw new RangeError("Invalid numeric sort callback tag");
+				const numericSortCallback =
+					numericCallbackTag === 0
+						? undefined
+						: {
+								operation:
+									numericCallbackTag === 1 ? ("sort" as const) : ("toSorted" as const),
+								functionIndex: r.i32(),
+								entryId: r.i32(),
+							};
+
 				const flags = r.u8();
 				const collectionTag = r.u8();
 				const guardedBuiltinCount =
@@ -3025,6 +3054,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
 					...(directCallbackFunctionIndex < 0 ? {} : { directCallbackFunctionIndex }),
 					...(directEntryId < 0 ? {} : { directEntryId }),
+					...(numericSortCallback === undefined ? {} : { numericSortCallback }),
 					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
 					...((flags & 128) === 0
@@ -4159,6 +4189,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		validateNativeLiteralSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;
+			if (plan.numericSortCallback !== undefined)
+				validateNativeNumericSortCallback(plan.numericSortCallback, nativeFunctions);
 			if (plan.directEntryId !== undefined) {
 				const target =
 					plan.directFunctionIndex ??

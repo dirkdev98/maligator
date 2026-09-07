@@ -11,6 +11,7 @@ import type {
 	CompilerExactCollectionBrand,
 	CompilerInstruction,
 	CompilerNumericTypedArrayKind,
+	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
@@ -1203,12 +1204,38 @@ export function validateNativeFieldCalls(
 	}
 }
 
+export function validateNativeNumericSortCallback(
+	callback: CompilerNumericSortCallback,
+	functions: ReadonlyArray<NativeFunctionPlan>,
+): void {
+	const entry = functions[callback.functionIndex]?.directEntries[callback.entryId];
+	if (
+		(callback.operation !== "sort" && callback.operation !== "toSorted") ||
+		!Number.isInteger(callback.functionIndex) ||
+		callback.functionIndex < 0 ||
+		!Number.isInteger(callback.entryId) ||
+		callback.entryId < 0 ||
+		entry === undefined ||
+		entry.id !== callback.entryId ||
+		entry.parameterRepresentations.length !== 2 ||
+		entry.parameterRepresentations.some(
+			(representation) => representation !== "number",
+		) ||
+		entry.resultRepresentation !== "number" ||
+		entry.argumentRepresentations !== undefined ||
+		entry.fieldParameters !== undefined
+	) {
+		throw new RangeError("Invalid native numeric sort callback contract");
+	}
+}
+
 export type NativeInstructionPlan =
 	| {
 			readonly kind: "call";
 			readonly directFunctionIndex?: number;
 			readonly guardedFunctionIndices?: ReadonlyArray<number>;
 			readonly directEntryId?: number;
+			readonly numericSortCallback?: CompilerNumericSortCallback;
 			readonly directFunctionCall?: true;
 			readonly directCallTargetFunctionIndex?: number;
 			readonly directCallbackFunctionIndex?: number;
@@ -1559,6 +1586,7 @@ function nativeInstructionPlanFromExecution(
 				instruction.directFunctionIndex === undefined &&
 				instruction.guardedFunctionIndices === undefined &&
 				instruction.directEntryId === undefined &&
+				instruction.numericSortCallback === undefined &&
 				instruction.directFunctionCall !== true &&
 				instruction.directCallTargetFunctionIndex === undefined &&
 				instruction.directCallbackFunctionIndex === undefined &&
@@ -1571,6 +1599,7 @@ function nativeInstructionPlanFromExecution(
 				directFunctionIndex: instruction.directFunctionIndex,
 				guardedFunctionIndices: instruction.guardedFunctionIndices,
 				directEntryId: instruction.directEntryId,
+				numericSortCallback: instruction.numericSortCallback,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				directCallbackFunctionIndex: instruction.directCallbackFunctionIndex,
