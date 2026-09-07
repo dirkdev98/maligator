@@ -88,6 +88,17 @@ describe("Core literal constants", () => {
 				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
 		).toBe(false);
 	});
+	it.each([
+		'return [1,2]["@@iterator"]();',
+		'return "abc"["@@iterator"]();',
+		'const key = "@@iterator"; return [1,2][key]();',
+	])("keeps string property names distinct from well-known symbols: %s", (body) => {
+		expect(
+			compile(body)
+				.runtime.functions.flatMap((fn) => fn.instructions)
+				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
+		).toBe(false);
+	});
 	it("retains ordinary dispatch when Array.prototype can be replaced", () => {
 		expect(constants(compile('return ["foo", "bar"].includes(x);', false))).toHaveLength(
 			0,

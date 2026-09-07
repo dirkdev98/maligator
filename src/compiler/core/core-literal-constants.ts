@@ -2,7 +2,10 @@ import {
 	literalPrototypeMethods,
 	literalPrototypeMethodIndex,
 } from "../shared/literal-prototype-methods.ts";
-import type { LiteralReceiverKind } from "../shared/literal-prototype-methods.ts";
+import type {
+	LiteralPrototypeKey,
+	LiteralReceiverKind,
+} from "../shared/literal-prototype-methods.ts";
 import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -185,7 +188,7 @@ function propertyName(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-): string | undefined {
+): LiteralPrototypeKey | undefined {
 	if (fn.instructionOpcodeName(instruction) === "loadPropertyStatic")
 		return string(program, fn.instructionAttributes(instruction).stringIndex as number);
 	if (fn.instructionOpcodeName(instruction) !== "loadProperty") return undefined;
@@ -202,7 +205,7 @@ function propertyName(
 	return symbol !== undefined &&
 		fn.instructionOpcodeName(symbol) === "loadIntrinsic" &&
 		fn.instructionAttributes(symbol).intrinsic === "Symbol"
-		? "@@iterator"
+		? Symbol.iterator
 		: undefined;
 }
 

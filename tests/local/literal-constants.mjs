@@ -137,3 +137,13 @@ try {
 	nullPrototypeThrew = e instanceof TypeError;
 }
 if (!nullPrototypeThrew) throw new Error("literal prototype override");
+
+for (const call of [() => [1, 2]["@@iterator"](), () => "abc"["@@iterator"]()]) {
+	let stringKeyThrew = false;
+	try {
+		call();
+	} catch (error) {
+		stringKeyThrew = error instanceof TypeError;
+	}
+	if (!stringKeyThrew) throw new Error("string key confused with Symbol.iterator");
+}
