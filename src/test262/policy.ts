@@ -1,3 +1,4 @@
+import { SyntaxDiagnostic } from "../compiler/frontend/syntax-diagnostic.ts";
 import type { Test262File, Test262Output, Test262Result } from "./types.ts";
 
 export type Test262Policy = "bail" | "complete";
@@ -40,50 +41,105 @@ export function test262RunsInVariant(
 ): boolean {
 	const flags = file.frontmatter.flags ?? [];
 	if (variant === "strict") {
-		return !flags.includes("noStrict");
+		return (
+			!flags.includes("noStrict") && !(flags.includes("raw") && !flags.includes("module"))
+		);
 	}
-	return !(
-		flags.includes("onlyStrict") ||
-		flags.includes("module") ||
-		flags.includes("raw")
-	);
+	return !(flags.includes("onlyStrict") || flags.includes("module"));
 }
 
-export interface Test262RuntimeNegativeVerdict {
+export function test262SkipReason(
+	file: Pick<Test262File, "frontmatter">,
+	variant: Test262Variant,
+): string | undefined {
+	if (file.frontmatter.flags?.includes("CanBlockIsTrue")) {
+		return "host: CanBlockIsTrue requires a blocking agent; this host has CanBlock=false";
+	}
+	if (!test262RunsInVariant(file, variant)) return `variant: no ${variant} execution`;
+	return undefined;
+}
+
+export function test262ScriptStrictness(
+	file: Pick<Test262File, "frontmatter">,
+	variant: Test262Variant,
+): boolean {
+	return !file.frontmatter.flags?.includes("raw") && variant === "strict";
+}
+
+export interface Test262Verdict {
 	passed: boolean;
 	reason: string;
 }
 
-/** Match a runtime-negative test against the native harness's uncaught error. */
-export function test262RuntimeNegativeVerdict(
+export function test262CompileNegativeVerdict(
+	file: Pick<Test262File, "frontmatter">,
+	error: unknown,
+): Test262Verdict | undefined {
+	const negative = file.frontmatter.negative;
+	if (negative === undefined || negative.phase === "runtime") return undefined;
+	const passed =
+		error instanceof SyntaxDiagnostic &&
+		error.phase === negative.phase &&
+		error.name === negative.type;
+	return {
+		passed,
+		reason: passed
+			? ""
+			: `negative(${negative.phase}): expected ${negative.type}, got ${
+					error instanceof SyntaxDiagnostic
+						? `${error.phase} ${error.name}`
+						: "compiler failure"
+				}`,
+	};
+}
+
+/** The native driver emits the final completion after test-controlled output. */
+export function test262RuntimeVerdict(
 	file: Pick<Test262File, "frontmatter">,
 	output: ReadonlyArray<string>,
-	didThrow: boolean,
-): Test262RuntimeNegativeVerdict | undefined {
-	const negative = file.frontmatter.negative;
-	if (negative?.phase !== "runtime") {
-		return undefined;
+	exitCode: number,
+): Test262Verdict {
+	const completion = output
+		.findLast((line) => line.startsWith("##COMPLETION "))
+		?.match(/^##COMPLETION (harness|runtime) (NORMAL|THROW)(?: ([0-9a-f]+|-))?$/);
+	if (completion === undefined || completion === null) {
+		return { passed: false, reason: "missing native completion record" };
 	}
-
-	if (!didThrow) {
+	const phase = completion[1];
+	const didThrow = completion[2] === "THROW";
+	if (phase !== "runtime")
+		return { passed: false, reason: "harness failed before test execution" };
+	if ((exitCode !== 0) !== didThrow) {
 		return {
 			passed: false,
-			reason: `negative(runtime): expected ${negative.type} but completed`,
+			reason: "native exit disagrees with completion record",
 		};
 	}
-
-	const uncaught = output
-		.map((line) => line.trim())
-		.find((line) => line.startsWith("Uncaught "));
-	const actual = uncaught?.slice("Uncaught ".length).match(/^([A-Za-z_$][\w$]*)/)?.[1];
-	if (actual === negative.type) {
-		return { passed: true, reason: "" };
+	const negative = file.frontmatter.negative;
+	if (negative !== undefined) {
+		const actual =
+			completion[3] === undefined || completion[3] === "-"
+				? undefined
+				: Buffer.from(completion[3], "hex").toString("utf8");
+		const passed = negative.phase === "runtime" && didThrow && actual === negative.type;
+		return {
+			passed,
+			reason: passed
+				? ""
+				: `negative(${negative.phase}): expected ${negative.type}, got ${didThrow ? `runtime ${actual ?? "unknown constructor"}` : "normal completion"}`,
+		};
 	}
-
-	return {
-		passed: false,
-		reason: `negative(runtime): expected ${negative.type}, got ${actual ?? "unknown throw"}`,
-	};
+	if (didThrow) return { passed: false, reason: "uncaught runtime exception" };
+	if (file.frontmatter.flags?.includes("async")) {
+		const failure = output.find((line) =>
+			line.trim().startsWith("Test262:AsyncTestFailure:"),
+		);
+		if (failure !== undefined) return { passed: false, reason: failure.trim() };
+		if (!output.some((line) => line.trim() === "Test262:AsyncTestComplete")) {
+			return { passed: false, reason: "async test did not complete" };
+		}
+	}
+	return { passed: true, reason: "" };
 }
 
 export function test262BatchRegressions(

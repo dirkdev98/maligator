@@ -51,7 +51,7 @@ function cacheDir(): string {
  * verdicts, failure buckets and code-size stats without re-compiling.
  */
 export interface BatchManifest {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	hasBinary: boolean;
 	/** UTF-8 byte length of the emitted translation unit, or null when no C was emitted. */
 	generatedCBytes: number | null;
@@ -59,7 +59,6 @@ export interface BatchManifest {
 	entries: Array<{
 		path: string;
 		index: number;
-		mode: "shared" | "legacy";
 		stats: {
 			functionCount: number;
 			instructionCount: number;
@@ -129,7 +128,7 @@ export function buildFingerprint(
 	if (cached !== undefined) return cached;
 
 	const hash = createHash("sha256");
-	hash.update("v1-shared-test262-helpers\n");
+	hash.update("v2-separate-test262-scripts\n");
 	hash.update(compilerImplementationDigest());
 	hashDirectory(hash, "runtime/src", [".h"]);
 	if (existsSync("package-lock.json")) {
@@ -156,7 +155,7 @@ export function batchCacheKey(
 	composedSources: Array<string>,
 ): string {
 	const hash = createHash("sha256");
-	hash.update("batch-schema-v2\n");
+	hash.update("batch-schema-v3\n");
 	hash.update(fingerprint);
 	hash.update("\n");
 	hash.update(emitMode);
@@ -212,7 +211,7 @@ export function loadArtifact(key: string): CachedArtifact | undefined {
 		return undefined;
 	}
 	if (
-		manifest.schemaVersion !== 2 ||
+		manifest.schemaVersion !== 3 ||
 		manifest.physical === undefined ||
 		!(typeof manifest.generatedCBytes === "number" || manifest.generatedCBytes === null)
 	) {

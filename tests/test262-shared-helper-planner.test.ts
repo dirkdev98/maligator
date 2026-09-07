@@ -1,107 +1,88 @@
+import { Script, createContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { planTest262SharedHelpers } from "../src/test262/shared-helper-plan.ts";
 import type { Test262File } from "../src/test262/types.ts";
 
-function testFile(content: string, includes: Array<string> = []): Test262File {
+function file(
+	content: string,
+	flags: Array<string> = [],
+	includes: Array<string> = [],
+): Test262File {
 	return {
-		path: "test/language/example.js",
-		frontmatter: { includes },
+		path: "test/example.js",
+		frontmatter: { flags, includes },
 		content,
 		result: "UNKNOWN",
 	};
 }
 
-const harness: Record<string, string> = {
-	"assert.js": "function assert() {}",
-	"sta.js": "var $ERROR = function () {};",
-	"propertyHelper.js": "function verifyProperty() {}",
-	"testTypedArray.js": "var typedArrayConstructors = [];",
-	"testIntl.js": "function testWithIntlConstructors() {}",
-};
+function execute(
+	content: string,
+	harness: Record<string, string>,
+	includes: Array<string> = [],
+): unknown {
+	const plan = planTest262SharedHelpers(
+		file(content, [], includes),
+		(name) => harness[name]!,
+	);
+	const context = createContext({});
+	for (const helper of plan.helpers) new Script(helper.source).runInContext(context);
+	return new Script(plan.testSource).runInContext(context);
+}
 
-describe("Test262 shared-helper planner", () => {
-	it("plans standard and eligible high-value helpers in source order", () => {
+describe("Test262 harness source plans", () => {
+	it("initializes harness globals before instantiating test declarations", () => {
+		expect(
+			execute(
+				"function Array() {} if (originalArray === Array) throw new Error('test hoisted before harness'); originalArray.name;",
+				{ "assert.js": "var originalArray = Array;", "sta.js": "" },
+			),
+		).toBe("Array");
+	});
+
+	it("preserves each script's directives and harness evaluation order", () => {
+		expect(
+			execute(
+				"'use strict'; if ((function () { return this; })() !== undefined) throw new Error('lost directive'); order.join(',');",
+				{
+					"assert.js": "var order = ['assert'];",
+					"sta.js": "order.push('sta');",
+					"extra.js": "order.push('extra');",
+				},
+				["extra.js"],
+			),
+		).toBe("assert,sta,extra");
+	});
+
+	it("keeps global lexical bindings visible to subsequent scripts", () => {
+		expect(
+			execute("if ('value' in globalThis) throw new Error('lexical leaked'); value;", {
+				"assert.js": "const value = 42;",
+				"sta.js": "",
+			}),
+		).toBe(42);
+	});
+
+	it("preserves raw bytes and omits every harness include", () => {
+		const source = '#!"use strict"\n/*--- flags: [raw] ---*/\nwith ({}) {}';
+		const plan = planTest262SharedHelpers(file(source, ["raw"], ["ignored.js"]), () => {
+			throw new Error("raw tests must not load harness files");
+		});
+		expect(plan.helpers).toEqual([]);
+		expect(plan.testSource).toBe(source);
+		expect(() => new Script(plan.testSource)).not.toThrow();
+	});
+
+	it("places async completion support before declared includes", () => {
 		const plan = planTest262SharedHelpers(
-			testFile("assert.sameValue(1, 1);", ["propertyHelper.js", "testIntl.js"]),
-			true,
-			(name) => harness[name]!,
+			file("$DONE();", ["async"], ["asyncHelpers.js"]),
+			(name) => name,
 		);
-
-		expect(plan.kind).toBe("shared");
-		if (plan.kind === "shared") {
-			expect(plan.helpers.map((helper) => helper.path)).toEqual([
-				"harness/assert.js",
-				"harness/sta.js",
-				"harness/propertyHelper.js",
-				"harness/testIntl.js",
-			]);
-			expect(plan.helpers[1]!.source.startsWith(";")).toBe(true);
-			expect(plan.helpers[1]!.source.startsWith(";\n")).toBe(false);
-			expect(plan.testSource.startsWith(";")).toBe(true);
-			expect(plan.testSource.startsWith(";\n")).toBe(false);
-		}
-	});
-
-	it("keeps lexical helpers, lexical tests, and unsupported includes on legacy composition", () => {
-		const lexicalHarness: Record<string, string> = {
-			...harness,
-			"assert.js": "class Assert {}",
-		};
-		expect(
-			planTest262SharedHelpers(
-				testFile("var value;"),
-				true,
-				(name) => lexicalHarness[name]!,
-			).kind,
-		).toBe("legacy");
-		expect(
-			planTest262SharedHelpers(
-				testFile("const value = 1;"),
-				true,
-				(name) => harness[name]!,
-			).kind,
-		).toBe("legacy");
-		expect(
-			planTest262SharedHelpers(
-				testFile("var value;", ["realm.js"]),
-				true,
-				(name) => harness[name]!,
-			).kind,
-		).toBe("legacy");
-	});
-
-	it("keeps colliding helper and test declarations on legacy composition", () => {
-		expect(
-			planTest262SharedHelpers(
-				testFile("function assert() {}"),
-				true,
-				(name) => harness[name]!,
-			).kind,
-		).toBe("legacy");
-	});
-
-	it("keeps test var and function declarations on legacy composition", () => {
-		for (const content of ["var Float16Array;", "function Float16Array() {}"]) {
-			expect(
-				planTest262SharedHelpers(
-					testFile(content, ["testTypedArray.js"]),
-					true,
-					(name) => harness[name]!,
-				).kind,
-			).toBe("legacy");
-		}
-	});
-
-	it("keeps modules, async tests, and negative tests on legacy composition", () => {
-		for (const frontmatter of [
-			{ flags: ["module"] },
-			{ flags: ["async"] },
-			{ negative: { phase: "parse" as const, type: "SyntaxError" } },
-		]) {
-			const file = { ...testFile("var value;"), frontmatter };
-			expect(planTest262SharedHelpers(file, true, (name) => harness[name]!).kind).toBe(
-				"legacy",
-			);
-		}
+		expect(plan.helpers.map((helper) => helper.path)).toEqual([
+			"harness/assert.js",
+			"harness/sta.js",
+			"harness/doneprintHandle.js",
+			"harness/asyncHelpers.js",
+		]);
 	});
 });

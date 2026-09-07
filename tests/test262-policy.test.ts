@@ -8,7 +8,8 @@ import {
 	resolveTest262ObjectCache,
 	test262BatchRegressions,
 	test262FoldedRegressions,
-	test262RuntimeNegativeVerdict,
+	test262RuntimeVerdict,
+	test262SkipReason,
 	test262RunsInVariant,
 	test262WorkerCount,
 } from "../src/test262/policy.ts";
@@ -82,27 +83,100 @@ describe("Test262 runner policy", () => {
 			false,
 		);
 		expect(test262RunsInVariant(file("module", ["module"]), "sloppy")).toBe(false);
-		expect(test262RunsInVariant(file("raw", ["raw"]), "sloppy")).toBe(false);
+		expect(test262RunsInVariant(file("raw", ["raw"]), "sloppy")).toBe(true);
+		expect(test262RunsInVariant(file("raw", ["raw"]), "strict")).toBe(false);
+		expect(test262RunsInVariant(file("raw-module", ["raw", "module"]), "strict")).toBe(
+			true,
+		);
+		expect(test262RunsInVariant(file("raw-module", ["raw", "module"]), "sloppy")).toBe(
+			false,
+		);
 	});
 
-	it("requires the exact exception type for runtime-negative tests", () => {
+	it("uses native constructor evidence for runtime-negative tests", () => {
 		const negative = file("runtime-negative");
 		negative.frontmatter.negative = { phase: "runtime", type: "TypeError" };
 
 		expect(
-			test262RuntimeNegativeVerdict(negative, ["Uncaught TypeError: boom"], true),
+			test262RuntimeVerdict(
+				negative,
+				[
+					"Uncaught RangeError: misleading text",
+					"##COMPLETION runtime THROW 547970654572726f72",
+				],
+				1,
+			),
 		).toEqual({ passed: true, reason: "" });
 		expect(
-			test262RuntimeNegativeVerdict(negative, ["Uncaught RangeError: boom"], true),
-		).toEqual({
-			passed: false,
-			reason: "negative(runtime): expected TypeError, got RangeError",
-		});
-		expect(test262RuntimeNegativeVerdict(negative, [], false)).toEqual({
-			passed: false,
-			reason: "negative(runtime): expected TypeError but completed",
-		});
-		expect(test262RuntimeNegativeVerdict(file("positive"), [], false)).toBeUndefined();
+			test262RuntimeVerdict(
+				negative,
+				["Uncaught TypeError: spoofed string", "##COMPLETION runtime THROW -"],
+				1,
+			).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(negative, ["##COMPLETION runtime NORMAL"], 0).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(
+				negative,
+				["##COMPLETION harness THROW 547970654572726f72"],
+				1,
+			).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(negative, ["Uncaught TypeError: no evidence"], 1).passed,
+		).toBe(false);
+	});
+
+	it("requires normal completion as well as async success", () => {
+		const asyncFile = file("async", ["async"]);
+		expect(
+			test262RuntimeVerdict(
+				asyncFile,
+				["Test262:AsyncTestComplete", "##COMPLETION runtime NORMAL"],
+				0,
+			).passed,
+		).toBe(true);
+		expect(
+			test262RuntimeVerdict(
+				asyncFile,
+				["Test262:AsyncTestComplete", "##COMPLETION runtime THROW 4572726f72"],
+				1,
+			).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(
+				asyncFile,
+				["Test262:AsyncTestComplete", "##COMPLETION runtime NORMAL"],
+				1,
+			).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(
+				asyncFile,
+				[
+					"Test262:AsyncTestFailure:Test262Error: failed",
+					"Test262:AsyncTestComplete",
+					"##COMPLETION runtime NORMAL",
+				],
+				0,
+			).passed,
+		).toBe(false);
+		expect(
+			test262RuntimeVerdict(asyncFile, ["##COMPLETION runtime NORMAL"], 0).passed,
+		).toBe(false);
+	});
+
+	it("reports blocking-host tests as inapplicable", () => {
+		for (const variant of ["strict", "sloppy"] as const) {
+			expect(test262SkipReason(file("blocking", ["CanBlockIsTrue"]), variant)).toContain(
+				"CanBlock=false",
+			);
+			expect(
+				test262SkipReason(file("nonblocking", ["CanBlockIsFalse"]), variant),
+			).toBeUndefined();
+		}
 	});
 
 	it("treats every non-pass result for a previous pass as a regression", () => {

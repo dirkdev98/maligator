@@ -8,6 +8,7 @@ export function test262LoadCache(corpusPaths?: ReadonlyArray<string>): Test262Ca
 	if (!existsSync(TEST262_METADATA.cacheFile)) {
 		test262Log("No cache found.");
 		return {
+			schemaVersion: 2,
 			sha: "",
 			files: [],
 		};
@@ -16,11 +17,14 @@ export function test262LoadCache(corpusPaths?: ReadonlyArray<string>): Test262Ca
 	const cacheContents = JSON.parse(
 		readFileSync(TEST262_METADATA.cacheFile, "utf-8"),
 	) as Test262Cache;
-	if (cacheContents.sha !== TEST262_METADATA.revision) {
+	if (
+		cacheContents.schemaVersion !== 2 ||
+		cacheContents.sha !== TEST262_METADATA.revision
+	) {
 		test262Log(
 			`Ignoring cached revision ${cacheContents.sha}; expected ${TEST262_METADATA.revision}.`,
 		);
-		return { sha: "", files: [] };
+		return { schemaVersion: 2, sha: "", files: [] };
 	}
 	if (
 		corpusPaths !== undefined &&
@@ -28,7 +32,7 @@ export function test262LoadCache(corpusPaths?: ReadonlyArray<string>): Test262Ca
 			cacheContents.files.some((file, index) => file.path !== corpusPaths[index]))
 	) {
 		test262Log("Ignoring cache whose file inventory differs from the pinned corpus.");
-		return { sha: "", files: [] };
+		return { schemaVersion: 2, sha: "", files: [] };
 	}
 
 	test262Log(`Using ${cacheContents.files.length} cached files at ${cacheContents.sha}.`);

@@ -418,6 +418,12 @@ only reproducible input.
 
 ## Realm correctness and runtime capabilities
 
+- [ ] Share global lexical bindings across separately compiled scripts in the same
+      Realm without exposing them as global-object properties. Preserve TDZ,
+      const writes, and declaration conflicts. Separate Test262 harness execution
+      exposes this in `resizableArrayBufferUtils.js` (`ctors`) and
+      `nativeFunctionMatcher.js` (`validateNativeFunctionSource`).
+
 - [ ] Implement module loading for ShadowRealm.prototype.importValue. Preserve
       wrapping, rejection, module identity, and cross-Realm error semantics.
 

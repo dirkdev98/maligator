@@ -26,7 +26,7 @@ describe("Test262 batch reporting", () => {
 
 	it("projects persisted manifest totals and execution metrics into the report", () => {
 		const manifest = {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			hasBinary: true,
 			generatedCBytes: 12_345,
 			entries: [],

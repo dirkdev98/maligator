@@ -3,12 +3,72 @@
 #include "array_buffer_object.h"
 #include "builtin_eval.h"
 #include "gc.h"
+#include "heap_string.h"
 #include "intrinsics.h"
 #include "object_ops.h"
+#include "utf8.h"
 #include "value.h"
 #include "vm.h"
+#include "vm_ops.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+void mal_test262_report_completion(MalVm *vm, const char *phase) {
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        fprintf(stdout, "\n##COMPLETION %s NORMAL\n", phase);
+        return;
+    }
+
+    MalCompletion original = vm->completion;
+    MalValue roots[] = {original.value, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 3);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    byte *name = nullptr;
+    usize length = 0;
+    if (mal_value_is_object(roots[0]) &&
+        mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "constructor"), &roots[1]) &&
+        mal_value_is_callable(roots[1]) &&
+        mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, "name"), &roots[2]) &&
+        mal_value_is_string(roots[2])) {
+        name = mal_string_to_utf8(mal_value_to_string(roots[2]), &length);
+    }
+    original.value = roots[0];
+    vm->completion = original;
+    fprintf(stdout, "\n##COMPLETION %s THROW ", phase);
+    if (name == nullptr || length == 0) {
+        fputc('-', stdout);
+    } else {
+        for (usize i = 0; i < length; i++) fprintf(stdout, "%02x", name[i]);
+    }
+    fputc('\n', stdout);
+    free(name);
+    mal_gc_unroot(&root_span);
+}
 
 #if MAL_REALMS
+
+static MalValue mal_test262_print(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_vm_to_string(vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    usize length;
+    byte *bytes = mal_string_to_utf8(string, &length);
+    if (bytes != nullptr) {
+        fwrite(bytes, 1, length, stdout);
+        free(bytes);
+    }
+    fputc('\n', stdout);
+    return mal_value_new_undefined();
+}
 
 static MalValue mal_test262_create_realm(
     MalVm *vm,
@@ -94,6 +154,7 @@ static MalValue mal_test262_detach_array_buffer(
 
 void mal_test262_install(MalVm *vm) {
     MalObject *global = mal_value_to_object(mal_realm_global(vm->current_realm));
+    mal_intrinsic_define_method_n(vm, global, "print", 1, mal_test262_print);
     MalObject *host = mal_intrinsic_new_object(vm);
     MalValue host_value = mal_value_from_object(host);
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;

@@ -22,17 +22,12 @@ import {
 } from "../build-flags.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
-import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semantic-analysis.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../compiler/pipeline/compile-program.ts";
 import {
 	emitBatch,
-	emitProgramImage,
 	NATIVE_C_HEADER_LINES,
 } from "../compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
@@ -40,7 +35,6 @@ import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { cacheFrontendWire } from "../frontend-cache.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
-import { nativeSourcePath } from "../native-source-path.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
 import type { NativeArtifacts } from "../runtime-build.ts";
 import { requireToolchain } from "../toolchain.ts";
@@ -57,9 +51,14 @@ import {
 	storeManifest,
 } from "./artifact-cache.ts";
 import type { BatchManifest } from "./artifact-cache.ts";
+import { compileTest262ProgramImage } from "./compile.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
-import { test262RuntimeNegativeVerdict } from "./policy.ts";
+import {
+	test262RuntimeVerdict,
+	test262ScriptStrictness,
+	test262SkipReason,
+} from "./policy.ts";
 import {
 	loadTest262ProgramImage,
 	storeTest262ProgramImage,
@@ -431,21 +430,6 @@ export function test262PrepareBuild() {
 			"runtime/src",
 			...mainFlags.split(" ").filter(Boolean),
 			"-c",
-			"runtime/test262_main.c",
-			"-o",
-			`${BUILD_PATH}/test262_main.o`,
-		],
-		{ env: nativeContext.environment, stdio: "inherit" },
-	);
-	execFileSync(
-		toolchain.tools.cc.path,
-		[
-			"-std=c2x",
-			"-O1",
-			"-I",
-			"runtime/src",
-			...mainFlags.split(" ").filter(Boolean),
-			"-c",
 			"runtime/test262_batch.c",
 			"-o",
 			`${BUILD_PATH}/test262_batch.o`,
@@ -454,25 +438,12 @@ export function test262PrepareBuild() {
 	);
 }
 
-export function test262ShouldSkip(file: Test262File): boolean {
-	// Variant-aware run-mode filtering. The sloppy pass runs only the tests that
-	// have a sloppy variant (default + `noStrict`), skipping the strict-only ones
-	// (`onlyStrict`/`module`/`raw`); the strict pass skips `noStrict` tests, which
-	// cannot run strict. A run always sets T262_VARIANT to one or the other.
-	const flags = file.frontmatter.flags ?? [];
-	if (process.env.T262_VARIANT === "sloppy") {
-		if (
-			flags.includes("onlyStrict") ||
-			flags.includes("module") ||
-			flags.includes("raw")
-		) {
-			return true;
-		}
-	} else if (flags.includes("noStrict")) {
-		return true;
-	}
+function activeTest262Variant(): "strict" | "sloppy" {
+	return process.env.T262_VARIANT === "sloppy" ? "sloppy" : "strict";
+}
 
-	return false;
+export function test262ShouldSkip(file: Test262File): boolean {
+	return test262SkipReason(file, activeTest262Variant()) !== undefined;
 }
 
 function loadHarnessFile(file: string) {
@@ -480,96 +451,26 @@ function loadHarnessFile(file: string) {
 	return HARNESS_CACHE[file];
 }
 
-/**
- * `flags: [async]` tests signal completion by calling `$DONE`, defined in
- * `harness/doneprintHandle.js`, which writes a `Test262:AsyncTestComplete` /
- * `:AsyncTestFailure` sentinel through a host-provided `print`. We back `print`
- * with `console.log` (it writes the bare string to stdout) and auto-include the
- * handle ahead of the test's own `includes` (e.g. `asyncHelpers.js` references
- * `$DONE`). The sentinel — not the exit code — decides the verdict; see
- * `asyncVerdict`. The microtask drain that lets `$DONE` actually fire already
- * happens in `mal_vm_run`.
- */
-const TEST262_ASYNC_PRELUDE = `function print(message) { console.log(message); }
-`;
-
-function isAsyncTest(file: Test262File): boolean {
-	return file.frontmatter.flags?.includes("async") ?? false;
+function sourcePlan(file: Test262File): Test262SourcePlan {
+	return test262ShouldSkip(file)
+		? { helpers: [], testSource: file.content }
+		: planTest262SharedHelpers(file, (name) => loadHarnessFile(`harness/${name}`));
 }
 
-function composeSource(file: Test262File, content = file.content) {
-	if (file.frontmatter.flags?.includes("raw")) {
-		return content;
-	}
-
-	const harnessFiles = ["harness/assert.js", "harness/sta.js"];
-	if (isAsyncTest(file)) {
-		harnessFiles.push("harness/doneprintHandle.js");
-	}
-	harnessFiles.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
-
-	const prelude = isAsyncTest(file) ? TEST262_ASYNC_PRELUDE : "";
-	return `${prelude}${harnessFiles.map(loadHarnessFile).join("\n")}\n${content}`;
-}
-
-/**
- * Decide an async test's verdict from the captured stdout sentinel. A passing
- * test prints exactly `Test262:AsyncTestComplete`; a failing one prints a
- * `Test262:AsyncTestFailure:<detail>` line (via `$DONE(error)`). Neither line
- * means the test never settled (a missing `$DONE`, a sync throw, an unhandled
- * rejection) — also a failure.
- */
-function asyncVerdict(output: Array<string>): {
-	passed: boolean;
-	reason: string;
-} {
-	const failure = output.find((line) =>
-		line.trim().startsWith("Test262:AsyncTestFailure"),
-	);
-	if (failure !== undefined) {
-		return { passed: false, reason: failure.trim() };
-	}
-	if (output.some((line) => line.trim() === "Test262:AsyncTestComplete")) {
-		return { passed: true, reason: "" };
-	}
-	return { passed: false, reason: "async test did not complete" };
-}
-
-/** Apply `asyncVerdict` to a raw stdout string (single-test path). */
-function applyAsyncVerdict(file: Test262File, stdout: string) {
-	const verdict = asyncVerdict(stdout.split("\n"));
-	if (verdict.passed) {
-		file.result = "PASSED";
-	} else {
-		file.result = "FAILED";
-		countReason(
-			FAILURE_COUNTS,
-			FAILURE_CACHE,
-			normalizeFailureReason(verdict.reason),
-			file,
-		);
-	}
-}
-
-function applyRuntimeNegativeVerdict(
+function applyRuntimeVerdict(
 	file: Test262File,
 	output: ReadonlyArray<string>,
-	didThrow: boolean,
-): boolean {
-	const verdict = test262RuntimeNegativeVerdict(file, output, didThrow);
-	if (verdict === undefined) {
-		return false;
-	}
+	exitCode: number,
+) {
+	const verdict = test262RuntimeVerdict(file, output, exitCode);
 	file.result = verdict.passed ? "PASSED" : "FAILED";
 	if (!verdict.passed) {
-		countReason(
-			FAILURE_COUNTS,
-			FAILURE_CACHE,
-			normalizeFailureReason(verdict.reason),
-			file,
-		);
+		const reason =
+			verdict.reason === "uncaught runtime exception"
+				? (output.find((line) => line.startsWith("Uncaught ")) ?? verdict.reason)
+				: verdict.reason;
+		countReason(FAILURE_COUNTS, FAILURE_CACHE, normalizeFailureReason(reason), file);
 	}
-	return true;
 }
 
 function recordFailure(
@@ -626,7 +527,11 @@ interface CompileOutcome {
 	result: Test262Result;
 	failure: string | undefined;
 	stats:
-		| { functionCount: number; instructionCount: number; opcodes: Record<string, number> }
+		| {
+				functionCount: number;
+				instructionCount: number;
+				opcodes: Record<string, number>;
+		  }
 		| undefined;
 }
 
@@ -664,41 +569,23 @@ function combineImageStats(stats: Array<ImageStats>): ImageStats {
 	return combined;
 }
 
-function strictForTest262File(file: Test262File): boolean {
-	return process.env.T262_VARIANT === "strict"
-		? true
-		: process.env.T262_VARIANT === "sloppy"
-			? false
-			: !(file.frontmatter.flags?.includes("noStrict") ?? false);
-}
-
-/**
- * Compile a test to a program image, resolving the SKIPPED and
- * COMPILE_FAILED verdicts along the way. `source` is the pre-composed
- * harness+test (also the cache-key input), passed in so it is built exactly once
- * per test.
- */
-function test262CompileToC(
-	file: Test262File,
-	source: string,
-	preParsed?: ReturnType<typeof parseScript>,
-): CompileOutcome {
+function test262CompileToC(file: Test262File, harness = false): CompileOutcome {
 	const outcome: CompileOutcome = {
 		image: undefined,
 		result: "UNKNOWN",
 		failure: undefined,
 		stats: undefined,
 	};
-
-	if (test262ShouldSkip(file)) {
+	if (!harness && test262ShouldSkip(file)) {
 		outcome.result = "SKIPPED";
 		return outcome;
 	}
+	const strict = !harness && test262ScriptStrictness(file, activeTest262Variant());
 	const cacheInput = {
 		path: file.path,
-		source,
-		variant:
-			process.env.T262_VARIANT === "sloppy" ? ("sloppy" as const) : ("strict" as const),
+		source: file.content,
+		frontmatter: file.frontmatter,
+		variant: strict ? ("strict" as const) : ("sloppy" as const),
 	};
 	const cached = loadTest262ProgramImage(cacheInput);
 	if (cached.state === "hit") {
@@ -713,105 +600,65 @@ function test262CompileToC(
 		PROGRAM_IMAGE_CACHE_STATS.corruptions++;
 		test262Log(`ProgramImage cache rejected ${file.path}: ${cached.reason}`);
 	}
-
-	const isModule = file.frontmatter.flags?.includes("module") ?? false;
-	// Strictness of the script parse. T262_VARIANT forces every script one way
-	// (the strict pass strict, the sloppy pass sloppy); the fallback only fires if
-	// a script runs with no variant set. A sloppy parse just relaxes the
-	// early-error surface (octal, `with`, …); the sloppy runtime behaviors gate on
-	// the per-scope strict flag sema derives from it.
-	const strict = strictForTest262File(file);
-
-	// A parse/early/resolution negative test must be REJECTED at compile: a
-	// SyntaxError thrown below is the pass; compiling successfully is the fail.
-	const negative = file.frontmatter.negative;
-	const negativeAtCompile =
-		negative !== undefined &&
-		(negative.phase === "parse" ||
-			negative.phase === "early" ||
-			negative.phase === "resolution");
-
-	const compileStartedAt = performance.now();
+	const startedAt = performance.now();
 	try {
-		// Parse and scan before any further work. Module-flagged tests parse
-		// as modules; the harness is still prepended (its functions become
-		// module-scoped, which the test references in the same scope).
-		const parsed = isModule
-			? parseModule(source)
-			: (preParsed ?? parseScript(source, { strict }));
-
-		const hasDynamicImport =
-			file.frontmatter.features?.includes("dynamic-import") ?? false;
-		const dynamicImportCandidates = hasDynamicImport
-			? readdirSync(path.dirname(path.join(TEST262_METADATA.path, file.path)))
-					.filter((name) => name.endsWith("_FIXTURE.js") && source.includes(name))
-					.map((name) => path.join(TEST262_METADATA.path, path.dirname(file.path), name))
-			: undefined;
-
-		// Module and dynamic-import tests run through the loader/graph pipeline so
-		// sibling `*_FIXTURE.js` imports resolve from the test's real directory. For
-		// module tests, the composed harness+test and all fixtures are modules. For
-		// script dynamic-import tests, only dependencies are forced to modules; the
-		// entry remains a script.
-		const semanticProgram = isModule
-			? loadEntrypointAndRunSemanticAnalysis(
-					path.join(TEST262_METADATA.path, file.path),
-					{
-						entrySource: source,
-						goalOverride: "module",
-						dynamicImportCandidates,
-					},
-				)
-			: hasDynamicImport
-				? loadEntrypointAndRunSemanticAnalysis(
-						path.join(TEST262_METADATA.path, file.path),
-						{
-							entryGoal: "script",
-							entrySource: source,
-							dependencyGoalOverride: "module",
-							dynamicImportCandidates,
-						},
-					)
-				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
-
-		const programImage = compileSemanticProgramToProgramImage(semanticProgram);
-
-		if (negativeAtCompile) {
-			// The source compiled cleanly, but a parse/early/resolution negative
-			// test expects a SyntaxError before execution — accepting it is a fail.
-			outcome.result = "FAILED";
-			outcome.failure = `negative(${negative.phase}): expected ${negative.type} but compiled`;
-			return outcome;
+		const compiled = compileTest262ProgramImage(file, strict);
+		outcome.result = compiled.result;
+		outcome.failure = compiled.failure;
+		outcome.image = compiled.image;
+		if (compiled.image !== undefined) {
+			outcome.stats = imageStats(compiled.image);
+			try {
+				PROGRAM_IMAGE_CACHE_STATS.writtenBytes += storeTest262ProgramImage(
+					cacheInput,
+					compiled.image,
+				);
+			} catch {
+				PROGRAM_IMAGE_CACHE_STATS.writeFailures++;
+			}
 		}
-
-		outcome.stats = imageStats(programImage);
-
-		outcome.image = programImage;
-		try {
-			PROGRAM_IMAGE_CACHE_STATS.writtenBytes += storeTest262ProgramImage(
-				cacheInput,
-				programImage,
-			);
-		} catch {
-			// Cache publication must never turn a valid compilation into a test failure.
-			PROGRAM_IMAGE_CACHE_STATS.writeFailures++;
-		}
-		return outcome;
-	} catch (e) {
-		if (negativeAtCompile && e instanceof SyntaxError) {
-			// The expected parse/early/resolution SyntaxError (meriyah's ParseError
-			// extends SyntaxError; sema/IR early errors throw SyntaxError too) — the
-			// negative test is rejected as required, so it passes. A non-SyntaxError
-			// throw is our own compiler bug, not the expected rejection.
-			outcome.result = "PASSED";
-			return outcome;
-		}
-		outcome.result = "COMPILE_FAILED";
-		outcome.failure = `compile: ${e instanceof Error ? e.message : String(e)}`;
 		return outcome;
 	} finally {
-		recordTiming("compile", file.path, performance.now() - compileStartedAt);
+		recordTiming("compile", file.path, performance.now() - startedAt);
 	}
+}
+
+const HELPER_COMPILE_CACHE = new Map<string, CompileOutcome>();
+
+function compileHelper(helper: Test262SharedHelper): CompileOutcome {
+	const key = JSON.stringify(helper);
+	let outcome = HELPER_COMPILE_CACHE.get(key);
+	if (outcome === undefined) {
+		outcome = test262CompileToC(
+			{
+				path: helper.path,
+				content: helper.source,
+				frontmatter: {},
+				result: "UNKNOWN",
+			},
+			true,
+		);
+		HELPER_COMPILE_CACHE.set(key, outcome);
+	}
+	return outcome;
+}
+
+function compileWithHelpers(
+	file: Test262File,
+	helpers: ReadonlyArray<CompileOutcome>,
+): CompileOutcome {
+	const outcome = test262CompileToC(file);
+	if (outcome.image === undefined) return outcome;
+	const failed = helpers.find((helper) => helper.image === undefined);
+	if (failed !== undefined) {
+		return {
+			image: undefined,
+			result: "COMPILE_FAILED",
+			failure: `harness: ${failed.failure ?? failed.result}`,
+			stats: undefined,
+		};
+	}
+	return outcome;
 }
 
 /**
@@ -841,7 +688,6 @@ interface BatchEntry {
 
 interface RunnableBatchEntry extends BatchEntry {
 	image: ProgramImage;
-	mode: "shared" | "legacy";
 	helperIds: Array<string>;
 	logicalStats: ImageStats;
 	imageIndex: number;
@@ -972,65 +818,20 @@ async function executeWireBatch(
 async function test262RunWireBatch(files: Array<Test262File>, workerId: number) {
 	const entries: Array<WireBatchEntry> = [];
 	for (const file of files) {
-		const content = file.content;
-		const composed = composeSource(file, content);
-		const plan = test262ShouldSkip(file)
-			? ({ kind: "legacy", reason: "skipped" } satisfies Test262SourcePlan)
-			: planTest262SharedHelpers(
-					file,
-					strictForTest262File(file),
-					(name) => loadHarnessFile(`harness/${name}`),
-					content,
-				);
-		let outcome: CompileOutcome;
-		let images: Array<ProgramImage>;
-		if (plan.kind === "shared") {
-			const helperOutcomes = plan.helpers.map((helper) =>
-				test262CompileToC(
-					{
-						path: helper.path,
-						frontmatter: {},
-						content: helper.source,
-						result: "UNKNOWN",
-					},
-					helper.source,
-					helper.parsed,
-				),
-			);
-			const canShare = helperOutcomes.every(
-				(helperOutcome) => helperOutcome.image !== undefined,
-			);
-			outcome = canShare
-				? test262CompileToC(file, plan.testSource, plan.parsedTest)
-				: test262CompileToC(file, composed);
-			if (canShare && outcome.image !== undefined) {
-				const testImage = outcome.image;
-				const helperImages = helperOutcomes.map((helperOutcome) => {
-					if (helperOutcome.image === undefined) {
-						throw new Error("shared Test262 helper image missing after validation");
-					}
-					return helperOutcome.image;
-				});
-				const helperStats = helperOutcomes.map((helperOutcome) => helperOutcome.stats!);
-				outcome = {
-					...outcome,
-					stats:
-						outcome.stats === undefined
-							? undefined
-							: combineImageStats([...helperStats, outcome.stats]),
-				};
-				images = [...helperImages, testImage];
-			} else {
-				if (canShare && outcome.result === "COMPILE_FAILED") {
-					outcome = test262CompileToC(file, composed);
-				}
-				images = outcome.image === undefined ? [] : [outcome.image];
-			}
-		} else {
-			outcome = test262CompileToC(file, composed);
-			images = outcome.image === undefined ? [] : [outcome.image];
-		}
-		applyOutcome(file, outcome);
+		const plan = sourcePlan(file);
+		const helpers = plan.helpers.map(compileHelper);
+		const outcome = compileWithHelpers(file, helpers);
+		const images =
+			outcome.image === undefined
+				? []
+				: [...helpers.map((helper) => helper.image!), outcome.image];
+		applyOutcome(file, {
+			...outcome,
+			stats:
+				outcome.image === undefined
+					? undefined
+					: combineImageStats(images.map(imageStats)),
+		});
 		if (images.length === 0) continue;
 		const wirePaths = images.map((image) =>
 			cacheFrontendWire(serializeRuntimeImage(image.runtime)),
@@ -1070,6 +871,7 @@ async function runBatchBinary(
 	binPath: string,
 	entries: Array<BatchEntry>,
 	workerId: number,
+	retryUnreported: boolean,
 ) {
 	let stdout = "";
 	// Stress collection at every poll and Guard Malloc are deliberately slower,
@@ -1104,7 +906,17 @@ async function runBatchBinary(
 	for (const entry of unreported) {
 		entry.file.result = "UNKNOWN";
 		// The batch or cached manifest already attributed this logical test's code.
-		await test262RunSingle(entry.file, workerId, false);
+		if (retryUnreported) {
+			await test262RunSingle(entry.file, workerId, false);
+		} else {
+			entry.file.result = "CRASHED";
+			countReason(
+				FAILURE_COUNTS,
+				FAILURE_CACHE,
+				"native driver failed before reporting",
+				entry.file,
+			);
+		}
 	}
 }
 
@@ -1171,6 +983,7 @@ export async function test262RunBatch(
 	files: Array<Test262File>,
 	workerId: number,
 	includeStats = true,
+	retryUnreported = true,
 ) {
 	if (wireBackend()) {
 		await test262RunWireBatch(files, workerId);
@@ -1204,20 +1017,7 @@ export async function test262RunBatch(
 		);
 	};
 
-	// Compose every test once: it feeds both the cache key and the compiler.
-	const contents = files.map((file) => file.content);
-	const composed = files.map((file, index) => composeSource(file, contents[index]));
-	const plans: Array<Test262SourcePlan> = files.map(
-		(file, index): Test262SourcePlan =>
-			test262ShouldSkip(file)
-				? { kind: "legacy", reason: "skipped" }
-				: planTest262SharedHelpers(
-						file,
-						strictForTest262File(file),
-						(name) => loadHarnessFile(`harness/${name}`),
-						contents[index],
-					),
-	);
+	const plans = files.map(sourcePlan);
 
 	let cacheKey = "";
 	if (useCache) {
@@ -1227,7 +1027,7 @@ export async function test262RunBatch(
 				test262Toolchain().fingerprint,
 			),
 			emitMode(),
-			plans.map((plan, index) => test262SourcePlanCacheInput(plan, composed[index]!)),
+			plans.map(test262SourcePlanCacheInput),
 		);
 		USED_CACHE_KEYS.add(cacheKey);
 
@@ -1237,7 +1037,7 @@ export async function test262RunBatch(
 			if (cached.objectPath !== undefined && entries.length > 0) {
 				timings.linkMs = await linkBatch(cached.objectPath, `${baseName}.bin`);
 				const runStartedAt = performance.now();
-				await runBatchBinary(`${baseName}.bin`, entries, workerId);
+				await runBatchBinary(`${baseName}.bin`, entries, workerId, retryUnreported);
 				timings.runMs = performance.now() - runStartedAt;
 			}
 			recordBatch(
@@ -1260,58 +1060,22 @@ export async function test262RunBatch(
 	};
 	const helpers = new Map<string, Test262SharedHelper>();
 	for (const plan of plans) {
-		if (plan.kind === "shared") {
-			for (const helper of plan.helpers) helpers.set(helper.id, helper);
-		}
+		for (const helper of plan.helpers) helpers.set(helper.id, helper);
 	}
-	const helperOutcomes = new Map<string, CompileOutcome>();
-	for (const helper of helpers.values()) {
-		const helperFile: Test262File = {
-			path: helper.path,
-			frontmatter: {},
-			content: helper.source,
-			result: "UNKNOWN",
-		};
-		helperOutcomes.set(
-			helper.id,
-			test262CompileToC(helperFile, helper.source, helper.parsed),
-		);
-	}
-
+	const helperOutcomes = new Map(
+		[...helpers].map(([id, helper]) => [id, compileHelper(helper)]),
+	);
 	for (let i = 0; i < files.length; i++) {
 		const file = files[i]!;
 		const plan = plans[i]!;
-		const canShare =
-			plan.kind === "shared" &&
-			plan.helpers.every((helper) => helperOutcomes.get(helper.id)?.image !== undefined);
-		let mode: "shared" | "legacy" = canShare ? "shared" : "legacy";
-		let outcome =
-			plan.kind === "shared" && canShare
-				? test262CompileToC(file, plan.testSource, plan.parsedTest)
-				: test262CompileToC(file, composed[i]!);
-
-		// A standalone fragment that reaches an unsupported compiler edge must not
-		// turn sharing into a new failure mode. Retry the exact legacy source.
-		if (mode === "shared" && outcome.result === "COMPILE_FAILED") {
-			mode = "legacy";
-			outcome = test262CompileToC(file, composed[i]!);
-		}
-
-		const helperIds =
-			mode === "shared" && plan.kind === "shared"
-				? plan.helpers.map((helper) => helper.id)
-				: [];
+		const helperIds = plan.helpers.map((helper) => helper.id);
+		const outcomes = helperIds.map((id) => helperOutcomes.get(id)!);
+		const outcome = compileWithHelpers(file, outcomes);
 		const logicalStats =
 			outcome.stats === undefined
 				? undefined
-				: combineImageStats([
-						...(mode === "shared"
-							? helperIds.map((id) => helperOutcomes.get(id)!.stats!)
-							: []),
-						outcome.stats,
-					]);
-		const logicalOutcome = { ...outcome, stats: logicalStats };
-		applyOutcome(file, logicalOutcome, includeStats);
+				: combineImageStats([...outcomes.map((helper) => helper.stats!), outcome.stats]);
+		applyOutcome(file, { ...outcome, stats: logicalStats }, includeStats);
 
 		if (outcome.image === undefined) {
 			resolved.push({
@@ -1335,7 +1099,6 @@ export async function test262RunBatch(
 			file,
 			index: entries.length,
 			image: outcome.image,
-			mode,
 			helperIds,
 			logicalStats: logicalStats!,
 			imageIndex: -1,
@@ -1345,48 +1108,38 @@ export async function test262RunBatch(
 	}
 
 	const physicalImages: Array<ProgramImage> = [];
-	const sharedEntries = entries.filter((entry) => entry.mode === "shared");
-	const usedHelperIds = new Set(sharedEntries.flatMap((entry) => entry.helperIds));
+	const usedHelperIds = new Set(entries.flatMap((entry) => entry.helperIds));
 	const usedHelpers = [...helpers.values()].filter((helper) =>
 		usedHelperIds.has(helper.id),
 	);
-	if (sharedEntries.length > 0) {
-		const sharedComponents = [
+	if (entries.length > 0) {
+		const merged = mergeProgramImages([
 			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.image!),
-			...sharedEntries.map((entry) => entry.image),
-		];
-		const merged = mergeProgramImages(sharedComponents);
+			...entries.map((entry) => entry.image),
+		]);
 		physicalImages.push(merged.image);
 		const helperBases = new Map(
 			usedHelpers.map(
 				(helper, index) => [helper.id, merged.functionBases[index]!] as const,
 			),
 		);
-		sharedEntries.forEach((entry, index) => {
+		entries.forEach((entry, index) => {
 			entry.imageIndex = 0;
 			entry.entryFunctionIndex = merged.functionBases[usedHelpers.length + index]!;
 			entry.helperFunctionIndices = entry.helperIds.map((id) => helperBases.get(id)!);
 		});
-	}
-	for (const entry of entries) {
-		if (entry.mode === "legacy") {
-			entry.imageIndex = physicalImages.length;
-			entry.entryFunctionIndex = 0;
-			physicalImages.push(entry.image);
-		}
 	}
 	const physicalStats = combineImageStats(
 		physicalImages.map((image) => imageStats(image)),
 	);
 
 	const manifest: BatchManifest = {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		hasBinary: entries.length > 0,
 		generatedCBytes: null,
 		entries: entries.map((entry) => ({
 			path: entry.file.path,
 			index: entry.index,
-			mode: entry.mode,
 			stats: entry.logicalStats,
 		})),
 		resolved,
@@ -1477,14 +1230,26 @@ export async function test262RunBatch(
 			file.result = "UNKNOWN";
 		}
 		if (retryFiles.length === 1) {
-			await test262RunSingle(retryFiles[0]!, workerId, false);
+			const file = retryFiles[0]!;
+			file.result = "COMPILE_FAILED";
+			countReason(
+				FAILURE_COUNTS,
+				FAILURE_CACHE,
+				`cc: ${firstLine(e instanceof Error ? e.message : String(e))}`,
+				file,
+			);
 		} else {
 			const midpoint = Math.ceil(retryFiles.length / 2);
 			test262Log(
 				`Isolating batch cc failure as ${midpoint}+${retryFiles.length - midpoint} tests.`,
 			);
-			await test262RunBatch(retryFiles.slice(0, midpoint), workerId, false);
-			await test262RunBatch(retryFiles.slice(midpoint), workerId, false);
+			await test262RunBatch(
+				retryFiles.slice(0, midpoint),
+				workerId,
+				false,
+				retryUnreported,
+			);
+			await test262RunBatch(retryFiles.slice(midpoint), workerId, false, retryUnreported);
 		}
 		return;
 	}
@@ -1501,7 +1266,7 @@ export async function test262RunBatch(
 	}
 
 	const runStartedAt = performance.now();
-	await runBatchBinary(`${baseName}.bin`, entries, workerId);
+	await runBatchBinary(`${baseName}.bin`, entries, workerId, retryUnreported);
 	timings.runMs = performance.now() - runStartedAt;
 	recordBatch(manifest, useCache ? "miss" : "disabled", objectBytes);
 }
@@ -1538,31 +1303,8 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
 		resolved.add(index);
 		recordTiming("run", file.path, elapsedMs);
 
-		if (kind === "EXIT" && applyRuntimeNegativeVerdict(file, currentOutput, code !== 0)) {
-			// The runtime-negative matcher owns this verdict, including error type.
-		} else if (kind === "EXIT" && isAsyncTest(file)) {
-			// Async tests exit 0 whether they pass or fail (`$DONE` never throws);
-			// the stdout sentinel is authoritative. A non-zero exit means a sync
-			// throw before settling, which `asyncVerdict` reports as no completion.
-			const verdict = asyncVerdict(currentOutput);
-			if (verdict.passed) {
-				file.result = "PASSED";
-			} else {
-				file.result = "FAILED";
-				countReason(
-					FAILURE_COUNTS,
-					FAILURE_CACHE,
-					normalizeFailureReason(verdict.reason),
-					file,
-				);
-			}
-		} else if (kind === "EXIT" && code === 0) {
-			file.result = "PASSED";
-		} else if (kind === "EXIT") {
-			file.result = "FAILED";
-			const raw =
-				currentOutput.find((it) => it.startsWith("Uncaught"))?.trim() || "non-zero exit";
-			countReason(FAILURE_COUNTS, FAILURE_CACHE, normalizeFailureReason(raw), file);
+		if (kind === "EXIT") {
+			applyRuntimeVerdict(file, currentOutput, code);
 		} else if (kind === "SIGNAL") {
 			file.result = "CRASHED";
 			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${code}`, file);
@@ -1580,106 +1322,13 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
 	return resolved;
 }
 
-/**
- * Single-test execution, used as the fallback when a batch cannot be
- * compiled or its driver died before reporting.
- */
+/** Retry a lost batch member with the same source plan and a bounded single-test driver. */
 export async function test262RunSingle(
 	file: Test262File,
 	workerId: number,
 	includeStats = true,
 ) {
-	const outcome = test262CompileToC(file, composeSource(file));
-	applyOutcome(file, outcome, includeStats);
-	if (outcome.image === undefined) {
-		return;
-	}
-	const cSource = emitProgramImage(outcome.image, {
-		sourcePath: nativeSourcePath,
-		includeHeader: false,
-	});
-
-	const baseName = path.join(BUILD_PATH, `t${workerId}`);
-
-	const ccStartedAt = performance.now();
-	try {
-		const artifacts = test262NativeArtifacts();
-		writeFileSync(`${baseName}.c`, `${NATIVE_C_HEADER_LINES.join("\n")}\n${cSource}`);
-		await execFileAsync(
-			test262Toolchain().tools.cc.path,
-			[
-				"-std=c2x",
-				...GENERATED_C_OPT_FLAGS,
-				"-I",
-				"runtime/src",
-				...perfStatsDefines(),
-				...sanitizerCcFlags(),
-				`${baseName}.c`,
-				`${BUILD_PATH}/test262_main.o`,
-				artifacts.c.engine,
-				...artifacts.rust.linkArgs,
-				"-o",
-				`${baseName}.bin`,
-			],
-			{ timeout: TEST262_METADATA.compileTimeoutMs },
-		);
-	} catch (e) {
-		file.result = "COMPILE_FAILED";
-		const message = e instanceof Error ? e.message : String(e);
-		countReason(FAILURE_COUNTS, FAILURE_CACHE, `cc: ${firstLine(message)}`, file);
-		return;
-	} finally {
-		recordTiming("cc", file.path, performance.now() - ccStartedAt);
-	}
-
-	const runStartedAt = performance.now();
-	try {
-		const { stdout } = await execFileAsync(`${baseName}.bin`, [], {
-			timeout: TEST262_METADATA.runTimeoutMs,
-			maxBuffer: 1024 * 1024,
-			env: { ...runEnv(), MAL_TEST262: "1" },
-		});
-		if (applyRuntimeNegativeVerdict(file, stdout.split("\n"), false)) {
-			// A runtime-negative test must throw; normal completion is a failure.
-		} else if (isAsyncTest(file)) {
-			applyAsyncVerdict(file, stdout);
-		} else {
-			file.result = "PASSED";
-		}
-	} catch (e) {
-		const error = e as NodeJS.ErrnoException & {
-			signal?: string;
-			stdout?: string;
-			stderr?: string;
-			killed?: boolean;
-		};
-
-		if (error.killed || error.signal === "SIGTERM") {
-			file.result = "TIMEOUT";
-			countReason(FAILURE_COUNTS, FAILURE_CACHE, "timeout", file);
-		} else if (error.signal) {
-			file.result = "CRASHED";
-			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${error.signal}`, file);
-		} else if (
-			applyRuntimeNegativeVerdict(
-				file,
-				[...(error.stdout ?? "").split("\n"), ...(error.stderr ?? "").split("\n")],
-				true,
-			)
-		) {
-			// The expected runtime exception and exact constructor decide the verdict.
-		} else if (isAsyncTest(file)) {
-			// A non-zero exit means the script threw before settling: no sentinel,
-			// so `asyncVerdict` reports it as an incomplete async test.
-			applyAsyncVerdict(file, error.stdout ?? "");
-		} else {
-			file.result = "FAILED";
-			const reason = firstLine(error.stderr ?? "") || "non-zero exit";
-			countReason(FAILURE_COUNTS, FAILURE_CACHE, reason, file);
-		}
-	} finally {
-		recordTiming("run", file.path, performance.now() - runStartedAt);
-	}
+	await test262RunBatch([file], workerId, includeStats, false);
 }
 
 export function getFailuresWithSamples() {
@@ -1694,7 +1343,11 @@ export function getFailuresWithSamples() {
  */
 export interface StatsSnapshot {
 	timings: Record<string, PhaseTimings>;
-	codeStats: { compiledFiles: number; functionCount: number; instructionCount: number };
+	codeStats: {
+		compiledFiles: number;
+		functionCount: number;
+		instructionCount: number;
+	};
 	opcodes: Record<string, number>;
 	failureCounts: Record<string, number>;
 	failureCache: Record<string, Array<string>>;

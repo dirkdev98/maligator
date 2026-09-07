@@ -110,7 +110,7 @@ export async function test262CollectFiles(
 	return files;
 }
 
-function extractFrontmatterFromSource(
+export function extractFrontmatterFromSource(
 	path: string,
 	source: string,
 ): {
@@ -127,14 +127,13 @@ function extractFrontmatterFromSource(
 	const frontMatterSource = match[1]!.trim().replace(/[\r\n]+/g, "\n");
 
 	try {
-		const strippedSource = source.replace(yamlRegex, "");
 		const frontmatter = parse(frontMatterSource, {
 			strict: false,
 		}) as Test262Frontmatter;
 
 		return {
 			frontmatter,
-			source: strippedSource,
+			source,
 		};
 	} catch (e) {
 		// @ts-expect-error add some context to the error.

@@ -2,3 +2,4 @@
 tests/toolchain.test.ts
 tests/self-compile-experiment.test.ts
 tests/wasm-embedding.test.ts
+tests/test262-execution.test.ts

@@ -308,6 +308,38 @@ single-variant, custom-baseline, and instrumented updates are rejected before wo
 All three full-corpus commands are expensive; ask before running them, `test:full`,
 or `test:full:report`. Filtered diagnostic selections remain focused commands.
 
+### Test262 verdicts and counts
+
+The combined verdict counts test files, not executions. A default script must pass
+both strict and sloppy execution; `onlyStrict`, `noStrict`, and module tests require
+their designated execution only. Raw scripts run once without forced strictness or
+source changes; raw modules retain the module parse goal. A failed required variant
+makes the file fail. Intentional variant omissions do not count as failures.
+
+Harness files execute in order as separate global scripts in the test's realm before
+the test is instantiated. Their declarations and directives do not become part of
+the test's source or module scope. This contract is the same for compiled,
+interpreted, wire, cached-batch, and single-test fallback execution.
+
+Negative tests require the declared error type at the declared semantic phase.
+Entry parsing and early errors are `parse`; loading invalid dependencies and
+linking errors are `resolution`. Compiler implementation errors are failures, not
+expected language rejections. Runtime exception types come from native completion
+records containing the thrown object's constructor name, not its printed stack or
+message. Async success additionally requires normal completion and the success
+sentinel; an uncaught throw still fails after `$DONE()`.
+
+The current host has `CanBlock=false`. Tests requiring `CanBlockIsTrue` are reported
+as `SKIPPED`, with an explicit host-applicability reason in `skips`. Combined skips
+remain visible in the total inventory. The site's percentage is
+`PASSED / (PASSED + FAILED + SKIPPED)`; it does not remove skips from the denominator.
+An ordinary check exits nonzero for regressions from previously passing files;
+known baseline failures can therefore coexist with a successful gate.
+
+Pure runner contracts run in the unit lane. The native runner integration contract
+is full-only and can be selected with
+`npm run test:unit:full-only -- --run tests/test262-execution.test.ts`.
+
 ## Full standards policy
 
 The full gate uses these deliberately non-Cartesian standards dimensions:

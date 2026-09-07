@@ -96,6 +96,7 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
         mal_loaded_runtime_image_free(loaded);
         return 2;
     }
+    int completed_index = -1;
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
         if (index > 0) {
@@ -114,9 +115,11 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
         }
         callables[index] = mal_vm_create_callable(&vm, entry);
         mal_vm_run(&vm, callables[index]);
+        completed_index = index;
         if (vm.completion.kind == MAL_COMPLETION_THROW) break;
     }
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    mal_test262_report_completion(&vm, completed_index == wire_count - 1 ? "runtime" : "harness");
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

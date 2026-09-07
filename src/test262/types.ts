@@ -5,7 +5,7 @@ export interface Test262Frontmatter {
 	flags?: Array<string>;
 	includes?: Array<string>;
 	negative?: {
-		phase: "parse" | "early" | "resolution" | "runtime";
+		phase: "parse" | "resolution" | "runtime";
 		type: string;
 	};
 	esid?: string;
@@ -29,6 +29,7 @@ export interface Test262File {
 }
 
 export interface Test262Cache {
+	schemaVersion: 2;
 	sha: string;
 	files: Array<Test262File>;
 }
@@ -40,6 +41,7 @@ export interface Test262Cache {
 export interface Test262Output {
 	sha: string;
 	summary: Record<string, number>;
+	skips?: Record<string, string>;
 
 	/**
 	 * Code-size totals over all compiled tests, tracked across commits so the

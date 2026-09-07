@@ -18,6 +18,7 @@ import {
 	resolveTest262ObjectCache,
 	test262BatchRegressions,
 	test262FoldedRegressions,
+	test262SkipReason,
 	test262WorkerCount,
 } from "../src/test262/policy.ts";
 import type { Test262Variant } from "../src/test262/policy.ts";
@@ -398,7 +399,10 @@ async function runWithWorkers(
 								| { type: "ready" }
 								| {
 										type: "batchDone";
-										results: Array<{ path: string; result: Test262File["result"] }>;
+										results: Array<{
+											path: string;
+											result: Test262File["result"];
+										}>;
 										processed: number;
 								  }
 								| { type: "stats"; snapshot: StatsSnapshot },
@@ -470,7 +474,11 @@ function combineFolded(a: Folded, b: Folded): Folded {
 interface VariantRun {
 	/** Folded verdict per selected test path. */
 	results: Map<string, Folded>;
-	code: { compiledFiles: number; functionCount: number; instructionCount: number };
+	code: {
+		compiledFiles: number;
+		functionCount: number;
+		instructionCount: number;
+	};
 	aborted: boolean;
 	regressions: Array<string>;
 }
@@ -527,6 +535,11 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 		acc[file.result] = (acc[file.result] ?? 0) + 1;
 		return acc;
 	}, {});
+	const skips = Object.fromEntries(
+		selection
+			.filter((file) => file.result === "SKIPPED")
+			.map((file) => [file.path, test262SkipReason(file, variant)!]),
+	);
 
 	const codeStats = getCodeStats();
 	const programImageCache = getProgramImageCacheStats();
@@ -563,6 +576,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 				totalTests: selection.length,
 				regressions: run.regressions,
 				summary,
+				skips,
 				code: codeStats,
 				timings: getTimings(),
 				programImageCache,
@@ -607,6 +621,11 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 		acc[result] = (acc[result] ?? 0) + 1;
 		return acc;
 	}, {});
+	const skips = Object.fromEntries(
+		selection
+			.filter((file) => combined.get(file.path) === "SKIPPED")
+			.map((file) => [file.path, test262SkipReason(file, "strict")!]),
+	);
 
 	const code = {
 		compiledFiles: strict.code.compiledFiles + sloppy.code.compiledFiles,
@@ -669,6 +688,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 				complete: true,
 				selectedTests: selection.length,
 				summary,
+				skips,
 				code,
 				regressions,
 				improvements,
@@ -696,6 +716,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 			{
 				sha: cacheContext.sha,
 				summary,
+				skips,
 				code,
 				results: Object.fromEntries(combined),
 			} satisfies Test262Output,

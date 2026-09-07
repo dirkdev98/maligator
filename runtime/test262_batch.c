@@ -35,11 +35,14 @@ static int mal_test262_run_single(int index) {
     int helper_end = mal_test262_plan_helper_offsets[index + 1];
     for (int i = helper_start; i < helper_end; i++) {
         if (mal_test262_run_entry(&vm, mal_test262_plan_helper_indices[i]) != 0) {
+            mal_test262_report_completion(&vm, "harness");
             return 1;
         }
     }
 
-    return mal_test262_run_entry(&vm, mal_test262_plan_entry_indices[index]);
+    int code = mal_test262_run_entry(&vm, mal_test262_plan_entry_indices[index]);
+    mal_test262_report_completion(&vm, "runtime");
+    return code;
 }
 
 static long mal_test262_now_ms(void) {

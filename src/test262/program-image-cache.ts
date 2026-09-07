@@ -18,8 +18,9 @@ import {
 } from "../compiler/target/compiler-artifact-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { TEST262_METADATA } from "./constants.ts";
+import type { Test262Frontmatter } from "./types.ts";
 
-const CACHE_PROTOCOL = 1;
+const CACHE_PROTOCOL = 2;
 
 interface ProgramImageManifest {
 	schemaVersion: 1;
@@ -30,6 +31,7 @@ interface ProgramImageManifest {
 export interface Test262ProgramImageCacheInput {
 	path: string;
 	source: string;
+	frontmatter?: Test262Frontmatter;
 	variant: "strict" | "sloppy";
 	revision?: string;
 	compilerDigest?: string;
@@ -58,6 +60,7 @@ export function test262ProgramImageCacheKey(
 			semanticConfig: "test262-full-runtime-v1",
 			variant: input.variant,
 			path: input.path,
+			frontmatter: input.frontmatter ?? {},
 			source: input.source,
 		}),
 		"hex",
