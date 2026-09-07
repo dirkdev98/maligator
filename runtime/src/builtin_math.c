@@ -872,7 +872,9 @@ static _Atomic(u64) mal_builtin_math_random_state;
  * ordering, and a torn 64-bit state is worth ruling out.
  */
 static atomic_bool mal_builtin_math_seeded;
+#if !defined(__wasi__) || defined(__wasm_atomics__)
 static pthread_mutex_t mal_builtin_math_seed_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 static MalMathSeedSource mal_builtin_math_seed_source;
 
 /* SplitMix64's finalizer: diffuses the low-entropy fallback inputs so that
@@ -914,7 +916,9 @@ static u64 mal_builtin_math_fallback_seed(void) {
  * source does: the CSPRNG must win over the fallback drawn at installation,
  * whichever order the two happened in. */
 static void mal_builtin_math_seed(bool force) {
+#if !defined(__wasi__) || defined(__wasm_atomics__)
     pthread_mutex_lock(&mal_builtin_math_seed_mutex);
+#endif
     if (force || !atomic_load_explicit(&mal_builtin_math_seeded, memory_order_relaxed)) {
         u64 seed = 0;
         if (mal_builtin_math_seed_source == nullptr
@@ -929,13 +933,19 @@ static void mal_builtin_math_seed(bool force) {
             memory_order_release);
         atomic_store_explicit(&mal_builtin_math_seeded, true, memory_order_release);
     }
+#if !defined(__wasi__) || defined(__wasm_atomics__)
     pthread_mutex_unlock(&mal_builtin_math_seed_mutex);
+#endif
 }
 
 void mal_builtin_math_set_seed_source(MalMathSeedSource source) {
+#if !defined(__wasi__) || defined(__wasm_atomics__)
     pthread_mutex_lock(&mal_builtin_math_seed_mutex);
+#endif
     mal_builtin_math_seed_source = source;
+#if !defined(__wasi__) || defined(__wasm_atomics__)
     pthread_mutex_unlock(&mal_builtin_math_seed_mutex);
+#endif
     mal_builtin_math_seed(true);
 }
 

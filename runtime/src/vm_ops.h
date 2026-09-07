@@ -859,8 +859,7 @@ typedef struct MalInlineCache {
     bool megamorphic;
 } MalInlineCache;
 
-// One per property-access site; 10% smaller than the former 80-byte row.
-static_assert(sizeof(MalInlineCache) == 72, "MalInlineCache must stay 72 bytes");
+static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInlineCache must retain its pointer-width-specific layout");
 
 static inline u8 mal_ic_poly_slot(const MalInlineCache *ic, u8 index) {
     return ic->poly_data[index];

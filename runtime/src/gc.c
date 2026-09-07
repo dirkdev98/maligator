@@ -254,6 +254,7 @@ static MalGcState *g_gc = nullptr;
 static MalGcState g_gc_stats_snapshot;
 static MalGcState *g_gc_stats_state = nullptr;
 static volatile sig_atomic_t g_gc_stats_snapshot_requested = 0;
+#if !defined(__wasi__)
 static bool g_gc_stats_signal_installed = false;
 static struct sigaction g_gc_stats_previous_signal_action;
 
@@ -262,6 +263,8 @@ static void mal_gc_request_stats_snapshot(int signal_number) {
     g_gc_stats_snapshot_requested = 1;
     mal_gc_poll = true;
 }
+
+#endif
 
 MalHeap *mal_gc_current_heap(void) {
     return &g_gc_vm->heap;
@@ -497,6 +500,7 @@ void mal_gc_init(MalVm *vm) {
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
         atexit(mal_gc_print_stats_at_exit);
+#if !defined(__wasi__)
         if (getenv("MAL_GC_CONTROL") != nullptr) {
             struct sigaction action = {0};
             action.sa_handler = mal_gc_request_stats_snapshot;
@@ -506,6 +510,7 @@ void mal_gc_init(MalVm *vm) {
                 g_gc_stats_signal_installed = true;
             }
         }
+#endif
     }
 
 #if MAL_GC_GENERATIONAL
@@ -2166,11 +2171,13 @@ void mal_gc_state_free(MalVm *vm) {
         g_gc_stats_snapshot = *g;
         g_gc_stats_state = &g_gc_stats_snapshot;
     }
+#if !defined(__wasi__)
     if (g_gc_stats_signal_installed) {
         sigaction(SIGUSR1, &g_gc_stats_previous_signal_action, nullptr);
         g_gc_stats_signal_installed = false;
         g_gc_stats_snapshot_requested = 0;
     }
+#endif
     free(g);
     vm->gc = nullptr;
     if (g_gc == g) {

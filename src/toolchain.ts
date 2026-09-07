@@ -147,6 +147,53 @@ export function formatToolCommand(tool: ToolExecutable): string {
 	return [tool.path, ...(tool.args ?? [])].join(" ");
 }
 
+export interface WasmToolchain {
+	target: "wasm32-wasip1";
+	zigTarget: "wasm32-wasi";
+	platform: "wasi";
+	arch: "wasm32";
+	tools: { zig: ToolExecutable; cargo: ToolExecutable; rustc: ToolExecutable };
+	fingerprint: string;
+}
+
+/** Reactor builds have no native-host, executable, or C++ capability probes. */
+export function requireWasmToolchain(rootDir: string, env = process.env): WasmToolchain {
+	const rustDir = path.join(rootDir, "runtime/rust");
+	const searchPath = env.PATH ?? "";
+	const zig = inspectExecutable(env.ZIG?.trim() || "zig", searchPath, rootDir, env, [
+		"version",
+	]);
+	if (zig === undefined) throw new Error("Wasm builds require Zig on PATH (or ZIG)");
+	const rustup = inspectExecutable("rustup", searchPath, rustDir, env);
+	if (rustup === undefined) throw new Error("Wasm builds require rustup on PATH");
+	const cargo = selectedRustTool(rustup, "cargo", rustDir, env);
+	const rustc = selectedRustTool(rustup, "rustc", rustDir, env);
+	if (cargo === undefined || rustc === undefined)
+		throw new Error("Install the toolchain selected by runtime/rust/rust-toolchain.toml");
+	if (!rustTargetInstalled(rustc, "wasm32-wasip1", rustDir, env)) {
+		throw new Error(
+			"Missing Rust Wasm target. Run: (cd runtime/rust && rustup target add wasm32-wasip1)",
+		);
+	}
+	const tools = { zig, cargo, rustc };
+	return {
+		target: "wasm32-wasip1",
+		zigTarget: "wasm32-wasi",
+		platform: "wasi",
+		arch: "wasm32",
+		tools,
+		fingerprint: hash(
+			"sha256",
+			JSON.stringify({
+				schema: 1,
+				target: "wasm32-wasip1",
+				tools: Object.values(tools).map(executableIdentity),
+			}),
+			"hex",
+		),
+	};
+}
+
 interface CachedProbes {
 	schema: number;
 	fingerprint: string;

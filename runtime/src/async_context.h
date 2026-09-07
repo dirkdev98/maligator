@@ -47,14 +47,14 @@ static_assert(
     sizeof(MalAsyncLocalStorageState) == 40,
     "AsyncLocalStorage identity must remain a 40-byte GC cell");
 static_assert(
-    sizeof(MalAsyncContext) == 48,
-    "AsyncLocalStorage context must remain a 48-byte immutable GC cell");
+    sizeof(MalAsyncContext) == (sizeof(void *) == 8 ? 48 : 40),
+    "AsyncLocalStorage context must retain its pointer-width-specific immutable GC cell layout");
 static_assert(
-    sizeof(MalAsyncResourceState) == 16,
-    "AsyncResource state must remain a 16-byte GC cell");
+    sizeof(MalAsyncResourceState) == (sizeof(void *) == 8 ? 16 : 8),
+    "AsyncResource state must retain its pointer-width-specific GC cell layout");
 static_assert(
-    sizeof(MalAsyncRunScopeState) == 32,
-    "AsyncLocalStorage RunScope state must remain a 32-byte GC cell");
+    sizeof(MalAsyncRunScopeState) == (sizeof(void *) == 8 ? 32 : 24),
+    "AsyncLocalStorage RunScope state must retain its pointer-width-specific GC cell layout");
 
 /**
  * A scoped context switch. Both sides are rooted through the existing C root-span

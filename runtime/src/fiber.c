@@ -18,18 +18,8 @@ MalFiber *mal_current_fiber = nullptr;
  */
 void (*mal_fiber_exit_hook)(MalFiber *finished) = nullptr;
 
-/* ---------------------------------------------------------------------------
- * Raw stack switch — module-level assembly.
- *
- * void mal_fiber_switch(void **from_sp, void **to_sp):
- *   push callee-saved regs of the current context, store SP -> *from_sp,
- *   load SP <- *to_sp, pop that context's callee-saved regs, ret into it.
- *
- * A fresh fiber is bootstrapped by hand-laying a fake saved-register frame on its
- * stack whose "return address" slot is mal_fiber_bootstrap (see mal_fiber_create),
- * so the first switch-in restores that frame and rets straight into the bootstrap.
- * --------------------------------------------------------------------------- */
-
+// Wasm reactors retain the main-fiber GC roots but cannot switch native stacks.
+#if !defined(__wasm__)
 #if defined(__APPLE__)
 #define MAL_ASM_SYM(name) "_" #name
 #else
@@ -204,6 +194,8 @@ MalFiber *mal_fiber_create(
     vm->fibers_head = f;
     return f;
 }
+
+#endif
 
 void mal_fiber_init_main(MalFiber *main_fiber, MalVm *vm) {
     memset(main_fiber, 0, sizeof(*main_fiber));

@@ -71,18 +71,22 @@
 		"test:wpt:report": "node ./scripts/wpt.ts --canonical --mode normal --backend compiled --policy complete",
 		"type-check": "node ./scripts/quality.ts type-check",
 		"update": "npx npm-check --update --save-exact",
-		"version:alpha": "node ./scripts/release.ts version-alpha"
+		"version:alpha": "node ./scripts/release.ts version-alpha",
+		"wasm:build": "node ./scripts/build-wasm.ts",
+		"wasm:doctor": "node ./scripts/build-wasm.ts --doctor"
 	},
 	"dependencies": {
 		"meriyah": "7.3.2"
 	},
 	"devDependencies": {
+		"@bjorn3/browser_wasi_shim": "0.4.2",
 		"@lightbase/eslint-config": "4.3.2",
 		"@vitest/coverage-v8": "4.1.7",
 		"drizzle-orm": "1.0.0-rc.4",
 		"express": "5.2.1",
 		"oxfmt": "0.52.0",
 		"postgres": "3.4.9",
+		"rolldown": "1.0.2",
 		"supports-color": "7.2.0",
 		"typescript": "6.0.3",
 		"valibot": "1.4.2",

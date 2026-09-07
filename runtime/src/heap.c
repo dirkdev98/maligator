@@ -669,6 +669,8 @@ static usize mal_gc_page_size(void) {
  * is preserved; whole pages strictly inside the cell region are madvised away. */
 static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
     u8 *block_base = (u8 *) block;
+
+#if !defined(__wasi__)
     usize page = mal_gc_page_size();
     uptr madv_start =
         ((uptr) block_base + mal_gc_cell_data_offset() + (page - 1)) & ~(uptr) (page - 1);
@@ -676,7 +678,8 @@ static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
     if (madv_end > madv_start) {
         madvise((void *) madv_start, (usize) (madv_end - madv_start), MAL_GC_MADV_REUSE);
     }
-    block->bump = block_base + mal_gc_cell_data_offset(); // pristine: no live cells
+#endif
+    block->bump = block_base + mal_gc_cell_data_offset();
     block->free_list = nullptr;
     block->recycled = 1;
     block->next_free = heap->free_blocks;
