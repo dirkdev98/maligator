@@ -105,9 +105,10 @@ describe("explorer compilation", () => {
 
 	it("bounds UTF-8 input and rejects malformed configuration and protocol", () => {
 		expect(utf8ByteLength("aé🐊\ud800")).toBe(Buffer.byteLength("aé🐊\ud800"));
-		expect(
-			request(`"${  "🐊".repeat(EXPLORER_LIMITS.sourceBytes / 4)  }"`),
-		).toMatchObject({ ok: false, category: "limit" });
+		expect(request(`"${"🐊".repeat(EXPLORER_LIMITS.sourceBytes / 4)}"`)).toMatchObject({
+			ok: false,
+			category: "limit",
+		});
 		expect(request("0", { intl: { enabled: true } })).toMatchObject({ ok: false });
 		expect(request("0", { assets: {} })).toMatchObject({ ok: false });
 		expect(JSON.parse(compileExplorerRequest('{"schema":2}'))).toMatchObject({

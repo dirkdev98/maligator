@@ -1222,17 +1222,20 @@ Mal.serve({
 						</div>
 						<aside class="proof-card">
 							<div>
-								<p class="kicker" style="color: #0b2c35">Resulting executable</p>
+								<p class="kicker" style="color: #0b2c35">
+									Server executable, assets excluded
+								</p>
 								<p class="big" data-binary-size>measuring</p>
 							</div>
 							<p class="label">
-								One native server. One embedded HTML asset. No client dependencies.
+								One native server, with all embedded asset payloads excluded from this
+								figure.
 							</p>
 							<p class="fine">
 								<span data-binary-platform>current host</span> ·
-								<span data-binary-profile>production</span> build · exact size measured
-								from this page’s own executable. Feature choices materially affect binary
-								size.
+								<span data-binary-profile>production</span> build · executable size minus
+								the embedded HTML, JavaScript, styles, licenses, and compressed Wasm.
+								Feature choices affect server size.
 							</p>
 						</aside>
 					</div>
@@ -11893,7 +11896,8 @@ Mal.serve({
 				"binary": {
 					"binaryBytes": 8295400,
 					"binaryPlatform": "aarch64-apple-darwin",
-					"binaryProfile": "production"
+					"binaryProfile": "production",
+					"embeddedAssetBytes": 5253144
 				}
 			}
 		</script>
@@ -12015,7 +12019,10 @@ Mal.serve({
 				document.querySelectorAll("[data-version]").forEach((node) => {
 					node.textContent = data.version;
 				});
-				const bytes = data.binary.binaryBytes;
+				const bytes =
+					data.binary.binaryBytes == null || data.binary.embeddedAssetBytes == null
+						? null
+						: data.binary.binaryBytes - data.binary.embeddedAssetBytes;
 				document.querySelector("[data-binary-size]").textContent =
 					bytes == null ? "measuring" : `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 				document.querySelector("[data-binary-platform]").textContent =

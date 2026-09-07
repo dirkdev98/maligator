@@ -124,6 +124,7 @@ interface BenchmarkFile {
 
 interface SiteMeta {
 	binaryBytes: number | null;
+	embeddedAssetBytes: number | null;
 	binaryPlatform: string;
 	binaryProfile: string;
 }

@@ -24,9 +24,7 @@ import type {
 } from "../compiler/target/execution-ir.ts";
 import { lowerCoreCompilationToExecution } from "../compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../compiler/target/lower-native-program-image.ts";
-import {
-	serializeRuntimeImage,
-} from "../compiler/target/program-image-codec.ts";
+import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import type {
 	NativeFunctionPlan,
 	ProgramImage,

@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { includeConfiguredAssets } from "../src/assets.ts";
+import { loadBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { buildExplorerSite } from "./build-explorer-site.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
@@ -28,6 +30,7 @@ function build(): string {
 }
 
 let binary = "";
+let stabilized = false;
 const progress = new CommandProgress("site-build");
 progress.start("update generated site data and build the native server");
 await buildExplorerSite();
@@ -36,26 +39,43 @@ for (let attempt = 0; attempt < 4; attempt++) {
 	updateSite();
 	binary = build();
 	const bytes = statSync(binary).size;
+	const assets = includeConfiguredAssets(
+		loadBuildConfig("website/maligator.build.ts").assets,
+	);
+	const embeddedAssetBytes = assets.reduce(
+		(total, asset) => total + asset.files.reduce((size, file) => size + file.size, 0),
+		0,
+	);
+	if (embeddedAssetBytes > bytes)
+		throw new Error("Embedded assets exceed the website binary size");
 	const meta = JSON.parse(readFileSync(META_FILE, "utf8")) as {
 		binaryBytes: number | null;
+		embeddedAssetBytes: number | null;
 	};
-	if (meta.binaryBytes === bytes) {
-		progress.stagePassed(attempt + 1, 4, "stabilize site metadata", `${bytes} bytes`);
+	if (meta.binaryBytes === bytes && meta.embeddedAssetBytes === embeddedAssetBytes) {
+		progress.stagePassed(
+			attempt + 1,
+			4,
+			"stabilize site metadata",
+			`${bytes - embeddedAssetBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
+		);
+		stabilized = true;
 		break;
 	}
 	progress.stagePassed(
 		attempt + 1,
 		4,
 		"stabilize site metadata",
-		`refresh size to ${bytes} bytes`,
+		`refresh size to ${bytes - embeddedAssetBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
 	);
 	writeFileSync(
 		META_FILE,
-		`${JSON.stringify({ ...meta, binaryBytes: bytes }, null, 2)}\n`,
+		`${JSON.stringify({ ...meta, binaryBytes: bytes, embeddedAssetBytes }, null, 2)}\n`,
 	);
 	formatSiteFiles([META_FILE]);
 }
 
-updateSite();
+if (!stabilized)
+	throw new Error("Website size metadata did not stabilize after four builds");
 progress.complete();
 console.log(binary);

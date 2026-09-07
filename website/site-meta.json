@@ -1,5 +1,6 @@
 {
 	"binaryBytes": 8295400,
 	"binaryPlatform": "aarch64-apple-darwin",
-	"binaryProfile": "production"
+	"binaryProfile": "production",
+	"embeddedAssetBytes": 5253144
 }

@@ -12,7 +12,7 @@ import type { NativeFeatureSpec } from "./build-flags.ts";
 import { defineBuild as defineBuildIdentity } from "./build.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "./compiler/frontend/parser.ts";
-import type {  MaligatorBuildConfig } from "./public-api.d.ts";
+import type { MaligatorBuildConfig } from "./public-api.d.ts";
 
 export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
 export { BuildConfigError } from "./build-config-error.ts";
