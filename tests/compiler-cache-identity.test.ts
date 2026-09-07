@@ -29,6 +29,10 @@ function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
 		'export const test = "test-only";\n',
 	);
 	writeFileSync(path.join(sourceRoot, "build-config-error.ts"), "export class E {}\n");
+	writeFileSync(
+		path.join(sourceRoot, "build-config-values.ts"),
+		"export const defaultEval = false;\n",
+	);
 	writeFileSync(path.join(sourceRoot, "utils.ts"), "export const debug = false;\n");
 	writeFileSync(
 		path.join(root, "package.json"),
@@ -60,12 +64,22 @@ describe("compiler cache identity", () => {
 		).toBe(initial);
 
 		writeFileSync(
+			path.join(fixture.sourceRoot, "build-config-values.ts"),
+			"export const defaultEval = true;\n",
+		);
+		const changedConfig = compilerImplementationDigestForRoot(
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		expect(changedConfig).not.toBe(initial);
+
+		writeFileSync(
 			path.join(fixture.sourceRoot, "compiler", "compile.ts"),
 			"export const n = 2;\n",
 		);
 		expect(
 			compilerImplementationDigestForRoot(fixture.sourceRoot, fixture.cacheDirectory),
-		).not.toBe(initial);
+		).not.toBe(changedConfig);
 	});
 
 	it("tracks every runtime source imported from outside the compiler tree", () => {
