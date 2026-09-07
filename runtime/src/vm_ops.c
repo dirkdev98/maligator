@@ -129,6 +129,10 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
+    if (mal_value_is_symbol(left) || mal_value_is_symbol(right)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value");
+        return MAL_VALUE_UNDEFINED;
+    }
     MalValue result;
     if (!mal_ops_add_checked(&vm->heap, left, right, &result)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");

@@ -996,6 +996,7 @@ export type CompilerInstruction =
 	  }
 	| {
 			type: "unary";
+			exactInputKindMasks?: readonly [CompilerValueKindMask];
 
 			// [destination, operand]
 			registers: [number, number];

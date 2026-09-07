@@ -17,6 +17,7 @@ import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	corePrimitiveOperatorEffectRefinement,
+	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import type {
@@ -522,6 +523,7 @@ function scalarProducerInputsSupportRepresentation(
 		(opcode === "unary" || opcode === "binary") &&
 		(representation === "i32" || representation === "f64")
 	) {
+		if (coreExactOperatorInputKindMasks(fn, instruction) !== undefined) return true;
 		for (let index = 0; index < operandCount; index++) {
 			const operand = fn.kernel.operandAt(operandStart + index);
 			const operandRepresentation = fn.valueRepresentation(operand);

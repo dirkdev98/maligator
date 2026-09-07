@@ -28,6 +28,63 @@ export const COMPILER_VALUE_KIND_TOP =
 export const COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED =
 	COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED;
 
+export const COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE =
+	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED |
+	COMPILER_VALUE_KIND_NULL |
+	COMPILER_VALUE_KIND_BOOLEAN;
+
+export type CompilerOperatorInputKindMasks =
+	| readonly [CompilerValueKindMask]
+	| readonly [CompilerValueKindMask, CompilerValueKindMask];
+
+export function compilerOperatorInputKindsHaveExactNativeSemantics(
+	opcode: string,
+	operator: unknown,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): masks is CompilerOperatorInputKindMasks {
+	if (
+		typeof operator !== "string" ||
+		!masks.every((mask) => compilerValueKindMaskIsValid(mask))
+	)
+		return false;
+	if (opcode === "unary") {
+		return (
+			masks.length === 1 &&
+			["-", "+", "~", "increment", "decrement", "tonumeric"].includes(operator) &&
+			compilerValueKindMaskIsSubset(masks[0]!, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
+		);
+	}
+	if (opcode !== "binary" || masks.length !== 2) return false;
+	const allowed = ["==", "!=", "===", "!=="].includes(operator)
+		? COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED
+		: COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE;
+	return (
+		[
+			"+",
+			"-",
+			"*",
+			"/",
+			"%",
+			"**",
+			"&",
+			"|",
+			"^",
+			"<<",
+			">>",
+			">>>",
+			"<",
+			"<=",
+			">",
+			">=",
+			"==",
+			"!=",
+			"===",
+			"!==",
+		].includes(operator) &&
+		masks.every((mask) => compilerValueKindMaskIsSubset(mask, allowed))
+	);
+}
+
 export function compilerValueKindMaskIsValid(
 	value: unknown,
 	options: { readonly allowEmpty?: boolean; readonly allowTop?: boolean } = {},

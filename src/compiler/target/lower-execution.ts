@@ -48,6 +48,7 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
 	coreInstructionNeedsOperationSafepoint,
@@ -1690,6 +1691,7 @@ function lowerFunctionToTarget(
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
+	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
@@ -2036,6 +2038,11 @@ function lowerFunctionToTarget(
 					throw new Error("Unsigned arithmetic lost its operation");
 				lowered = { ...lowered, unsignedArithmetic: true };
 			}
+			const inputMasks = operatorInputs.get(instruction);
+			if (lowered.type === "binary" && inputMasks?.length === 2)
+				lowered = { ...lowered, exactInputKindMasks: inputMasks };
+			if (lowered.type === "unary" && inputMasks?.length === 1)
+				lowered = { ...lowered, exactInputKindMasks: inputMasks };
 			loweredInstructions.set(instruction, lowered);
 			const site = siteFacts.get(
 				coreCompilerSiteId(
@@ -2410,6 +2417,14 @@ function lowerFunctionToTarget(
 		);
 		return {
 			id: entry.id,
+			...(entry.operatorInputs === undefined
+				? {}
+				: {
+						operatorInputs: entry.operatorInputs.map(({ instruction, masks }) => ({
+							instruction: loweredInstructions.get(instruction)!,
+							masks,
+						})),
+					}),
 			...(entry.fieldParameters === undefined
 				? {}
 				: {
@@ -2548,6 +2563,11 @@ export function lowerCoreCompilationToExecutionProgram(
 				(compilation.plan.unsignedArithmetic ?? [])
 					.filter((operation) => operation.function === core)
 					.map((operation) => operation.instruction),
+			),
+			new Map(
+				(compilation.plan.operatorInputs ?? [])
+					.filter((operation) => operation.function === core)
+					.map(({ instruction, masks }) => [instruction, masks]),
 			),
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],

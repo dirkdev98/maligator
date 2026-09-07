@@ -1,6 +1,8 @@
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
+import { coreExactOperatorInputKindMasks } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -90,6 +92,53 @@ export function coreUnsignedArithmeticPlans(
 		for (const instruction of admitted) {
 			const plan = Object.freeze({ function: functionId, instruction });
 			proofs.set(plan, { fn, versions: fn.versions });
+			plans.push(plan);
+		}
+	}
+	return Object.freeze(plans);
+}
+
+export interface CoreOperatorInputPlan {
+	readonly function: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+	readonly masks: CompilerOperatorInputKindMasks;
+}
+
+const operatorProofs = new WeakMap<
+	CoreOperatorInputPlan,
+	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
+>();
+
+export function coreOperatorInputProofIsCurrent(
+	program: CoreProgram,
+	plan: CoreOperatorInputPlan,
+): boolean {
+	const proof = operatorProofs.get(plan);
+	return (
+		proof?.fn === program.function(plan.function) &&
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
+	);
+}
+
+export function coreOperatorInputPlans(
+	program: CoreProgram,
+	functions: ReadonlyArray<CoreFunctionId>,
+): ReadonlyArray<CoreOperatorInputPlan> {
+	const plans: Array<CoreOperatorInputPlan> = [];
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "unary" && opcode !== "binary") continue;
+			const masks = coreExactOperatorInputKindMasks(fn, instruction);
+			if (masks === undefined) continue;
+			const plan = Object.freeze({
+				function: functionId,
+				instruction,
+				masks: Object.freeze(masks),
+			});
+			operatorProofs.set(plan, { fn, versions: fn.versions });
 			plans.push(plan);
 		}
 	}

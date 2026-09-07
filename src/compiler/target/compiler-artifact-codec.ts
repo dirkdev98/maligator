@@ -4,7 +4,8 @@ import type {
 	CompilerExactCollectionBrand,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
-import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
@@ -36,7 +37,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 57;
+export const COMPILER_ARTIFACT_VERSION = 58;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -673,6 +674,12 @@ function writeCompilerArtifact(
 				w.i32(instructionIp);
 				w.u8(value ? 1 : 0);
 			}
+			w.u32(entry.operatorInputs?.length ?? 0);
+			for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
+				w.u32(instructionIp);
+				w.u8(masks.length);
+				for (const mask of masks) w.u8(mask);
+			}
 			w.u32(entry.registerRepresentations.length);
 			for (const representation of entry.registerRepresentations) {
 				w.u8(representationTag(representation));
@@ -897,18 +904,21 @@ function writeCompilerArtifact(
 			) {
 				w.u8(18);
 			} else if (
-				plan.kind === "exact-binary-input-kinds" &&
-				instruction.opcode === "BINARY"
+				plan.kind === "exact-operator-input-kinds" &&
+				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
 			) {
 				if (
-					!compilerValueKindMaskIsValid(plan.inputKindMasks[0]) ||
-					!compilerValueKindMaskIsValid(plan.inputKindMasks[1])
+					!compilerOperatorInputKindsHaveExactNativeSemantics(
+						instruction.opcode.toLowerCase(),
+						instruction.operator,
+						plan.inputKindMasks,
+					)
 				) {
 					throw new RangeError("program-image-codec: invalid exact binary kind masks");
 				}
 				w.u8(17);
 				w.u8(plan.inputKindMasks[0]);
-				w.u8(plan.inputKindMasks[1]);
+				if (plan.inputKindMasks.length === 2) w.u8(plan.inputKindMasks[1]);
 			} else {
 				throw new RangeError(
 					"program-image-codec: native instruction plan opcode mismatch",
@@ -2842,6 +2852,16 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					throw new Error("program-image-codec: invalid direct-entry comparison");
 				return { instructionIp, value: value === 1 };
 			});
+			const operatorInputs = Array.from({ length: r.count(6) }, () => {
+				const instructionIp = r.u32();
+				const count = r.u8();
+				if (count !== 1 && count !== 2)
+					throw new RangeError("Invalid native operator arity");
+				const masks = Array.from({ length: count }, () =>
+					r.u8(),
+				) as unknown as CompilerOperatorInputKindMasks;
+				return { instructionIp, masks };
+			});
 			const directRegisterCount = r.count(1);
 			if (directRegisterCount !== fn.registerCount) {
 				throw new Error("program-image-codec: direct-entry register count mismatch");
@@ -2888,6 +2908,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				resultRepresentation,
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 				...(constantCount === 0 ? {} : { constantBooleans }),
+				...(operatorInputs.length === 0 ? {} : { operatorInputs }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
@@ -3125,15 +3146,23 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				nativeInstructions[instructionIndex] = { kind: "unsigned-arithmetic" };
-			} else if (tag === 17 && instruction.opcode === "BINARY") {
-				const left = r.u8();
-				const right = r.u8();
-				if (!compilerValueKindMaskIsValid(left) || !compilerValueKindMaskIsValid(right)) {
-					throw new RangeError("program-image-codec: invalid exact binary kind masks");
-				}
+			} else if (
+				tag === 17 &&
+				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
+			) {
+				const masks: CompilerOperatorInputKindMasks =
+					instruction.opcode === "BINARY" ? [r.u8(), r.u8()] : [r.u8()];
+				if (
+					!compilerOperatorInputKindsHaveExactNativeSemantics(
+						instruction.opcode.toLowerCase(),
+						instruction.operator,
+						masks,
+					)
+				)
+					throw new RangeError("program-image-codec: invalid exact operator kind masks");
 				nativeInstructions[instructionIndex] = {
-					kind: "exact-binary-input-kinds",
-					inputKindMasks: [left, right],
+					kind: "exact-operator-input-kinds",
+					inputKindMasks: masks,
 				};
 			} else {
 				throw new RangeError(

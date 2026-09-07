@@ -32,7 +32,10 @@ import {
 	coreArgumentObservation,
 	coreNativeEntryProofIsCurrent,
 } from "./core-native-entry-analysis.ts";
-import { coreUnsignedArithmeticProofIsCurrent } from "./core-native-numeric-analysis.ts";
+import {
+	coreOperatorInputProofIsCurrent,
+	coreUnsignedArithmeticProofIsCurrent,
+} from "./core-native-numeric-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
 import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
@@ -1815,6 +1818,10 @@ export function verifyCoreOptimizationPlan(
 			blockProofs.get(selection.function)!,
 			localCandidates,
 		);
+	}
+	for (const operation of plan.operatorInputs ?? []) {
+		if (!coreOperatorInputProofIsCurrent(program, operation))
+			fail("operator inputs have no current kind proof");
 	}
 	for (const operation of plan.unsignedArithmetic ?? []) {
 		if (!coreUnsignedArithmeticProofIsCurrent(program, operation))

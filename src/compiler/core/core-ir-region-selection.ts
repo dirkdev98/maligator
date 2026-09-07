@@ -61,7 +61,10 @@ import {
 	coreFieldEntryHasNumericComputations,
 	coreNumericFieldArgument,
 } from "./core-native-field-analysis.ts";
-import { coreUnsignedArithmeticPlans } from "./core-native-numeric-analysis.ts";
+import {
+	coreOperatorInputPlans,
+	coreUnsignedArithmeticPlans,
+} from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import {
@@ -89,6 +92,7 @@ interface PendingDirectEntry {
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
+	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
 	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
 }
 
@@ -1235,6 +1239,7 @@ function directEntryCandidates(
 		let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 		let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 		let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
+		let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
 		let selectedCalls = callSites.filter(
 			(call) =>
 				summaries.targets.site(call.caller, call.instruction)?.targets.functions
@@ -1278,6 +1283,7 @@ function directEntryCandidates(
 						fieldParameters = fields;
 						selectedCalls = fieldCalls;
 						valueRepresentations = variant.valueRepresentations;
+						operatorInputs = variant.operatorInputs;
 						resultRepresentation = variant.resultRepresentation;
 					}
 				}
@@ -1358,6 +1364,7 @@ function directEntryCandidates(
 					selectedCalls,
 				);
 				valueRepresentations = variant.valueRepresentations;
+				operatorInputs = variant.operatorInputs;
 				constantBooleans = variant.constantBooleans;
 				resultRepresentation = variant.resultRepresentation;
 			}
@@ -1384,6 +1391,7 @@ function directEntryCandidates(
 			...(valueRepresentations === undefined ? {} : { valueRepresentations }),
 			...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 			...(constantBooleans === undefined ? {} : { constantBooleans }),
+			...(operatorInputs === undefined ? {} : { operatorInputs }),
 			...(fieldParameters === undefined ? {} : { fieldParameters }),
 			budget: {
 				kind: "direct-entry",
@@ -1591,6 +1599,9 @@ export function buildCoreOptimizationPlan(
 					...(candidate.constantBooleans === undefined
 						? {}
 						: { constantBooleans: candidate.constantBooleans }),
+					...(candidate.operatorInputs === undefined
+						? {}
+						: { operatorInputs: candidate.operatorInputs }),
 					target: "native",
 					fallback: "canonical-core",
 					cost: Object.freeze({
@@ -1640,6 +1651,7 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
+		operatorInputs: coreOperatorInputPlans(program, liveFunctions),
 		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,

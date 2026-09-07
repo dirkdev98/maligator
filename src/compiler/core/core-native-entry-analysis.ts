@@ -3,6 +3,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
@@ -20,6 +21,7 @@ const representationProofs = new WeakMap<
 		readonly versions: CoreFunctionVersions;
 		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
 		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
+		readonly operatorInputs: CoreDirectEntryPlan["operatorInputs"];
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
 		readonly calls: CoreDirectEntryPlan["callSites"];
 		readonly fields: CoreDirectEntryPlan["fieldParameters"];
@@ -37,6 +39,7 @@ export function analyzeCoreNativeEntry(
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
+	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
 } {
 	const mask = (representation: CorePlanRepresentation | undefined) =>
 		representation === "f64"
@@ -67,6 +70,26 @@ export function analyzeCoreNativeEntry(
 			return undefined;
 		},
 	});
+	const inputs = Object.freeze(
+		[...fn.instructionIds()].flatMap((instruction) => {
+			if (fn.instructionKind(instruction) !== "operation") return [];
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "unary" && opcode !== "binary") return [];
+			const start = fn.kernel.instructionOperandStart(instruction);
+			const masks = Array.from(
+				{ length: fn.kernel.instructionOperandCount(instruction) },
+				(_, i) => kinds.kindMask(fn.kernel.operandAt(start + i)),
+			);
+			return compilerOperatorInputKindsHaveExactNativeSemantics(
+				opcode,
+				fn.instructionAttributes(instruction).operator,
+				masks,
+			)
+				? [Object.freeze({ instruction, masks: Object.freeze(masks) })]
+				: [];
+		}),
+	);
+	const operatorInputs = inputs.length === 0 ? undefined : inputs;
 	const constants =
 		arguments_ === undefined
 			? []
@@ -103,6 +126,7 @@ export function analyzeCoreNativeEntry(
 		parameters: [...parameters],
 		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
+		operatorInputs,
 		fields:
 			fields === undefined
 				? undefined
@@ -112,6 +136,7 @@ export function analyzeCoreNativeEntry(
 	return {
 		valueRepresentations,
 		resultRepresentation,
+		operatorInputs,
 		...(constantBooleans === undefined ? {} : { constantBooleans }),
 	};
 }
@@ -124,7 +149,8 @@ export function coreNativeEntryProofIsCurrent(
 		return (
 			entry.argumentRepresentations === undefined &&
 			entry.constantBooleans === undefined &&
-			entry.fieldParameters === undefined
+			entry.fieldParameters === undefined &&
+			entry.operatorInputs === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
 	const same = <T>(
@@ -142,6 +168,7 @@ export function coreNativeEntryProofIsCurrent(
 		same(proof.parameters, entry.parameterRepresentations) &&
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
+		proof.operatorInputs === entry.operatorInputs &&
 		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
 		(proof.fields === undefined ||
 			(entry.fieldParameters !== undefined &&

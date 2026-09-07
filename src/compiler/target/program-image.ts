@@ -12,7 +12,8 @@ import type {
 	CompilerInstruction,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
-import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
@@ -961,6 +962,10 @@ export interface NativeDirectEntryPlan {
 		}>;
 	};
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
+	readonly operatorInputs?: ReadonlyArray<{
+		readonly instructionIp: number;
+		readonly masks: CompilerOperatorInputKindMasks;
+	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instructionIp: number;
 		readonly value: boolean;
@@ -973,6 +978,22 @@ export function validateNativeDirectEntry(
 	fn: BytecodeFunction,
 	entry: NativeDirectEntryPlan,
 ): void {
+	const seenInputs = new Set<number>();
+	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
+		const instruction = fn.instructions[instructionIp];
+		if (
+			seenInputs.has(instructionIp) ||
+			instruction === undefined ||
+			(instruction.opcode !== "BINARY" && instruction.opcode !== "UNARY") ||
+			!compilerOperatorInputKindsHaveExactNativeSemantics(
+				instruction.opcode.toLowerCase(),
+				instruction.operator,
+				masks,
+			)
+		)
+			throw new RangeError("Invalid native operator input kinds");
+		seenInputs.add(instructionIp);
+	}
 	const fields = entry.fieldParameters;
 	if (fields !== undefined) {
 		if (
@@ -1211,8 +1232,8 @@ export type NativeInstructionPlan =
 			readonly elementKind: CompilerNumericTypedArrayKind;
 	  }
 	| {
-			readonly kind: "exact-binary-input-kinds";
-			readonly inputKindMasks: readonly [CompilerValueKindMask, CompilerValueKindMask];
+			readonly kind: "exact-operator-input-kinds";
+			readonly inputKindMasks: CompilerOperatorInputKindMasks;
 	  }
 	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" };
@@ -1617,12 +1638,14 @@ function nativeInstructionPlanFromExecution(
 			return instruction.exactOwnSlot === undefined
 				? undefined
 				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
+		case "unary":
 		case "binary":
-			if (instruction.unsignedArithmetic) return { kind: "unsigned-arithmetic" };
+			if (instruction.type === "binary" && instruction.unsignedArithmetic)
+				return { kind: "unsigned-arithmetic" };
 			return instruction.exactInputKindMasks === undefined
 				? undefined
 				: {
-						kind: "exact-binary-input-kinds",
+						kind: "exact-operator-input-kinds",
 						inputKindMasks: instruction.exactInputKindMasks,
 					};
 		default:
@@ -3818,6 +3841,14 @@ function lowerExecutionFunctionToNativePlan(
 	});
 	const directEntries: Array<NativeDirectEntryPlan> = fn.directEntries.map((entry) => ({
 		id: entry.id,
+		...(entry.operatorInputs === undefined
+			? {}
+			: {
+					operatorInputs: entry.operatorInputs.map(({ instruction, masks }) => ({
+						instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+						masks,
+					})),
+				}),
 		parameterRepresentations: [...entry.parameterRepresentations],
 		...(entry.fieldParameters === undefined
 			? {}

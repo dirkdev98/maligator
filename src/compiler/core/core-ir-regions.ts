@@ -1,5 +1,6 @@
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type {
 	CoreBlockId,
@@ -8,7 +9,10 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { CoreUnsignedArithmeticPlan } from "./core-native-numeric-analysis.ts";
+import type {
+	CoreOperatorInputPlan,
+	CoreUnsignedArithmeticPlan,
+} from "./core-native-numeric-analysis.ts";
 import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
@@ -378,6 +382,10 @@ export interface CoreDirectEntryPlan {
 	readonly fieldParameters?: CoreEntryFields;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	readonly operatorInputs?: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly masks: CompilerOperatorInputKindMasks;
+	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
 		readonly value: boolean;
@@ -412,6 +420,7 @@ export interface CoreOptimizationPlan {
 		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
+	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly recipes: CoreSpecializationRecipeTable;
 	readonly statistics: CoreOptimizationPlanStatistics;

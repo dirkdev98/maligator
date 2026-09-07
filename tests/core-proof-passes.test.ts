@@ -269,7 +269,7 @@ describe("Core local proofs and representations", () => {
 		expect(fn.valueRepresentation(sum!)).toBe("f64");
 	});
 
-	it("keeps numeric coercion boxed when its numeric input must remain boxed", () => {
+	it("uses a numeric result while its proven numeric input remains boxed", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
@@ -308,9 +308,9 @@ describe("Core local proofs and representations", () => {
 			finished.function,
 		).runComponent("proofs", CORE_PROOF_PASSES);
 		expect(fn.valueRepresentation(source!)).toBe("boxed");
-		expect(fn.valueRepresentation(numeric!)).toBe("boxed");
-		expect(fn.valueRepresentation(incremented!)).toBe("boxed");
-		expect(fn.valueRepresentation(remainder!)).toBe("boxed");
+		expect(fn.valueRepresentation(numeric!)).toBe("f64");
+		expect(fn.valueRepresentation(incremented!)).toBe("f64");
+		expect(fn.valueRepresentation(remainder!)).toBe("f64");
 	});
 
 	it("refreshes primitive effect proofs after operand kinds narrow", () => {

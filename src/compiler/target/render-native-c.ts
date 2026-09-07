@@ -1,6 +1,10 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	compilerValueKindMaskIsSubset,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
@@ -513,6 +517,17 @@ function emitCompiledVariant(
 					...native,
 					registerRepresentations: directEntry.registerRepresentations,
 					gc: directEntry.gc,
+					instructions: (() => {
+						const instructions = [...native.instructions];
+						for (const { instructionIp, masks } of directEntry.operatorInputs ?? []) {
+							if (instructions[instructionIp]?.kind !== "unsigned-arithmetic")
+								instructions[instructionIp] = {
+									kind: "exact-operator-input-kinds",
+									inputKindMasks: masks,
+								};
+						}
+						return instructions;
+					})(),
 				};
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -3298,6 +3313,32 @@ function emitInstruction(
 		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
 	};
 	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
+	const exactPrimitiveNumber = (r: number, mask: CompilerValueKindMask): string => {
+		const number = isNumericRep(reps[r]!) ? num(r) : `mal_ops_number_as_f64(${boxed(r)})`;
+		const boolean = reps[r] === "boolean" ? `r${r}` : `mal_value_to_boolean(${boxed(r)})`;
+		const choices: Array<{ mask: number; test: string; value: string }> = [
+			{
+				mask: COMPILER_VALUE_KIND_UNDEFINED,
+				test: `mal_value_is_undefined(${boxed(r)})`,
+				value: '__builtin_nan("")',
+			},
+			{
+				mask: COMPILER_VALUE_KIND_NULL,
+				test: `mal_value_is_null(${boxed(r)})`,
+				value: "0.0",
+			},
+			{
+				mask: COMPILER_VALUE_KIND_BOOLEAN,
+				test: `mal_value_is_boolean(${boxed(r)})`,
+				value: `(${boolean} ? 1.0 : 0.0)`,
+			},
+			{ mask: COMPILER_VALUE_KIND_NUMBER, test: "true", value: number },
+		].filter((choice) => (mask & choice.mask) !== 0);
+		let expression = choices.pop()!.value;
+		for (const choice of choices.reverse())
+			expression = `(${choice.test} ? ${choice.value} : ${expression})`;
+		return expression;
+	};
 	const truthy = (r: number): string =>
 		reps[r] === "boolean"
 			? `r${r}`
@@ -4550,9 +4591,26 @@ function emitInstruction(
 			}
 			const fusion = numericFusionAction;
 			const exactInputKinds =
-				nativePlan?.kind === "exact-binary-input-kinds"
+				nativePlan?.kind === "exact-operator-input-kinds" &&
+				nativePlan.inputKindMasks.length === 2
 					? nativePlan.inputKindMasks
 					: undefined;
+			if (
+				exactInputKinds !== undefined &&
+				exactInputKinds.every((mask) =>
+					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
+				)
+			) {
+				const a = exactPrimitiveNumber(left, exactInputKinds[0]);
+				const b = exactPrimitiveNumber(right, exactInputKinds[1]);
+				if (RELATIONAL_COMPARE.has(operator))
+					return [storeBoolean(dst, `${a} ${compare} ${b}`)];
+				const expression =
+					operator === "**"
+						? `mal_number_exponentiate(${a}, ${b})`
+						: nativeNumberExpr(operator, a, b);
+				if (expression !== null) return [storeNumber(dst, expression)];
+			}
 			if (indexedLengthLoopAction?.role === "compare") {
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
@@ -4695,10 +4753,6 @@ function emitInstruction(
 					}
 				}
 			}
-			// The dst is `number`-rep only when the lattice proved both operands are
-			// numbers in the target plan (see producesNumberFromNumbers) — emit native
-			// arithmetic or a native ToInt32-based bitwise/shift/remainder, all
-			// holding their integer-valued results as a double.
 			if (reps[dst] === "int32") {
 				if (
 					!leftIsNum ||
@@ -4963,6 +5017,24 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (
+				nativePlan?.kind === "exact-operator-input-kinds" &&
+				nativePlan.inputKindMasks.length === 1
+			) {
+				const value = exactPrimitiveNumber(src, nativePlan.inputKindMasks[0]);
+				const expression =
+					operator === "-"
+						? `-(${value})`
+						: operator === "+" || operator === "tonumeric"
+							? value
+							: operator === "~"
+								? `(f64)(~mal_ops_number_to_i32(${value}))`
+								: operator === "increment" || operator === "decrement"
+									? `${value} ${operator === "increment" ? "+" : "-"} 1.0`
+									: null;
+				if (expression !== null) return [storeNumber(dst, expression)];
+			}
+
 			if (reps[src] === "boolean") {
 				const value = coerciveNumberOperand(src)!;
 				const expression =

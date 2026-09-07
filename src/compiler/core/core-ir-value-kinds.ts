@@ -3,7 +3,8 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_NUMBER,
-	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	compilerOperatorInputKindsHaveExactNativeSemantics,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
@@ -12,7 +13,10 @@ import {
 	compilerValueKindMaskIsSubset,
 	compilerValueKindMaskIsValid,
 } from "../shared/compiler-value-kinds.ts";
-import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import type {
+	CompilerOperatorInputKindMasks,
+	CompilerValueKindMask,
+} from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
@@ -416,7 +420,7 @@ export function analyzeCoreValueKinds(
 			incoming =
 				input === 0
 					? 0
-					: compilerValueKindMaskIsSubset(input, COMPILER_VALUE_KIND_NUMBER)
+					: compilerValueKindMaskIsSubset(input, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
 						? COMPILER_VALUE_KIND_NUMBER
 						: COMPILER_VALUE_KIND_TOP;
 		} else if (kind === KIND_TRANSFER_BINARY || kind === KIND_TRANSFER_ADD) {
@@ -431,8 +435,8 @@ export function analyzeCoreValueKinds(
 				incoming = COMPILER_VALUE_KIND_STRING;
 			} else {
 				incoming =
-					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMBER) &&
-					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMBER)
+					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) &&
+					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
 						? COMPILER_VALUE_KIND_NUMBER
 						: COMPILER_VALUE_KIND_TOP;
 			}
@@ -757,29 +761,24 @@ export function coreValueKindObservation(
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
 }
 
-export function coreExactBinaryInputKindMasks(
-	value: unknown,
-): readonly [CompilerValueKindMask, CompilerValueKindMask] | undefined {
-	if (
-		!Array.isArray(value) ||
-		value.length !== 2 ||
-		!compilerValueKindMaskIsValid(value[0]) ||
-		!compilerValueKindMaskIsValid(value[1])
-	)
-		return undefined;
-	return value as unknown as readonly [CompilerValueKindMask, CompilerValueKindMask];
-}
-
-export function coreBinaryInputKindMasksHaveExactNativeSemantics(
-	operator: unknown,
-	masks: readonly [CompilerValueKindMask, CompilerValueKindMask],
-): boolean {
-	return (
-		typeof operator === "string" &&
-		COMPARISON_OPERATORS.has(operator) &&
-		compilerValueKindMaskIsSubset(masks[0], COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) &&
-		compilerValueKindMaskIsSubset(masks[1], COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED)
-	);
+export function coreExactOperatorInputKindMasks(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CompilerOperatorInputKindMasks | undefined {
+	const refinement = fn.instructionEffectRefinement(instruction);
+	if (refinement === undefined) return undefined;
+	const fact = fn.fact(refinement.proof);
+	const masks = fact.value;
+	return fact.kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT &&
+		Array.isArray(masks) &&
+		masks.every((mask) => compilerValueKindMaskIsValid(mask)) &&
+		compilerOperatorInputKindsHaveExactNativeSemantics(
+			fn.instructionOpcodeName(instruction),
+			fn.instructionAttributes(instruction).operator,
+			masks,
+		)
+		? masks
+		: undefined;
 }
 
 export function corePrimitiveOperatorEffectRefinement(
@@ -792,29 +791,29 @@ export function corePrimitiveOperatorEffectRefinement(
 	let primitive = false;
 	let gcFree = false;
 	if (opcode === "unary" && masks.length === 1 && typeof operator === "string") {
-		const numberOnly = compilerValueKindMaskIsSubset(
+		const numericPrimitive = compilerValueKindMaskIsSubset(
 			masks[0]!,
-			COMPILER_VALUE_KIND_NUMBER,
+			COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 		);
 		primitive =
 			NON_COERCING_UNARY_OPERATORS.has(operator) ||
-			(NUMERIC_UNARY_OPERATORS.has(operator) && numberOnly);
-		gcFree = NON_COERCING_UNARY_OPERATORS.has(operator) || numberOnly;
+			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive);
+		gcFree = NON_COERCING_UNARY_OPERATORS.has(operator) || numericPrimitive;
 	} else if (opcode === "binary" && masks.length === 2 && typeof operator === "string") {
-		const numbersOnly = masks.every((mask) =>
-			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMBER),
+		const numericPrimitives = masks.every((mask) =>
+			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 		);
 		primitive =
 			["===", "!=="].includes(operator) ||
-			(NUMERIC_BINARY_OPERATORS.has(operator) && numbersOnly) ||
+			(NUMERIC_BINARY_OPERATORS.has(operator) && numericPrimitives) ||
 			(operator === "+" &&
 				masks.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
 				)) ||
-			coreBinaryInputKindMasksHaveExactNativeSemantics(operator, [masks[0]!, masks[1]!]);
+			compilerOperatorInputKindsHaveExactNativeSemantics(opcode, operator, masks);
 		gcFree =
 			["===", "!=="].includes(operator) ||
-			(numbersOnly &&
+			(numericPrimitives &&
 				(NUMERIC_BINARY_OPERATORS.has(operator) || COMPARISON_OPERATORS.has(operator)));
 	}
 	if (!primitive) return undefined;

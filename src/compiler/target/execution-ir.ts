@@ -7,6 +7,7 @@ import type {
 	SealedCoreProgram,
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 
 /**
  * Backend-neutral executable semantics after SSA optimization and allocation.
@@ -98,6 +99,10 @@ export interface ExecutionDirectEntry {
 		}>;
 	};
 	readonly argumentRepresentations?: ReadonlyArray<ExecutionRegisterRepresentation>;
+	readonly operatorInputs?: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly masks: CompilerOperatorInputKindMasks;
+	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
 		readonly value: boolean;
