@@ -29,13 +29,11 @@ rooting, and resource-safety defects can interrupt that order.
 
 ## Verification workflow
 
-- [ ] Finish verification of the catalog-driven `maligator:process` execution
-      implementation in `docs/decisions/06-platform-catalog-and-execution.md`:
-      native/interpreter snapshot shape, descriptors, identity and GC lifetime;
-      cross-fragment context isolation; unused native-symbol exclusion; native
-      test-runner bootstrap regressions; and the normal developer gate. Tiny
-      compiler, cache, generator and packaged declaration checks pass. Retain
-      current evidence in `.cache/platform-execution-20260907/`.
+- [ ] Separate instrumented runtime preparation from the 60-second behavioral-test
+      budget in `tests/native/own-table-property-cache.test.ts`. The normal gate
+      spent 92 seconds building the runtime inside its counter test; a single-worker
+      recheck also exceeded the limit. Preserve the counter and output assertions.
+      Evidence: `.cache/platform-execution-20260907/native-timeout-telemetry.jsonl`.
 
 - [ ] Make `scripts/dx-performance.ts` verify the running application's revision
       before and after a dependency edit. A controlled driver that keeps reporting
