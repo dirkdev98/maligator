@@ -55,6 +55,13 @@ function cloneNativeInstructionPlan(
 				plan.directCallbackFunctionIndex === undefined
 					? undefined
 					: plan.directCallbackFunctionIndex + base.function,
+			numericSortCallback:
+				plan.numericSortCallback === undefined
+					? undefined
+					: {
+							...plan.numericSortCallback,
+							functionIndex: plan.numericSortCallback.functionIndex + base.function,
+						},
 			guardedBuiltinCall:
 				plan.guardedBuiltinCall === undefined
 					? undefined
@@ -614,13 +621,27 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		);
 		mergedNativeFunctions.push(
 			...programImage.native.functions.map((native, localFunctionIndex) => ({
+				...native,
 				functionIndex: base.function + localFunctionIndex,
 				mode: native.mode,
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
-					id: entry.id,
+					...entry,
 					parameterRepresentations: [...entry.parameterRepresentations],
 					resultRepresentation: entry.resultRepresentation,
+					fieldParameters:
+						entry.fieldParameters === undefined
+							? undefined
+							: {
+									keys: entry.fieldParameters.keys.map((key) => key + base.string),
+									loads: entry.fieldParameters.loads.map((load) => ({ ...load })),
+								},
+					argumentRepresentations: entry.argumentRepresentations?.slice(),
+					operatorInputs: entry.operatorInputs?.map((input) => ({
+						...input,
+						masks: [...input.masks] as typeof input.masks,
+					})),
+					constantBooleans: entry.constantBooleans?.map((constant) => ({ ...constant })),
 					registerRepresentations: [...entry.registerRepresentations],
 					gc: {
 						safepoints: entry.gc.safepoints.map((safepoint) => ({
@@ -629,6 +650,24 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							rootRegisters: [...safepoint.rootRegisters],
 						})),
 					},
+				})),
+				literalSwitches: native.literalSwitches?.map((site) =>
+					site.kind === "string"
+						? {
+								...site,
+								cases: site.cases.map((label) => ({
+									...label,
+									stringIndex: label.stringIndex + base.string,
+								})),
+							}
+						: { ...site, cases: site.cases.map((label) => ({ ...label })) },
+				),
+				fieldCalls: native.fieldCalls?.map((site) => ({
+					...site,
+					entries: site.entries.map((entry) => ({
+						...entry,
+						functionIndex: entry.functionIndex + base.function,
+					})),
 				})),
 				gc: {
 					safepoints: native.gc.safepoints.map((safepoint) => ({

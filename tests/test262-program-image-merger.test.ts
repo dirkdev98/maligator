@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import type { ProgramImage, NativePlan } from "../src/compiler/target/program-image.ts";
 import type {
 	BytecodeFunction,
@@ -67,6 +70,40 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it("keeps compiler-issued native ABIs valid after helper rebasing", () => {
+		const compile = (source: string) =>
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, "native-contracts.js"),
+			);
+		const prefix = compile('globalThis.prefix = "padding";');
+		const program = compile(`
+			(function () {
+				function count(value) { return arguments.length + value; }
+				globalThis.count = count(1, 2, 3);
+				class Price { quote(r) { return r.x + (r.y > 0); } }
+				const price = new Price();
+				for (let i = 0; i < 3; i++) globalThis.price = price.quote({x: i, y: 1, metadata: 'retail'});
+				function compare(a, b) { return a - b; }
+				globalThis.sorted = [3, 1, 2].sort(compare);
+				function select(s) { switch (s) { case 'red': return 1; case 'blue': return 2; default: return 0; } }
+				globalThis.selected = select('red');
+			})();
+		`);
+		const plans = program.native.functions;
+		expect(
+			plans.some((fn) => fn.directEntries.some((entry) => entry.argumentRepresentations)),
+		).toBe(true);
+		expect(plans.some((fn) => fn.fieldCalls?.length)).toBe(true);
+		expect(plans.some((fn) => fn.literalSwitches?.length)).toBe(true);
+		expect(
+			plans.some((fn) =>
+				fn.instructions.some((plan) => plan?.kind === "call" && plan.numericSortCallback),
+			),
+		).toBe(true);
+		const merged = mergeProgramImages([prefix, program]).image;
+		expect(() => emitProgramImage(merged, {})).not.toThrow();
+	});
+
 	it("retains one shared semantic world and rejects mixed facts", () => {
 		const semanticProtectors: NativePlan["semanticProtectors"] = [
 			{

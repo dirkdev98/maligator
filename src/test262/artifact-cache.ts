@@ -114,7 +114,7 @@ const CACHED_FINGERPRINTS = new Map<string, string>();
 
 /**
  * A stable hash of every input that can change a batch's `.o`: the whole
- * compiler implementation plus dependency lock, every runtime header, and the cc
+ * compiler and runner implementations, dependency lock, runtime headers, and cc
  * flags. The runtime `.c` files are deliberately excluded - they compile
  * into the library we always re-link, not into the batch object - which is
  * exactly what makes the implementation-edit loop a cache hit.
@@ -130,6 +130,7 @@ export function buildFingerprint(
 	const hash = createHash("sha256");
 	hash.update("v2-separate-test262-scripts\n");
 	hash.update(compilerImplementationDigest());
+	hashDirectory(hash, "src/test262", [".ts"]);
 	hashDirectory(hash, "runtime/src", [".h"]);
 	if (existsSync("package-lock.json")) {
 		hash.update("package-lock.json");
@@ -144,9 +145,8 @@ export function buildFingerprint(
 }
 
 /**
- * Key a batch by its build fingerprint, the emit mode (shared-harness changes
- * the generated C, hence the object), and the composed source of every test in
- * it (harness + host prelude + test body). Composition order is deterministic,
+ * Key a batch by its build fingerprint, emit mode, and ordered source plans
+ * including each test's metadata and separate harness scripts. Order is deterministic,
  * so identical inputs always yield the same key.
  */
 export function batchCacheKey(

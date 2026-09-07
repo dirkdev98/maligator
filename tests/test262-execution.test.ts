@@ -70,6 +70,22 @@ function cases(): Array<Test262File> {
 		file("blocking-host", 'throw new Error("inapplicable test executed");', {
 			flags: ["CanBlockIsTrue"],
 		}),
+		file(
+			"native-call-contracts",
+			`
+			(function () {
+				function count(value) { return arguments.length + value; }
+				assert.sameValue(count(1, 2, 3), 4);
+				class Price { quote(r) { return r.x + (r.y > 0); } }
+				const price = new Price();
+				for (let i = 0; i < 3; i++) assert.sameValue(price.quote({x: i, y: 1}), i + 1);
+				function compare(a, b) { return a - b; }
+				assert.sameValue([3, 1, 2].sort(compare).join(), "1,2,3");
+				function select(s) { switch (s) { case 'red': return 1; case 'blue': return 2; default: return 0; } }
+				assert.sameValue(select('red'), 1);
+			})();
+		`,
+		),
 	];
 }
 
@@ -95,6 +111,7 @@ describe("Test262 native execution contract", () => {
 					"FAILED",
 					"PASSED",
 					"SKIPPED",
+					"PASSED",
 				];
 				for (let run = 0; run < 2; run++) {
 					runner.test262ResetStats();
