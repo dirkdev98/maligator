@@ -2377,9 +2377,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             err = "unsupported host installer";
             goto fail;
         }
-        // The wire stores each slot as a length-prefixed UTF-8 name plus a
-        // varint destination. Runtime structs are pointer-sized and therefore
-        // much larger than their serialized form.
+        // Names, destinations and optional data each occupy at least one wire byte.
         u32 slot_count = rd_count(&r, 3);
         MalHostInstallSlot *slots = arena_array(
             L, &r, slot_count, sizeof(MalHostInstallSlot), alignof(MalHostInstallSlot));

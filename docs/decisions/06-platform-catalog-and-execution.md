@@ -81,9 +81,8 @@ unreachable declaration does not require its source files to exist.
 
 ## Verification
 
-During implementation, use tiny compilation inputs, generator checks, focused
-contract tests, and isolated declaration consumers. Defer runtime rebuilds, native
-link checks, broad type/lint checks, and the normal developer gate until other
-heavy work has finished and a fresh environment/activity probe permits them. Keep
-pending verification in `TODO.md`; do not treat structural checks as native runtime
-or native dependency-elimination evidence.
+Contract changes require small compiler inputs, generator checks, isolated
+declaration consumers, and cache-invalidation coverage. Native checks cover runtime
+shape, descriptors, identity, GC lifetime, runner initialization, and unused-symbol
+exclusion in addition to the normal developer gate. Compiler structure alone does
+not establish native behavior or dependency elimination.

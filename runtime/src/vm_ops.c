@@ -1085,9 +1085,7 @@ void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruc
             callable->vm, instruction->as.instantiate_literal_template.template_offset);
 }
 
-// Shared by the interpreter op and the native backend: build a module namespace
-// exotic object from the (name-constant-index, export-slot) pairs. No user code
-// runs, so it never throws.
+// Every import of one module must observe the same namespace identity.
 MalValue mal_vm_op_create_module_namespace(
     MalVm *vm, i32 cache_slot, i32 count, const i32 *name_indices, const i32 *slots
 ) {

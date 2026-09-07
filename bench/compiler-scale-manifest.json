@@ -158,6 +158,8 @@
 				"src/compiler/core/core-optimization-report.ts",
 				"src/compiler/core/core-pass-manager.ts",
 				"src/compiler/core/core-pass.ts",
+				"src/compiler/core/core-platform-constants.ts",
+				"src/compiler/core/core-platform-modules.ts",
 				"src/compiler/core/core-program-flow-analysis.ts",
 				"src/compiler/core/core-program-flow.ts",
 				"src/compiler/core/core-proof-passes.ts",
