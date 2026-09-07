@@ -29,6 +29,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	inspectCoreBlockParameters,
@@ -51,6 +52,89 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it.each(["union", "arithmetic", "unknown"])(
+		"preserves %s kinds through a closed global dependency in either block order",
+		(form) => {
+			for (const consumerFirst of [false, true]) {
+				const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+				const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+				const entry = builder.createBlock([{ representation: "boxed" }]);
+				const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+				const left = builder.createBlock();
+				const right = builder.createBlock();
+				const first = builder.createBlock();
+				const second = builder.createBlock();
+				const producer = consumerFirst ? second : first;
+				const consumer = consumerFirst ? first : second;
+				const joined = builder.appendBlockParameter(producer);
+				builder.setTerminator(entry, {
+					kind: "branch",
+					condition: input,
+					consequent: { block: left, arguments: [] },
+					alternate: { block: right, arguments: [] },
+				});
+				const [number] = builder.appendInstruction(left, "createNumber", [], {
+					attributes: { value: 3 },
+				});
+				const [undefined_] = builder.appendInstruction(right, "createUndefined", []);
+				builder.setTerminator(left, {
+					kind: "jump",
+					edge: { block: producer, arguments: [number!] },
+				});
+				builder.setTerminator(right, {
+					kind: "jump",
+					edge: {
+						block: producer,
+						arguments: [form === "unknown" ? input : undefined_!],
+					},
+				});
+				const [negated] = builder.appendInstruction(producer, "unary", [joined], {
+					attributes: { operator: "-" },
+				});
+				builder.appendInstruction(
+					producer,
+					"storeGlobal",
+					[form === "arithmetic" ? negated! : joined],
+					{ attributes: { index: 0 } },
+				);
+				builder.setTerminator(producer, {
+					kind: "jump",
+					edge: { block: consumer, arguments: [] },
+				});
+				const [loaded] = builder.appendInstruction(consumer, "loadGlobal", [], {
+					attributes: { index: 0 },
+				});
+				const [result] = builder.appendInstruction(consumer, "unary", [loaded!], {
+					attributes: { operator: "+" },
+				});
+				builder.setTerminator(consumer, { kind: "return", value: result! });
+				const finished = builder.finish(entry);
+				const analyses = new CoreAnalysisManager(
+					program,
+					{
+						...context,
+						data: { ...context.data, singleAssignmentGlobalSlots: [0] },
+					},
+					new CoreOptimizationReportBuilder(program),
+				);
+				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+					scope: "function",
+					function: finished.function,
+				});
+				expect(kinds.kindMask(loaded!)).toBe(
+					form === "unknown"
+						? COMPILER_VALUE_KIND_TOP
+						: form === "arithmetic"
+							? COMPILER_VALUE_KIND_NUMBER
+							: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+				);
+				expect(kinds.kindMask(result!)).toBe(
+					form === "unknown" ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+				);
+			}
+		},
+	);
+
 	it.each(["-", "+", "~", "increment", "decrement", "tonumeric"])(
 		"infers %s independently of block order through forward dependencies and loop joins",
 		(operator) => {

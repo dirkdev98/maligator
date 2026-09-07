@@ -14,7 +14,11 @@ import {
 	programClosureCertificate,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
-import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import {
@@ -129,6 +133,44 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 }
 
 describe("whole-program Core value kinds", () => {
+	it.each(["-", "+", "~", "increment", "decrement", "tonumeric"])(
+		"preserves unresolved %s results across a forward call edge",
+		(operator) => {
+			for (const unknown of [false, true]) {
+				const program = analysisProgram();
+				const caller = new CoreFunctionBuilder(program);
+				const entry = caller.createBlock();
+				const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+					attributes: { functionIndex: 1 },
+				});
+				const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+				const [called] = caller.appendInstruction(entry, "call", [callee!, receiver!]);
+				const [result] = caller.appendInstruction(entry, "unary", [called!], {
+					attributes: { operator },
+				});
+				caller.setTerminator(entry, { kind: "return", value: result! });
+				const callerId = caller.finish(entry).function;
+				const leaf = appendLeaf(program);
+				if (unknown) {
+					const editor = CoreEditor.open(program, leaf.function);
+					editor.replaceInstruction(leaf.valueInstruction, "loadGlobal", [], {
+						attributes: { index: 0 },
+					});
+					editor.commit();
+				}
+				const manager = new CoreAnalysisManager(
+					program,
+					programAnalysisContext(),
+					new CoreOptimizationReportBuilder(program),
+				);
+				const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+				expect(kinds.summary(callerId).returnKind).toBe(
+					unknown ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+				);
+			}
+		},
+	);
+
 	it("propagates closed primitive kinds through a recursive caller SCC", () => {
 		const result = compileRecursiveObservation(true);
 		const optimized = result.program;

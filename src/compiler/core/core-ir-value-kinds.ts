@@ -54,6 +54,10 @@ export interface CoreValueKindAnalysis {
 export interface CoreValueKindInputs {
 	readonly parameterMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly receiverMask?: CompilerValueKindMask;
+	readonly operationResultValue?: (
+		instruction: CoreInstructionId,
+		result: CoreValueId,
+	) => CoreValueId | undefined;
 	readonly operationResultMask?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
@@ -241,6 +245,11 @@ function addOperationTransfer(
 	const supplied = inputs?.operationResultMask?.(instruction, output);
 	if (supplied !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, supplied);
+		return;
+	}
+	const forwarded = inputs?.operationResultValue?.(instruction, output);
+	if (forwarded !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_COPY, output, 0, [forwarded]);
 		return;
 	}
 	const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -593,24 +602,9 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					instructionOrder[instructionIndex] = order++;
 				}
 			}
-			const storedKind = (value: CoreValueId): CompilerValueKindMask | undefined => {
-				const representation = representationKind(fn, value);
-				if (representation !== undefined) return representation;
-				if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				const kind = staticOpcodeKind(fn.instructionOpcodeName(definition));
-				if (kind !== undefined) return kind;
-				const source =
-					fn.kernel.instructionOperandCount(definition) === 0
-						? undefined
-						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
-				return fn.instructionOpcodeName(definition) === "move" && source !== undefined
-					? storedKind(source)
-					: undefined;
-			};
-			const operationResultMask = (
+			const operationResultValue = (
 				instruction: CoreInstructionId,
-			): CompilerValueKindMask | undefined => {
+			): CoreValueId | undefined => {
 				if (fn.instructionOpcodeName(instruction) !== "loadGlobal") return undefined;
 				const index = fn.instructionAttributes(instruction).index;
 				if (typeof index !== "number") return undefined;
@@ -622,9 +616,9 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					storeBlock === loadBlock
 						? instructionOrder[store.instruction]! < instructionOrder[instruction]!
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
-				return dominates ? storedKind(store.value) : undefined;
+				return dominates ? store.value : undefined;
 			};
-			return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
+			return analyzeCoreValueKinds(fn, cfg, { operationResultValue });
 		},
 	};
 
