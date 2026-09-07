@@ -530,6 +530,7 @@ npm run test262:prepare             # populate/repair the pinned full-corpus cac
 # Inspect or reclaim Maligator-owned rebuildable caches.
 node ./src/index.ts cache status
 node ./src/index.ts cache prune --dry-run
+node ./src/index.ts cache prune     # target 15 GiB, preserving protected entries
 node ./src/index.ts cache clear --all
 
 # Check agent sandbox/cache access and inspect exact stage requirements.

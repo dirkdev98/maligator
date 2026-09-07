@@ -367,8 +367,8 @@ function retainedPerFamily(entries: Array<CacheEntry>, keep: number): Set<string
 
 export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePruneResult {
 	const root = cacheRoot(options.cacheRoot);
-	const maxBytes = options.maxBytes ?? 5 * GIB;
-	const minAgeMs = options.minAgeMs ?? DAY;
+	const maxBytes = options.maxBytes ?? DEFAULT_CACHE_MAX_BYTES;
+	const minAgeMs = options.minAgeMs ?? DEFAULT_CACHE_MIN_AGE_MS;
 	const nowMs = options.nowMs ?? Date.now();
 	const dryRun = options.dryRun ?? false;
 	const lockPath = acquirePruneLock(root);
@@ -539,7 +539,7 @@ export function touchCacheEntry(target: string): void {
 	}
 }
 
-export const DEFAULT_CACHE_MAX_BYTES = 5 * GIB;
+export const DEFAULT_CACHE_MAX_BYTES = 15 * GIB;
 export const DEFAULT_CACHE_MIN_AGE_MS = DAY;
 
 export function formatCacheBytes(bytes: number): string {

@@ -106,7 +106,7 @@ Options:
   --shuffle [seed]             Shuffle deterministically and print the seed
   --repeat <count>             Repeat selected tests without recompiling
   --bail                       Stop after the first failure
-  --max-gb <number>            Cache prune target (default: 5)
+  --max-gb <number>            Cache prune target in GiB (default: 15)
   --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
   --dry-run                    Show what cache prune would remove
   -h, --help                   Show help
