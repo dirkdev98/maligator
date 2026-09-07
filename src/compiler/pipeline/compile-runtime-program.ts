@@ -17,6 +17,8 @@ export function compileEntrypointToBuffer(
 	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
 	const runtime = compileSemanticProgramToRuntimeImage(semantic, {
 		facts,
+		optimization: options.optimization,
+		coreVerification: options.coreVerification,
 		runPhase,
 	});
 	return runPhase("serialize", () => serializeRuntimeImage(runtime));

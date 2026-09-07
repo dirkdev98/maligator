@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { PlatformData } from "../../platform/catalog.ts";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
@@ -84,7 +85,7 @@ export interface ModuleLinkage {
 	hostModules: Array<{
 		specifier: string;
 		installer: string;
-		exports: Array<{ name: string; binding: Binding }>;
+		exports: Array<{ name: string; binding: Binding; constant?: PlatformData }>;
 	}>;
 
 	/**
@@ -292,7 +293,11 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		}
 		const spec = record.host;
 		const moduleExports: ModuleExports = { named: new Map(), stars: [] };
-		const exportBindings: Array<{ name: string; binding: Binding }> = [];
+		const exportBindings: Array<{
+			name: string;
+			binding: Binding;
+			constant?: PlatformData;
+		}> = [];
 		const declareHostExport = (name: string) => {
 			const binding: Binding = {
 				kind: "const",
@@ -304,7 +309,13 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 				imported: true,
 			};
 			moduleExports.named.set(name, { kind: "local", binding });
-			exportBindings.push({ name, binding });
+			exportBindings.push({
+				name,
+				binding,
+				...(spec.constants !== undefined && Object.hasOwn(spec.constants, name)
+					? { constant: spec.constants[name]! }
+					: {}),
+			});
 		};
 		for (const name of spec.named) {
 			declareHostExport(name);

@@ -1,3 +1,4 @@
+import type { PlatformData } from "../../platform/catalog.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
@@ -11,7 +12,11 @@ export interface CoreCapturedSlotRef {
 
 export interface CoreHostInstallCandidate {
 	readonly installer: string;
-	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
+	readonly exports: ReadonlyArray<{
+		readonly name: string;
+		readonly slot: number;
+		readonly constant?: PlatformData;
+	}>;
 }
 
 /**

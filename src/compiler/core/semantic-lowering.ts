@@ -273,7 +273,11 @@ interface CoreFrontendContext {
 	hostModules: Array<{
 		specifier: string;
 		installer: string;
-		exports: Array<{ name: string; binding: Binding }>;
+		exports: Array<{
+			name: string;
+			binding: Binding;
+			constant?: import("../../platform/catalog.ts").PlatformData;
+		}>;
 	}>;
 
 	/**
@@ -880,6 +884,7 @@ export function constructSemanticProgramCore(
 }
 
 function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
+	const hostInstallCandidates = coreHostInstallCandidates(program);
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -888,7 +893,6 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		globalCount: program.nextGlobalIndex,
 	});
 	const candidates = coreSingleAssignmentCellCandidates(program);
-	const hostInstallCandidates = coreHostInstallCandidates(program);
 	return {
 		program: program.core,
 		context: {
@@ -946,13 +950,28 @@ function coreHostInstallCandidates(
 ): Array<CoreHostInstallCandidate> {
 	const candidates = new Map<
 		string,
-		Array<{ readonly name: string; readonly slot: number }>
+		Array<CoreHostInstallCandidate["exports"][number]>
 	>();
 	for (const hostModule of program.hostModules) {
 		const entries = candidates.get(hostModule.installer) ?? [];
-		for (const { name, binding } of hostModule.exports) {
+		for (const { name, binding, constant } of hostModule.exports) {
 			const location = program.bindingToStorage.get(binding);
-			if (location?.type === "global") entries.push({ name, slot: location.index });
+			if (location?.type === "global") {
+				entries.push({
+					name,
+					slot: location.index,
+					...(constant === undefined ? {} : { constant }),
+				});
+				if (constant !== undefined) {
+					const pending = [constant];
+					while (pending.length > 0) {
+						const value = pending.pop()!;
+						if (typeof value === "string") getOrCreateStringConstant(program, value);
+						else if (value !== null && typeof value === "object")
+							pending.push(...Object.values(value));
+					}
+				}
+			}
 		}
 		if (entries.length > 0) candidates.set(hostModule.installer, entries);
 	}

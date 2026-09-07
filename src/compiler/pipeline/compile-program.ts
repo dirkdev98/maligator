@@ -38,6 +38,8 @@ export function compileEntrypoint(
 		core,
 		{
 			facts,
+			optimization: options.optimization,
+			coreVerification: options.coreVerification,
 			coreInstrumentation: options.coreInstrumentation,
 			coreOptimizationBenchmarkAblation: options.coreOptimizationBenchmarkAblation,
 			afterCoreOptimization: options.afterCoreOptimization,
