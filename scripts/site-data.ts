@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
+import { renderSiteTemplate } from "../website/templates/layout.ts";
 
 const TEST262_FILE = "scripts/test262.json";
 const BENCH_FILE = "bench/baseline.json";
@@ -816,17 +817,14 @@ ${domain.apis
 	).join("\n");
 }
 
-function updateCompatibility(mascot: string): void {
+function updateCompatibility(): void {
 	const manifest = JSON.parse(readFileSync(WPT_FILE, "utf8")) as WptManifest;
 	const expectations = JSON.parse(
 		readFileSync(WPT_EXPECTATIONS_FILE, "utf8"),
 	) as WptExpectations;
-	let html = readFileSync(COMPATIBILITY_FILE, "utf8");
-	html = replaceRegion(
-		html,
-		"nav-mascot",
-		`<img class="nav-mascot" src="data:image/webp;base64,${mascot}" alt="" width="768" height="768">`,
-		COMPATIBILITY_FILE,
+	let html = renderSiteTemplate(
+		readFileSync("website/templates/compatibility.html", "utf8"),
+		"compatibility",
 	);
 	html = replaceRegion(
 		html,
@@ -881,7 +879,10 @@ export function updateSite(): void {
 		selfCompile,
 		binary: meta,
 	};
-	let html = readFileSync(SITE_FILE, "utf8");
+	let html = renderSiteTemplate(
+		readFileSync("website/templates/index.html", "utf8"),
+		"overview",
+	);
 	html = replaceRegion(
 		html,
 		"site-data",
@@ -890,17 +891,12 @@ export function updateSite(): void {
 	const mascot = readFileSync(MASCOT_FILE).toString("base64");
 	html = replaceRegion(
 		html,
-		"nav-mascot",
-		`<img class="nav-mascot" src="data:image/webp;base64,${mascot}" alt="" width="768" height="768">`,
-	);
-	html = replaceRegion(
-		html,
 		"mascot",
 		`<img class="mascot" src="data:image/webp;base64,${mascot}" alt="A focused Belgian Malinois with a mischievous expression" width="768" height="768">`,
 	);
 	writeFileSync(SITE_FILE, html);
 	formatSiteFiles([SITE_FILE]);
-	updateCompatibility(mascot);
+	updateCompatibility();
 }
 
 const isMain =

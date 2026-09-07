@@ -182,6 +182,7 @@ describe("Test262 VM image merger", () => {
 			},
 			{
 				opcode: "CREATE_MODULE_NAMESPACE",
+				cacheSlot: -1,
 				dst: 0,
 				nameIndices: [0],
 				slots: [0],

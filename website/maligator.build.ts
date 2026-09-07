@@ -7,6 +7,8 @@ export default defineBuild({
 	outputName: "maligator-site",
 	assets: {
 		site: { type: "file", path: "website/index.html" },
+		processApi: { type: "file", path: "website/maligator-process.html" },
+		testApi: { type: "file", path: "website/maligator-test.html" },
 		compatibility: { type: "file", path: "website/compatibility.html" },
 		explorer: {
 			type: "directory",

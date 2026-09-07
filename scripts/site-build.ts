@@ -4,6 +4,7 @@ import { includeConfiguredAssets } from "../src/assets.ts";
 import { loadBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { buildExplorerSite } from "./build-explorer-site.ts";
+import { generateSite } from "./generate-site.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
 
 const META_FILE = "website/site-meta.json";
@@ -33,6 +34,7 @@ let binary = "";
 let stabilized = false;
 const progress = new CommandProgress("site-build");
 progress.start("update generated site data and build the native server");
+await generateSite();
 await buildExplorerSite();
 for (let attempt = 0; attempt < 4; attempt++) {
 	progress.stage(attempt + 1, 4, `stabilize site metadata (attempt ${attempt + 1})`);

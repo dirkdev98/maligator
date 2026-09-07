@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
@@ -17,6 +17,7 @@ describe("dictionary own-property cache hints", () => {
 	let expected: string;
 	let compiled: string;
 	let interpreted: string;
+	let instrumented: string;
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 			encoding: "utf8",
@@ -26,7 +27,15 @@ describe("dictionary own-property cache hints", () => {
 			name: "own-table-property-cache",
 			outDir,
 		}));
+		instrumented = buildNativeBinary({
+			fixture,
+			name: "own-table-property-cache-perf",
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	});
+
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 	it("matches Node through mutation, layout changes, accessors, and exotic receivers", () => {
 		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
@@ -40,13 +49,7 @@ describe("dictionary own-property cache hints", () => {
 	});
 
 	it("uses validated entry hints for repeated mutable dictionary reads", () => {
-		const binary = buildNativeBinary({
-			fixture,
-			name: "own-table-property-cache-perf",
-			outDir,
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
-		});
-		const result = spawnSync(binary, [], {
+		const result = spawnSync(instrumented, [], {
 			env: { ...process.env, MAL_PERF_STATS: "1", MAL_HOST_GC: "1" },
 			encoding: "utf8",
 			timeout: 60_000,

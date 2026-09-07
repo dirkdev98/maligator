@@ -360,13 +360,11 @@ const OPCODE_ACCESSES = {
 		read("global-property"),
 		write("global-property"),
 	],
-	// The namespace exotic object resolves each export from the global slot named
-	// in its `exports` attribute on every property get, so the object's existence
-	// keeps those slots read for as long as it is reachable. One attribute carries
-	// the whole cell list rather than one attribute per cell, so this stays a
-	// whole-family read: conservative, and never a narrower guess than the
-	// descriptor can decode.
-	createModuleNamespace: [read("global-slot")],
+	// Namespace exports remain live reads; the cached object preserves namespace identity.
+	createModuleNamespace: [
+		read("global-slot"),
+		write("global-slot", { attributes: ["cacheSlot"] }),
+	],
 	// A reusable literal publishes its fully constructed tree to a private slot on first use.
 	instantiateLiteralTemplate: [
 		read("global-slot", { attributes: ["cacheSlot"] }),

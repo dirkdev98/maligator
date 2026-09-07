@@ -122,7 +122,7 @@ describe("parseCliArgs", () => {
 	it("parses one profile flag consistently across existing commands", () => {
 		expect(parseCliArgs(["build", "src/main.ts", "--profile"])).toMatchObject({
 			kind: "build",
-			production: true,
+			production: false,
 			profile: true,
 		});
 		expect(parseCliArgs(["run", "src/main.ts", "--profile"])).toMatchObject({

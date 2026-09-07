@@ -2184,9 +2184,9 @@ MalValue mal_vm_op_create_template_object(
     MalVm *vm, i32 cache_slot, i32 count, const i32 *cooked_indices, const i32 *raw_indices
 );
 
-/** Build a module namespace exotic object from (name-constant, export-slot) pairs. */
+/** Reuse a module namespace by cache slot; -1 creates an uncached deferred namespace. */
 MalValue mal_vm_op_create_module_namespace(
-    MalVm *vm, i32 count, const i32 *name_indices, const i32 *slots
+    MalVm *vm, i32 cache_slot, i32 count, const i32 *name_indices, const i32 *slots
 );
 
 /**

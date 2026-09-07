@@ -58,6 +58,11 @@ import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
+	executionTarget,
+	hostExecutionTarget,
+	resolveExecution,
+} from "./platform/execution.ts";
+import {
 	createProfileCapture,
 	finalizeProfileCapture,
 	formatProfileReport,
@@ -451,6 +456,17 @@ function compileAndBuild(
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
+	const execution = resolveExecution(command, buildConfig, {
+		compiled:
+			command.kind === "build"
+				? command.internal.compiled && command.internal.serializePath === undefined
+				: command.profile,
+		optimization: production ? "full" : "development",
+		target:
+			command.kind === "build" && command.target !== undefined
+				? executionTarget(command.target)
+				: hostExecutionTarget(process.platform, process.arch),
+	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontend = reporter.phase(
@@ -460,6 +476,7 @@ function compileAndBuild(
 				return compileBuildFrontend({
 					entrypoint: entrypointPath,
 					config: buildConfig,
+					execution,
 					...(buildConfig.surface.node
 						? {
 								nodeGlobalsSource: readFileSync(

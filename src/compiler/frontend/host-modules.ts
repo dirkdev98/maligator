@@ -15,6 +15,9 @@
  * exports and installers remain eligible for dead-code elimination.
  */
 
+import { PLATFORM_MODULES } from "../../platform/catalog.ts";
+import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
+
 export interface HostModuleSpec {
 	/** Canonical specifier and virtual module identity, e.g. `"node:path"`. */
 	id: string;
@@ -32,6 +35,8 @@ export interface HostModuleSpec {
 	 * {@link hostInstallerSymbol}, so the mapping has one source of truth.
 	 */
 	installer: string;
+	platform?: PlatformModule;
+	constants?: Readonly<Record<string, PlatformData>>;
 }
 
 /**
@@ -733,7 +738,18 @@ export function isNodeSpecifier(specifier: string): boolean {
 
 /** The catalog entry for a specifier, or undefined when it is not a supported built-in. */
 export function lookupHostModule(specifier: string): HostModuleSpec | undefined {
-	return HOST_MODULES.get(specifier);
+	const platform = PLATFORM_MODULES.find(
+		(module) => module.id === specifier && module.kind === "native",
+	);
+	return platform === undefined || platform.kind !== "native"
+		? HOST_MODULES.get(specifier)
+		: {
+				id: platform.id,
+				named: platform.exports.map((entry) => entry.name),
+				hasDefault: false,
+				installer: platform.installer,
+				platform,
+			};
 }
 
 /** Canonical catalog id for a Node built-in spelling, if supported. */

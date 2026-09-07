@@ -34,10 +34,13 @@ import {
 	frontendWirePath,
 } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
+import { executionIdentity } from "../platform/execution.ts";
+import type { Execution } from "../platform/execution.ts";
 
 const TEST_CACHE_SCHEMA = 1;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const TEST_MODULE_ID = "maligator:test";
+const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
 const TEST_IMAGE_TRANSFORM = 1;
 
 export type DependencyIdentity = FrontendDependencyIdentity;
@@ -58,6 +61,7 @@ interface TestCacheManifest {
 
 interface CompileTestOptions {
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	testModuleSource: string;
@@ -127,6 +131,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
+			execution: executionIdentity(options.execution),
 			testModule: digest(options.testModuleSource),
 			nodeGlobals:
 				options.config.surface.node === true
@@ -201,7 +206,8 @@ function cachedWire(
 
 function syntheticEntry(entries: Array<string>, node: boolean): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `${node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
+	return `${node ? 'import "maligator-internal:node-globals";\n' : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
+import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
 globalThis.__maligatorTestResult = await __run(globalThis.__maligatorTestOptions);
 `;
@@ -226,13 +232,24 @@ function buildTestGraph(
 		entrySource,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache: session.moduleParses,
 		virtualModules: new Map([
-			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			[
+				TEST_MODULE_ID,
+				{ source: options.testModuleSource, goal: "module", platform: true },
+			],
+			[
+				TEST_BOOTSTRAP_MODULE_ID,
+				{
+					source: `import { __initializeRunner } from "maligator:test"; __initializeRunner();`,
+					goal: "module",
+				},
+			],
 			...(options.config.surface.node
 				? [
 						[
-							"maligator:node-globals",
+							"maligator-internal:node-globals",
 							{ source: options.nodeGlobalsSource ?? "", goal: "module" },
 						] as const,
 					]
@@ -261,7 +278,8 @@ function testProcessEntrySource(
 	resultPrefix: string,
 ): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `${node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
+	return `${node ? 'import "maligator-internal:node-globals";\n' : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
+import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
 const __result = await __run(${JSON.stringify({ ...runOptions, files: entries })});
 console.log(${JSON.stringify(resultPrefix)} + JSON.stringify(__result));

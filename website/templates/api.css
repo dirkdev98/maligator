@@ -1,0 +1,136 @@
+body {
+	font:
+		17px/1.65 system-ui,
+		sans-serif;
+	margin: 0;
+	color: #20252b;
+	background: #fafafa;
+}
+main,
+.api-navigation {
+	max-width: 960px;
+	margin: 2rem auto;
+	padding: 0 1.5rem;
+}
+h1,
+h2,
+h3 {
+	line-height: 1.3;
+}
+h2 {
+	margin: 0 0 0.75rem;
+}
+h3 {
+	font-size: 1rem;
+	margin: 1.75rem 0 0.75rem;
+}
+a {
+	color: #175fa6;
+	text-underline-offset: 0.2em;
+}
+code {
+	font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+	font-size: 0.9em;
+}
+p {
+	max-width: 78ch;
+}
+pre {
+	overflow: auto;
+	padding: 1.25rem;
+	border: 1px solid #ddd;
+	border-radius: 8px;
+	background: white;
+	font-size: 14px;
+	line-height: 1.6;
+}
+.api-navigation a[aria-current] {
+	font-weight: 700;
+}
+.type-section {
+	margin-top: 3.5rem;
+}
+[id] {
+	scroll-margin-top: 1.5rem;
+}
+.properties {
+	margin: 1.5rem 0;
+	border: 1px solid #dce2e6;
+	border-radius: 10px;
+	background: white;
+}
+.property {
+	padding: 1.1rem 1.35rem;
+}
+.property + .property {
+	border-top: 1px solid #e5e9ec;
+}
+.property dt {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 0.4rem 0.75rem;
+}
+.property-name {
+	font-weight: 700;
+	text-decoration: none;
+}
+.property-name:hover,
+.member-signature:hover {
+	text-decoration: underline;
+}
+.qualifier {
+	color: #52616c;
+	font-size: 0.75rem;
+}
+.property-type {
+	flex-basis: 100%;
+	color: #42576a;
+	overflow-wrap: anywhere;
+}
+.property dd {
+	margin: 0.6rem 0 0;
+}
+.property p {
+	margin: 0;
+	font-size: 0.95rem;
+}
+.property .properties {
+	margin: 1rem 0 0;
+	border-left: 3px solid #c5dce8;
+	background: #fbfcfd;
+}
+.member-signature {
+	color: #175fa6;
+	text-decoration: none;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.type-note {
+	padding: 0.75rem 1rem;
+	background: #edf3f7;
+	border-radius: 6px;
+}
+.declaration {
+	margin-top: 1rem;
+}
+.declaration summary {
+	cursor: pointer;
+	color: #52616c;
+	font-size: 0.9rem;
+}
+.declaration summary:hover {
+	color: #175fa6;
+}
+@media (max-width: 600px) {
+	main,
+	.api-navigation {
+		padding-inline: 1rem;
+	}
+	.property {
+		padding: 1rem;
+	}
+	.property .property {
+		padding: 0.8rem;
+	}
+}

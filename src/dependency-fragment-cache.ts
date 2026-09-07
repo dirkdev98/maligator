@@ -37,6 +37,8 @@ import {
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
 import { nativeBuildJobs, runIndependentCommands } from "./native-command.ts";
+import { executionIdentity } from "./platform/execution.ts";
+import type { Execution } from "./platform/execution.ts";
 
 const DEPENDENCY_FRAGMENT_SCHEMA = 2;
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "dependency-fragments");
@@ -74,6 +76,7 @@ export interface CompileDependencyFragmentsOptions {
 	graph: ModuleGraph;
 	targets: Array<DependencyFragmentTarget>;
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	facts: CompilerProgramFacts;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
@@ -90,6 +93,7 @@ interface DependencyFragmentRequest {
 	schema: 1;
 	targets: Array<DependencyFragmentTarget>;
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	stripperIdentity: string;
 	cacheDirectory?: string;
 }
@@ -123,6 +127,7 @@ function environmentIdentity(options: CompileDependencyFragmentsOptions): string
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
+			execution: executionIdentity(options.execution),
 		}),
 	);
 }
@@ -194,7 +199,10 @@ function dependencyIslands(
 
 function islandGraph(
 	targetsInput: Array<DependencyFragmentTarget>,
-	options: Pick<CompileDependencyFragmentsOptions, "config" | "stripTypes" | "session">,
+	options: Pick<
+		CompileDependencyFragmentsOptions,
+		"config" | "execution" | "stripTypes" | "session"
+	>,
 ): ModuleGraph {
 	const targets = [...targetsInput].sort((left, right) =>
 		left.target < right.target ? -1 : left.target > right.target ? 1 : 0,
@@ -227,6 +235,7 @@ globalThis[${JSON.stringify(DEVELOPMENT_LINKED_MODULES_GLOBAL)}] = __maligatorMo
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache: options.session.moduleParses,
 	});
 }
@@ -404,6 +413,7 @@ export function compileDependencyFragmentRequest(
 	session.useCacheDirectory(request.cacheDirectory);
 	const graph = islandGraph(request.targets, {
 		config: request.config,
+		execution: request.execution,
 		stripTypes,
 		session,
 	});
@@ -411,6 +421,7 @@ export function compileDependencyFragmentRequest(
 		graph,
 		targets: request.targets,
 		config: request.config,
+		execution: request.execution,
 		facts: compilerProgramFactsFromConfig(request.config),
 		stripTypes,
 		stripperIdentity: request.stripperIdentity,
@@ -457,6 +468,7 @@ export function compileDependencyFragments(
 				schema: 1,
 				targets: plans,
 				config: options.config,
+				execution: options.execution,
 				stripperIdentity: options.stripperIdentity,
 				...(options.cacheDirectory === undefined
 					? {}

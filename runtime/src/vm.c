@@ -685,6 +685,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->fibers_head = nullptr;
     // Host context (reactor/timers) is attached by the host layer, not the engine.
     vm->host = nullptr;
+    vm->prepared_values = nullptr;
     vm->runtime_cleanup_count = 0;
     vm->active_job = nullptr;
     vm->kept_objects = nullptr;
@@ -917,6 +918,13 @@ bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm)) {
 }
 
 void mal_vm_free(MalVm *vm) {
+    while (vm->prepared_values != nullptr) {
+        MalPreparedValue *entry = vm->prepared_values;
+        vm->prepared_values = entry->next;
+        free(entry->identity);
+        free(entry->data);
+        free(entry);
+    }
 	mal_profile_finish(vm);
     for (usize i = vm->runtime_cleanup_count; i > 0; i--) {
         vm->runtime_cleanups[i - 1](vm);
@@ -1256,6 +1264,7 @@ static void mal_vm_rebase_instruction(
             break;
         }
         case MAL_OP_CREATE_MODULE_NAMESPACE: {
+            if (in->as.create_module_namespace.cache_slot >= 0) in->as.create_module_namespace.cache_slot += global_base;
             i32 *data = instruction_data + in->as.create_module_namespace.data_offset;
             i32 count = data[0];
             i32 *names = &data[1];

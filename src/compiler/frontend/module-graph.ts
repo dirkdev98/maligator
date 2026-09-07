@@ -2,6 +2,10 @@ import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
+import type { PlatformModule } from "../../platform/catalog.ts";
+import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
+import type { Execution } from "../../platform/execution.ts";
+import { executionData } from "../../platform/execution.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
@@ -82,9 +86,11 @@ export interface ModuleRecord {
 	host?: HostModuleSpec;
 	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
 	virtual?: true;
+	platform?: PlatformModule;
 }
 
 export interface ModuleGraph {
+	execution?: Execution;
 	/** Absolute path of the entrypoint. */
 	entry: string;
 	/**
@@ -219,6 +225,8 @@ export interface BuildModuleGraphOptions {
 	 * only under `surface.node`. Defaults to the product defaults (node OFF).
 	 */
 	buildConfig?: ResolvedBuildConfig;
+	/** Immutable application context shared by all compilation fragments. */
+	execution?: Execution;
 
 	/**
 	 * Toolchain-owned modules that resolve without a package or filesystem entry.
@@ -227,7 +235,7 @@ export interface BuildModuleGraphOptions {
 	 */
 	virtualModules?: ReadonlyMap<
 		string,
-		{ source: string; goal?: Exclude<ModuleGoal, "cjs"> }
+		{ source: string; goal?: Exclude<ModuleGoal, "cjs">; platform?: boolean }
 	>;
 
 	/**
@@ -287,7 +295,7 @@ export function buildModuleGraph(
 	const virtualModule = (specifier: string) =>
 		options.virtualModules?.get(specifier) ??
 		(options.entryPrelude?.specifier === specifier
-			? { source: options.entryPrelude.source, goal: "module" as const }
+			? { source: options.entryPrelude.source, goal: "module" as const, platform: false }
 			: undefined);
 
 	const load = (
@@ -367,7 +375,11 @@ export function buildModuleGraph(
 					dependency.kind === "require" &&
 					dependency.specifier === options.entryPrelude?.specifier;
 				if (
-					dependency.kind === "dynamic" ||
+					(dependency.kind === "dynamic" &&
+						!(
+							toolchainModule.platform &&
+							lookupPlatformModule(dependency.specifier)?.kind === "source"
+						)) ||
 					(dependency.kind === "require" && !entryPreludeRequire)
 				) {
 					throw new SyntaxDiagnostic(
@@ -432,6 +444,9 @@ export function buildModuleGraph(
 			parsed,
 			dependencies,
 			...(virtual ? { virtual: true as const } : {}),
+			...(virtual && virtualModule(filePath)?.platform
+				? { platform: lookupPlatformModule(filePath) }
+				: {}),
 		});
 
 		for (const dependency of dependencies) {
@@ -443,7 +458,7 @@ export function buildModuleGraph(
 			// no disk read, no recursion (it has no dependencies of its own).
 			const host = lookupHostModule(resolvedPath);
 			if (host) {
-				modules.set(resolvedPath, hostModuleRecord(host));
+				modules.set(resolvedPath, hostModuleRecord(host, options.execution));
 				continue;
 			}
 			const toolchainModule = virtualModule(resolvedPath);
@@ -506,6 +521,7 @@ export function buildModuleGraph(
 
 	return {
 		entry,
+		execution: options.execution,
 		nodeEnabled: ctx.nodeEnabled,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
@@ -702,7 +718,23 @@ type ResolveResult =
  * user source (empty parse, so it is inert under semantic analysis) — the linker
  * will read {@link HostModuleSpec} to synthesize the host exports later.
  */
-function hostModuleRecord(host: HostModuleSpec): ModuleRecord {
+function hostModuleRecord(host: HostModuleSpec, execution?: Execution): ModuleRecord {
+	if (host.platform !== undefined) {
+		const constants = Object.fromEntries(
+			host.platform.exports.map((entry) => {
+				if (entry.contract.provider === "execution") {
+					if (execution === undefined)
+						throw new SyntaxDiagnostic(
+							"resolution",
+							`${host.id} requires an application execution description`,
+						);
+					return [entry.name, executionData(execution)];
+				}
+				throw new Error(`Unknown platform provider for ${host.id}/${entry.name}`);
+			}),
+		);
+		host = { ...host, constants };
+	}
 	return {
 		path: host.id,
 		goal: "module",
@@ -723,6 +755,15 @@ function resolveSpecifier(
 	importerPath: string,
 	ctx: ResolveContext,
 ): ResolveResult {
+	if (specifier.startsWith("maligator:")) {
+		const host = lookupHostModule(specifier);
+		return host === undefined
+			? {
+					error: `unknown Maligator module '${specifier}' (supported native modules: ${PLATFORM_MODULES.map((module) => module.id).join(", ")})`,
+					hard: true,
+				}
+			: { host };
+	}
 	if (isNodeSpecifier(specifier)) {
 		if (!ctx.nodeEnabled) {
 			return {

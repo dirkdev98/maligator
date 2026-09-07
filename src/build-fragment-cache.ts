@@ -68,6 +68,8 @@ import {
 	frontendWirePath,
 	FrontendCompilationSession,
 } from "./frontend-cache.ts";
+import { executionIdentity } from "./platform/execution.ts";
+import type { Execution } from "./platform/execution.ts";
 
 const FRAGMENT_SCHEMA = 2;
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "build-fragments");
@@ -94,6 +96,7 @@ interface LinkageValidationRequest {
 	entrypoint: string;
 	entryPrelude?: NonNullable<BuildModuleGraphOptions["entryPrelude"]>;
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	stripperIdentity: string;
 	cacheDirectory?: string;
 	resultPath: string;
@@ -139,6 +142,7 @@ export interface CompileBuildFragmentsOptions {
 	graph: ModuleGraph;
 	entryPrelude?: BuildModuleGraphOptions["entryPrelude"];
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	facts: CompilerProgramFacts;
 	/** Reuse whole-graph analysis already required by locked-world diagnostics. */
 	semantic?: SemanticProgram;
@@ -306,6 +310,7 @@ function applicationGraph(
 	return buildModuleGraph(options.graph.entry, {
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache,
 		virtualModules,
 	});
@@ -359,6 +364,7 @@ function preludeGraph(options: CompileBuildFragmentsOptions): ModuleGraph | unde
 	return {
 		entry: specifier,
 		nodeEnabled: options.graph.nodeEnabled,
+		execution: options.execution,
 		modules: new Map(
 			[...options.graph.modules].filter(([module]) => reachable.has(module)),
 		),
@@ -380,6 +386,7 @@ function environmentIdentity(options: CompileBuildFragmentsOptions): string {
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
+			execution: executionIdentity(options.execution),
 			entryPrelude:
 				options.entryPrelude === undefined
 					? undefined
@@ -731,6 +738,7 @@ function prepareParallelLinkageValidation(
 		entrypoint: options.graph.entry,
 		...(options.entryPrelude === undefined ? {} : { entryPrelude: options.entryPrelude }),
 		config: options.config,
+		execution: options.execution,
 		stripperIdentity: options.stripperIdentity,
 		...(options.cacheDirectory === undefined
 			? {}
@@ -777,6 +785,7 @@ export function validateBuildFragmentRequest(
 	try {
 		const graph = buildModuleGraph(request.entrypoint, {
 			buildConfig: request.config,
+			execution: request.execution,
 			stripTypes,
 			entryPrelude: request.entryPrelude,
 		});
@@ -795,6 +804,7 @@ export function validateBuildFragmentRequest(
 			graph,
 			entryPrelude: request.entryPrelude,
 			config: request.config,
+			execution: request.execution,
 			facts: compilerProgramFactsFromConfig(request.config),
 			stripTypes,
 			stripperIdentity: request.stripperIdentity,
@@ -841,6 +851,7 @@ export function compileBuildFragments(
 		graph: options.graph,
 		targets: plans.map(({ target, commonjs }) => ({ target, commonjs })),
 		config: options.config,
+		execution: options.execution,
 		facts: options.facts,
 		stripTypes: options.stripTypes,
 		stripperIdentity: options.stripperIdentity,

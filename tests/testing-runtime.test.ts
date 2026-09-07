@@ -15,6 +15,23 @@ beforeEach(() => runtime.__reset());
 afterEach(() => runtime.__reset());
 
 describe("registration and lifecycle", () => {
+	test("installs runner globals only through explicit initialization", () => {
+		expect(Reflect.has(globalThis, "__maligatorTestApi")).toBe(false);
+		expect(Reflect.has(globalThis, "__maligatorTestBeginFile")).toBe(false);
+		runtime.__initializeRunner();
+		try {
+			expect(Reflect.get(globalThis, "__maligatorTestApi")).toMatchObject({
+				test: runtime.test,
+			});
+			expect(Reflect.get(globalThis, "__maligatorTestBeginFile")).toBe(
+				runtime.__beginFile,
+			);
+		} finally {
+			Reflect.deleteProperty(globalThis, "__maligatorTestApi");
+			Reflect.deleteProperty(globalThis, "__maligatorTestBeginFile");
+			Reflect.deleteProperty(globalThis, "__maligatorTestEndFile");
+		}
+	});
 	test("keeps implicit test-file hooks and results separate in a shared realm", async () => {
 		const calls: Array<string> = [];
 		runtime.__beginFile("a.test.ts");

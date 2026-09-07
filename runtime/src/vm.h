@@ -200,7 +200,7 @@ typedef struct MalInstruction {
 
         struct {
             // Side data: [count, name string indices..., global slots...].
-            i32 dst, data_offset;
+            i32 dst, data_offset, cache_slot;
         } create_module_namespace;
 
         struct {
@@ -900,15 +900,18 @@ typedef struct MalFunction {
 static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 152 : 144),
               "function metadata outgrew its packed layout");
 
-/**
- * One host export's destination: the export/global name and the global slot the
- * installer writes its value into. The engine-neutral installer ABI (below): an
- * installer receives its slot table and matches names to decide what to build
- * where, keeping Node-specific names out of the shared intrinsic tables.
- */
+typedef struct MalPreparedValue {
+    struct MalPreparedValue *next;
+    char *identity;
+    char *data;
+    MalValue value;
+} MalPreparedValue;
+
+// Prepared data uses the same export-slot ABI as ordinary native modules.
 typedef struct MalHostInstallSlot {
     const char *name;
     i32 slot;
+    const char *data;
 } MalHostInstallSlot;
 
 /**
@@ -1694,6 +1697,9 @@ typedef struct MalVm {
      * the bare test262 runner). See host.h.
      */
     void *host;
+
+    // Application fragments share prepared exports for the lifetime of this isolate.
+    MalPreparedValue *prepared_values;
 
     /** Runtime modules reached by this isolate register their teardown here. */
     void (*runtime_cleanups[8])(MalVm *vm);

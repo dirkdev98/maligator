@@ -74,7 +74,13 @@ function runtimeFixture(): RuntimeImage {
 			stringIndex: 7,
 			icIndex: 0,
 		},
-		{ opcode: "CREATE_MODULE_NAMESPACE", dst: 6, nameIndices: [5], slots: [0] },
+		{
+			opcode: "CREATE_MODULE_NAMESPACE",
+			cacheSlot: -1,
+			dst: 6,
+			nameIndices: [5],
+			slots: [0],
+		},
 		{
 			opcode: "CREATE_TEMPLATE_OBJECT",
 			dst: 6,

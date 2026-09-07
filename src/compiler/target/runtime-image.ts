@@ -1,3 +1,4 @@
+import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
@@ -279,7 +280,7 @@ export interface RuntimeImage {
 	cjsModuleFunctionIndices: Array<number>;
 	hostInstalls: Array<{
 		installer: string;
-		exports: Array<{ name: string; slot: number }>;
+		exports: Array<{ name: string; slot: number; constant?: PlatformData }>;
 	}>;
 }
 
@@ -703,6 +704,7 @@ export type BytecodeInstruction =
 	  }
 	| {
 			opcode: "CREATE_MODULE_NAMESPACE";
+			cacheSlot: number;
 			dst: number;
 			nameIndices: Array<number>;
 			slots: Array<number>;
@@ -2578,10 +2580,10 @@ function buildHostInstalls(
 		return install;
 	};
 	for (const hostModule of context.data.hostInstallCandidates) {
-		const usedExports: Array<{ name: string; slot: number }> = [];
-		for (const { name, slot } of hostModule.exports) {
-			if (readGlobalSlots.has(slot)) {
-				usedExports.push({ name, slot });
+		const usedExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
+		for (const entry of hostModule.exports) {
+			if (readGlobalSlots.has(entry.slot)) {
+				usedExports.push(entry);
 			}
 		}
 		if (usedExports.length > 0) {
@@ -2965,6 +2967,7 @@ function lowerInstructionToBytecodeInstruction(
 		case "createModuleNamespace":
 			return {
 				opcode: "CREATE_MODULE_NAMESPACE",
+				cacheSlot: instruction.cacheSlot ?? -1,
 				dst: instruction.registers[0],
 				nameIndices: instruction.exports.map((entry) => entry.nameStringIndex),
 				slots: instruction.exports.map((entry) => entry.slot),

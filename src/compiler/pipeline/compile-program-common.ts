@@ -15,6 +15,8 @@ export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
 export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize";
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
+	optimization?: CompileCoreOptions["optimization"];
+	coreVerification?: CompileCoreOptions["coreVerification"];
 	coreInstrumentation?: CompileCoreOptions["coreInstrumentation"];
 	coreOptimizationBenchmarkAblation?: CompileCoreOptions["coreOptimizationBenchmarkAblation"];
 	afterCoreOptimization?: CompileCoreOptions["afterCoreOptimization"];

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 39u
+#define WIRE_VERSION 40u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -634,6 +634,7 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
         case WIRE_CREATE_MODULE_NAMESPACE: {
             o->opcode = MAL_OP_CREATE_MODULE_NAMESPACE;
             o->as.create_module_namespace.dst = rd_i32(r);
+            o->as.create_module_namespace.cache_slot = rd_i32(r);
             o->as.create_module_namespace.data_offset = rd_side_pair(r, side_data);
             return;
         }
@@ -2410,10 +2411,8 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             err = "unsupported host installer";
             goto fail;
         }
-        // The wire stores each slot as a length-prefixed UTF-8 name plus a
-        // varint destination. Runtime structs are pointer-sized and therefore
-        // much larger than their serialized form.
-        u32 slot_count = rd_count(&r, 2);
+        // Names, destinations and optional data each occupy at least one wire byte.
+        u32 slot_count = rd_count(&r, 3);
         MalHostInstallSlot *slots = arena_array(
             L, &r, slot_count, sizeof(MalHostInstallSlot), alignof(MalHostInstallSlot));
         host_installs[i].slots = slots;
@@ -2426,6 +2425,14 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             }
             slots[slot].name = name;
             slots[slot].slot = rd_i32(&r);
+            u32 data_length = rd_count(&r, 1);
+            if (data_length > 0) {
+                char *data = arena(L, &r, (usize) data_length + 1, alignof(char));
+                for (u32 byte = 0; r.ok && byte < data_length; byte++) {
+                    data[byte] = (char) rd_u8(&r);
+                }
+                slots[slot].data = data;
+            }
         }
     }
 

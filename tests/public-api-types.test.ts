@@ -28,6 +28,14 @@ describe("@maligator/cli public TypeScript API", () => {
 			path.join(packageDirectory, "test-api.d.ts"),
 		);
 		copyFileSync(
+			path.resolve(import.meta.dirname, "../src/platform-api.d.ts"),
+			path.join(packageDirectory, "platform-api.d.ts"),
+		);
+		copyFileSync(
+			path.resolve(import.meta.dirname, "../src/process-api.d.ts"),
+			path.join(packageDirectory, "process-api.d.ts"),
+		);
+		copyFileSync(
 			path.resolve(import.meta.dirname, "../npm/cli/index.js"),
 			path.join(packageDirectory, "index.js"),
 		);
@@ -100,6 +108,23 @@ import {
 	expect,
 	test,
 } from "maligator:test";
+import { execution } from "maligator:process";
+
+const command: "build" | "run" | "dev" | "test" = execution.command;
+const compiled: boolean = execution.compiled;
+if (execution.command === "test") {
+	const repeat: number = execution.options.repeat;
+	const seed: number | null = execution.options.shuffleSeed;
+	void [repeat, seed];
+} else {
+	// @ts-expect-error Test options exist only for the test command.
+	execution.options.repeat;
+}
+// @ts-expect-error Execution snapshots are deeply readonly.
+execution.config.engine.intl.features.push("collator");
+// @ts-expect-error Runtime process arguments are not preparation constants.
+execution.argv;
+void [command, compiled];
 
 describe("public types", () => {
 	beforeAll(() => undefined);

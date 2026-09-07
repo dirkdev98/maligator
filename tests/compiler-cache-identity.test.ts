@@ -19,6 +19,15 @@ function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
 	const cacheDirectory = path.join(root, "cache");
 	mkdirSync(path.join(sourceRoot, "compiler"), { recursive: true });
 	mkdirSync(path.join(sourceRoot, "testing"), { recursive: true });
+	mkdirSync(path.join(sourceRoot, "platform"), { recursive: true });
+	writeFileSync(
+		path.join(sourceRoot, "platform", "catalog.ts"),
+		"export const version = 1;\n",
+	);
+	writeFileSync(
+		path.join(sourceRoot, "platform", "execution.ts"),
+		"export const mode = 'run';\n",
+	);
 	writeFileSync(path.join(sourceRoot, "compiler", "compile.ts"), "export const n = 1;\n");
 	writeFileSync(
 		path.join(sourceRoot, "build-frontend-cache.ts"),
@@ -102,8 +111,31 @@ describe("compiler cache identity", () => {
 				}
 			}
 		});
-		expect([...externalSources].sort()).toEqual(["build-config-error.ts", "utils.ts"]);
+		expect([...externalSources].sort()).toEqual([
+			"build-config-error.ts",
+			"platform/catalog.ts",
+			"platform/execution.ts",
+			"utils.ts",
+		]);
 	});
+
+	it.each(["catalog.ts", "execution.ts"])(
+		"invalidates cached compiler output after %s changes",
+		(file) => {
+			const fixture = compilerFixture();
+			const initial = compilerImplementationDigestForRoot(
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			);
+			writeFileSync(
+				path.join(fixture.sourceRoot, "platform", file),
+				"export const changed = true;\n",
+			);
+			expect(
+				compilerImplementationDigestForRoot(fixture.sourceRoot, fixture.cacheDirectory),
+			).not.toBe(initial);
+		},
+	);
 
 	it("invalidates only a producer's transitive source cone", () => {
 		const fixture = compilerFixture();

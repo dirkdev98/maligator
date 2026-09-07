@@ -5,6 +5,20 @@ import type { ExplorerAsset, SiteResource } from "./responses.ts";
 const explorerRoot = mal.assets.materialize("explorer");
 const pages = new Map<string, SiteResource>([
 	[
+		"/api/process",
+		{
+			body: readFileSync(mal.assets.materialize("processApi"), "utf8"),
+			type: "text/html; charset=utf-8",
+		},
+	],
+	[
+		"/api/test",
+		{
+			body: readFileSync(mal.assets.materialize("testApi"), "utf8"),
+			type: "text/html; charset=utf-8",
+		},
+	],
+	[
 		"/",
 		{
 			body: readFileSync(mal.assets.materialize("site"), "utf8"),
