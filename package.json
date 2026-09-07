@@ -47,7 +47,7 @@
 		"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
 		"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
 		"site:build": "node ./scripts/site-build.ts",
-		"site:update": "node ./scripts/site-data.ts",
+		"site:update": "node ./scripts/generate-site.ts",
 		"test": "node ./scripts/vitest.ts",
 		"test262": "node ./scripts/test262.ts --canonical",
 		"test262:gc:broad": "node ./scripts/test262.ts --canonical --backend wire --mode gc-stress --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",

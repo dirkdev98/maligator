@@ -1,3 +1,4 @@
+import ts from "typescript";
 import type { PlatformDocumentation, PlatformModule, PlatformType } from "./catalog.ts";
 
 function documentation(value: PlatformDocumentation, indent: string): string {
@@ -71,6 +72,97 @@ function html(value: string): string {
 		.replaceAll('"', "&quot;");
 }
 
+function prose(value: string): string {
+	return html(value)
+		.replace(/`([^`]+)`/g, "<code>$1</code>")
+		.replace(/\{@link ([\w.]+)\}/g, "<code>$1</code>");
+}
+
+function referenceType(type: PlatformType): string {
+	switch (type.kind) {
+		case "reference":
+			return `<a href="#${html(type.name)}">${html(type.name)}</a>`;
+		case "object":
+			return "{ … }";
+		case "array":
+			return `ReadonlyArray&lt;${referenceType(type.element)}&gt;`;
+		case "record":
+			return `Readonly&lt;Record&lt;string, ${referenceType(type.value)}&gt;&gt;`;
+		case "union":
+		case "intersection":
+			return type.types
+				.map(referenceType)
+				.join(type.kind === "union" ? " | " : " &amp; ");
+		default:
+			return html(renderPlatformType(type));
+	}
+}
+
+function propertyDocumentation(type: PlatformType, owner: string): string {
+	if (type.kind === "object") {
+		return `<dl class="properties">${type.properties
+			.map((property) => {
+				const id = `${owner}.${property.name}`;
+				return `<div class="property" id="${html(id)}"><dt><a class="property-name" href="#${html(id)}"><code>${html(property.name)}</code></a><span class="qualifier">readonly</span><code class="property-type">${referenceType(property.type)}</code></dt><dd><p>${prose(property.description)}</p>${property.type.kind === "object" ? propertyDocumentation(property.type, id) : ""}</dd></div>`;
+			})
+			.join("\n")}</dl>`;
+	}
+	if (type.kind === "intersection") {
+		return type.types
+			.map((part, index) =>
+				part.kind === "reference"
+					? `<p class="type-note">Includes all properties of <code>${referenceType(part)}</code>.</p>`
+					: propertyDocumentation(part, `${owner}.${index}`),
+			)
+			.join("\n");
+	}
+	if (type.kind === "union" && type.types.some((part) => part.kind === "object")) {
+		return type.types
+			.map((part, index) => {
+				const command =
+					part.kind === "object"
+						? part.properties.find((property) => property.name === "command")
+						: undefined;
+				return `<div class="type-variant"><h3>${command ? `When <code>command</code> is <code>${referenceType(command.type)}</code>` : `Variant ${index + 1}`}</h3>${propertyDocumentation(part, `${owner}.${index}`)}</div>`;
+			})
+			.join("\n");
+	}
+	if (type.kind === "signature") {
+		const source = ts.createSourceFile(
+			"reference.ts",
+			`type Reference = ${type.source};`,
+			ts.ScriptTarget.Latest,
+			true,
+		);
+		const declaration = source.statements[0];
+		if (
+			declaration &&
+			ts.isTypeAliasDeclaration(declaration) &&
+			ts.isTypeLiteralNode(declaration.type)
+		) {
+			return `<dl class="properties">${declaration.type.members
+				.map((member, index) => {
+					const name = member.name?.getText(source) ?? "call";
+					const id = `${owner}.${name}.${index}`;
+					const description = (ts.getLeadingCommentRanges(source.text, member.pos) ?? [])
+						.map((comment) =>
+							source.text
+								.slice(comment.pos, comment.end)
+								.replace(/^\/\*\*?|\*\/$/g, "")
+								.replace(/^\s*\*\s?/gm, ""),
+						)
+						.join(" ")
+						.replace(/\s+/g, " ")
+						.trim();
+					const signature = member.getText(source).replace(/;$/, "");
+					return `<div class="property" id="${html(id)}"><dt><a class="member-signature" href="#${html(id)}"><code>${html(signature)}</code></a></dt><dd>${description ? `<p>${prose(description)}</p>` : ""}</dd></div>`;
+				})
+				.join("\n")}</dl>`;
+		}
+	}
+	return "";
+}
+
 export function generatePlatformReference(
 	platform: PlatformModule,
 	modules: ReadonlyArray<PlatformModule> = [platform],
@@ -82,10 +174,11 @@ export function generatePlatformReference(
 		)
 		.join("\n");
 	const types = platform.types
-		.map(
-			(type) =>
-				`<section><h2 id="${html(type.name)}">${html(type.name)}</h2><p>${html(type.description)}</p><pre><code>${html(`type ${type.name} = ${renderPlatformType(type.type)};`)}</code></pre></section>`,
-		)
+		.map((type) => {
+			const properties = propertyDocumentation(type.type, type.name);
+			const declaration = `<pre><code>${html(`type ${type.name} = ${renderPlatformType(type.type)};`)}</code></pre>`;
+			return `<section class="type-section"><h2 id="${html(type.name)}">${html(type.name)}</h2><p>${prose(type.description)}</p>${properties}${properties ? `<details class="declaration"><summary>TypeScript declaration</summary>${declaration}</details>` : declaration}</section>`;
+		})
 		.join("\n");
 	return `<!doctype html>
 <html lang="en">
@@ -93,15 +186,18 @@ export function generatePlatformReference(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${html(platform.id)} — Maligator API reference</title>
-<style>body{font:17px/1.6 system-ui,sans-serif;max-width:900px;margin:3rem auto;padding:0 1.5rem;color:#20252b;background:#fafafa}h1,h2{line-height:1.2}h2{margin-top:2.5rem}pre{overflow:auto;padding:1.25rem;border:1px solid #ddd;border-radius:8px;background:white;font-size:14px}a{color:#175fa6}code{font-family:ui-monospace,monospace}</style>
+__API_STYLES__
+__SITE_STYLES__
 </head>
 <body>
-<nav><a href="/">Maligator</a> / API reference: ${modules.map((entry) => `<a href="/api/${html(entry.id.slice("maligator:".length))}">${html(entry.id)}</a>`).join(" · ")}</nav>
-<main><h1>${html(platform.id)}</h1><p>${html(platform.description)}</p><p>Status: ${platform.stability}. Module evaluation: ${platform.evaluation}.</p>
+__SITE_NAVIGATION__
+<nav class="api-navigation" aria-label="API reference">${modules.map((entry) => `<a href="/api/${html(entry.id.slice("maligator:".length))}"${entry.id === platform.id ? ' aria-current="page"' : ""}>${html(entry.id)}</a>`).join(" · ")}</nav>
+<main id="main"><h1>${html(platform.id)}</h1><p>${html(platform.description)}</p><p>Status: ${platform.stability}. Module evaluation: ${platform.evaluation}.</p>
 <p>TypeScript: include <code>@maligator/cli</code> in your tsconfig <code>compilerOptions.types</code> or add <code>/// &lt;reference types="@maligator/cli" /&gt;</code> to a declaration file.</p>
 ${exports}
 ${types}
 </main>
+__SITE_FOOTER__
 </body>
 </html>
 `;

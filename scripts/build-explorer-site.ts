@@ -93,7 +93,6 @@ export async function buildExplorerSite(): Promise<void> {
 	const html = readFileSync("website/explorer.html", "utf8")
 		.replace("__EXPLORER_CSS__", cssUrl)
 		.replace("__EXPLORER_JS__", entry("explorer"))
-		.replace("__MASCOT__", readFileSync("website/mascot.webp").toString("base64"))
 		.replace("__LICENSES__", licenseUrl)
 		.replace("__EXPLORER_DATA__", JSON.stringify(data).replaceAll("<", "\\u003c"));
 	writeFileSync(path.join(staging, "index.html"), html);

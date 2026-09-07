@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			name="description"
+			content="A searchable inventory of Maligator's verified Web Platform Test coverage and partial Node.js compatibility."
+		/>
+		<meta name="color-scheme" content="light" />
+		<title>Compatibility inventory — Maligator</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--paper: #fff9ed;
+				--paper-deep: #f4e6c5;
+				--ink: #0b2c35;
+				--muted: #52666a;
+				--tan: #d99543;
+				--cyan: #007e99;
+				--cyan-deep: #007e99;
+				--coral: #dd6746;
+				--green: #287d63;
+				--line: color-mix(in srgb, var(--ink) 17%, transparent);
+				--panel: #fffcf5;
+				--shadow: 0 5px 18px #0b2c350d;
+				--mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+				--sans:
+					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+					sans-serif;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+			html {
+				scroll-behavior: smooth;
+			}
+			body {
+				margin: 0;
+				background: var(--paper);
+				color: var(--ink);
+				font: 16px/1.6 var(--sans);
+				text-rendering: optimizeLegibility;
+			}
+			a {
+				color: inherit;
+			}
+			:focus-visible {
+				outline: 3px solid var(--cyan);
+				outline-offset: 4px;
+			}
+			.wrap {
+				width: min(1200px, calc(100% - 2rem));
+				margin-inline: auto;
+			}
+			.skip-link {
+				position: fixed;
+				top: 0.75rem;
+				left: 0.75rem;
+				z-index: 10;
+				padding: 0.65rem 1rem;
+				border-radius: 0.6rem;
+				background: var(--ink);
+				color: var(--paper);
+				transform: translateY(-180%);
+			}
+			.skip-link:focus {
+				transform: translateY(0);
+			}
+
+			.hero {
+				display: grid;
+				grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+				gap: clamp(2.5rem, 7vw, 7rem);
+				align-items: end;
+				padding-block: clamp(5rem, 10vw, 8.5rem);
+			}
+			.eyebrow,
+			.kicker {
+				margin: 0 0 1rem;
+				color: var(--cyan-deep);
+				font: 800 0.76rem/1.3 var(--mono);
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+			}
+			h1 {
+				margin: 0;
+				max-width: 13ch;
+				font-size: clamp(3rem, 6vw, 5rem);
+				line-height: 1.04;
+				letter-spacing: -0.06em;
+				font-weight: 850;
+			}
+			h1 span {
+				color: #a85b16;
+			}
+			.lede {
+				max-width: 46rem;
+				margin: 2rem 0 0;
+				font-size: clamp(1.2rem, 2.3vw, 1.6rem);
+				letter-spacing: -0.025em;
+				line-height: 1.38;
+			}
+			.search-tip {
+				margin: 1.35rem 0 0;
+				color: var(--muted);
+				font: 0.82rem/1.55 var(--mono);
+			}
+			.search-tip kbd {
+				padding: 0.18rem 0.38rem;
+				border: 1px solid var(--line);
+				border-bottom-width: 2px;
+				border-radius: 0.35rem;
+				background: var(--panel);
+				color: var(--ink);
+				font: inherit;
+			}
+
+			.summary-board {
+				position: relative;
+				display: grid;
+				grid-template-columns: auto 1fr;
+				align-items: baseline;
+				gap: 0.8rem 1rem;
+				padding: clamp(1.4rem, 4vw, 2.2rem);
+				background: var(--panel);
+
+				border: 1px solid var(--line);
+				border-radius: 0.65rem;
+				box-shadow: var(--shadow);
+			}
+			.summary-board strong {
+				font: 950 clamp(2rem, 5vw, 3.6rem)/1 var(--mono);
+				letter-spacing: -0.07em;
+			}
+			.summary-board span {
+				color: var(--muted);
+				font-size: 0.9rem;
+			}
+
+			main > section {
+				padding-block: clamp(4.5rem, 9vw, 7.5rem);
+				border-top: 1px solid var(--line);
+			}
+			.section-head {
+				display: grid;
+				grid-template-columns: minmax(0, 0.8fr) minmax(300px, 1.2fr);
+				gap: 2rem;
+				align-items: end;
+				margin-bottom: 2.4rem;
+			}
+			h2 {
+				margin: 0;
+				font-size: clamp(2.6rem, 7vw, 5.4rem);
+				line-height: 0.92;
+				letter-spacing: -0.065em;
+			}
+			.section-copy {
+				max-width: 46rem;
+				margin: 0;
+				color: var(--muted);
+				font-size: 1.04rem;
+			}
+			.section-copy strong {
+				color: var(--ink);
+			}
+
+			.legend-grid {
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 1rem;
+			}
+			.legend-card {
+				padding: 1.3rem;
+				border: 1px solid var(--line);
+				border-radius: 1rem;
+				background: var(--panel);
+			}
+			.legend-card h3 {
+				margin: 0 0 0.45rem;
+				font-size: 1rem;
+			}
+			.legend-card p {
+				margin: 0;
+				color: var(--muted);
+				font-size: 0.86rem;
+			}
+			.status {
+				display: inline-flex;
+				align-items: center;
+				width: max-content;
+				padding: 0.26rem 0.48rem;
+				border: 1px solid currentColor;
+				border-radius: 999px;
+				font: 800 0.67rem/1 var(--mono);
+				letter-spacing: 0.03em;
+				white-space: nowrap;
+			}
+			.status.full {
+				color: var(--green);
+			}
+			.status.partial {
+				color: var(--cyan-deep);
+			}
+			.status.stub {
+				color: var(--coral);
+			}
+
+			.evidence-strip {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.65rem 1.2rem;
+				margin: 0 0 1.4rem;
+				padding: 1rem 1.15rem;
+				border-left: 0.35rem solid var(--cyan);
+				background: color-mix(in srgb, var(--cyan) 8%, var(--panel));
+				font: 0.78rem/1.45 var(--mono);
+			}
+			.evidence-strip span {
+				color: var(--muted);
+			}
+			.evidence-strip code {
+				color: var(--ink);
+			}
+
+			.inventory {
+				display: grid;
+				gap: 1.2rem;
+			}
+			.inventory-group {
+				min-width: 0;
+				border: 1px solid var(--line);
+				border-radius: 1.1rem;
+				background: var(--panel);
+				box-shadow: var(--shadow);
+				overflow: hidden;
+			}
+			.inventory-heading {
+				display: flex;
+				justify-content: space-between;
+				gap: 1rem;
+				align-items: baseline;
+				padding: 1rem 1.15rem;
+				border-bottom: 1px solid var(--line);
+			}
+			.inventory-heading h3 {
+				margin: 0;
+				font-size: 1.1rem;
+				letter-spacing: -0.025em;
+			}
+			.inventory-heading span {
+				color: var(--muted);
+				font: 0.68rem/1.3 var(--mono);
+				white-space: nowrap;
+			}
+			.table-wrap {
+				overflow-x: auto;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+			}
+			th,
+			td {
+				padding: 0.9rem 1rem;
+				border-bottom: 1px solid var(--line);
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: color-mix(in srgb, var(--ink) 5%, var(--panel));
+				color: var(--muted);
+				font: 800 0.7rem/1.2 var(--mono);
+				letter-spacing: 0.07em;
+				text-transform: uppercase;
+			}
+			tr:last-child td {
+				border-bottom: 0;
+			}
+			.api-name {
+				color: var(--cyan-deep);
+				font: 800 0.84rem/1.45 var(--mono);
+				white-space: nowrap;
+			}
+			.inventory-group td:nth-child(2) {
+				width: 12rem;
+			}
+			.caveat {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 2rem;
+				align-items: center;
+				margin-top: 1.2rem;
+				padding: clamp(1.3rem, 4vw, 2rem);
+				border: 2px solid var(--ink);
+				border-radius: 1rem;
+				background: color-mix(in srgb, var(--coral) 8%, var(--panel));
+			}
+			.caveat h3 {
+				margin: 0 0 0.4rem;
+				font-size: 1.35rem;
+			}
+			.caveat p {
+				max-width: 48rem;
+				margin: 0;
+				color: var(--muted);
+			}
+			.caveat strong {
+				font: 950 clamp(2.5rem, 6vw, 4.8rem)/1 var(--mono);
+				letter-spacing: -0.08em;
+			}
+
+			@media (max-width: 820px) {
+				.hero,
+				.section-head,
+				.legend-grid {
+					grid-template-columns: 1fr;
+				}
+				.hero {
+					align-items: start;
+					padding-block: 4rem;
+				}
+				.summary-board {
+					max-width: 34rem;
+					transform: none;
+				}
+			}
+
+			@media (max-width: 560px) {
+				.wrap {
+					width: min(1200px, calc(100% - 1.25rem));
+				}
+				h1 {
+					font-size: clamp(3.2rem, 17vw, 5rem);
+				}
+				main > section {
+					padding-block: 3.5rem;
+				}
+				.section-head {
+					gap: 1rem;
+				}
+				.inventory-heading {
+					display: block;
+				}
+				.inventory-heading span {
+					display: block;
+					margin-top: 0.25rem;
+				}
+				.test-list li {
+					grid-template-columns: minmax(0, 1fr);
+					gap: 0.4rem;
+				}
+				.api-name {
+					white-space: normal;
+				}
+				.caveat {
+					grid-template-columns: 1fr;
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				html {
+					scroll-behavior: auto;
+				}
+			}
+
+			.legend-card,
+			.inventory-card,
+			.caveat {
+				border-radius: 0.65rem;
+				box-shadow: none;
+			}
+			.hero {
+				padding-block: 4.5rem;
+			}
+			.hero h1 {
+				font-size: clamp(3rem, 6vw, 5rem);
+				line-height: 1.04;
+			}
+		</style>
+		__SITE_STYLES__
+	</head>
+	<body>
+		<a class="skip-link" href="#main">Skip to compatibility inventory</a>
+		__SITE_NAVIGATION__
+
+		<main id="main">
+			<section class="hero wrap">
+				<div>
+					<p class="eyebrow">Compatibility · current main</p>
+					<h1>Support,<br /><span>item by item.</span></h1>
+					<p class="lede">
+						A searchable inventory of what passes, what is partial, and what only exists
+						to let real dependency graphs load.
+					</p>
+					<p class="search-tip">
+						Use <kbd>Ctrl</kbd> + <kbd>F</kbd> for <code>Response#json</code>,
+						<code>node:fs#readFileSync</code>, or <code>ReadableStream#pipeTo</code>.
+					</p>
+				</div>
+				<aside class="summary-board" aria-label="Compatibility inventory summary">
+					<!-- compatibility-summary:start -->
+					<!-- compatibility-summary:end -->
+				</aside>
+			</section>
+
+			<section id="meaning">
+				<div class="wrap">
+					<div class="section-head">
+						<div>
+							<p class="kicker">Read the labels literally</p>
+							<h2>No umbrella claims.</h2>
+						</div>
+						<p class="section-copy">
+							A passing file is evidence for that file. A recognized module is not the
+							whole Node.js module. The inventory names exact exposed APIs and keeps its
+							pinned WPT revision visible so gaps remain visible.
+						</p>
+					</div>
+					<div class="legend-grid">
+						<article class="legend-card">
+							<span class="status full">Full file</span>
+							<h3>Every subtest passes</h3>
+							<p>
+								The complete pinned WPT file passes in the canonical compiled/normal run,
+								without an expected-failure suppression.
+							</p>
+						</article>
+						<article class="legend-card">
+							<span class="status partial">Partial surface</span>
+							<h3>A functional Node.js slice</h3>
+							<p>
+								The listed exports are implemented for current applications and fixtures;
+								unlisted module APIs are not claimed.
+							</p>
+						</article>
+						<article class="legend-card">
+							<span class="status stub">Shape-only stub</span>
+							<h3>Loads, then fails clearly</h3>
+							<p>
+								Enough module shape exists for dependency initialization. Core operations
+								are unavailable or deliberately inert.
+							</p>
+						</article>
+					</div>
+				</div>
+			</section>
+
+			<section id="wpt">
+				<div class="wrap">
+					<div class="section-head">
+						<div>
+							<p class="kicker">Web Platform Tests</p>
+							<h2>Fully passing files.</h2>
+						</div>
+						<p class="section-copy">
+							<strong>This is curated coverage, not full web-platform compliance.</strong>
+							Every API row is backed by complete passing test files; each surrounding API
+							still has behavior and WPT files outside this inventory.
+						</p>
+					</div>
+					<div class="evidence-strip">
+						<strong>Pinned WPT revision</strong>
+						<!-- wpt-revision:start -->
+						<!-- wpt-revision:end -->
+						<span>canonical backend: compiled · mode: normal · expectations: none</span>
+					</div>
+					<div class="inventory">
+						<!-- wpt-compatibility:start -->
+						<!-- wpt-compatibility:end -->
+					</div>
+				</div>
+			</section>
+
+			<section id="node">
+				<div class="wrap">
+					<div class="section-head">
+						<div>
+							<p class="kicker">Node.js compatibility</p>
+							<h2>Curated, not drop-in.</h2>
+						</div>
+						<p class="section-copy">
+							Each module gets its own table and each named export gets an API row.
+							Semantics are developed against focused fixtures and real application
+							paths—not the full Node.js conformance surface.
+						</p>
+					</div>
+					<div class="inventory">
+						<!-- node-compatibility:start -->
+						<!-- node-compatibility:end -->
+					</div>
+					<div class="caveat">
+						<div>
+							<h3>Full Node.js built-ins claimed</h3>
+							<p>
+								None. Even the broadest modules above expose a deliberate subset. Native
+								addons using N-API are outside this compatibility layer.
+							</p>
+						</div>
+						<strong>0</strong>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		__SITE_FOOTER__
+	</body>
+</html>
