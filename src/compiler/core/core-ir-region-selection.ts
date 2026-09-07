@@ -94,6 +94,7 @@ interface PendingDirectEntry {
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
 	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
 	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
+	readonly runtimeBenefit: number;
 }
 
 type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
@@ -1160,6 +1161,32 @@ function directEntryCandidates(
 	live: ReadonlySet<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
 ): ReadonlyArray<PendingDirectEntry> {
+	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
+	const callWeight = (site: CoreDirectEntryCallSite): number => {
+		const caller = program.function(site.caller);
+		let weights = loopWeights.get(site.caller);
+		if (weights === undefined) {
+			weights = new Uint8Array(caller.blockCapacity);
+			weights.fill(1);
+			const cfg = analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: site.caller,
+				})
+				.ordinary();
+			// Unknown trip counts justify only a capped preference for repeated sites.
+			for (const loop of cfg.loops) {
+				const weight = loop.depth > 1 ? 8 : 4;
+				for (const block of loop.blocks)
+					weights[block] = Math.max(weights[block]!, weight);
+			}
+			for (const cycle of cfg.irreducibleCycles) {
+				for (const block of cycle.blocks) weights[block] = Math.max(weights[block]!, 4);
+			}
+			loopWeights.set(site.caller, weights);
+		}
+		return weights[caller.instructionBlock(site.instruction)]!;
+	};
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
 	const methods = new Map<number, Array<CoreFunctionId>>();
 	for (const target of live) {
@@ -1300,6 +1327,7 @@ function directEntryCandidates(
 					representations: Array<CorePlanRepresentation>;
 					calls: Array<CoreDirectEntryCallSite>;
 					scalars: number;
+					weight: number;
 				}
 			>();
 			for (const call of selectedCalls) {
@@ -1330,18 +1358,19 @@ function directEntryCandidates(
 				const signature = signatures.get(key) ?? {
 					representations,
 					calls: [],
+					weight: 0,
 					scalars:
 						representations.filter((representation) => representation !== "boxed")
 							.length + (needsArity ? 1 : 0),
 				};
 				signature.calls.push(call);
+				signature.weight += callWeight(call);
 				signatures.set(key, signature);
 			}
 			const signature = [...signatures.values()]
 				.filter(({ scalars }) => scalars > 0)
 				.sort(
-					(left, right) =>
-						right.calls.length * right.scalars - left.calls.length * left.scalars,
+					(left, right) => right.weight * right.scalars - left.weight * left.scalars,
 				)[0];
 			if (signature !== undefined) {
 				argumentRepresentations = needsArity ? signature.representations : undefined;
@@ -1378,8 +1407,11 @@ function directEntryCandidates(
 			continue;
 		const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 		const compilerWork = generatedCode + fn.valueCapacity;
+		const runtimeBenefit =
+			selectedCalls.reduce((sum, site) => sum + callWeight(site), 0) * 8;
 		candidates.push({
 			function: target,
+			runtimeBenefit,
 			callSites: Object.freeze(
 				selectedCalls.sort(
 					(left, right) =>
@@ -1399,7 +1431,7 @@ function directEntryCandidates(
 				site: callSites[0]!.instruction,
 				revision: 0,
 				priorityClass: 2,
-				priorityScore: 0,
+				priorityScore: -runtimeBenefit,
 				targets: Object.freeze([target]),
 				generatedCodeCost: generatedCode,
 				compilerWorkCost: compilerWork,
@@ -1607,7 +1639,7 @@ export function buildCoreOptimizationPlan(
 					cost: Object.freeze({
 						generatedCode: budget.generatedCodeCost,
 						compilerWork: budget.compilerWorkCost,
-						runtimeBenefit: candidate.callSites.length * 8,
+						runtimeBenefit: candidate.runtimeBenefit,
 					}),
 				}),
 			);

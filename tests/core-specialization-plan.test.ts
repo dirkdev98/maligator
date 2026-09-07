@@ -1142,4 +1142,38 @@ describe("late Core specialization plan", () => {
 			]!.directEntries,
 		).toEqual(fn.directEntries);
 	});
+
+	it.each([false, true])(
+		"prefers the numeric loop signature over cold strings: nested=%s",
+		(nested) => {
+			const definition = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`
+				(function () {
+					const helper = function (value) { let sum = value; for (let j = 0; j < 3; j++) sum = sum + value; return sum; };
+					globalThis.coldA = helper("startup");
+					globalThis.coldB = helper("shutdown");
+					for (let i = 0; i < 10; i++) {
+						${nested ? 'globalThis.outer = helper("outer"); for (let k = 0; k < 10; k++) {' : ""}
+						globalThis.hot = helper(i + 0.5);
+						${nested ? "}" : ""}
+					}
+				})();
+			`,
+					"loop-signature.js",
+				),
+			);
+			const entries = definition.native.functions.flatMap((fn) => fn.directEntries);
+			expect(entries).toHaveLength(1);
+			expect(entries[0]!.parameterRepresentations).toEqual(["number"]);
+			expect(entries[0]!.resultRepresentation).toBe("number");
+			const calls = definition.native.functions.flatMap((fn) =>
+				fn.instructions.filter(
+					(instruction) =>
+						instruction?.kind === "call" && instruction.directEntryId !== undefined,
+				),
+			);
+			expect(calls).toHaveLength(1);
+		},
+	);
 });
