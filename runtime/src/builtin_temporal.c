@@ -748,13 +748,9 @@ static bool temporal_calendar_kind(
     return true;
 }
 
-static bool temporal_calendar_string(
+static bool temporal_calendar_from_like(
     MalVm *vm, MalValue value, AnyCalendarKind *kind
 ) {
-    if (mal_value_is_undefined(value)) {
-        *kind = AnyCalendarKind_Iso;
-        return true;
-    }
     if (mal_value_is_temporal_object(value)) {
         return temporal_calendar_kind(vm, value, kind);
     }
@@ -1734,7 +1730,8 @@ static bool plain_date_partial_from_object_impl(
     MalValue value;
     if (!mal_vm_get_property(
             vm, input, mal_intrinsic_string_key(vm, "calendar"), &value) ||
-        !temporal_calendar_string(vm, value, &fields->partial.calendar)) {
+        (!mal_value_is_undefined(value) &&
+         !temporal_calendar_from_like(vm, value, &fields->partial.calendar))) {
         return false;
     }
     const byte *names[] = {"day", "era", "eraYear", "month", "monthCode", "year"};
@@ -2196,7 +2193,7 @@ static MalValue plain_date_with_calendar(
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
     AnyCalendarKind calendar;
-    if (!temporal_calendar_kind(
+    if (!temporal_calendar_from_like(
             vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &calendar)) {
         return mal_value_new_undefined();
     }
@@ -2752,7 +2749,7 @@ static MalValue plain_date_time_with_calendar(
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
     AnyCalendarKind calendar;
-    if (!temporal_calendar_kind(
+    if (!temporal_calendar_from_like(
             vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &calendar)) {
         return mal_value_new_undefined();
     }
@@ -4984,7 +4981,7 @@ static MalValue zoned_date_time_with_calendar(
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
     AnyCalendarKind calendar;
-    if (!temporal_calendar_kind(
+    if (!temporal_calendar_from_like(
             vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &calendar)) {
         return mal_value_new_undefined();
     }

@@ -87,7 +87,10 @@ fn locale_expander() -> icu_locale::LocaleExpander {
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_canonicalize_locale(tag_ptr: *const u8, tag_len: usize, out: *mut u8, out_cap: i32) -> i32 {
     match parse_locale(tag_ptr, tag_len) {
-        Some(locale) => unsafe { write_utf8(&locale.to_string(), out, out_cap) },
+        Some(mut locale) => {
+            icu_locale::LocaleCanonicalizer::new_extended().canonicalize(&mut locale);
+            unsafe { write_utf8(&locale.to_string(), out, out_cap) }
+        },
         None => -1,
     }
 }

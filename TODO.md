@@ -412,6 +412,14 @@ only reproducible input.
       options, NumberFormat, DateTimeFormat, and interval collapsing. Keep data
       availability distinct from algorithmic correctness.
 
+- [ ] Implement `Temporal.PlainDateTime.prototype.with` through the existing Rust
+      partial-date-time API. Preserve observable field access and conversion order,
+      calendar fields, overflow behavior, and rejection of Temporal objects.
+
+- [ ] Complete Duration `relativeTo` conversion for strings and property bags in
+      `compare`, `round`, and `total`. Preserve option access order and Rust handle
+      lifetimes for plain and zoned reference dates.
+
 - [ ] Generate a ranked failure-cluster report from scripts/test262.json. Use it rather
       than mutable hand-maintained counts to select correctness work.
 
