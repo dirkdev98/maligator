@@ -405,6 +405,8 @@ bool mal_op_call_guarded_math(
 bool mal_op_call_guarded_builtin(
     MalCallable *callable, const MalInstruction *instruction);
 void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_call_literal_method(MalCallable *callable, const MalInstruction *instruction);
+MalValue mal_vm_call_literal_method(MalVm *vm, i32 method, MalValue receiver, const MalValue *args, i32 count);
 void mal_op_call_builtin_exact_collection(
     MalCallable *callable, const MalInstruction *instruction
 );
@@ -2097,7 +2099,7 @@ u64 mal_vm_stack_object_materialization_count(void);
 MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
-MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset);
+MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot);
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
 

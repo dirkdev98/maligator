@@ -936,7 +936,7 @@ describe("late Core specialization plan", () => {
 		const execution = lowerCoreCompilationToExecution({
 			program: sealed,
 			context,
-			plan: verifyCoreOptimizationPlan(sealed, plan),
+			plan: verifyCoreOptimizationPlan(sealed, plan, context),
 		});
 		expect(execution.functions[callee]!.directEntries).toMatchObject([
 			{ id: 0, resultRepresentation: "number" },
@@ -953,6 +953,7 @@ describe("late Core specialization plan", () => {
 		const genericOnly: CoreOptimizationPlan = {
 			...plan,
 			directEntries: [],
+			specializedOnlyFunctions: [],
 			recipes: buildCoreSpecializationRecipeTable([]),
 			statistics: {
 				...plan.statistics,
@@ -969,7 +970,7 @@ describe("late Core specialization plan", () => {
 		const generic = lowerCoreCompilationToExecution({
 			program: sealed,
 			context,
-			plan: verifyCoreOptimizationPlan(sealed, genericOnly),
+			plan: verifyCoreOptimizationPlan(sealed, genericOnly, context),
 		});
 		expect(
 			generic.functions[caller]!.blocks.flatMap(({ instructions }) => instructions).find(
@@ -990,7 +991,7 @@ describe("late Core specialization plan", () => {
 				},
 			],
 		};
-		expect(() => verifyCoreOptimizationPlan(sealed, omittedCallsite)).toThrow(
+		expect(() => verifyCoreOptimizationPlan(sealed, omittedCallsite, context)).toThrow(
 			/omitted from target lowering/,
 		);
 	});

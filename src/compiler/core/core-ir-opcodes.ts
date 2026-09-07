@@ -28,6 +28,7 @@ export const CORE_OPCODES = [
 	"binary",
 	"call",
 	"callBuiltin",
+	"callLiteralMethod",
 	"callSpread",
 	"callSpreadIterable",
 	"callRestArguments",
@@ -225,6 +226,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"binary",
 	"call",
 	"callBuiltin",
+	"callLiteralMethod",
 	"callSpread",
 	"callSpreadIterable",
 	"callRestArguments",
@@ -323,6 +325,10 @@ const OPCODE_ACCESSES = {
 	// The callee is implicit in the activation rather than an SSA operand.
 	generatorStart: [read("prototype")],
 	// Operation-specific refinements narrow this conservative receiver-state envelope.
+	callLiteralMethod: [
+		read("object-slot", { baseOperand: 0 }),
+		write("object-slot", { baseOperand: 0 }),
+	],
 	callBuiltin: [
 		read("object-slot", { baseOperand: 0 }),
 		write("object-slot", { baseOperand: 0 }),
@@ -361,9 +367,12 @@ const OPCODE_ACCESSES = {
 	// whole-family read: conservative, and never a narrower guess than the
 	// descriptor can decode.
 	createModuleNamespace: [read("global-slot")],
-	// A dedicated per-site slot the runtime fills on first evaluation and returns
-	// on every later one, which is what makes the strings object's identity stable.
-	// The stored value is the instruction's own result rather than an operand.
+	// A reusable literal publishes its fully constructed tree to a private slot on first use.
+	instantiateLiteralTemplate: [
+		read("global-slot", { attributes: ["cacheSlot"] }),
+		write("global-slot", { attributes: ["cacheSlot"] }),
+	],
+	// Tagged templates expose the identity stored in their dedicated per-site slot.
 	createTemplateObject: [
 		read("global-slot", { attributes: ["cacheSlot"] }),
 		write("global-slot", { attributes: ["cacheSlot"] }),
@@ -457,9 +466,8 @@ const OPCODE_ALLOCATIONS = {
  * other, and a newly added control transfer is not a call anywhere until it is
  * declared here.
  *
- * `callBuiltin` is deliberately absent: its callee is a builtin named by an
- * attribute rather than an operand, so no operand holds a callable and no script
- * function's return value is involved.
+ * Builtin and literal-method calls name their callee in attributes rather than
+ * operands, so they do not transfer script-function targets.
  */
 const OPCODE_CALL_TRANSFERS = {
 	callRestArguments: {
@@ -589,6 +597,7 @@ const INPUT_ARITIES = {
 	binary: [2, 2],
 	call: [2, 65_535],
 	callBuiltin: [1, 65_535],
+	callLiteralMethod: [1, 65_535],
 	callSpread: [3, 3],
 	callSpreadIterable: [3, 3],
 	callRestArguments: [3, 3],

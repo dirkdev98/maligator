@@ -288,6 +288,9 @@ function cloneInstruction(
 			return {
 				...instruction,
 				templateOffset: instruction.templateOffset + base.template,
+				...(instruction.cacheSlot === undefined
+					? {}
+					: { cacheSlot: instruction.cacheSlot + base.global }),
 			};
 		case "LOAD_UNDECLARED":
 		case "GLOBAL_BINDING_QUERY":
@@ -364,6 +367,7 @@ function cloneInstruction(
 					rebaseVmValueOperand(operand, base.string),
 				),
 			};
+		case "CALL_LITERAL_METHOD":
 		case "CALL_BUILTIN":
 			return {
 				...instruction,

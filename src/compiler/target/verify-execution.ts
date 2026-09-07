@@ -361,6 +361,7 @@ function verifyInstructionOperands(model: FunctionModel): void {
 			const embeddable =
 				instruction.type === "call" ||
 				instruction.type === "callBuiltin" ||
+				instruction.type === "callLiteralMethod" ||
 				instruction.type === "construct";
 			for (const [position, register] of (registers ?? []).entries()) {
 				const operandContext = { ...context, register };

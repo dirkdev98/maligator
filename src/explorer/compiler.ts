@@ -337,6 +337,7 @@ function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	return Object.freeze({
 		...plan,
 		directEntries: Object.freeze([]),
+		specializedOnlyFunctions: Object.freeze([]),
 		recipes: buildCoreSpecializationRecipeTable([]),
 		statistics: Object.freeze({
 			considered: discovered,

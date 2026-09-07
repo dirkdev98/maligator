@@ -959,7 +959,13 @@ static bool mal_literal_decode_value(
     return false;
 }
 
-MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
+MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot) {
+    if (cache_slot < -1 || cache_slot >= vm->runtime_image->global_count) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal constant slot");
+        return MAL_VALUE_UNDEFINED;
+    }
+    if (cache_slot >= 0 && !mal_value_is_undefined(vm->globals[cache_slot]))
+        return vm->globals[cache_slot];
     MalValue result = mal_value_new_undefined();
     MalRootSpan result_root;
     mal_gc_root(&result_root, &result, 1);
@@ -1072,6 +1078,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal template");
         result = mal_value_new_undefined();
     }
+    if (ok && cache_slot >= 0) vm->globals[cache_slot] = result;
     mal_gc_unroot(&active_root);
     mal_gc_unroot(&result_root);
     free(active);
@@ -1082,7 +1089,8 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
 void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.instantiate_literal_template.dst] =
         mal_vm_instantiate_literal_template(
-            callable->vm, instruction->as.instantiate_literal_template.template_offset);
+            callable->vm, instruction->as.instantiate_literal_template.template_offset,
+            instruction->as.instantiate_literal_template.cache_slot);
 }
 
 // Shared by the interpreter op and the native backend: build a module namespace
@@ -2641,6 +2649,54 @@ void mal_op_call_builtin_exact_collection(
         default:
             abort();
     }
+    callable->registers[instruction->as.call_builtin.dst] = result;
+}
+
+MalValue mal_vm_call_literal_method(MalVm *vm, i32 method, MalValue receiver, const MalValue *args, i32 count) {
+    if (method < 0 || method >= MAL_LITERAL_METHOD_COUNT) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal method");
+        return MAL_VALUE_UNDEFINED;
+    }
+    if (vm->literal_method_callbacks[method] == nullptr) {
+        static const struct { MalIntrinsic prototype; const byte *key; } methods[] = {
+#define MAL_LITERAL_METHOD(index, prototype, key) { prototype, (const byte *) key },
+#include "generated/literal_prototype_methods.inc"
+#undef MAL_LITERAL_METHOD
+        };
+        MalKey key = strcmp((const char *) methods[method].key, "@@iterator") == 0
+            ? mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)
+            : mal_intrinsic_string_key(vm, methods[method].key);
+        MalValue callee;
+        if (!mal_vm_get_property(vm, vm->intrinsics[methods[method].prototype], key, &callee))
+            return MAL_VALUE_UNDEFINED;
+        if (!mal_value_is_native_function_object(callee)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "literal method is not native");
+            return MAL_VALUE_UNDEFINED;
+        }
+        // Locked primordial reachability roots both the callee and its callback for the VM lifetime.
+        vm->literal_method_callees[method] = callee;
+        vm->literal_method_callbacks[method] = mal_native_function_object_callback(mal_value_to_native_function_object(callee));
+    }
+    MalCompletion completion = mal_vm_call_exact_native(vm, vm->literal_method_callbacks[method],
+        vm->literal_method_callees[method], receiver, args, count);
+    if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+    return completion.value;
+}
+
+void mal_op_call_literal_method(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call_builtin.data_offset);
+    i32 count = data[0];
+    if (vm->value_stack_size + count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
+    }
+    i32 base = vm->value_stack_size;
+    for (i32 i = 0; i < count; i++) vm->value_stack[base + i] = mal_op_value_operand(callable, data[i + 1]);
+    vm->value_stack_size = base + count;
+    MalValue receiver = mal_op_value_operand(callable, instruction->as.call_builtin.this_value);
+    MalValue result = mal_vm_call_literal_method(vm, instruction->as.call_builtin.operation, receiver, &vm->value_stack[base], count);
+    vm->value_stack_size = base;
     callable->registers[instruction->as.call_builtin.dst] = result;
 }
 

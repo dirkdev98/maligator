@@ -114,6 +114,7 @@ export interface ExecutionDirectEntry {
 }
 
 export interface ExecutionFunction {
+	readonly specializedOnly?: true;
 	readonly sourcePath: string;
 	readonly functionIndex: number;
 	readonly nameStringIndex: number;

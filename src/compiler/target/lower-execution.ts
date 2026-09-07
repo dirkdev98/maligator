@@ -326,7 +326,7 @@ function immediateOnlyInstructions(
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const embeddable =
 				!protectedInstructions.has(instruction) &&
-				["call", "callBuiltin", "construct"].includes(
+				["call", "callBuiltin", "callLiteralMethod", "construct"].includes(
 					fn.instructionOpcodeName(instruction),
 				);
 			const inputStart = kernel.instructionOperandStart(instruction);
@@ -445,7 +445,10 @@ function rebuildOperation(
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	if (
 		allowImmediateOperands &&
-		(opcode === "call" || opcode === "callBuiltin" || opcode === "construct")
+		(opcode === "call" ||
+			opcode === "callBuiltin" ||
+			opcode === "callLiteralMethod" ||
+			opcode === "construct")
 	) {
 		for (let index = 0; index < inputCount; index++) {
 			const input = kernel.operandAt(inputStart + index);
@@ -2574,8 +2577,10 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryTargets.set(site.caller, targets);
 		}
 	}
-	const functions = functionMap.executionToCore.map((core, execution) =>
-		lowerFunctionToTarget(
+	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
+	const functions = functionMap.executionToCore.map((core, execution) => ({
+		...(specializedOnly.has(core) ? { specializedOnly: true as const } : {}),
+		...lowerFunctionToTarget(
 			compilation.program.function(core),
 			execution,
 			functionMap,
@@ -2601,7 +2606,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			compilation.context.facts.instructionSites,
 			options.reuseRegisters !== false,
 		),
-	);
+	}));
 	return Object.freeze({
 		core: compilation.program,
 		context: compilation.context,

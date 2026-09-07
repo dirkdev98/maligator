@@ -1,3 +1,4 @@
+import { literalPrototypeMethods } from "../shared/literal-prototype-methods.ts";
 import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -23,7 +24,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 38;
+export const WIRE_VERSION = 39;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -829,6 +830,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			w.i32(i.dst);
 			w.i32(i.templateOffset);
+			w.i32(i.cacheSlot ?? -1);
 			return;
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
@@ -865,6 +867,13 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.left);
 			w.i32(i.right);
 			w.u8(mathBinaryNumberTag(i.operation));
+			return;
+		case "CALL_LITERAL_METHOD":
+			w.i32(i.dst);
+			w.i32(i.thisValue);
+			w.i32(i.argumentCount);
+			w.i32Array(i.arguments);
+			w.u32(i.methodIndex);
 			return;
 		case "CALL_BUILTIN":
 			w.i32(i.dst);
@@ -1599,8 +1608,14 @@ function readInstruction(r: Reader): BytecodeInstruction {
 		}
 		case "CREATE_ARRAY":
 			return { opcode, dst: r.i32(), length: r.i32() };
-		case "INSTANTIATE_LITERAL_TEMPLATE":
-			return { opcode, dst: r.i32(), templateOffset: r.i32() };
+		case "INSTANTIATE_LITERAL_TEMPLATE": {
+			const dst = r.i32(),
+				templateOffset = r.i32(),
+				cacheSlot = r.i32();
+			if (cacheSlot < -1)
+				throw new RangeError("program-image-codec: invalid literal constant slot");
+			return { opcode, dst, templateOffset, ...(cacheSlot < 0 ? {} : { cacheSlot }) };
+		}
 		case "CREATE_MODULE_NAMESPACE":
 			return { opcode, dst: r.i32(), nameIndices: r.i32Array(), slots: r.i32Array() };
 		case "CREATE_TEMPLATE_OBJECT":
@@ -1662,6 +1677,27 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				left,
 				right,
 				operation,
+			};
+		}
+		case "CALL_LITERAL_METHOD": {
+			const dst = r.i32();
+			const thisValue = r.i32();
+			const argumentCount = r.i32();
+			const arguments_ = r.i32Array();
+			const methodIndex = r.u32();
+			if (
+				literalPrototypeMethods[methodIndex] === undefined ||
+				argumentCount !== arguments_.length
+			) {
+				throw new RangeError("program-image-codec: invalid direct builtin call");
+			}
+			return {
+				opcode,
+				dst,
+				thisValue,
+				argumentCount,
+				arguments: arguments_,
+				methodIndex,
 			};
 		}
 		case "CALL_BUILTIN": {

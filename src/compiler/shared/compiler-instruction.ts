@@ -191,6 +191,8 @@ export type CompilerInstruction =
 	  }
 	| {
 			type: "instantiateLiteralTemplate";
+			/** Private GC-rooted slot, present only after Core proves identity cannot escape. */
+			cacheSlot?: number;
 
 			// [destination]
 			registers: [number];
@@ -395,6 +397,12 @@ export type CompilerInstruction =
 			 * this operation may still allocate, call user code, or throw according to its
 			 * registry effects, but it has no dynamic property/call fallback edge.
 			 */
+			type: "callLiteralMethod";
+			registers: [number, number, ...Array<number>];
+			methodIndex: number;
+			immediateValues?: Array<CompilerImmediateValue | undefined>;
+	  }
+	| {
 			type: "callBuiltin";
 			// [destination, this, ...arguments]
 			registers: [number, number, ...Array<number>];

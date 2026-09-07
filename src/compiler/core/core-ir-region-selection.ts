@@ -52,6 +52,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreSpecializedOnlyFunctions } from "./core-native-body-reachability.ts";
 import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
@@ -1750,6 +1751,15 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
+		specializedOnlyFunctions: Object.freeze(
+			coreSpecializedOnlyFunctions(
+				program,
+				options.context,
+				summaries.targets,
+				liveFunctions,
+				directEntries,
+			),
+		),
 		operatorInputs: coreOperatorInputPlans(program, liveFunctions),
 		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
 		recipes: buildCoreSpecializationRecipeTable(specializations),

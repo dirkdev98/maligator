@@ -2714,6 +2714,17 @@ export class CoreProgram {
 		this.#versions.data++;
 	}
 
+	_appendLiteralConstant(
+		mutation: CoreStoreMutation,
+		data: ReadonlyArray<number>,
+	): { templateOffset: number; cacheSlot: number } {
+		this.#requireMutation(mutation);
+		if (this.#sealed) throw new Error("Core program is sealed");
+		const templateOffset = this.#literalTemplateData.length;
+		this.#literalTemplateData = Object.freeze([...this.#literalTemplateData, ...data]);
+		return { templateOffset, cacheSlot: this.#globalCount++ };
+	}
+
 	_appendSourcePositions(
 		mutation: CoreStoreMutation,
 		positions: ReadonlyArray<CoreSourcePosition>,

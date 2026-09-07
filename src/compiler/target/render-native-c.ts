@@ -168,7 +168,12 @@ function nativeMathBinaryExpr(
 	return `(isnan(${left}) || isnan(${right}) ? NAN : (${left} == 0.0 && ${right} == 0.0 ? (${negativeZero} ? -0.0 : 0.0) : (${left} ${compare} ${right} ? ${left} : ${right})))`;
 }
 
-export interface CompiledFunction {
+interface NativeCallCoverage {
+	readonly emittedInstructions: ReadonlySet<number>;
+	readonly directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
+}
+
+export interface CompiledFunction extends NativeCallCoverage {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
 	/** Final decisions from the exact emitted variant, never an exploratory pass. */
@@ -177,6 +182,8 @@ export interface CompiledFunction {
 	source: string;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
+		emittedInstructions: ReadonlySet<number>;
+		directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
 		id: number;
 		symbol: string;
 		/**
@@ -1096,6 +1103,8 @@ function emitCompiledVariant(
 		symbol,
 		source: lines.join("\n"),
 		profileDecisions,
+		emittedInstructions: body.emittedInstructions,
+		directEntryCalls: body.directEntryCalls,
 		directEntries: [],
 	};
 }
@@ -1265,6 +1274,8 @@ export function emitCompiledFunction(
 		...canonical,
 		directEntries: variants.map(({ entry, emitted, leaf }) => ({
 			...(leaf === undefined ? {} : { leaf }),
+			emittedInstructions: emitted.emittedInstructions,
+			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
 			symbol: emitted.symbol,
 			source: emitted.source,
@@ -1496,6 +1507,8 @@ function emitResumableFunction(
 		symbol,
 		source: lines.join("\n"),
 		profileDecisions,
+		emittedInstructions: body.emittedInstructions,
+		directEntryCalls: body.directEntryCalls,
 		directEntries: [],
 	};
 }
@@ -1878,7 +1891,7 @@ interface IndexedLengthLoopAction {
 
 type NativeBodyResource = "propertyCache" | "literalShapes" | "newTarget" | "throwExit";
 
-interface EmittedBody {
+interface EmittedBody extends NativeCallCoverage {
 	readonly lines: Array<string>;
 	readonly invocationPreamble: Array<string>;
 	readonly resources: ReadonlySet<NativeBodyResource>;
@@ -2426,6 +2439,8 @@ function emitBody(
 	}
 	const lines: Array<string> = [];
 	const resources = new Set<NativeBodyResource>();
+	const emittedInstructions = new Set<number>();
+	const directEntryCalls = new Map<number, Set<number>>();
 	const invocationPreamble: Array<string> = [];
 	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
 		if (action.role !== "call") continue;
@@ -2713,6 +2728,7 @@ function emitBody(
 		}
 		const instructionProfile: NativeInstructionProfile | undefined =
 			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
+		emittedInstructions.add(ip);
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -2726,6 +2742,7 @@ function emitBody(
 			{
 				nativePlan: nativeInstructions[ip],
 				resources,
+				directEntryCalls,
 				profileSiteId: fn.profileSiteIds?.[ip],
 				profile: instructionProfile,
 				gcSafepoint: safepointKind !== undefined,
@@ -2830,7 +2847,7 @@ function emitBody(
 		}
 	}
 
-	return { lines, resources, invocationPreamble };
+	return { lines, resources, invocationPreamble, emittedInstructions, directEntryCalls };
 }
 
 function profileOperationInstruction(instruction: BytecodeInstruction): boolean {
@@ -3052,6 +3069,7 @@ interface NativeFieldCall {
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly resources: Set<NativeBodyResource>;
+	readonly directEntryCalls: Map<number, Set<number>>;
 	readonly profileSiteId?: number;
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
@@ -3190,6 +3208,7 @@ function emitInstruction(
 			? expression
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const genericContext: NativeInstructionContext = {
+		directEntryCalls: context.directEntryCalls,
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
 		nativePlan,
@@ -3771,7 +3790,7 @@ function emitInstruction(
 			];
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return [
-				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)});`,
+				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.cacheSlot === undefined ? "-1" : relocation.globalIndex(instruction.cacheSlot)});`,
 				throwCheck(),
 			];
 		case "CREATE_FUNCTION":
@@ -5153,6 +5172,16 @@ function emitInstruction(
 			);
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
+		case "CALL_LITERAL_METHOD": {
+			const args = instruction.arguments.map(boxedOperand);
+			const arguments_ =
+				args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`;
+			return [
+				`r${instruction.dst} = mal_vm_call_literal_method(vm, ${instruction.methodIndex}, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length});`,
+				throwCheck(),
+				poll,
+			];
+		}
 		case "CALL_BUILTIN": {
 			const argsExpr =
 				instruction.arguments.length === 0
@@ -5971,6 +6000,9 @@ function emitInstruction(
 						entry !== undefined &&
 						parameters?.every((parameter) => parameter !== null)
 					) {
+						const covered = context.directEntryCalls.get(ip) ?? new Set<number>();
+						covered.add(target);
+						context.directEntryCalls.set(ip, covered);
 						const value = `__guarded_entry_value_${ip}`;
 						const result =
 							entry.resultRepresentation === "number"
@@ -6052,6 +6084,7 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					const parameters = directEntryParameters(directEntry);
 					if (parameters.every((parameter) => parameter !== null)) {
+						context.directEntryCalls.set(ip, new Set([target]));
 						nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
 						const directResult =
 							directEntry.resultRepresentation === "int32"

@@ -38,7 +38,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 60;
+export const COMPILER_ARTIFACT_VERSION = 61;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -629,6 +629,7 @@ function writeCompilerArtifact(
 				w.u32(entry.entryId);
 			}
 		}
+		w.u8(native.specializedOnly ? 1 : 0);
 		w.u32(native.directEntries.length);
 		for (const [entryIndex, entry] of native.directEntries.entries()) {
 			if (
@@ -2811,6 +2812,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				entryId: r.u32(),
 			})),
 		}));
+		const specializedOnly = r.u8();
+		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
 		const directEntryCount = r.count(1);
 		if (directEntryCount > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
@@ -4172,6 +4175,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			}
 		}
 		const nativeFunction: NativeFunctionPlan = {
+			...(specializedOnly ? { specializedOnly: true as const } : {}),
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,

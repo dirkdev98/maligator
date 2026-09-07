@@ -509,6 +509,8 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
 
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
+    memset(vm->literal_method_callbacks, 0, sizeof(vm->literal_method_callbacks));
+    memset(vm->literal_method_callees, 0, sizeof(vm->literal_method_callees));
 #if MAL_REALMS
     vm->error_stack_marker = mal_value_new_undefined();
 #endif
@@ -1192,6 +1194,8 @@ static void mal_vm_rebase_instruction(
             break;
         case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
             in->as.instantiate_literal_template.template_offset += template_base;
+            if (in->as.instantiate_literal_template.cache_slot >= 0)
+                in->as.instantiate_literal_template.cache_slot += global_base;
             break;
         case MAL_OP_LOAD_UNDECLARED:
             in->as.load_undeclared.name_string_index += string_base;
@@ -1278,6 +1282,7 @@ static void mal_vm_rebase_instruction(
             }
             break;
         }
+        case MAL_OP_CALL_LITERAL_METHOD:
         case MAL_OP_CALL_BUILTIN: {
             in->as.call_builtin.this_value = mal_vm_rebase_value_operand(
                 in->as.call_builtin.this_value, string_base);
@@ -2991,6 +2996,9 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
                 break;
             }
+            case MAL_OP_CALL_LITERAL_METHOD:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_literal_method(frame, instruction));
+                break;
             case MAL_OP_CALL_BUILTIN: {
                 MalDirectBuiltinOp operation =
                     (MalDirectBuiltinOp) instruction->as.call_builtin.operation;

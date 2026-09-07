@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 38u
+#define WIRE_VERSION 39u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -629,6 +629,7 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE;
             o->as.instantiate_literal_template.dst = rd_i32(r);
             o->as.instantiate_literal_template.template_offset = rd_i32(r);
+            o->as.instantiate_literal_template.cache_slot = rd_i32(r);
             return;
         case WIRE_CREATE_MODULE_NAMESPACE: {
             o->opcode = MAL_OP_CREATE_MODULE_NAMESPACE;
@@ -735,6 +736,17 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             } else {
                 side_data->data[side_data->count++] = guarded_side_tag;
             }
+            return;
+        }
+        case WIRE_CALL_LITERAL_METHOD: {
+            o->opcode = MAL_OP_CALL_LITERAL_METHOD;
+            o->as.call_builtin.dst = rd_i32(r);
+            o->as.call_builtin.this_value = rd_i32(r);
+            i32 count = rd_i32(r);
+            o->as.call_builtin.data_offset = rd_side_single(r, side_data, count);
+            u32 method = rd_u32(r);
+            if (method >= MAL_LITERAL_METHOD_COUNT) r->ok = false;
+            o->as.call_builtin.operation = (i32) method;
             return;
         }
         case WIRE_CALL_BUILTIN: {
@@ -1320,6 +1332,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
         MAL_WRITES_DST(MAL_OP_CALL, call);
         MAL_WRITES_DST(MAL_OP_CALL_BUILTIN, call_builtin);
+        MAL_WRITES_DST(MAL_OP_CALL_LITERAL_METHOD, call_builtin);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
         MAL_WRITES_DST(MAL_OP_CATCH, caught);
         MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
@@ -2291,7 +2304,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
-            } else if (instruction->opcode == MAL_OP_CALL_BUILTIN) {
+            } else if ((instruction->opcode == MAL_OP_CALL_BUILTIN || instruction->opcode == MAL_OP_CALL_LITERAL_METHOD)) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call_builtin.data_offset];
                 if (!mal_loaded_value_operand_valid(

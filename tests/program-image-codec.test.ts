@@ -40,6 +40,15 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_STRING", dst: 3, stringIndex: 1 },
 	{ opcode: "CREATE_BIGINT", dst: 4, bigintIndex: 0 },
 	{ opcode: "INSTANTIATE_LITERAL_TEMPLATE", dst: 4, templateOffset: 0 },
+	{ opcode: "INSTANTIATE_LITERAL_TEMPLATE", dst: 4, templateOffset: 0, cacheSlot: 0 },
+	{
+		opcode: "CALL_LITERAL_METHOD",
+		dst: 4,
+		thisValue: 0,
+		arguments: [1, 2],
+		argumentCount: 2,
+		methodIndex: 0,
+	},
 	{ opcode: "LOAD_INTRINSIC", dst: 5, intrinsic: "Math" },
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
@@ -665,7 +674,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-18)).toEqual([
+		expect(WIRE_OPCODES.slice(-19)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -679,6 +688,7 @@ describe("program-image-codec", () => {
 			"MATH_UNARY_NUMBER",
 			"MATH_BINARY_NUMBER",
 			"CALL_BUILTIN",
+			"CALL_LITERAL_METHOD",
 			"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"SELECT_SHAPE_CASE",

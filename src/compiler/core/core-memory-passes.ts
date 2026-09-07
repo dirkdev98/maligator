@@ -58,6 +58,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { reuseLiteralConstants } from "./core-literal-constants.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -2267,6 +2268,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 };
 
 export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	reuseLiteralConstants,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
@@ -2285,6 +2287,7 @@ export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
 ];
 
 export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	reuseLiteralConstants,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,

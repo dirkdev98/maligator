@@ -2,6 +2,8 @@ import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
+import { analyzeCoreCallGraph } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -28,6 +30,7 @@ import type {
 	CoreRepresentation,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
+import { coreSpecializedOnlyFunctions } from "./core-native-body-reachability.ts";
 import {
 	coreArgumentObservation,
 	coreNativeEntryProofIsCurrent,
@@ -1775,6 +1778,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 export function verifyCoreOptimizationPlan(
 	program: SealedCoreProgram,
 	plan: CoreOptimizationPlan,
+	context?: CoreCompilationContext,
 ): VerifiedCoreOptimizationPlan {
 	const startedAt = Date.now();
 	if (!program.sealed) fail("program is not sealed");
@@ -1804,6 +1808,22 @@ export function verifyCoreOptimizationPlan(
 		)
 	) {
 		fail("live function mapping is not a sorted set of stable IDs");
+	}
+	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0) {
+		if (context?.facts.closure.sourceClosure.kind !== "known")
+			fail("native body omission requires source closure");
+		const targets = analyzeCoreCallGraph(program, true, undefined, undefined, context);
+		const eligible = new Set(
+			coreSpecializedOnlyFunctions(
+				program,
+				context,
+				targets,
+				plan.liveFunctions,
+				plan.directEntries,
+			),
+		);
+		if (plan.specializedOnlyFunctions!.some((functionId) => !eligible.has(functionId)))
+			fail("native body has a reachable generic use");
 	}
 	const blockProofs = verifyBlockOrders(program, plan);
 	const ids: Array<string> = [];

@@ -373,7 +373,7 @@ export function optimizeCore(
 	reportBuilder.recordCheckpoint("after-sealing", program);
 	const verifiedPlan = measurePhase(
 		"plan-verification",
-		() => verifyCoreOptimizationPlan(program, plan),
+		() => verifyCoreOptimizationPlan(program, plan, compilation.context),
 		CORE_OPTIMIZATION_OWNER.coreVerification,
 	);
 	reportBuilder.recordPlanWork(verifiedPlan.statistics);

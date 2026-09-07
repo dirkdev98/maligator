@@ -416,6 +416,7 @@ export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStati
 export interface CoreOptimizationPlan {
 	readonly version: CorePlanVersionStamp;
 	readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly specializedOnlyFunctions?: ReadonlyArray<CoreFunctionId>;
 	readonly blockOrders: ReadonlyArray<{
 		readonly function: CoreFunctionId;
 		readonly blocks: ReadonlyArray<CoreBlockId>;

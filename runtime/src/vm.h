@@ -195,7 +195,7 @@ typedef struct MalInstruction {
         } create_array;
 
         struct {
-            i32 dst, template_offset;
+            i32 dst, template_offset, cache_slot;
         } instantiate_literal_template;
 
         struct {
@@ -1278,7 +1278,16 @@ typedef struct MalExactScriptCall {
     MalEnv *env;
 } MalExactScriptCall;
 
+enum {
+    MAL_LITERAL_METHOD_COUNT = 0
+#define MAL_LITERAL_METHOD(index, prototype, key) + 1
+#include "generated/literal_prototype_methods.inc"
+#undef MAL_LITERAL_METHOD
+};
+
 typedef struct MalVm {
+    MalValue literal_method_callees[MAL_LITERAL_METHOD_COUNT];
+    MalNativeFunctionCallback literal_method_callbacks[MAL_LITERAL_METHOD_COUNT];
     const MalRuntimeImage *runtime_image;
 
     /** Initial immutable string table retained for native code's direct constants. */

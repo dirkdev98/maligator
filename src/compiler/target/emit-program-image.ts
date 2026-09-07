@@ -365,6 +365,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					),
 				);
 				break;
+			case "CALL_LITERAL_METHOD":
 			case "CALL_BUILTIN":
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
@@ -502,6 +503,7 @@ function nativeCompilationAvailability(
 				if (
 					target !== undefined &&
 					compiledTargets.has(target) &&
+					compiled[target]!.source.length > 0 &&
 					!image.runtime.functions[target]!.isClassConstructor
 				) {
 					directCompiledTargets.add(target);
@@ -526,12 +528,55 @@ function nativeCompilationAvailability(
 	return { directCompiledTargets, directCompiledEntries };
 }
 
+function omitUnreachableCanonicalBodies(
+	image: ProgramImage,
+	compiled: Array<CompiledFunction | null>,
+): Array<CompiledFunction | null> {
+	const removable = new Set(
+		image.native.functions.flatMap((fn, index) =>
+			fn.specializedOnly === true &&
+			compiled[index] !== null &&
+			compiled[index]!.directEntries.length > 0
+				? [index]
+				: [],
+		),
+	);
+	// Each emitted caller variant must select a typed entry for every private target.
+	for (const [caller, native] of image.native.functions.entries()) {
+		const emitted = compiled[caller];
+		for (const [ip, instruction] of native.instructions.entries()) {
+			if (instruction?.kind !== "call") continue;
+			for (const target of [
+				instruction.directFunctionIndex,
+				...(instruction.guardedFunctionIndices ?? []),
+			]) {
+				if (target === undefined || !removable.has(target)) continue;
+				if (
+					emitted === null ||
+					emitted === undefined ||
+					[emitted, ...emitted.directEntries].some(
+						(variant) =>
+							variant.emittedInstructions.has(ip) &&
+							!variant.directEntryCalls.get(ip)?.has(target),
+					)
+				)
+					removable.delete(target);
+			}
+		}
+	}
+	return compiled.map((fn, index) =>
+		fn !== null && removable.has(index) ? { ...fn, source: "" } : fn,
+	);
+}
+
 function compiledAvailabilityKey(
 	compiled: ReadonlyArray<CompiledFunction | null>,
 ): string {
 	return compiled
 		.map((fn) =>
-			fn === null ? "-" : fn.directEntries.map((entry) => entry.id).join(","),
+			fn === null
+				? "-"
+				: `${fn.source.length > 0 ? "c" : "s"}:${fn.directEntries.map((entry) => entry.id).join(",")}`,
 		)
 		.join(";");
 }
@@ -620,11 +665,12 @@ function emitNativeFunctions(
 			image.runtime.stringConstants,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
+		const entries = emitted.directEntries.filter((entry) => fits(entry.source));
 		return {
 			...emitted,
 			// A typed entry is an optional native overlay. Keep it independently
 			// bounded so duplicating a large body can never evict the canonical ABI.
-			directEntries: emitted.directEntries.filter((entry) => fits(entry.source)),
+			directEntries: entries,
 		};
 	};
 
@@ -661,9 +707,10 @@ function emitNativeFunctions(
 			compiled[index] === null ? null : emit(index, availability),
 		);
 		if (compiledAvailabilityKey(next) === compiledAvailabilityKey(compiled)) {
+			const stripped = omitUnreachableCanonicalBodies(image, next);
 			return {
-				compiled: next,
-				availability: nativeCompilationAvailability(image, next),
+				compiled: stripped,
+				availability: nativeCompilationAvailability(image, stripped),
 			};
 		}
 		compiled = next;
@@ -873,7 +920,7 @@ function emitProgramImageSource(
 		}
 		for (const fn of compiled) {
 			if (fn !== null) {
-				lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
+				if (fn.source.length > 0) lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
 			}
 		}
 		for (const fn of compiled) {
@@ -1009,7 +1056,9 @@ function emitProgramImageSource(
 					? `mal_function_${i}_mapped_argument_slots${suffix}`
 					: "nullptr",
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
-				compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
+				compiled[i] !== null && compiled[i]!.source.length > 0
+					? compiled[i]!.symbol
+					: "nullptr",
 				profileSiteSymbols[i]!,
 				{
 					positionsSymbol: positionInfo[i]!.symbol,
@@ -1076,7 +1125,7 @@ export function emitProgramTranslationUnits(
 		.concat(
 			emitted.compiled.flatMap(
 				(fn): Array<GeneratedDeclaration> =>
-					fn === null
+					fn === null || fn.source.length === 0
 						? []
 						: [
 								{
@@ -1179,7 +1228,8 @@ export function emitProgramTranslationUnits(
 	}
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
-		append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
+		if (fn.source.length > 0)
+			append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
 		for (const entry of fn.directEntries) {
 			append({
 				kind: "compiled function",
@@ -1540,7 +1590,7 @@ export function emitBatch(
 		const { compiled } = nativeEmission;
 		for (const functionIndex of nativeEmission.availability.directCompiledTargets) {
 			const fn = compiled[functionIndex];
-			if (fn !== undefined && fn !== null) {
+			if (fn !== undefined && fn !== null && fn.source.length > 0) {
 				lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
 			}
 		}
@@ -1656,7 +1706,9 @@ export function emitBatch(
 					argumentSnapshotPlanCounts[i]!,
 					mappedArgumentSlotsSymbols[i]!,
 					handlerSymbols[i]!,
-					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
+					compiled[i] !== null && compiled[i]!.source.length > 0
+						? compiled[i]!.symbol
+						: "nullptr",
 					"nullptr",
 					// The batch path strips debug info (test262 does not use it).
 					{ positionsSymbol: "nullptr", positionCount: 0, fileIndex: 0 },
@@ -1704,7 +1756,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "CREATE_ARRAY":
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
 		case "INSTANTIATE_LITERAL_TEMPLATE":
-			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset} } }`;
+			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset}, .cache_slot = ${instruction.cacheSlot ?? -1} } }`;
 		case "CREATE_MODULE_NAMESPACE":
 			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_TEMPLATE_OBJECT":
@@ -1733,6 +1785,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
+		case "CALL_LITERAL_METHOD":
+			return `{ .opcode = MAL_OP_CALL_LITERAL_METHOD, .as.call_builtin = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${instruction.methodIndex} } }`;
 		case "CALL_BUILTIN": {
 			const operationIndex = (
 				VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>

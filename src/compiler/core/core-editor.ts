@@ -339,6 +339,17 @@ export class CoreEditor {
 		program._configureProgramData(data);
 	}
 
+	appendLiteralConstant(data: ReadonlyArray<number>): {
+		templateOffset: number;
+		cacheSlot: number;
+	} {
+		this.#assertActive();
+		const result = this.program._appendLiteralConstant(this.#mutation, data);
+		this.#programDomains.add("data");
+		this.#edits++;
+		return result;
+	}
+
 	appendSourcePositions(positions: ReadonlyArray<CoreSourcePosition>): number {
 		this.#assertActive();
 		if (positions.length === 0) return this.program.sourcePositions.length;

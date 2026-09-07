@@ -901,6 +901,7 @@ export function vmRegionActionsAreCurrent(
 }
 
 export interface NativeFunctionPlan {
+	readonly specializedOnly?: true;
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
@@ -1280,6 +1281,7 @@ export function createConservativeNativePlan(
 		functions: functions.map((fn, functionIndex) => ({
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+
 			registerRepresentations: Array.from(
 				{ length: fn.registerCount },
 				() => "boxed" as const,
@@ -3916,6 +3918,7 @@ function lowerExecutionFunctionToNativePlan(
 	return {
 		functionIndex: fn.functionIndex,
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+		...(fn.specializedOnly ? { specializedOnly: true as const } : {}),
 		registerRepresentations: [...fn.registerRepresentations],
 		directEntries,
 		...(fn.literalSwitches === undefined
