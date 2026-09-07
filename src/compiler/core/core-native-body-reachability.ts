@@ -12,9 +12,13 @@ export function coreSpecializedOnlyFunctions(
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	entries: ReadonlyArray<CoreDirectEntryPlan>,
 ): ReadonlyArray<CoreFunctionId> {
-	if (context?.facts.closure.sourceClosure.kind !== "known") return [];
+	if (entries.length === 0 || context?.facts.closure.sourceClosure.kind !== "known")
+		return [];
 	const candidates = new Set(entries.map((entry) => entry.function));
-	candidates.delete([...program.functionIds()][0]!);
+	for (const entrypoint of program.functionIds()) {
+		candidates.delete(entrypoint);
+		break;
+	}
 	for (const functionId of context.data.cjsModuleFunctionIndices)
 		candidates.delete(functionId as CoreFunctionId);
 	for (const installation of context.data.hostInstallCandidates) {
@@ -24,6 +28,7 @@ export function coreSpecializedOnlyFunctions(
 			for (const functionId of installed.functions) candidates.delete(functionId);
 		}
 	}
+	if (candidates.size === 0) return [];
 	const covered = new Map<CoreFunctionId, Map<CoreInstructionId, Set<CoreFunctionId>>>();
 	for (const entry of entries) {
 		for (const site of entry.callSites) {
@@ -38,15 +43,8 @@ export function coreSpecializedOnlyFunctions(
 		}
 	}
 	for (const functionId of liveFunctions) {
+		if (candidates.size === 0) return [];
 		const fn = program.function(functionId);
-		if (
-			[...fn.instructionIds()].some(
-				(instruction) =>
-					fn.instructionKind(instruction) === "operation" &&
-					fn.instructionOpcodeName(instruction) === "loadCallee",
-			)
-		)
-			candidates.delete(functionId);
 		for (const site of targets.outgoing(functionId)) {
 			for (const target of site.targets.functions) {
 				if (!covered.get(functionId)?.get(site.instruction)?.has(target))
@@ -58,6 +56,15 @@ export function coreSpecializedOnlyFunctions(
 				fn.instructionKind(instruction) === "operation"
 					? fn.instructionOpcodeName(instruction)
 					: undefined;
+			if (opcode === "loadCallee") candidates.delete(functionId);
+			// Private cells, SSA copies, and identity guards cannot call or export the value.
+			if (
+				opcode === "move" ||
+				opcode === "rootUse" ||
+				opcode === "guardFunctionIndex" ||
+				opcode === "typeofCompare"
+			)
+				continue;
 			if (opcode === "createModuleNamespace") {
 				const exports = fn.instructionAttributes(instruction).exports as ReadonlyArray<{
 					readonly slot: number;
@@ -75,14 +82,6 @@ export function coreSpecializedOnlyFunctions(
 			) {
 				const values = targets.targets(functionId, fn.kernel.operandAt(start + operand));
 				if (values.functions.length === 0) continue;
-				// Private cells, SSA copies, and identity guards cannot call or export the value.
-				if (
-					opcode === "move" ||
-					opcode === "rootUse" ||
-					opcode === "guardFunctionIndex" ||
-					opcode === "typeofCompare"
-				)
-					continue;
 				if (opcode === undefined) {
 					const kind = fn.instructionKind(instruction);
 					if (

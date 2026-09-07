@@ -541,9 +541,15 @@ function omitUnreachableCanonicalBodies(
 				: [],
 		),
 	);
+	if (removable.size === 0) return compiled;
 	// Each emitted caller variant must select a typed entry for every private target.
 	for (const [caller, native] of image.native.functions.entries()) {
+		if (removable.size === 0) return compiled;
 		const emitted = compiled[caller];
+		const variants =
+			emitted === null || emitted === undefined
+				? []
+				: [emitted, ...emitted.directEntries];
 		for (const [ip, instruction] of native.instructions.entries()) {
 			if (instruction?.kind !== "call") continue;
 			for (const target of [
@@ -552,9 +558,8 @@ function omitUnreachableCanonicalBodies(
 			]) {
 				if (target === undefined || !removable.has(target)) continue;
 				if (
-					emitted === null ||
-					emitted === undefined ||
-					[emitted, ...emitted.directEntries].some(
+					variants.length === 0 ||
+					variants.some(
 						(variant) =>
 							variant.emittedInstructions.has(ip) &&
 							!variant.directEntryCalls.get(ip)?.has(target),
