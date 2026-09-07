@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>maligator:test — Maligator API reference</title>
+		<style>
+			body {
+				font:
+					17px/1.6 system-ui,
+					sans-serif;
+				max-width: 900px;
+				margin: 3rem auto;
+				padding: 0 1.5rem;
+				color: #20252b;
+				background: #fafafa;
+			}
+			h1,
+			h2 {
+				line-height: 1.2;
+			}
+			h2 {
+				margin-top: 2.5rem;
+			}
+			pre {
+				overflow: auto;
+				padding: 1.25rem;
+				border: 1px solid #ddd;
+				border-radius: 8px;
+				background: white;
+				font-size: 14px;
+			}
+			a {
+				color: #175fa6;
+			}
+			code {
+				font-family: ui-monospace, monospace;
+			}
+		</style>
+	</head>
+	<body>
+		<nav>
+			<a href="/">Maligator</a> / API reference:
+			<a href="/api/process">maligator:process</a> ·
+			<a href="/api/test">maligator:test</a>
+		</nav>
+		<main>
+			<h1>maligator:test</h1>
+			<p>
+				Test authoring and assertions. Importing this module does not register tests or
+				install runner globals. Registration and assertions are ordinary effectful calls;
+				the test command initializes its internal runner explicitly. Unused imports can be
+				eliminated.
+			</p>
+			<p>Status: experimental. Module evaluation: side-effect-free.</p>
+			<p>
+				TypeScript: include <code>@maligator/cli</code> in your tsconfig
+				<code>compilerOptions.types</code> or add
+				<code>/// &lt;reference types="@maligator/cli" /&gt;</code> to a declaration file.
+			</p>
+			<section>
+				<h2 id="test">test</h2>
+				<p>Register a test in the current suite.</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="describe">describe</h2>
+				<p>Register a nested suite in the current suite.</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="expect">expect</h2>
+				<p>Create fluent matchers for a received value.</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="beforeAll">beforeAll</h2>
+				<p>Run once before tests in the current suite.</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="afterAll">afterAll</h2>
+				<p>Run once after tests in the current suite, including after test failures.</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="beforeEach">beforeEach</h2>
+				<p>
+					Run before every selected descendant test. Ancestor hooks run before hooks
+					declared by a nested suite.
+				</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="afterEach">afterEach</h2>
+				<p>
+					Run after every selected descendant test. Nested-suite hooks run before ancestor
+					hooks.
+				</p>
+				<p>Phase: runtime. Value: callable. Identity: module.</p>
+			</section>
+			<section>
+				<h2 id="TestCallback">TestCallback</h2>
+				<p>
+					A test or hook body. Maligator waits for a returned promise or thenable before
+					advancing the lifecycle.
+				</p>
+				<pre><code>type TestCallback = () =&gt; unknown;</code></pre>
+			</section>
+			<section>
+				<h2 id="HookCallback">HookCallback</h2>
+				<p>A lifecycle hook body, with the same async completion contract as a test.</p>
+				<pre><code>type HookCallback = TestCallback;</code></pre>
+			</section>
+			<section>
+				<h2 id="Constructor">Constructor</h2>
+				<p>A constructable value accepted by {@link expect.any}.</p>
+				<pre><code>type Constructor = abstract new (...args: Array&lt;never&gt;) =&gt; unknown;</code></pre>
+			</section>
+			<section>
+				<h2 id="AsymmetricMatcher">AsymmetricMatcher</h2>
+				<p>
+					Opaque partial-match value produced by helpers such as {@link
+					expect.objectContaining}. It may be nested inside `toEqual`, `toStrictEqual`,
+					and `toMatchObject` expectations.
+				</p>
+				<pre><code>type AsymmetricMatcher = {
+		readonly __maligator_asymmetric__: string;
+	};</code></pre>
+			</section>
+			<section>
+				<h2 id="Matchers">Matchers</h2>
+				<p>Matchers for a synchronously received value.</p>
+				<pre><code>type Matchers = {
+		/** Negate the following matcher. */
+		readonly not: Matchers;
+		/** Wait for the received promise to fulfill, then match its value. */
+		readonly resolves: AsyncMatchers;
+		/** Wait for the received promise to reject, then match its reason. */
+		readonly rejects: AsyncMatchers;
+		/** Require ECMAScript `Object.is` identity. */
+		toBe(expected: unknown): void;
+		/** Recursively compare enumerable object properties and array elements. */
+		toEqual(expected: unknown): void;
+		/**
+		 * Recursively compare values while also requiring matching prototypes and
+		 * matching sparse-array holes.
+		 */
+		toStrictEqual(expected: unknown): void;
+		/** Require a value other than `undefined`. */
+		toBeDefined(): void;
+		/** Require `undefined`. */
+		toBeUndefined(): void;
+		/** Require `null`. */
+		toBeNull(): void;
+		/** Require a truthy value. */
+		toBeTruthy(): void;
+		/** Require a falsy value. */
+		toBeFalsy(): void;
+		/** Require a string substring or an array element matched by identity. */
+		toContain(expected: unknown): void;
+		/** Require a numeric `.length` equal to `expected`. */
+		toHaveLength(expected: number): void;
+		/** Match a string against a substring or regular expression. */
+		toMatch(expected: string | RegExp): void;
+		/** Recursively require the enumerable properties present in `expected`. */
+		toMatchObject(expected: object): void;
+		/**
+		 * Invoke the received function and require it to throw. The optional
+		 * expectation may be a message substring, regular expression, error
+		 * constructor, or error instance.
+		 */
+		toThrow(
+			expected?:
+				| string
+				| RegExp
+				| Error
+				| (abstract new (...args: Array&lt;never&gt;) =&gt; Error),
+		): void;
+	};</code></pre>
+			</section>
+			<section>
+				<h2 id="AsyncMatchers">AsyncMatchers</h2>
+				<p>
+					Promise-returning matcher surface exposed by {@link Matchers.resolves} and
+					{@link Matchers.rejects}. Await these calls so the test cannot finish before the
+					assertion.
+				</p>
+				<pre><code>type AsyncMatchers = {
+		/** Negate the following asynchronous matcher. */
+		readonly not: AsyncMatchers;
+		toBe(expected: unknown): Promise&lt;void&gt;;
+		toEqual(expected: unknown): Promise&lt;void&gt;;
+		toStrictEqual(expected: unknown): Promise&lt;void&gt;;
+		toBeDefined(): Promise&lt;void&gt;;
+		toBeUndefined(): Promise&lt;void&gt;;
+		toBeNull(): Promise&lt;void&gt;;
+		toBeTruthy(): Promise&lt;void&gt;;
+		toBeFalsy(): Promise&lt;void&gt;;
+		toContain(expected: unknown): Promise&lt;void&gt;;
+		toHaveLength(expected: number): Promise&lt;void&gt;;
+		toMatch(expected: string | RegExp): Promise&lt;void&gt;;
+		toMatchObject(expected: object): Promise&lt;void&gt;;
+		toThrow(
+			expected?:
+				| string
+				| RegExp
+				| Error
+				| (abstract new (...args: Array&lt;never&gt;) =&gt; Error),
+		): Promise&lt;void&gt;;
+	};</code></pre>
+			</section>
+			<section>
+				<h2 id="ExpectFunction">ExpectFunction</h2>
+				<p>Assertion entrypoint and Maligator-owned asymmetric matcher factories.</p>
+				<pre><code>type ExpectFunction = {
+		/** Create matchers for `received`. The assertion position is captured here. */
+		(received: unknown): Matchers;
+		/** Match a primitive of the corresponding built-in kind or an instance. */
+		any(constructorValue: Constructor): AsymmetricMatcher;
+		/** Match any value except `null` and `undefined`. */
+		anything(): AsymmetricMatcher;
+		/** Match a string containing `pattern` or satisfying the regular expression. */
+		stringMatching(pattern: string | RegExp): AsymmetricMatcher;
+		/** Match an object containing all recursively matched properties in `value`. */
+		objectContaining(value: object): AsymmetricMatcher;
+		/** Match an array containing a match for every element in `value`. */
+		arrayContaining(value: Array&lt;unknown&gt;): AsymmetricMatcher;
+	};</code></pre>
+			</section>
+			<section>
+				<h2 id="TestFunction">TestFunction</h2>
+				<p>Register tests in the current suite during module evaluation.</p>
+				<pre><code>type TestFunction = {
+		/** Register a test. Returned promises are awaited by the runner. */
+		(name: string, callback: TestCallback): void;
+		/** Register a skipped test without invoking its callback. */
+		skip(name: string, callback: TestCallback): void;
+		/** Register a named placeholder with no callback. */
+		todo(name: string): void;
+		/**
+		 * Register a focused test. When any `.only` exists, non-focused tests are
+		 * skipped and the runner emits a warning.
+		 */
+		only(name: string, callback: TestCallback): void;
+		/**
+		 * Register one test for each row. Use `%#` in `name` for the zero-based row
+		 * index. Array rows are spread into callback parameters.
+		 */
+		each&lt;const Row extends ReadonlyArray&lt;unknown&gt;&gt;(
+			rows: ReadonlyArray&lt;Row&gt;,
+		): (name: string, callback: (...values: [...Row]) =&gt; unknown) =&gt; void;
+	};</code></pre>
+			</section>
+			<section>
+				<h2 id="DescribeFunction">DescribeFunction</h2>
+				<p>Register nested suites synchronously during module evaluation.</p>
+				<pre><code>type DescribeFunction = {
+		/** Register a suite. Suite callbacks must not return a promise. */
+		(name: string, callback: () =&gt; void): void;
+		/** Register a suite whose descendants are skipped. */
+		skip(name: string, callback: () =&gt; void): void;
+		/** Register a focused suite and emit the runner's focused-test warning. */
+		only(name: string, callback: () =&gt; void): void;
+	};</code></pre>
+			</section>
+		</main>
+	</body>
+</html>

@@ -334,6 +334,7 @@ function cloneInstruction(
 		case "CREATE_MODULE_NAMESPACE":
 			return {
 				...instruction,
+				cacheSlot: instruction.cacheSlot < 0 ? -1 : instruction.cacheSlot + base.global,
 				nameIndices: instruction.nameIndices.map((index) => index + base.string),
 				slots: instruction.slots.map((index) => index + base.global),
 			};

@@ -6534,7 +6534,7 @@ function emitInstruction(
 					? `(const i32[]){ ${instruction.slots.map((index) => relocation.globalIndex(index)).join(", ")} }`
 					: "nullptr";
 			return [
-				`r${instruction.dst} = mal_vm_op_create_module_namespace(vm, ${count}, ${names}, ${slots});`,
+				`r${instruction.dst} = mal_vm_op_create_module_namespace(vm, ${instruction.cacheSlot < 0 ? "-1" : relocation.globalIndex(instruction.cacheSlot)}, ${count}, ${names}, ${slots});`,
 			];
 		}
 		case "COPY_DATA_PROPERTIES": {

@@ -1176,6 +1176,9 @@ static void mal_gc_scan_roots(MalVm *vm) {
 
     // Isolate-shared roots (one per isolate, not per fiber).
     mal_gc_mark_value(vm->allocation_error);
+    for (MalPreparedValue *entry = vm->prepared_values; entry != nullptr; entry = entry->next) {
+        mal_gc_mark_value(entry->value);
+    }
 #if MAL_NODE
     if (vm->async_context != nullptr) {
         mal_gc_shade(&vm->async_context->header);

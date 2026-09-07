@@ -1411,8 +1411,10 @@ function malRuntimeImageStruct(
 			lines.push(
 				`static const MalHostInstallSlot mal_host_install_${i}_slots${suffix}[] = {`,
 			);
-			for (const { name, slot } of install.exports) {
-				lines.push(`    { .name = "${cEscapeString(name)}", .slot = ${slot} },`);
+			for (const { name, slot, constant } of install.exports) {
+				lines.push(
+					`    { .name = "${cEscapeString(name)}", .slot = ${slot}, .data = ${constant === undefined ? "nullptr" : `"${cEscapeString(JSON.stringify(constant))}"`} },`,
+				);
 			}
 			lines.push("};", "");
 		});
@@ -1706,7 +1708,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset} } }`;
 		case "CREATE_MODULE_NAMESPACE":
-			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
+			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .cache_slot = ${instruction.cacheSlot}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_TEMPLATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_TEMPLATE_OBJECT, .as.create_template_object = { .dst = ${instruction.dst}, .cache_slot = ${instruction.cacheSlot}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_UNDEFINED":

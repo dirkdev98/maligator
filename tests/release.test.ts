@@ -329,8 +329,9 @@ describe("npm launcher", () => {
 			"bin/maligator.js",
 			"index.js",
 			"index.d.ts",
-			"test-api.d.ts",
+			"platform-api.d.ts",
 			"process-api.d.ts",
+			"test-api.d.ts",
 			"README.md",
 			"LICENSE",
 		]);

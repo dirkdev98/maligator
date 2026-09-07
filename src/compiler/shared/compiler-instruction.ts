@@ -196,6 +196,7 @@ export type CompilerInstruction =
 			// Build an `import * as ns` module namespace exotic object. Each export
 			// names a string constant and the global slot holding its live value.
 			type: "createModuleNamespace";
+			cacheSlot?: number;
 
 			// [destination]
 			registers: [number];

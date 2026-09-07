@@ -6,6 +6,7 @@ import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
 import { cacheDevelopmentAssets } from "../development-assets.ts";
+import { hostExecutionTarget, resolveExecution } from "../platform/execution.ts";
 import {
 	compileIsolatedTestImage,
 	compileProfiledTestImage,
@@ -175,16 +176,28 @@ export function prepareProfiledTestCommand(
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
 	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
+	const runOptions = testConfig(command);
+	const execution = resolveExecution(
+		command,
+		config,
+		{
+			compiled: command.profile,
+			optimization: command.profile ? "full" : "development",
+			target: hostExecutionTarget(process.platform, process.arch),
+		},
+		runOptions.shuffleSeed ?? null,
+	);
 	const compiled = compileProfiledTestImage(
 		{
 			files,
 			config,
+			execution,
 			stripTypes: context.stripTypes,
 			stripperIdentity: context.installation.frontendIdentity,
 			testModuleSource: moduleSource,
 			nodeGlobalsSource,
 		},
-		testConfig(command),
+		runOptions,
 	);
 	return {
 		...compiled,
@@ -209,9 +222,20 @@ export function prepareIsolatedTestCommand(
 	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
 	const runOptions = testConfig(command);
+	const execution = resolveExecution(
+		command,
+		config,
+		{
+			compiled: command.profile,
+			optimization: command.profile ? "full" : "development",
+			target: hostExecutionTarget(process.platform, process.arch),
+		},
+		runOptions.shuffleSeed ?? null,
+	);
 	const options = {
 		files,
 		config,
+		execution,
 		stripTypes: context.stripTypes,
 		stripperIdentity: context.installation.frontendIdentity,
 		testModuleSource: moduleSource,
@@ -347,6 +371,16 @@ export async function executeTestCommand(
 	}
 	globals.mal._setDevelopmentAssets?.(assetManifest);
 	const runOptions = testConfig(command);
+	const execution = resolveExecution(
+		command,
+		config,
+		{
+			compiled: command.profile,
+			optimization: command.profile ? "full" : "development",
+			target: hostExecutionTarget(process.platform, process.arch),
+		},
+		runOptions.shuffleSeed ?? null,
+	);
 	if (runOptions.shuffleSeed !== undefined)
 		output(`Shuffle seed: ${runOptions.shuffleSeed}`);
 	if (command.compileConcurrency > 1) {
@@ -392,6 +426,7 @@ export async function executeTestCommand(
 			const options = {
 				files: entries,
 				config,
+				execution,
 				stripTypes: context.stripTypes,
 				stripperIdentity: context.installation.frontendIdentity,
 				testModuleSource: moduleSource,
@@ -475,6 +510,7 @@ export async function executeTestCommand(
 						const compiled = compileTestImage({
 							files: entries,
 							config,
+							execution,
 							stripTypes: context.stripTypes,
 							stripperIdentity: context.installation.frontendIdentity,
 							testModuleSource: moduleSource,

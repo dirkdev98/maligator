@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
 import { createReleaseArchive } from "./release-archive.ts";
@@ -218,8 +219,8 @@ const launcherPackageFiles = [
 	"bin/maligator.js",
 	"index.js",
 	"index.d.ts",
-	"test-api.d.ts",
-	"process-api.d.ts",
+	"platform-api.d.ts",
+	...PLATFORM_MODULES.map((module) => module.declarationFile).sort(),
 	"README.md",
 	"LICENSE",
 ];
@@ -288,14 +289,12 @@ function stageLauncherPackage(version: string, selected: typeof targets): string
 		path.join(repositoryRoot, "src/public-api.d.ts"),
 		path.join(directory, "index.d.ts"),
 	);
-	copyFileSync(
-		path.join(repositoryRoot, "src/test-api.d.ts"),
-		path.join(directory, "test-api.d.ts"),
-	);
-	copyFileSync(
-		path.join(repositoryRoot, "src/process-api.d.ts"),
-		path.join(directory, "process-api.d.ts"),
-	);
+	for (const module of [...PLATFORM_MODULES, { declarationFile: "platform-api.d.ts" }]) {
+		copyFileSync(
+			path.join(repositoryRoot, "src", module.declarationFile),
+			path.join(directory, module.declarationFile),
+		);
+	}
 	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
 	writeJson(
 		path.join(directory, "package.json"),

@@ -111,19 +111,19 @@ describe("platform execution catalog", () => {
 	});
 
 	it("validates provider values against the documented schema", () => {
-		const module = lookupPlatformModule("maligator:process")!;
+		const platform = lookupPlatformModule("maligator:process")!;
 		const snapshot = resolveExecution(command(["test"]), resolveBuildConfig({}), plan);
 		expect(
-			validatePlatformValue(module, module.exports[0]!.type, executionData(snapshot)),
+			validatePlatformValue(platform, platform.exports[0]!.type, executionData(snapshot)),
 		).toBe(true);
 		expect(
-			validatePlatformValue(module, module.exports[0]!.type, {
+			validatePlatformValue(platform, platform.exports[0]!.type, {
 				...snapshot,
 				command: "doctor",
 			}),
 		).toBe(false);
 		expect(
-			validatePlatformValue(module, module.exports[0]!.type, {
+			validatePlatformValue(platform, platform.exports[0]!.type, {
 				...snapshot,
 				options: {},
 			}),
@@ -131,9 +131,9 @@ describe("platform execution catalog", () => {
 	});
 
 	it("generates declarations and HTML from the same public contracts", () => {
-		const module = lookupPlatformModule("maligator:process")!;
-		const declarations = generatePlatformDeclarations(module);
-		const reference = generatePlatformReference(module);
+		const platform = lookupPlatformModule("maligator:process")!;
+		const declarations = generatePlatformDeclarations(platform);
+		const reference = generatePlatformReference(platform);
 		expect(declarations).toContain('declare module "maligator:process"');
 		expect(declarations).toContain("export const execution: Execution;");
 		expect(reference).toContain("nameFilter");

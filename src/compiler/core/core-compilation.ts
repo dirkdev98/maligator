@@ -35,6 +35,10 @@ export interface CoreProgramData {
 		readonly contents: string;
 	}>;
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
+	readonly pureModuleInitializers?: ReadonlyArray<{
+		readonly functionIndex: number;
+		readonly exportSlots: ReadonlyArray<number>;
+	}>;
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
 	/** Source-immutable cells, plus graph-proven activation-private cells. */
 	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;

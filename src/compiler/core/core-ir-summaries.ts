@@ -113,7 +113,6 @@ const FRESH_RESULTS = new Set([
 	"createArgumentsObject",
 	"createArray",
 	"createFunction",
-	"createModuleNamespace",
 	"createObject",
 	"createObjectShaped",
 	"createPrivateName",

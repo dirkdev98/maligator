@@ -1,4 +1,7 @@
-import { NO_EFFECT_SUMMARY } from "../compiler/shared/effect-summary.ts";
+import {
+	NO_EFFECT_SUMMARY,
+	EVERY_EFFECT_SUMMARY,
+} from "../compiler/shared/effect-summary.ts";
 import type { EffectSummary } from "../compiler/shared/effect-summary.ts";
 
 export type PlatformData =
@@ -10,6 +13,7 @@ export type PlatformData =
 	| { readonly [key: string]: PlatformData };
 
 export type PlatformType =
+	| { readonly kind: "signature"; readonly source: string }
 	| { readonly kind: "primitive"; readonly name: "string" | "number" | "boolean" }
 	| { readonly kind: "literal"; readonly value: string | boolean | null }
 	| { readonly kind: "reference"; readonly name: string }
@@ -31,29 +35,34 @@ export interface PlatformProperty extends PlatformDocumentation {
 	readonly type: PlatformType;
 }
 
-export interface PlatformTypeDefinition extends PlatformProperty {}
+export type PlatformTypeDefinition = PlatformProperty;
 
 export interface PlatformExport extends PlatformDocumentation {
 	readonly name: string;
 	readonly type: PlatformType;
 	readonly contract: {
-		readonly phase: "preparation";
-		readonly value: "deep-frozen-data";
-		readonly identity: "application-context";
-		readonly provider: "execution";
+		readonly phase: "preparation" | "runtime";
+		readonly value: "deep-frozen-data" | "callable";
+		readonly identity: "application-context" | "module";
+		readonly provider?: "execution";
 		readonly effects: EffectSummary;
 	};
 }
 
-export interface PlatformModule extends PlatformDocumentation {
+interface PlatformModuleDefinition extends PlatformDocumentation {
 	readonly id: `maligator:${string}`;
 	readonly stability: "experimental";
 	readonly evaluation: "side-effect-free";
-	readonly installer: string;
 	readonly declarationFile: string;
 	readonly types: ReadonlyArray<PlatformTypeDefinition>;
 	readonly exports: ReadonlyArray<PlatformExport>;
 }
+
+export type PlatformModule = PlatformModuleDefinition &
+	(
+		| { readonly kind: "native"; readonly installer: string }
+		| { readonly kind: "source"; readonly sourceFile: string }
+	);
 
 const string: PlatformType = { kind: "primitive", name: "string" };
 const number: PlatformType = { kind: "primitive", name: "number" };
@@ -320,6 +329,7 @@ export const PLATFORM_CATALOG_VERSION = 1;
 
 export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 	{
+		kind: "native",
 		id: "maligator:process",
 		stability: "experimental",
 		evaluation: "side-effect-free",
@@ -348,6 +358,173 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 			},
 		],
 	},
+
+	{
+		kind: "source",
+		id: "maligator:test",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		sourceFile: "testing/runtime.mjs",
+		declarationFile: "test-api.d.ts",
+		description:
+			"Test authoring and assertions. Importing this module does not register tests or install runner globals. Registration and assertions are ordinary effectful calls; the test command initializes its internal runner explicitly. Unused imports can be eliminated.",
+		types: [
+			{
+				name: "TestCallback",
+				type: {
+					kind: "signature",
+					source: "() => unknown",
+				},
+				description:
+					"A test or hook body. Maligator waits for a returned promise or thenable before advancing the lifecycle.",
+			},
+			{
+				name: "HookCallback",
+				type: {
+					kind: "signature",
+					source: "TestCallback",
+				},
+				description:
+					"A lifecycle hook body, with the same async completion contract as a test.",
+			},
+			{
+				name: "Constructor",
+				type: {
+					kind: "signature",
+					source: "abstract new (...args: Array<never>) => unknown",
+				},
+				description: "A constructable value accepted by {@link expect.any}.",
+			},
+			{
+				name: "AsymmetricMatcher",
+				type: {
+					kind: "signature",
+					source: "{\n\t\treadonly __maligator_asymmetric__: string;\n\t}",
+				},
+				description:
+					"Opaque partial-match value produced by helpers such as {@link expect.objectContaining}. It may be nested inside `toEqual`, `toStrictEqual`, and `toMatchObject` expectations.",
+			},
+			{
+				name: "Matchers",
+				type: {
+					kind: "signature",
+					source:
+						"{\n\t\t/** Negate the following matcher. */\n\t\treadonly not: Matchers;\n\t\t/** Wait for the received promise to fulfill, then match its value. */\n\t\treadonly resolves: AsyncMatchers;\n\t\t/** Wait for the received promise to reject, then match its reason. */\n\t\treadonly rejects: AsyncMatchers;\n\t\t/** Require ECMAScript `Object.is` identity. */\n\t\ttoBe(expected: unknown): void;\n\t\t/** Recursively compare enumerable object properties and array elements. */\n\t\ttoEqual(expected: unknown): void;\n\t\t/**\n\t\t * Recursively compare values while also requiring matching prototypes and\n\t\t * matching sparse-array holes.\n\t\t */\n\t\ttoStrictEqual(expected: unknown): void;\n\t\t/** Require a value other than `undefined`. */\n\t\ttoBeDefined(): void;\n\t\t/** Require `undefined`. */\n\t\ttoBeUndefined(): void;\n\t\t/** Require `null`. */\n\t\ttoBeNull(): void;\n\t\t/** Require a truthy value. */\n\t\ttoBeTruthy(): void;\n\t\t/** Require a falsy value. */\n\t\ttoBeFalsy(): void;\n\t\t/** Require a string substring or an array element matched by identity. */\n\t\ttoContain(expected: unknown): void;\n\t\t/** Require a numeric `.length` equal to `expected`. */\n\t\ttoHaveLength(expected: number): void;\n\t\t/** Match a string against a substring or regular expression. */\n\t\ttoMatch(expected: string | RegExp): void;\n\t\t/** Recursively require the enumerable properties present in `expected`. */\n\t\ttoMatchObject(expected: object): void;\n\t\t/**\n\t\t * Invoke the received function and require it to throw. The optional\n\t\t * expectation may be a message substring, regular expression, error\n\t\t * constructor, or error instance.\n\t\t */\n\t\ttoThrow(\n\t\t\texpected?:\n\t\t\t\t| string\n\t\t\t\t| RegExp\n\t\t\t\t| Error\n\t\t\t\t| (abstract new (...args: Array<never>) => Error),\n\t\t): void;\n\t}",
+				},
+				description: "Matchers for a synchronously received value.",
+			},
+			{
+				name: "AsyncMatchers",
+				type: {
+					kind: "signature",
+					source:
+						"{\n\t\t/** Negate the following asynchronous matcher. */\n\t\treadonly not: AsyncMatchers;\n\t\ttoBe(expected: unknown): Promise<void>;\n\t\ttoEqual(expected: unknown): Promise<void>;\n\t\ttoStrictEqual(expected: unknown): Promise<void>;\n\t\ttoBeDefined(): Promise<void>;\n\t\ttoBeUndefined(): Promise<void>;\n\t\ttoBeNull(): Promise<void>;\n\t\ttoBeTruthy(): Promise<void>;\n\t\ttoBeFalsy(): Promise<void>;\n\t\ttoContain(expected: unknown): Promise<void>;\n\t\ttoHaveLength(expected: number): Promise<void>;\n\t\ttoMatch(expected: string | RegExp): Promise<void>;\n\t\ttoMatchObject(expected: object): Promise<void>;\n\t\ttoThrow(\n\t\t\texpected?:\n\t\t\t\t| string\n\t\t\t\t| RegExp\n\t\t\t\t| Error\n\t\t\t\t| (abstract new (...args: Array<never>) => Error),\n\t\t): Promise<void>;\n\t}",
+				},
+				description:
+					"Promise-returning matcher surface exposed by {@link Matchers.resolves} and {@link Matchers.rejects}. Await these calls so the test cannot finish before the assertion.",
+			},
+			{
+				name: "ExpectFunction",
+				type: {
+					kind: "signature",
+					source:
+						"{\n\t\t/** Create matchers for `received`. The assertion position is captured here. */\n\t\t(received: unknown): Matchers;\n\t\t/** Match a primitive of the corresponding built-in kind or an instance. */\n\t\tany(constructorValue: Constructor): AsymmetricMatcher;\n\t\t/** Match any value except `null` and `undefined`. */\n\t\tanything(): AsymmetricMatcher;\n\t\t/** Match a string containing `pattern` or satisfying the regular expression. */\n\t\tstringMatching(pattern: string | RegExp): AsymmetricMatcher;\n\t\t/** Match an object containing all recursively matched properties in `value`. */\n\t\tobjectContaining(value: object): AsymmetricMatcher;\n\t\t/** Match an array containing a match for every element in `value`. */\n\t\tarrayContaining(value: Array<unknown>): AsymmetricMatcher;\n\t}",
+				},
+				description:
+					"Assertion entrypoint and Maligator-owned asymmetric matcher factories.",
+			},
+			{
+				name: "TestFunction",
+				type: {
+					kind: "signature",
+					source:
+						"{\n\t\t/** Register a test. Returned promises are awaited by the runner. */\n\t\t(name: string, callback: TestCallback): void;\n\t\t/** Register a skipped test without invoking its callback. */\n\t\tskip(name: string, callback: TestCallback): void;\n\t\t/** Register a named placeholder with no callback. */\n\t\ttodo(name: string): void;\n\t\t/**\n\t\t * Register a focused test. When any `.only` exists, non-focused tests are\n\t\t * skipped and the runner emits a warning.\n\t\t */\n\t\tonly(name: string, callback: TestCallback): void;\n\t\t/**\n\t\t * Register one test for each row. Use `%#` in `name` for the zero-based row\n\t\t * index. Array rows are spread into callback parameters.\n\t\t */\n\t\teach<const Row extends ReadonlyArray<unknown>>(\n\t\t\trows: ReadonlyArray<Row>,\n\t\t): (name: string, callback: (...values: [...Row]) => unknown) => void;\n\t}",
+				},
+				description: "Register tests in the current suite during module evaluation.",
+			},
+			{
+				name: "DescribeFunction",
+				type: {
+					kind: "signature",
+					source:
+						"{\n\t\t/** Register a suite. Suite callbacks must not return a promise. */\n\t\t(name: string, callback: () => void): void;\n\t\t/** Register a suite whose descendants are skipped. */\n\t\tskip(name: string, callback: () => void): void;\n\t\t/** Register a focused suite and emit the runner's focused-test warning. */\n\t\tonly(name: string, callback: () => void): void;\n\t}",
+				},
+				description: "Register nested suites synchronously during module evaluation.",
+			},
+		],
+		exports: [
+			{
+				name: "test",
+				type: {
+					kind: "reference",
+					name: "TestFunction",
+				},
+				description: "Register a test in the current suite.",
+			},
+			{
+				name: "describe",
+				type: {
+					kind: "reference",
+					name: "DescribeFunction",
+				},
+				description: "Register a nested suite in the current suite.",
+			},
+			{
+				name: "expect",
+				type: {
+					kind: "reference",
+					name: "ExpectFunction",
+				},
+				description: "Create fluent matchers for a received value.",
+			},
+			{
+				name: "beforeAll",
+				type: {
+					kind: "signature",
+					source: "(callback: HookCallback) => void",
+				},
+				description: "Run once before tests in the current suite.",
+			},
+			{
+				name: "afterAll",
+				type: {
+					kind: "signature",
+					source: "(callback: HookCallback) => void",
+				},
+				description:
+					"Run once after tests in the current suite, including after test failures.",
+			},
+			{
+				name: "beforeEach",
+				type: {
+					kind: "signature",
+					source: "(callback: HookCallback) => void",
+				},
+				description:
+					"Run before every selected descendant test. Ancestor hooks run before hooks\ndeclared by a nested suite.",
+			},
+			{
+				name: "afterEach",
+				type: {
+					kind: "signature",
+					source: "(callback: HookCallback) => void",
+				},
+				description:
+					"Run after every selected descendant test. Nested-suite hooks run before\nancestor hooks.",
+			},
+		].map(
+			(entry): PlatformExport => ({
+				...entry,
+				type: entry.type as PlatformType,
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			}),
+		),
+	},
 ];
 
 export function lookupPlatformModule(specifier: string): PlatformModule | undefined {
@@ -361,6 +538,8 @@ export function validatePlatformValue(
 	value: unknown,
 ): value is PlatformData {
 	switch (type.kind) {
+		case "signature":
+			return false;
 		case "primitive":
 			return (
 				typeof value === type.name && (type.name !== "number" || Number.isFinite(value))

@@ -1,3 +1,4 @@
+import type { PlatformData } from "../../platform/catalog.ts";
 import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -23,7 +24,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 36;
+export const WIRE_VERSION = 37;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -600,6 +601,10 @@ export function writeRuntimeImage(
 			w.u32(name.length);
 			for (const byte of name) w.u8(byte);
 			w.i32(entry.slot);
+			const constant =
+				entry.constant === undefined ? [] : utf8Encode(JSON.stringify(entry.constant));
+			w.u32(constant.length);
+			for (const byte of constant) w.u8(byte);
 		}
 	}
 }
@@ -831,6 +836,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
+			w.i32(i.cacheSlot);
 			w.i32Array(i.nameIndices);
 			w.i32Array([...i.slots]);
 			return;
@@ -1342,13 +1348,23 @@ export function readRuntimeImage(
 		for (let byte = 0; byte < installerLength; byte++) {
 			installerBytes[byte] = r.u8();
 		}
-		const hostExports = [];
+		const hostExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
 		const exportCount = r.count(1);
 		for (let exportIndex = 0; exportIndex < exportCount; exportIndex++) {
 			const nameLength = r.count(1);
 			const nameBytes = new Array<number>(nameLength);
 			for (let byte = 0; byte < nameLength; byte++) nameBytes[byte] = r.u8();
-			hostExports.push({ name: utf8Decode(nameBytes), slot: r.i32() });
+			const slot = r.i32();
+			const constantLength = r.count(1);
+			const constantBytes = new Array<number>(constantLength);
+			for (let byte = 0; byte < constantLength; byte++) constantBytes[byte] = r.u8();
+			hostExports.push({
+				name: utf8Decode(nameBytes),
+				slot,
+				...(constantLength === 0
+					? {}
+					: { constant: JSON.parse(utf8Decode(constantBytes)) as PlatformData }),
+			});
 		}
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
 	}
@@ -1589,7 +1605,13 @@ function readInstruction(r: Reader): BytecodeInstruction {
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return { opcode, dst: r.i32(), templateOffset: r.i32() };
 		case "CREATE_MODULE_NAMESPACE":
-			return { opcode, dst: r.i32(), nameIndices: r.i32Array(), slots: r.i32Array() };
+			return {
+				opcode,
+				dst: r.i32(),
+				cacheSlot: r.i32(),
+				nameIndices: r.i32Array(),
+				slots: r.i32Array(),
+			};
 		case "CREATE_TEMPLATE_OBJECT":
 			return {
 				opcode,

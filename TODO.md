@@ -29,15 +29,13 @@ rooting, and resource-safety defects can interrupt that order.
 
 ## Verification workflow
 
-- [ ] Implement the catalog-driven `maligator:process` execution contract in
-      `docs/decisions/06-platform-catalog-and-execution.md`: catalog and generated
-      declarations/reference documentation; execution normalization and cache
-      identity; side-effect-free public modules and explicit bootstrap; runtime
-      snapshots; mandatory constant specialization and unused module elimination.
-      Use unsigned local checkpoints and tiny input checks while the host is busy.
-      Finish native runtime/GC and link exclusion checks, isolated packaged type
-      checks, and `npm run test:check` only after a fresh activity probe permits heavy
-      work. Record any remaining verification here before completion.
+- [ ] Finish verification of the catalog-driven `maligator:process` execution
+      implementation in `docs/decisions/06-platform-catalog-and-execution.md`:
+      native/interpreter snapshot shape, descriptors, identity and GC lifetime;
+      cross-fragment context isolation; unused native-symbol exclusion; native
+      test-runner bootstrap regressions; and the normal developer gate. Tiny
+      compiler, cache, generator and packaged declaration checks pass. Retain
+      current evidence in `.cache/platform-execution-20260907/`.
 
 - [ ] Make `scripts/dx-performance.ts` verify the running application's revision
       before and after a dependency edit. A controlled driver that keeps reporting

@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
 import { isPureDataCjsModule } from "../frontend/cjs-exports.ts";
 import {
@@ -219,6 +220,7 @@ interface CoreFrontendContext {
 	dynamicModuleStatusSlot: Map<string, number>;
 	moduleEvaluationErrorSlot: Map<string, number>;
 	deferredModuleNamespaceSlot: Map<string, number>;
+	moduleNamespaceSlot: Map<string, number>;
 
 	/**
 	 * CommonJS modules, keyed by path to their integer module id. The id indexes
@@ -276,7 +278,7 @@ interface CoreFrontendContext {
 		exports: Array<{
 			name: string;
 			binding: Binding;
-			constant?: import("../../platform/catalog.ts").PlatformData;
+			constant?: PlatformData;
 		}>;
 	}>;
 
@@ -810,6 +812,7 @@ export function constructSemanticProgramCore(
 		dynamicModuleStatusSlot: new Map(),
 		moduleEvaluationErrorSlot: new Map(),
 		deferredModuleNamespaceSlot: new Map(),
+		moduleNamespaceSlot: new Map(),
 
 		cjsModuleId: new Map(),
 		cjsWrapperFunctionIndex: [],
@@ -900,6 +903,27 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			data: coreProgramDataFromSemantic(program.semantic, {
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,
+				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(
+					([modulePath, functionIndex]) => {
+						if (
+							functionIndex === null ||
+							program.semantic.graph?.modules.get(modulePath)?.platform?.evaluation !==
+								"side-effect-free"
+						)
+							return [];
+						return [
+							{
+								functionIndex,
+								exportSlots: (program.moduleNamespaces.get(modulePath) ?? []).flatMap(
+									({ exporter }) => {
+										const location = program.bindingToStorage.get(exporter);
+										return location?.type === "global" ? [location.index] : [];
+									},
+								),
+							},
+						];
+					},
+				),
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
 				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
@@ -966,6 +990,7 @@ function coreHostInstallCandidates(
 					const pending = [constant];
 					while (pending.length > 0) {
 						const value = pending.pop()!;
+						getOrCreateStringConstant(program, typeof value);
 						if (typeof value === "string") getOrCreateStringConstant(program, value);
 						else if (value !== null && typeof value === "object")
 							pending.push(...Object.values(value));
@@ -1013,7 +1038,11 @@ function compileMergedModuleInit(
 	// separate per-file init; mark every module compiled up front since the
 	// merged init already covers every module's top-level.
 	for (const modulePath of evaluationOrder) {
-		program.compiledModuleInitForPaths.set(modulePath, null);
+		if (
+			program.semantic.graph?.modules.get(modulePath)?.platform?.evaluation !==
+			"side-effect-free"
+		)
+			program.compiledModuleInitForPaths.set(modulePath, null);
 	}
 
 	const fn: CoreFrontendFunction = {
@@ -1079,6 +1108,17 @@ function compileMergedModuleInit(
 			continue;
 		}
 		fn.semanticFile = file;
+		if (
+			program.semantic.graph?.modules.get(modulePath)?.platform?.evaluation ===
+			"side-effect-free"
+		) {
+			const evaluationBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			const blockIndex = fn.blocks.push(evaluationBlock) - 1;
+			if (tail) tail.emitter.emit({ type: "jump", blocks: [blockIndex] });
+			emitModuleSyncEvaluationCall(program, fn, evaluationBlock, file, false);
+			tail = evaluationBlock;
+			continue;
+		}
 
 		const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const prologueIndex = fn.blocks.push(prologue) - 1;
@@ -1124,6 +1164,7 @@ function emitRequiredEsmNamespaceInits(
 			fn,
 			block,
 			program.moduleNamespaces.get(modulePath) ?? [],
+			modulePath,
 		);
 		block.emitter.emit({ type: "storeGlobal", registers: [namespace], index: slot });
 	}
@@ -2409,6 +2450,7 @@ function emitModulePrologue(
 				block,
 				namespaceImport.binding,
 				namespaceImport.exports,
+				namespaceImport.module,
 			);
 		}
 	}
@@ -12262,7 +12304,7 @@ function emitDynamicImportCall(
 			});
 		}
 		const namespace = namespaceExports
-			? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports)
+			? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports, path)
 			: compileUndefined(fn, cursor);
 		const statusSlot = path ? getDynamicModuleStatusSlot(program, path) : -1;
 		return [initFn, namespace, compileNumberLiteral(fn, cursor, statusSlot)];
@@ -13127,8 +13169,9 @@ function emitNamespaceObject(
 	block: CoreFrontendBlock,
 	binding: Binding,
 	exports: Array<{ name: string; exporter: Binding }>,
+	modulePath: string,
 ) {
-	const namespace = emitNamespaceObjectRegister(program, fn, block, exports);
+	const namespace = emitNamespaceObjectRegister(program, fn, block, exports, modulePath);
 	const location = getOrCreateBindingLocation(program, fn, binding);
 	storeRegisterAtLocation(block, location, namespace);
 }
@@ -13138,6 +13181,7 @@ function emitNamespaceObjectRegister(
 	fn: CoreFrontendFunction,
 	block: CoreFrontendBlock,
 	exports: Array<{ name: string; exporter: Binding }>,
+	modulePath?: string,
 ): number {
 	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
 	for (const { name, exporter } of exports) {
@@ -13151,9 +13195,16 @@ function emitNamespaceObjectRegister(
 		});
 	}
 
+	let cacheSlot = -1;
+	if (modulePath !== undefined) {
+		const existing = program.moduleNamespaceSlot.get(modulePath);
+		cacheSlot = existing ?? program.nextGlobalIndex++;
+		program.moduleNamespaceSlot.set(modulePath, cacheSlot);
+	}
 	const namespace = nextCoreVariable(fn);
 	block.emitter.emit({
 		type: "createModuleNamespace",
+		cacheSlot,
 		registers: [namespace],
 		exports: entries,
 	});

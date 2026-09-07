@@ -71,6 +71,8 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
+import { executionIdentity } from "./platform/execution.ts";
+import type { Execution } from "./platform/execution.ts";
 
 const BUILD_FRONTEND_CACHE_SCHEMA = 3;
 const BUILD_FRONTEND_PIPELINE_VERSION = 3;
@@ -78,7 +80,7 @@ const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
 );
-const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
+const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
@@ -143,6 +145,7 @@ export interface CompiledBuildFrontend {
 export interface CompileBuildFrontendOptions {
 	entrypoint: string;
 	config: ResolvedBuildConfig;
+	execution?: Execution;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	/** Node compatibility globals evaluated before a Node-surface application. */
@@ -209,6 +212,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
+			execution: executionIdentity(options.execution),
 		}),
 	);
 }
@@ -559,6 +563,7 @@ export function compileBuildFrontend(
 	const graphStartedAt = Date.now();
 	const graph = buildModuleGraph(entrypoint, {
 		buildConfig: options.config,
+		execution: options.execution,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
 		entryPrelude,
@@ -614,6 +619,7 @@ export function compileBuildFrontend(
 			const fragments = compileBuildFragments({
 				graph,
 				config: options.config,
+				execution: options.execution,
 				facts,
 				semantic: sharedSemantic,
 				stripTypes: options.stripTypes,

@@ -738,8 +738,10 @@ export function isNodeSpecifier(specifier: string): boolean {
 
 /** The catalog entry for a specifier, or undefined when it is not a supported built-in. */
 export function lookupHostModule(specifier: string): HostModuleSpec | undefined {
-	const platform = PLATFORM_MODULES.find((module) => module.id === specifier);
-	return platform === undefined
+	const platform = PLATFORM_MODULES.find(
+		(module) => module.id === specifier && module.kind === "native",
+	);
+	return platform === undefined || platform.kind !== "native"
 		? HOST_MODULES.get(specifier)
 		: {
 				id: platform.id,

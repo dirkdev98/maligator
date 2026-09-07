@@ -36,8 +36,8 @@ function canonicalData(value: PlatformData): PlatformData {
 }
 
 export function executionData(execution: Execution): PlatformData {
-	const module = lookupPlatformModule("maligator:process")!;
-	if (!validatePlatformValue(module, module.exports[0]!.type, execution)) {
+	const platform = lookupPlatformModule("maligator:process")!;
+	if (!validatePlatformValue(platform, platform.exports[0]!.type, execution)) {
 		throw new Error("Invalid application execution description");
 	}
 	return canonicalData(execution);
@@ -108,4 +108,17 @@ export function executionTarget(triple: string): ExecutionTarget {
 	const target = targets[triple];
 	if (target === undefined) throw new Error(`Unsupported execution target: ${triple}`);
 	return target;
+}
+
+export function hostExecutionTarget(platform: string, arch: string): ExecutionTarget {
+	const cpu = arch === "arm64" ? "aarch64" : arch === "x64" ? "x86_64" : undefined;
+	const system =
+		platform === "darwin"
+			? "apple-darwin"
+			: platform === "linux"
+				? "unknown-linux-gnu"
+				: undefined;
+	if (cpu === undefined || system === undefined)
+		throw new Error(`Unsupported execution host: ${platform}/${arch}`);
+	return executionTarget(`${cpu}-${system}`);
 }

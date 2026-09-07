@@ -37,6 +37,7 @@ import {
 } from "../frontend-cache.ts";
 import type { FrontendCompilationSession } from "../frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "../frontend-cache.ts";
+import { executionIdentity } from "../platform/execution.ts";
 import type {
 	CompileTestImageOptions,
 	DependencyIdentity,
@@ -46,7 +47,7 @@ import { TestCompilationSession } from "./cache.ts";
 
 const FRAGMENT_SCHEMA = 1;
 const TEST_MODULE_ID = "maligator:test";
-const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
+const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
@@ -170,6 +171,7 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
+			execution: executionIdentity(options.execution),
 			runtime: digest(options.testModuleSource),
 			nodeGlobals:
 				options.config.surface.node === true
@@ -522,9 +524,13 @@ function planningGraph(
 			.join("\n")}\n`,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache,
 		virtualModules: new Map([
-			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			[
+				TEST_MODULE_ID,
+				{ source: options.testModuleSource, goal: "module", platform: true },
+			],
 			...(options.config.surface.node
 				? [
 						[
@@ -583,6 +589,7 @@ function fragmentGraph(
 	return buildModuleGraph(plan.file, {
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache,
 		virtualModules,
 		transformSource(source, filePath) {
@@ -617,6 +624,8 @@ function baseGraph(
 		)
 		.join("\n");
 	const source = `${imports}
+import { __initializeRunner } from "maligator:test";
+__initializeRunner();
 const __maligatorModules = Object.create(null);
 ${publications}
 globalThis.__maligatorTestLinkedModules = __maligatorModules;
@@ -627,9 +636,13 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache,
 		virtualModules: new Map([
-			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			[
+				TEST_MODULE_ID,
+				{ source: options.testModuleSource, goal: "module", platform: true },
+			],
 			...(options.config.surface.node
 				? [
 						[
@@ -663,6 +676,7 @@ console.log(${JSON.stringify(options.processRunner.resultPrefix)} + JSON.stringi
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		execution: options.execution,
 		parseCache,
 	});
 }
@@ -752,6 +766,7 @@ export function compileRelocatableTestImage(
 		graph: planning,
 		targets: dependencyTargets,
 		config: options.config,
+		execution: options.execution,
 		facts: compilerProgramFactsFromConfig(options.config),
 		stripTypes: options.stripTypes,
 		stripperIdentity: options.stripperIdentity,

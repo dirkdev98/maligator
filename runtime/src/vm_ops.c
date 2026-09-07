@@ -1089,17 +1089,26 @@ void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruc
 // exotic object from the (name-constant-index, export-slot) pairs. No user code
 // runs, so it never throws.
 MalValue mal_vm_op_create_module_namespace(
-    MalVm *vm, i32 count, const i32 *name_indices, const i32 *slots
+    MalVm *vm, i32 cache_slot, i32 count, const i32 *name_indices, const i32 *slots
 ) {
+    if (cache_slot >= 0 && !mal_value_is_undefined(vm->globals[cache_slot])) {
+        return vm->globals[cache_slot];
+    }
     MalModuleNamespaceExport *exports =
         count > 0 ? malloc(sizeof(MalModuleNamespaceExport) * (usize) count) : nullptr;
+    if (count > 0 && exports == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     for (i32 i = 0; i < count; i++) {
         exports[i].name = &vm->runtime_image->string_constants[name_indices[i]];
         exports[i].slot = slots[i];
     }
 
     MalModuleNamespaceObject *ns = mal_module_namespace_object_new(&vm->heap, exports, count);
-    return mal_value_from_module_namespace_object(ns);
+    MalValue result = mal_value_from_module_namespace_object(ns);
+    if (cache_slot >= 0) vm->globals[cache_slot] = result;
+    return result;
 }
 
 void mal_op_create_module_namespace(MalCallable *callable, const MalInstruction *instruction) {
@@ -1108,6 +1117,7 @@ void mal_op_create_module_namespace(MalCallable *callable, const MalInstruction 
     i32 count = data[0];
     callable->registers[instruction->as.create_module_namespace.dst] = mal_vm_op_create_module_namespace(
         callable->vm,
+        instruction->as.create_module_namespace.cache_slot,
         count,
         &data[1],
         &data[1 + count]

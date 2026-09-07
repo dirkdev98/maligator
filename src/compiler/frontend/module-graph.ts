@@ -2,7 +2,8 @@ import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
-import { PLATFORM_MODULES } from "../../platform/catalog.ts";
+import type { PlatformModule } from "../../platform/catalog.ts";
+import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
 import { traverseEstree } from "./estree-traversal.ts";
@@ -85,6 +86,7 @@ export interface ModuleRecord {
 	host?: HostModuleSpec;
 	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
 	virtual?: true;
+	platform?: PlatformModule;
 }
 
 export interface ModuleGraph {
@@ -233,7 +235,7 @@ export interface BuildModuleGraphOptions {
 	 */
 	virtualModules?: ReadonlyMap<
 		string,
-		{ source: string; goal?: Exclude<ModuleGoal, "cjs"> }
+		{ source: string; goal?: Exclude<ModuleGoal, "cjs">; platform?: boolean }
 	>;
 
 	/**
@@ -293,7 +295,7 @@ export function buildModuleGraph(
 	const virtualModule = (specifier: string) =>
 		options.virtualModules?.get(specifier) ??
 		(options.entryPrelude?.specifier === specifier
-			? { source: options.entryPrelude.source, goal: "module" as const }
+			? { source: options.entryPrelude.source, goal: "module" as const, platform: false }
 			: undefined);
 
 	const load = (
@@ -373,7 +375,11 @@ export function buildModuleGraph(
 					dependency.kind === "require" &&
 					dependency.specifier === options.entryPrelude?.specifier;
 				if (
-					dependency.kind === "dynamic" ||
+					(dependency.kind === "dynamic" &&
+						!(
+							toolchainModule.platform &&
+							lookupPlatformModule(dependency.specifier)?.kind === "source"
+						)) ||
 					(dependency.kind === "require" && !entryPreludeRequire)
 				) {
 					throw new SyntaxDiagnostic(
@@ -438,6 +444,9 @@ export function buildModuleGraph(
 			parsed,
 			dependencies,
 			...(virtual ? { virtual: true as const } : {}),
+			...(virtual && virtualModule(filePath)?.platform
+				? { platform: lookupPlatformModule(filePath) }
+				: {}),
 		});
 
 		for (const dependency of dependencies) {

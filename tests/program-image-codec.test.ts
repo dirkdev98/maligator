@@ -165,6 +165,7 @@ const instructions: Array<BytecodeInstruction> = [
 	},
 	{
 		opcode: "CREATE_MODULE_NAMESPACE",
+		cacheSlot: -1,
 		dst: 13,
 		nameIndices: [0, 1],
 		slots: [4, 5],

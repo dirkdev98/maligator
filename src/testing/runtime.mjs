@@ -449,9 +449,6 @@ export function __endFile() {
 	currentFile = undefined;
 }
 
-globalThis.__maligatorTestBeginFile = __beginFile;
-globalThis.__maligatorTestEndFile = __endFile;
-
 function requireCallback(kind, callback) {
 	if (typeof callback !== "function") throw new TypeError(`${kind} requires a callback`);
 }
@@ -863,19 +860,20 @@ export function __reset() {
 	currentFile = undefined;
 }
 
-// Stable internal ABI used by relocatable test fragments. Public authoring
-// continues to import maligator:test; fragments bind those imports to this
-// preinitialized namespace instead of recompiling the matcher runtime.
-globalThis.__maligatorTestApi = {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	test,
-	__beginFile,
-	__endFile,
-	__reset,
-	__run,
-};
+export function __initializeRunner() {
+	globalThis.__maligatorTestBeginFile = __beginFile;
+	globalThis.__maligatorTestEndFile = __endFile;
+	globalThis.__maligatorTestApi = {
+		afterAll,
+		afterEach,
+		beforeAll,
+		beforeEach,
+		describe,
+		expect,
+		test,
+		__beginFile,
+		__endFile,
+		__reset,
+		__run,
+	};
+}

@@ -25,6 +25,11 @@ const stages: Record<
 		{ label: "format files", tool: "oxfmt", args: [] },
 	],
 	"lint-ci": [
+		{
+			label: "check platform API generation",
+			tool: process.execPath,
+			args: ["./scripts/generate-platform-api.ts", "--check"],
+		},
 		{ label: "lint", tool: "eslint", args: [".", "--concurrency=auto"] },
 		{ label: "check formatting", tool: "oxfmt", args: ["--check"] },
 	],

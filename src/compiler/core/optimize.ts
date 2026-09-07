@@ -28,7 +28,11 @@ import type {
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
-import { specializeCorePlatformConstants } from "./core-platform-constants.ts";
+import {
+	specializeCorePlatformConstants,
+	pruneUnusedPlatformAliases,
+} from "./core-platform-constants.ts";
+import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
@@ -210,6 +214,8 @@ export function optimizeCore(
 		"after-initial-local-structural-optimization",
 		compilation.program,
 	);
+	pruneUnusedPlatformAliases(compilation);
+	pruneUnusedPlatformModuleInitializers(compilation);
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),

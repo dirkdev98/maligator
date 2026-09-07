@@ -347,7 +347,10 @@ const OPCODE_ACCESSES = {
 	// the whole cell list rather than one attribute per cell, so this stays a
 	// whole-family read: conservative, and never a narrower guess than the
 	// descriptor can decode.
-	createModuleNamespace: [read("global-slot")],
+	createModuleNamespace: [
+		read("global-slot"),
+		write("global-slot", { attributes: ["cacheSlot"] }),
+	],
 	// A dedicated per-site slot the runtime fills on first evaluation and returns
 	// on every later one, which is what makes the strings object's identity stable.
 	// The stored value is the instruction's own result rather than an operand.

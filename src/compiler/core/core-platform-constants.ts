@@ -1,11 +1,13 @@
 import type { PlatformData } from "../../platform/catalog.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreEdge,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreInstructionAttributes,
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -39,6 +41,18 @@ function edge(fn: CoreFunctionStore, row: number): CoreEdge {
 	};
 }
 
+function cellKey(
+	opcode: string,
+	attributes: CoreInstructionAttributes,
+): string | undefined {
+	if (typeof attributes.index !== "number") return undefined;
+	if (opcode === "loadGlobal" || opcode === "storeGlobal")
+		return `global:${attributes.index}`;
+	return typeof attributes.functionIndex === "number"
+		? `captured:${attributes.functionIndex}:${attributes.index}`
+		: undefined;
+}
+
 class PlatformValues {
 	readonly roots = new Map<string, KnownValue>();
 	readonly stores = new Map<string, StoredValue | null>();
@@ -49,9 +63,6 @@ class PlatformValues {
 
 	constructor(compilation: ConstructedCoreCompilation) {
 		this.#program = compilation.program;
-		this.strings = compilation.program.stringConstants.map((units) =>
-			String.fromCharCode(...units),
-		);
 		const data = compilation.context.data;
 		for (const install of data.hostInstallCandidates) {
 			for (const entry of install.exports) {
@@ -62,6 +73,15 @@ class PlatformValues {
 					});
 			}
 		}
+		this.strings =
+			this.roots.size === 0
+				? []
+				: compilation.program.stringConstants.map((units) => {
+						const chunks: Array<string> = [];
+						for (let index = 0; index < units.length; index += 8192)
+							chunks.push(String.fromCharCode(...units.slice(index, index + 8192)));
+						return chunks.join("");
+					});
 		if (this.roots.size === 0) return;
 		const closed = new Set([
 			...data.singleAssignmentGlobalSlots.map((slot) => `global:${slot}`),
@@ -76,11 +96,8 @@ class PlatformValues {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (opcode !== "storeGlobal" && opcode !== "storeCaptured") continue;
 				const attributes = fn.instructionAttributes(instruction);
-				const key =
-					opcode === "storeGlobal"
-						? `global:${attributes.index}`
-						: `captured:${attributes.functionIndex}:${attributes.index}`;
-				if (!closed.has(key)) continue;
+				const key = cellKey(opcode, attributes);
+				if (key === undefined || !closed.has(key)) continue;
 				const value = operand(fn, instruction, 0);
 				if (
 					fn.kernel.valueDefinitionKind(value) === 1 &&
@@ -101,7 +118,7 @@ class PlatformValues {
 		const root = this.roots.get(key);
 		if (root !== undefined) return root;
 		const store = this.stores.get(key);
-		return store == null
+		return store === null || store === undefined
 			? undefined
 			: this.value(this.#program.function(store.function), store.value);
 	}
@@ -172,14 +189,22 @@ class PlatformValues {
 			case "move":
 				return input(0);
 			case "loadGlobal":
-				return this.cell(`global:${attributes.index}`);
-			case "loadCaptured":
-				return this.cell(`captured:${attributes.functionIndex}:${attributes.index}`);
+			case "loadCaptured": {
+				const key = cellKey(fn.instructionOpcodeName(instruction), attributes);
+				return key === undefined ? undefined : this.cell(key);
+			}
 			case "createModuleNamespace": {
 				if (!Array.isArray(attributes.exports)) return undefined;
 				const entries: Array<[string, PlatformData]> = [];
-				for (const entry of attributes.exports) {
-					if (entry === null || typeof entry !== "object" || Array.isArray(entry))
+				for (const entry of attributes.exports as ReadonlyArray<unknown>) {
+					if (
+						entry === null ||
+						typeof entry !== "object" ||
+						Array.isArray(entry) ||
+						!("nameStringIndex" in entry) ||
+						!("slot" in entry) ||
+						typeof entry.slot !== "number"
+					)
 						return undefined;
 					const name =
 						typeof entry.nameStringIndex === "number"
@@ -229,15 +254,15 @@ class PlatformValues {
 					(!left.platform && !right.platform)
 				)
 					return undefined;
-				if (attributes.operator === "===")
-					return { value: left.value === right.value, platform: true };
-				if (attributes.operator === "!==")
-					return { value: left.value !== right.value, platform: true };
 				if (
 					(left.value !== null && typeof left.value === "object") ||
 					(right.value !== null && typeof right.value === "object")
 				)
 					return undefined;
+				if (attributes.operator === "===")
+					return { value: left.value === right.value, platform: true };
+				if (attributes.operator === "!==")
+					return { value: left.value !== right.value, platform: true };
 				const a = left.value as string | number;
 				const b = right.value as string | number;
 				switch (attributes.operator) {
@@ -274,9 +299,49 @@ export function specializeCorePlatformConstants(
 		const fn = program.function(functionId);
 		const editor = CoreEditor.open(program, functionId);
 		const discardable: Array<CoreInstructionId> = [];
+		const cfg = buildCoreControlFlow(program, functionId);
+		const initializedGlobals = new Map<number, Array<CoreInstructionId>>();
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "storeGlobal"
+			)
+				continue;
+			const value = values.value(fn, operand(fn, instruction, 0));
+			const index = fn.instructionAttributes(instruction).index;
+			if (!value?.platform || typeof index !== "number") continue;
+			const stores = initializedGlobals.get(index) ?? [];
+			stores.push(instruction);
+			initializedGlobals.set(index, stores);
+		}
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "throwIfTdz") {
+				const input = operand(fn, instruction, 0);
+				if (fn.kernel.valueDefinitionKind(input) === 1) {
+					const load = coreInstructionId(fn.kernel.valueDefinitionOwner(input));
+					const index = fn.instructionAttributes(load).index;
+					if (
+						fn.instructionOpcodeName(load) === "loadGlobal" &&
+						typeof index === "number" &&
+						(values.roots.has(`global:${index}`) ||
+							(initializedGlobals.get(index) ?? []).some((store) => {
+								const storeBlock = fn.instructionBlock(store);
+								const readBlock = fn.instructionBlock(instruction);
+								if (storeBlock !== readBlock)
+									return cfg.instructionDominatesBlock(storeBlock, readBlock);
+								for (const member of fn.bodyInstructionIds(storeBlock)) {
+									if (member === store) return true;
+									if (member === instruction) return false;
+								}
+								return false;
+							}))
+					)
+						editor.removeInstruction(instruction);
+				}
+				continue;
+			}
 			if (opcode === "requireCoercible") {
 				const object = values.value(fn, operand(fn, instruction, 0));
 				if (object?.platform && object.value !== null && object.value !== undefined)
@@ -339,5 +404,92 @@ export function specializeCorePlatformConstants(
 				editor.removeInstruction(instruction);
 		}
 		editor.commit();
+	}
+}
+
+/** Internal alias stores must not keep discarded snapshots alive; eval can expose those cells. */
+export function pruneUnusedPlatformAliases(
+	compilation: ConstructedCoreCompilation,
+): void {
+	if (compilation.context.facts.world.eval !== "disabled") return;
+	const values = new PlatformValues(compilation);
+	if (values.roots.size === 0) return;
+	const { program } = compilation;
+	const aliases = new Set<number>();
+	for (const key of values.stores.keys()) {
+		if (key.startsWith("global:") && values.cell(key)?.platform)
+			aliases.add(Number(key.slice(7)));
+	}
+	const discardable = new Map<CoreFunctionId, Array<CoreInstructionId>>();
+	for (const id of program.functionIds()) {
+		const fn = program.function(id);
+		const instructions: Array<CoreInstructionId> = [];
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (
+				opcode !== "loadGlobal" &&
+				opcode !== "loadProperty" &&
+				opcode !== "loadPropertyStatic" &&
+				opcode !== "createModuleNamespace"
+			)
+				continue;
+			const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (values.value(fn, result)?.platform) instructions.push(instruction);
+		}
+		discardable.set(id, instructions.reverse());
+	}
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const readSlots = new Set<number>();
+		for (const id of program.functionIds()) {
+			const fn = program.function(id);
+			for (const block of buildCoreControlFlow(program, id).reachable) {
+				for (const instruction of fn.bodyInstructionIds(block)) {
+					const opcode = fn.instructionOpcodeName(instruction);
+					const attributes = fn.instructionAttributes(instruction);
+					if (opcode === "loadGlobal" && typeof attributes.index === "number")
+						readSlots.add(attributes.index);
+					if (Array.isArray(attributes.exports)) {
+						for (const entry of attributes.exports as ReadonlyArray<unknown>) {
+							if (
+								entry !== null &&
+								typeof entry === "object" &&
+								!Array.isArray(entry) &&
+								"slot" in entry &&
+								typeof entry.slot === "number"
+							)
+								readSlots.add(entry.slot);
+						}
+					}
+				}
+			}
+		}
+		for (const id of program.functionIds()) {
+			const fn = program.function(id);
+			const editor = CoreEditor.open(program, id);
+			for (const instruction of fn.instructionIds()) {
+				if (
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.instructionOpcodeName(instruction) !== "storeGlobal"
+				)
+					continue;
+				const index = fn.instructionAttributes(instruction).index;
+				if (typeof index === "number" && aliases.has(index) && !readSlots.has(index)) {
+					editor.removeInstruction(instruction);
+					changed = true;
+				}
+			}
+			for (const instruction of discardable.get(id) ?? []) {
+				if (!fn.isInstructionLive(instruction)) continue;
+				const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+				if (fn.valueUseCount(result) + fn.kernel.valueHandlerUseCount(result) !== 0)
+					continue;
+				editor.removeInstruction(instruction);
+				changed = true;
+			}
+			editor.commit();
+		}
 	}
 }
