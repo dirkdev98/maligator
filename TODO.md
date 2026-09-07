@@ -354,6 +354,10 @@ only reproducible input.
 
 - [ ] Finish dynamic-import resolution, import attributes, evaluation order, and error
       ordering. Cover compiled, interpreted, and runtime-loading paths.
+      Reproduce `for-await-resolution-and-error-agen-yield.js` with its surrounding
+      Test262 batch as well as alone: the sloppy batch loses the expected `foo`
+      rejection. Preserve asynchronous evaluation for the `module-graphs-does-not-hang`
+      and `tla-hang-entry` module graphs.
 
 - [ ] Implement import-defer syntax and semantics. Integrate it with linking,
       evaluation state, cycles, and failure propagation.
@@ -378,7 +382,14 @@ only reproducible input.
 
 - [ ] Complete script-global environment-record behavior across separately evaluated
       scripts. Preserve declaration conflicts, deletability, global-object interaction,
-      and lexical bindings.
+      TDZ, and const writes. Separate Test262 harness execution exposes missing lexical
+      bindings in `resizableArrayBufferUtils.js`, `regExpUtils.js`,
+      `nativeFunctionMatcher.js`, `wellKnownIntrinsicObjects.js`, and
+      `sm/non262-Math-shell.js`; do not expose these bindings as global-object properties.
+
+- [ ] Fix indexed-length-loop region validity for separately compiled scripts.
+      `test/staging/sm/Array/toSpliced-dense.js` and `with-dense.js` fail the structural
+      contract during VM lowering; preserve the verifier and repair the owning region.
 
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring. Keep abrupt
       completion and iterator closing correct around exhausted iterators.
@@ -417,12 +428,6 @@ only reproducible input.
       Cover abrupt completion and object identity as well as primitives.
 
 ## Realm correctness and runtime capabilities
-
-- [ ] Share global lexical bindings across separately compiled scripts in the same
-      Realm without exposing them as global-object properties. Preserve TDZ,
-      const writes, and declaration conflicts. Separate Test262 harness execution
-      exposes this in `resizableArrayBufferUtils.js` (`ctors`) and
-      `nativeFunctionMatcher.js` (`validateNativeFunctionSource`).
 
 - [ ] Implement module loading for ShadowRealm.prototype.importValue. Preserve
       wrapping, rejection, module identity, and cross-Realm error semantics.
