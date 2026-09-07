@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 import { compileExplorer, compileExplorerRequest } from "../src/explorer/api.ts";
@@ -5,27 +6,62 @@ import type { ExplorerResponse } from "../src/explorer/api.ts";
 import { compileExplorerCore } from "../src/explorer/compiler.ts";
 import {
 	EXPLORER_LIMITS,
+	EXPLORER_SCHEMA,
 	explorerBuildConfig,
 	normalizeExplorerConfig,
 	utf8ByteLength,
 } from "../src/explorer/config.ts";
 import { SAMPLES } from "../src/explorer/samples.ts";
 
-function request(source: string, config: unknown = {}): ExplorerResponse {
+function request(
+	source: string,
+	config: unknown = {},
+	language: unknown = "javascript",
+): ExplorerResponse {
 	return JSON.parse(
-		compileExplorerRequest(JSON.stringify({ schema: 1, source, config })),
+		compileExplorerRequest(
+			JSON.stringify({ schema: EXPLORER_SCHEMA, source, config, language }),
+		),
 	) as ExplorerResponse;
 }
 
 describe("explorer compilation", () => {
 	it("compiles every builtin through both lowerings without executing source", () => {
 		for (const sample of SAMPLES) {
-			const result = compileExplorer(sample.source, sample.config ?? {});
+			const result = compileExplorer(sample.source, sample.config ?? {}, sample.language);
 			expect(result.modes.generic.optimizedCore).toBe(result.modes.full.optimizedCore);
 			expect(result.modes.full.stats.functions).toBeGreaterThan(0);
 			expect(result.modes.full.wire.slice(0, 4)).toEqual([77, 65, 76, 87]);
 		}
 		expect(request('throw new Error("must not execute"); for (;;) {}').ok).toBe(true);
+	});
+
+	it("strips erasable TypeScript before the ordinary compiler and keeps JavaScript strict", () => {
+		const source =
+			'import type { Point } from "unavailable";\ninterface Shape { x: number }\nconst point = { x: 42 } satisfies Shape;\nglobalThis.answer = point.x;';
+		const typed = compileExplorer(source, {}, "typescript");
+		expect(typed.language).toBe("typescript");
+		expect(typed.strippedSource.split("\n")).toHaveLength(source.split("\n").length);
+		expect(typed.strippedSource.indexOf("globalThis.answer")).toBe(
+			source.indexOf("globalThis.answer"),
+		);
+		expect(runInNewContext(`${typed.strippedSource}\nglobalThis.answer`)).toBe(42);
+		expect(request(source)).toMatchObject({ ok: false, category: "syntax" });
+		for (const invalid of [
+			"enum Color { Red }",
+			"class Point { constructor(public x: number) {} }",
+			'import { value } from "missing"; globalThis.x = value;',
+		]) {
+			expect(request(invalid, {}, "typescript")).toMatchObject({
+				ok: false,
+				category: "syntax",
+			});
+		}
+		expect(
+			request("const answer: number = 42; globalThis.answer = answer", {}, "typescript")
+				.ok,
+		).toBe(true);
+		expect(request("0", {}, "tsx")).toMatchObject({ ok: false });
 	});
 
 	it("uses the ordinary build policies and closure facts for each eval mode", () => {
@@ -86,7 +122,10 @@ describe("explorer compilation", () => {
 		const first = request(source, config);
 		expect(first).toMatchObject({
 			ok: true,
-			result: { config, world: { ecmaFeatures: { intl: true, temporal: true } } },
+			result: {
+				config,
+				world: { ecmaFeatures: { intl: true, temporal: true } },
+			},
 		});
 		expect(request(source, config)).toEqual(first);
 	});
@@ -109,7 +148,9 @@ describe("explorer compilation", () => {
 			ok: false,
 			category: "limit",
 		});
-		expect(request("0", { intl: { enabled: true } })).toMatchObject({ ok: false });
+		expect(request("0", { intl: { enabled: true } })).toMatchObject({
+			ok: false,
+		});
 		expect(request("0", { assets: {} })).toMatchObject({ ok: false });
 		expect(JSON.parse(compileExplorerRequest('{"schema":2}'))).toMatchObject({
 			ok: false,

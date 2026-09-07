@@ -2,11 +2,12 @@ import type { ExplorerResult } from "./api.ts";
 import {
 	EXPLORER_LIMITS,
 	EXPLORER_SCHEMA,
-	EXPLORER_SOURCE_PATH,
+	explorerSourcePath,
+	normalizeExplorerLanguage,
 	normalizeExplorerConfig,
 	utf8ByteLength,
 } from "./config.ts";
-import type { ExplorerConfig } from "./config.ts";
+import type { ExplorerConfig, ExplorerLanguage } from "./config.ts";
 import type {
 	ExplorerSiteData,
 	ExplorerWorkerRequest,
@@ -55,17 +56,22 @@ export class ExplorerClient {
 		this.#onState = onState;
 	}
 
-	compile(source: string, settings: unknown): Promise<ExplorerCompilation> {
+	compile(
+		source: string,
+		settings: unknown,
+		inputLanguage: unknown = "javascript",
+	): Promise<ExplorerCompilation> {
 		if (utf8ByteLength(source) > EXPLORER_LIMITS.sourceBytes)
 			return Promise.reject(
 				new ExplorerClientError("limit", "Source exceeds the 64 KiB UTF-8 limit"),
 			);
 		const config = normalizeExplorerConfig(settings);
-		const signature = JSON.stringify({ source, config });
+		const language = normalizeExplorerLanguage(inputLanguage);
+		const signature = JSON.stringify({ source, config, language });
 		if (this.#inflight?.signature === signature) return this.#inflight.promise;
 		if (this.#inflight !== undefined) this.cancel();
 		const id = ++this.#serial;
-		const promise = this.#compile(id, source, config).finally(() => {
+		const promise = this.#compile(id, source, config, language).finally(() => {
 			if (id === this.#serial) this.#inflight = undefined;
 		});
 		this.#inflight = { signature, promise };
@@ -89,6 +95,7 @@ export class ExplorerClient {
 		id: number,
 		source: string,
 		config: ExplorerConfig,
+		language: ExplorerLanguage,
 	): Promise<ExplorerCompilation> {
 		if (
 			typeof Worker === "undefined" ||
@@ -102,10 +109,11 @@ export class ExplorerClient {
 		const input = JSON.stringify({
 			identity: this.#data.identity,
 			schema: EXPLORER_SCHEMA,
-			path: EXPLORER_SOURCE_PATH,
+			path: explorerSourcePath(language),
 			goal: "module",
 			source,
 			config,
+			language,
 		});
 		const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
 		const key = Array.from(new Uint8Array(digest), (byte) =>
@@ -116,7 +124,12 @@ export class ExplorerClient {
 		if (cached !== undefined) {
 			this.#cache.delete(key);
 			this.#cache.set(key, cached);
-			return { result: cached.result, cached: true, milliseconds: 0, memoryBytes: 0 };
+			return {
+				result: cached.result,
+				cached: true,
+				milliseconds: 0,
+				memoryBytes: 0,
+			};
 		}
 		clearTimeout(this.#idleTimer);
 		await this.#ensureWorker();
@@ -141,6 +154,7 @@ export class ExplorerClient {
 					identity: this.#data.identity,
 					source,
 					config,
+					language,
 				} satisfies ExplorerWorkerRequest);
 			} catch {
 				this.#terminate(

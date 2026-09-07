@@ -103,42 +103,6 @@
 				transform: translateY(0);
 			}
 
-			header {
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				min-height: 5.25rem;
-				border-bottom: 1px solid var(--line);
-			}
-			.wordmark {
-				display: inline-flex;
-				align-items: center;
-				gap: 0.7rem;
-				text-decoration: none;
-				font-weight: 900;
-				letter-spacing: -0.04em;
-				font-size: 1.25rem;
-			}
-			.nav-mascot {
-				display: block;
-				width: 2.65rem;
-				height: 2.65rem;
-				aspect-ratio: 1;
-				border: 2px solid currentColor;
-				border-radius: 50%;
-				object-fit: cover;
-			}
-			nav {
-				display: flex;
-				gap: 1.25rem;
-				font-size: 0.9rem;
-				font-weight: 700;
-			}
-			nav a {
-				text-decoration-thickness: 1px;
-				text-underline-offset: 0.25rem;
-			}
-
 			.hero {
 				display: grid;
 				grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
@@ -750,9 +714,6 @@
 			}
 
 			@media (max-width: 820px) {
-				nav {
-					display: none;
-				}
 				.hero {
 					grid-template-columns: minmax(0, 1fr);
 					min-height: auto;
@@ -778,9 +739,6 @@
 			@media (max-width: 520px) {
 				.wrap {
 					width: min(1180px, calc(100% - 1.25rem));
-				}
-				header {
-					min-height: 4.5rem;
 				}
 				main section {
 					padding-block: 3.5rem;
@@ -863,13 +821,75 @@
 					animation: none !important;
 				}
 			}
+			.site-navigation {
+				width: min(1180px, calc(100% - 2rem));
+			}
+			.site-header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				min-height: 5.25rem;
+				border-bottom: 1px solid var(--line);
+
+				width: 100%;
+				margin-inline: auto;
+				gap: 1rem;
+			}
+			.site-header .wordmark {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.7rem;
+				text-decoration: none;
+				font-weight: 900;
+				letter-spacing: -0.04em;
+				font-size: 1.25rem;
+			}
+			.site-header .nav-mascot {
+				display: block;
+				width: 2.65rem;
+				height: 2.65rem;
+				aspect-ratio: 1;
+				border: 2px solid currentColor;
+				border-radius: 50%;
+				object-fit: cover;
+			}
+			.site-header nav {
+				display: flex;
+				gap: 1.25rem;
+				font-size: 0.9rem;
+				font-weight: 700;
+			}
+			.site-header nav a {
+				text-decoration-thickness: 1px;
+				text-underline-offset: 0.25rem;
+			}
+
+			.site-header nav a[aria-current="page"] {
+				text-decoration: underline;
+			}
+			@media (max-width: 820px) {
+				.site-header {
+					min-height: 4.5rem;
+					flex-wrap: wrap;
+					padding-block: 0.75rem;
+				}
+				.site-header nav {
+					flex-wrap: wrap;
+					gap: 0.75rem 1.25rem;
+				}
+			}
+			@media (max-width: 600px) {
+				.site-navigation {
+					width: calc(100% - 1.25rem);
+				}
+			}
 		</style>
 	</head>
 	<body>
 		<a class="skip-link" href="#main">Skip to content</a>
-		<div class="wrap">
-			<header>
-				<a class="wordmark" href="#top" aria-label="Maligator home"
+		<div class="wrap site-navigation">
+			<header class="site-header">
+				<a class="wordmark" href="/" aria-label="Maligator home"
 					><!-- nav-mascot:start -->
 					<img
 						class="nav-mascot"
@@ -882,12 +902,9 @@
 					maligator</a
 				>
 				<nav aria-label="Primary navigation">
-					<a href="#progress">Progress</a>
-					<a href="/explorer">Explorer</a>
-					<a href="/compatibility">Compatibility</a>
-					<a href="#reality">Reality</a>
-					<a href="#example">Built with itself</a>
-					<a href="https://github.com/dirkdev98/maligator">GitHub</a>
+					<a href="/" aria-current="page">Overview</a><a href="/explorer">Explorer</a
+					><a href="/compatibility">Compatibility</a
+					><a href="https://github.com/dirkdev98/maligator">GitHub</a>
 				</nav>
 			</header>
 		</div>
@@ -11894,10 +11911,10 @@ Mal.serve({
 					}
 				],
 				"binary": {
-					"binaryBytes": 8295400,
+					"binaryBytes": 8377960,
 					"binaryPlatform": "aarch64-apple-darwin",
 					"binaryProfile": "production",
-					"embeddedAssetBytes": 5253144
+					"embeddedAssetBytes": 5327413
 				}
 			}
 		</script>

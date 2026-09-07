@@ -62,7 +62,9 @@ scope.onmessage = async (event: MessageEvent<ExplorerWorkerRequest>) => {
 			if (!(instance.exports.memory instanceof WebAssembly.Memory))
 				throw new Error("Missing compiler memory");
 			wasi.initialize(
-				instance as WebAssembly.Instance & { exports: { memory: WebAssembly.Memory } },
+				instance as WebAssembly.Instance & {
+					exports: { memory: WebAssembly.Memory };
+				},
 			);
 			engine = new WasmEngine(instance);
 			send({
@@ -84,6 +86,7 @@ scope.onmessage = async (event: MessageEvent<ExplorerWorkerRequest>) => {
 					schema: EXPLORER_SCHEMA,
 					source: request.source,
 					config: request.config,
+					language: request.language,
 				}),
 			);
 			const response = JSON.parse(output) as ExplorerResponse;

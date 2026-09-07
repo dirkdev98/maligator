@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileExplorer } from "../src/explorer/api.ts";
 import { ExplorerClient } from "../src/explorer/browser-client.ts";
-import { EXPLORER_LIMITS } from "../src/explorer/config.ts";
+import { EXPLORER_LIMITS, EXPLORER_SCHEMA } from "../src/explorer/config.ts";
 import type {
 	ExplorerSiteData,
 	ExplorerWorkerRequest,
@@ -11,7 +11,7 @@ import type {
 const result = compileExplorer("globalThis.answer = 42");
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 const data: ExplorerSiteData = {
-	schema: 1,
+	schema: EXPLORER_SCHEMA,
 	identity: "compiler-a",
 	version: "test",
 	wasmUrl: "/compiler.wasm",
@@ -105,6 +105,17 @@ describe("browser compiler lifecycle", () => {
 			ControlledWorker.instances[0]!.messages.filter((item) => item.type === "compile"),
 		).toHaveLength(3);
 	});
+	it("separates JavaScript and TypeScript requests in the result cache", async () => {
+		await compile("same source");
+		const typed = client.compile("same source", {}, "typescript");
+		const worker = await pendingWorker();
+		expect(worker.messages.at(-1)).toMatchObject({ language: "typescript" });
+		worker.finish();
+		expect((await typed).cached).toBe(false);
+		expect((await client.compile("same source", {}, "typescript")).cached).toBe(true);
+		expect((await client.compile("same source", {}, "javascript")).cached).toBe(true);
+	});
+
 	it("cancels loading and active work, ignores an old worker, and reuses the compiled module", async () => {
 		const first = client.compile("first", {});
 		const rejected = expect(first).rejects.toMatchObject({ kind: "cancelled" });
@@ -125,12 +136,16 @@ describe("browser compiler lifecycle", () => {
 	});
 	it("times out stalled loading and compilation and accepts subsequent work", async () => {
 		const first = client.compile("loading", {});
-		const loadFailure = expect(first).rejects.toMatchObject({ kind: "timeout" });
+		const loadFailure = expect(first).rejects.toMatchObject({
+			kind: "timeout",
+		});
 		await vi.waitFor(() => expect(ControlledWorker.instances).toHaveLength(1));
 		await vi.advanceTimersByTimeAsync(EXPLORER_LIMITS.loadMs);
 		await loadFailure;
 		const second = client.compile("compiling", {});
-		const compileFailure = expect(second).rejects.toMatchObject({ kind: "timeout" });
+		const compileFailure = expect(second).rejects.toMatchObject({
+			kind: "timeout",
+		});
 		await vi.waitFor(() => expect(ControlledWorker.instances).toHaveLength(2));
 		await pendingWorker();
 		await vi.advanceTimersByTimeAsync(EXPLORER_LIMITS.compileMs);

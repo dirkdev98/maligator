@@ -14,11 +14,17 @@ function outputMode(result: ReturnType<typeof compileMode>) {
 	};
 }
 
-export function compileExplorer(source: string, config: unknown = {}) {
-	const compiled = compileExplorerCore(source, config);
+export function compileExplorer(
+	source: string,
+	config: unknown = {},
+	language: unknown = "javascript",
+) {
+	const compiled = compileExplorerCore(source, config, language);
 	return {
 		schema: EXPLORER_SCHEMA,
 		config: compiled.config,
+		language: compiled.language,
+		strippedSource: compiled.strippedSource,
 		world: compiled.facts.world,
 		closure: compiled.facts.closure,
 		diagnostics: compiled.diagnostics,
@@ -46,12 +52,16 @@ export function compileExplorerRequest(input: string): string {
 			request.schema !== EXPLORER_SCHEMA ||
 			!("source" in request) ||
 			typeof request.source !== "string" ||
-			!("config" in request)
+			!("config" in request) ||
+			!("language" in request)
 		) {
 			throw new Error("Invalid explorer request or incompatible compiler version");
 		}
-		const result = compileExplorer(request.source, request.config);
-		const output = JSON.stringify({ ok: true, result } satisfies ExplorerResponse);
+		const result = compileExplorer(request.source, request.config, request.language);
+		const output = JSON.stringify({
+			ok: true,
+			result,
+		} satisfies ExplorerResponse);
 		if (utf8ByteLength(output) > EXPLORER_LIMITS.outputBytes)
 			throw new RangeError("Output exceeds the 8 MiB limit; use a smaller snippet");
 		return output;

@@ -17,6 +17,7 @@
 		<header class="site-header">
 			<a class="wordmark" href="/"
 				><img
+					class="nav-mascot"
 					src="data:image/webp;base64,__MASCOT__"
 					width="56"
 					height="56"
@@ -48,9 +49,14 @@
 							>Example
 							<select id="example"></select></label
 						><button id="reset" type="button">Reset example</button
+						><label for="language"
+							>Language<select id="language">
+								<option value="javascript">JavaScript</option>
+								<option value="typescript">TypeScript (strip types)</option>
+							</select></label
 						><span id="source-size"></span>
 					</div>
-					<label class="sr-only" for="source">JavaScript source</label>
+					<label class="sr-only" for="source">Source code</label>
 					<textarea
 						id="source"
 						spellcheck="false"
@@ -60,7 +66,8 @@
 					></textarea>
 					<div class="editor-footer">
 						<p id="source-help">
-							One JavaScript module · 64 KiB maximum · imports unavailable
+							One module · 64 KiB maximum · runtime imports unavailable · types not
+							checked
 						</p>
 						<button class="primary" id="compile" type="button">
 							Compile <kbd>⌘ / Ctrl ↵</kbd></button

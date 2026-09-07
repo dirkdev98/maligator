@@ -10,6 +10,7 @@ import { optimizeCore } from "../compiler/core/optimize.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/analyze-module-graph.ts";
 import { validateSemanticBuildPolicy } from "../compiler/frontend/build-policy.ts";
 import { certifyProgramClosure } from "../compiler/frontend/certify-closure.ts";
+import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
 import { traverseEstree } from "../compiler/frontend/estree-traversal.ts";
 import type { ModuleGraph } from "../compiler/frontend/module-graph.ts";
 import { parseModule } from "../compiler/frontend/parser.ts";
@@ -32,7 +33,8 @@ import type {
 import type { BytecodeFunction, RuntimeImage } from "../compiler/target/runtime-image.ts";
 import {
 	EXPLORER_LIMITS,
-	EXPLORER_SOURCE_PATH,
+	explorerSourcePath,
+	normalizeExplorerLanguage,
 	explorerBuildConfig,
 	normalizeExplorerConfig,
 	utf8ByteLength,
@@ -265,12 +267,20 @@ function summarizeRuntime(image: RuntimeImage, wire: Uint8Array, c: string) {
 	};
 }
 
-export function compileExplorerCore(source: string, settings: unknown = {}) {
+export function compileExplorerCore(
+	source: string,
+	settings: unknown = {},
+	inputLanguage: unknown = "javascript",
+) {
 	if (utf8ByteLength(source) > EXPLORER_LIMITS.sourceBytes)
 		throw new RangeError("Source exceeds the 64 KiB UTF-8 limit");
 	const config = normalizeExplorerConfig(settings);
 	const buildConfig = explorerBuildConfig(config);
-	const parsed = parseModule(source);
+	const language = normalizeExplorerLanguage(inputLanguage);
+	const sourcePath = explorerSourcePath(language);
+	const strippedSource =
+		language === "typescript" ? stripCompactTypes(source, sourcePath) : source;
+	const parsed = parseModule(strippedSource);
 	traverseEstree(parsed.ast, (node) => {
 		if (
 			node.type === "ImportDeclaration" ||
@@ -284,22 +294,22 @@ export function compileExplorerCore(source: string, settings: unknown = {}) {
 		}
 	});
 	const graph: ModuleGraph = {
-		entry: EXPLORER_SOURCE_PATH,
+		entry: sourcePath,
 		nodeEnabled: config.node,
 		modules: new Map([
 			[
-				EXPLORER_SOURCE_PATH,
+				sourcePath,
 				{
-					path: EXPLORER_SOURCE_PATH,
+					path: sourcePath,
 					goal: "module",
-					source,
+					source: strippedSource,
 					parsed,
 					dependencies: [],
 					virtual: true,
 				},
 			],
 		]),
-		evaluationOrder: [EXPLORER_SOURCE_PATH],
+		evaluationOrder: [sourcePath],
 		cycles: [],
 	};
 	const semantic = runSemanticAnalysisForGraph(graph);
@@ -314,7 +324,15 @@ export function compileExplorerCore(source: string, settings: unknown = {}) {
 	const core = lowerSemanticProgramToCore(semantic, { facts });
 	const preCore = formatCore(core.program);
 	const result = optimizeCore(core, { instrumentation: "full" });
-	return { preCore, result, config, diagnostics, facts };
+	return {
+		preCore,
+		result,
+		config,
+		diagnostics,
+		facts,
+		language,
+		strippedSource,
+	};
 }
 
 function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
@@ -386,7 +404,9 @@ export function compileMode(
 		mode === "full"
 			? compiled.result.compilation
 			: Object.freeze({ ...compiled.result.compilation, plan });
-	const execution = lowerCoreCompilationToExecution(optimized, { reuseRegisters: true });
+	const execution = lowerCoreCompilationToExecution(optimized, {
+		reuseRegisters: true,
+	});
 	const image = lowerExecutionToProgramImage(execution, false);
 	const wire = serializeRuntimeImage(image.runtime, { debugInfo: true });
 	const c = emitProgramImage(image, { compiled: true, debugInfo: true });

@@ -1,5 +1,5 @@
 import type { ExplorerResponse } from "./api.ts";
-import type { ExplorerConfig } from "./config.ts";
+import type { ExplorerConfig, ExplorerLanguage } from "./config.ts";
 import type { Sample } from "./samples.ts";
 
 export interface ExplorerSiteData {
@@ -14,13 +14,19 @@ export interface ExplorerSiteData {
 }
 
 export type ExplorerWorkerRequest =
-	| { type: "init"; identity: string; wasmUrl: string; module?: WebAssembly.Module }
+	| {
+			type: "init";
+			identity: string;
+			wasmUrl: string;
+			module?: WebAssembly.Module;
+	  }
 	| {
 			type: "compile";
 			id: number;
 			identity: string;
 			source: string;
 			config: ExplorerConfig;
+			language: ExplorerLanguage;
 	  };
 
 export type ExplorerWorkerResponse =

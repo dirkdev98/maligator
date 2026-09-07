@@ -67,7 +67,10 @@ function sha256(content: string | Uint8Array): string {
 
 function gitOutput(args: ReadonlyArray<string>): string {
 	try {
-		return execFileSync("git", [...args], { cwd: ROOT, encoding: "utf8" }).trim();
+		return execFileSync("git", [...args], {
+			cwd: ROOT,
+			encoding: "utf8",
+		}).trim();
 	} catch {
 		return "unknown";
 	}
@@ -100,12 +103,19 @@ function writeArtifact(relativePath: string, content: string | Uint8Array): stri
 }
 
 const samples = SAMPLES.map((sample) => {
-	const compiled = compileExplorerCore(sample.source, sample.config ?? {});
+	const compiled = compileExplorerCore(
+		sample.source,
+		sample.config ?? {},
+		sample.language,
+	);
 	const full = compileMode(compiled, "full");
 	const generic = compileMode(compiled, "generic");
 	validateTrails(sample, generic, full);
 	const base = sample.id;
-	const sourcePath = writeArtifact(path.join(base, "source.js"), `${sample.source}\n`);
+	const sourcePath = writeArtifact(
+		path.join(base, sample.language === "typescript" ? "source.ts" : "source.js"),
+		`${sample.source}\n`,
+	);
 	const preCorePath = writeArtifact(path.join(base, "pre-core.txt"), `${full.preCore}\n`);
 	const modeData = Object.fromEntries(
 		(["generic", "full"] as const).map((mode) => {

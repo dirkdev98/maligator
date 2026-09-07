@@ -29,6 +29,7 @@ const cases = [
 		name: sample.id,
 		source: sample.source,
 		config: sample.config ?? {},
+		language: sample.language ?? "javascript",
 	})),
 	{
 		name: "exports-unicode",
@@ -45,8 +46,18 @@ const cases = [
 		source: "Array.prototype.extra = 42; globalThis.x = [].extra;",
 		config: { primordials: "mutable" },
 	},
-	{ name: "regexp-disabled", source: 'globalThis.match = /a+/.test("aa");', config: {} },
+	{
+		name: "regexp-disabled",
+		source: 'globalThis.match = /a+/.test("aa");',
+		config: {},
+	},
 	{ name: "syntax-error", source: "const = ;", config: {} },
+	{
+		name: "nonerasable-types",
+		source: "enum Color { Red }",
+		config: {},
+		language: "typescript",
+	},
 	{ name: "after-error", source: "globalThis.answer = 42;", config: {} },
 	{
 		name: "medium",
@@ -65,6 +76,7 @@ try {
 			schema: EXPLORER_SCHEMA,
 			source: item.source,
 			config: item.config,
+			language: "language" in item ? item.language : "javascript",
 		});
 		const expected = compileExplorerRequest(input);
 		const start = performance.now();
