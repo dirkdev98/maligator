@@ -4,6 +4,7 @@ import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import { BUFFER_INSTALLER_SYMBOL, PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
+import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
 /**
  * The linker: cross-module binding resolution for ES modules.
@@ -539,12 +540,14 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	for (const { file, binding, module, name } of importsToAlias) {
 		const exporter = resolveExport(module, name);
 		if (exporter === "ambiguous") {
-			throw new SyntaxError(
+			throw new SyntaxDiagnostic(
+				"resolution",
 				`Linker: ambiguous import '${name}' from ${module} (imported by ${file.path})`,
 			);
 		}
 		if (!exporter) {
-			throw new SyntaxError(
+			throw new SyntaxDiagnostic(
+				"resolution",
 				`Linker: ${module} does not export '${name}' (imported by ${file.path})`,
 			);
 		}
@@ -577,12 +580,14 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			}
 			const resolved = resolveExport(entry.module, entry.name);
 			if (resolved === "ambiguous") {
-				throw new SyntaxError(
+				throw new SyntaxDiagnostic(
+					"resolution",
 					`Linker: ambiguous re-export '${name}' from ${entry.module} (re-exported by ${modulePath})`,
 				);
 			}
 			if (resolved === null) {
-				throw new SyntaxError(
+				throw new SyntaxDiagnostic(
+					"resolution",
 					`Linker: ${entry.module} does not export '${entry.name}' (re-exported by ${modulePath})`,
 				);
 			}

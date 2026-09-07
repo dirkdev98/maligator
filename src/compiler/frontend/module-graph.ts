@@ -13,6 +13,7 @@ import {
 } from "./host-modules.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
+import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
 /** TypeScript source extensions stripped to JS before parsing. */
 const TS_EXTENSIONS = new Set([".ts", ".mts", ".cts"]);
@@ -127,7 +128,9 @@ export class ModuleParseCache {
 		}
 		const resolved = path.resolve(file);
 		for (const goal of ["script", "module", "cjs"] as const) {
-			this.#records.delete(`${goal}\0${resolved}`);
+			for (const strict of [false, true]) {
+				this.#records.delete(`${goal}\0${strict}\0${resolved}`);
+			}
 		}
 	}
 
@@ -140,8 +143,9 @@ export class ModuleParseCache {
 		source: string,
 		goal: ModuleGoal,
 		compute: () => Pick<CachedModuleParse, "parsed" | "dependencies">,
+		strict = true,
 	): Pick<CachedModuleParse, "parsed" | "dependencies"> {
-		const key = `${goal}\0${file}`;
+		const key = `${goal}\0${strict}\0${file}`;
 		const cached = this.#records.get(key);
 		if (cached !== undefined && cached.source === source) {
 			this.#hits++;
@@ -168,12 +172,13 @@ export interface BuildModuleGraphOptions {
 
 	/** Force the entrypoint's goal, bypassing extension-based detection. */
 	entryGoal?: ModuleGoal;
+	/** Initial script strictness; source directives still take effect. Modules are always strict. */
+	entryStrict?: boolean;
 
 	/**
 	 * Use this source for the entrypoint instead of reading it from disk. The
 	 * entrypoint's path is still used for resolving its (on-disk) dependencies.
-	 * Lets a caller compose an entry module in memory (e.g. test262 prepends its
-	 * harness) while sibling imports still resolve from the real directory.
+	 * Sibling imports still resolve from the entrypoint's real directory.
 	 */
 	entrySource?: string;
 
@@ -300,7 +305,18 @@ export function buildModuleGraph(
 		if (path.extname(filePath) === ".json") {
 			// Validate with the JSON grammar now, then parse a CommonJS wrapper that
 			// preserves JSON.parse semantics for keys such as "__proto__".
-			JSON.parse(source);
+			try {
+				JSON.parse(source);
+			} catch (error) {
+				if (error instanceof SyntaxError) {
+					throw new SyntaxDiagnostic(
+						filePath === entry ? "parse" : "resolution",
+						error.message,
+						{ cause: error },
+					);
+				}
+				throw error;
+			}
 			parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
 		}
 		if (TS_EXTENSIONS.has(path.extname(filePath))) {
@@ -319,12 +335,24 @@ export function buildModuleGraph(
 					: `import ${specifier};\n${parseSource}`;
 		}
 		parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
+		const strict = filePath === entry ? (options.entryStrict ?? true) : true;
 		const parse = () => {
-			const parsed = parseWithGoal(parseSource, goal);
-			return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+			try {
+				const parsed = parseWithGoal(parseSource, goal, strict);
+				return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+			} catch (error) {
+				if (error instanceof SyntaxError) {
+					throw new SyntaxDiagnostic(
+						filePath === entry ? "parse" : "resolution",
+						error.message,
+						{ cause: error },
+					);
+				}
+				throw error;
+			}
 		};
 		const parsedModule =
-			options.parseCache?.parse(filePath, parseSource, goal, parse) ?? parse();
+			options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ?? parse();
 		const parsed = parsedModule.parsed;
 
 		const dependencies = parsedModule.dependencies.map((dependency): ModuleDependency => {
@@ -342,7 +370,8 @@ export function buildModuleGraph(
 					dependency.kind === "dynamic" ||
 					(dependency.kind === "require" && !entryPreludeRequire)
 				) {
-					throw new SyntaxError(
+					throw new SyntaxDiagnostic(
+						"resolution",
 						`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 					);
 				}
@@ -385,7 +414,8 @@ export function buildModuleGraph(
 				}
 				// A static import that cannot resolve fails the graph — the
 				// resolution-phase SyntaxError of 16.2.1.6.1.
-				throw new SyntaxError(
+				throw new SyntaxDiagnostic(
+					"resolution",
 					`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
 				);
 			}
@@ -489,11 +519,11 @@ export function buildModuleGraph(
  * Scripts and (for now) CommonJS both parse as scripts; CommonJS sloppy-mode
  * parsing arrives with the CJS-consume milestone.
  */
-function parseWithGoal(source: string, goal: ModuleGoal) {
+function parseWithGoal(source: string, goal: ModuleGoal, strict: boolean) {
 	if (goal === "module") {
 		return parseModule(source);
 	}
-	return parseScript(source, { strict: true });
+	return parseScript(source, { strict });
 }
 
 /**
@@ -817,7 +847,10 @@ function resolveBareSpecifier(
  * Split a bare specifier into its package name and the subpath within it.
  * Scoped packages (`@scope/name`) keep both leading segments as the name.
  */
-function splitBareSpecifier(specifier: string): { packageName: string; subpath: string } {
+function splitBareSpecifier(specifier: string): {
+	packageName: string;
+	subpath: string;
+} {
 	const segments = specifier.split("/");
 	const nameSegmentCount = specifier.startsWith("@") ? 2 : 1;
 	return {

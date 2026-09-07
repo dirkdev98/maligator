@@ -38,6 +38,7 @@ import type {
 	SemanticProgram,
 	StaticArgumentsAccess,
 } from "../frontend/semantic-analysis.ts";
+import { SyntaxDiagnostic } from "../frontend/syntax-diagnostic.ts";
 import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type {
@@ -3145,7 +3146,10 @@ function compileClass(
 			// Static Semantics early error: a class field initializer may not
 			// reference `arguments` (a field runs with no `arguments` binding).
 			if (referencesArguments(member.value ?? undefined)) {
-				throw new SyntaxError("'arguments' is not allowed in a class field initializer");
+				throw new SyntaxDiagnostic(
+					"parse",
+					"'arguments' is not allowed in a class field initializer",
+				);
 			}
 			const valueNode = (member.value ?? null) as ESTree.Expression | null;
 			let entry: SemanticInstanceFieldPlanEntry;
@@ -4377,7 +4381,7 @@ function compilePatternTarget(
 			// SyntaxErrors. meriyah in webcompat mode fails to reject these, so
 			// enforce the early error here (only in a destructuring *assignment*).
 			if (isAssign) {
-				throw new SyntaxError("Invalid destructuring assignment target");
+				throw new SyntaxDiagnostic("parse", "Invalid destructuring assignment target");
 			}
 			break;
 		}

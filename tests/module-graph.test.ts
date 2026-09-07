@@ -124,6 +124,27 @@ test("detects goals by extension (.mjs => module)", () => {
 	expect(graph.modules.get(path.join(root, pkgIndex))!.goal).toBe("module");
 });
 
+test("separates cached script parses by initial strictness", () => {
+	const parseCache = new ModuleParseCache();
+	const entry = path.join(root, "strictness.js");
+	const options = {
+		entryGoal: "script" as const,
+		entrySource: "function f() { return this; }",
+		parseCache,
+	};
+	const sloppy = buildModuleGraph(entry, { ...options, entryStrict: false });
+	const strict = buildModuleGraph(entry, { ...options, entryStrict: true });
+	expect(sloppy.modules.get(entry)!.parsed.strict).toBe(false);
+	expect(strict.modules.get(entry)!.parsed.strict).toBe(true);
+	expect(() =>
+		buildModuleGraph(entry, {
+			...options,
+			entryStrict: false,
+			entrySource: '"use strict"; with ({}) {}',
+		}),
+	).toThrow(SyntaxError);
+});
+
 test("detects .js entry goals from the nearest package type", () => {
 	write("commonjs-package/package.json", JSON.stringify({ type: "commonjs" }));
 	write("commonjs-package/entry.js", `module.exports = require("./dependency.js");\n`);
