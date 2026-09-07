@@ -26,6 +26,7 @@ import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.t
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
+import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -37,7 +38,6 @@ import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
 } from "./compiler/frontend/semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";

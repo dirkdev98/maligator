@@ -40,6 +40,7 @@ import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { cacheFrontendWire } from "../frontend-cache.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
+import { nativeSourcePath } from "../native-source-path.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
 import type { NativeArtifacts } from "../runtime-build.ts";
 import { requireToolchain } from "../toolchain.ts";
@@ -1593,7 +1594,10 @@ export async function test262RunSingle(
 	if (outcome.image === undefined) {
 		return;
 	}
-	const cSource = emitProgramImage(outcome.image, { includeHeader: false });
+	const cSource = emitProgramImage(outcome.image, {
+		sourcePath: nativeSourcePath,
+		includeHeader: false,
+	});
 
 	const baseName = path.join(BUILD_PATH, `t${workerId}`);
 

@@ -1,6 +1,25 @@
 import { BuildConfigError } from "../../build-config-error.ts";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
+import type { WorldFacts } from "../shared/compiler-facts.ts";
+import { collectPrimordialMutationDiagnostics } from "./primordial-diagnostics.ts";
 import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
+import type { SemanticProgram } from "./semantic-analysis.ts";
+import {
+	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
+} from "./semantic-analysis.ts";
+
+export function validateSemanticBuildPolicy(
+	semantic: SemanticProgram,
+	config: ResolvedBuildConfig,
+	world: WorldFacts,
+) {
+	assertEvalPolicy(config, collectDisallowedEvalUsage(semantic));
+	assertRegexpPolicy(config, collectDisallowedRegexpUsage(semantic));
+	return collectPrimordialMutationDiagnostics(semantic, world, {
+		nodeEnabled: config.surface.node,
+	});
+}
 
 export function assertEvalPolicy(
 	config: ResolvedBuildConfig,

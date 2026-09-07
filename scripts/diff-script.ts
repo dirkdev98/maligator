@@ -19,6 +19,7 @@ import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-prog
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
+import { nativeSourcePath } from "../src/native-source-path.ts";
 
 const fixture = process.argv[2];
 if (fixture === undefined) {
@@ -54,7 +55,7 @@ function buildBinary(name: string, compiled: boolean): string {
 		parsed,
 	);
 	const image = compileSemanticProgramToProgramImage(semanticProgram);
-	const cSource = emitProgramImage(image, { compiled });
+	const cSource = emitProgramImage(image, { compiled, sourcePath: nativeSourcePath });
 	return buildLocalBinary({ context, name, cSource, verbose: false }).binaryPath;
 }
 

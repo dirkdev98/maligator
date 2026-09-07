@@ -8,6 +8,7 @@ import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "../compiler-cache-identity.ts";
+import { runSemanticAnalysisForGraph } from "../compiler/frontend/analyze-module-graph.ts";
 import { linkModules } from "../compiler/frontend/linker.ts";
 import type { ModuleGraph, ModuleParseCache } from "../compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "../compiler/frontend/module-graph.ts";
@@ -15,7 +16,6 @@ import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
 } from "../compiler/frontend/semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../compiler/shared/compiler-facts.ts";
 import {

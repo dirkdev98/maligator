@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { IncludedAsset } from "../../assets.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
@@ -25,6 +24,8 @@ import type {
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
 export interface EmitOptions {
+	/** Host path normalization for compiled stack traces; virtual paths pass through by default. */
+	sourcePath?: (file: string) => string;
 	/**
 	 * Suffix for all emitted symbols, so multiple program images can live in a
 	 * single translation unit (used by the batched test262 runner).
@@ -97,17 +98,6 @@ export function cEscapeString(value: string): string {
 		}
 	}
 	return out;
-}
-
-/**
- * The stack-trace display path for a source file: relative to the compiler's
- * working directory, prefixed `compiled://`.
- */
-function displayFilePath(filePath: string): string {
-	const relative = path.isAbsolute(filePath)
-		? path.relative(process.cwd(), filePath)
-		: filePath;
-	return `compiled://${relative}`;
 }
 
 const MAL_FUNCTION_ROW_MACRO = [
@@ -1269,7 +1259,7 @@ function malRuntimeImageStruct(
 	suffix: string,
 	debug: boolean,
 	sharedLiteralTemplates?: string,
-	options: Pick<EmitOptions, "assets" | "maligatorSurface"> = {},
+	options: Pick<EmitOptions, "assets" | "maligatorSurface" | "sourcePath"> = {},
 	profileSiteCount?: number,
 ): Array<string> {
 	const lines: Array<string> = [];
@@ -1316,7 +1306,9 @@ function malRuntimeImageStruct(
 	if (hasFiles) {
 		lines.push(`static const char *const mal_files${suffix}[] = {`);
 		for (const file of runtime.files) {
-			lines.push(`    "${cEscapeString(displayFilePath(file))}",`);
+			lines.push(
+				`    "${cEscapeString(`compiled://${options.sourcePath?.(file) ?? file}`)}",`,
+			);
 		}
 		lines.push("};", "");
 	}

@@ -16,6 +16,7 @@ import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
+import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import {
 	ESTREE_SKIP,
 	ESTREE_STOP,
@@ -39,7 +40,6 @@ import type {
 	SemanticFile,
 	SemanticProgram,
 } from "./compiler/frontend/semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compareCompilerDiagnostics } from "./compiler/shared/compiler-diagnostics.ts";

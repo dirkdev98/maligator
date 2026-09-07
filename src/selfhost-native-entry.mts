@@ -6,6 +6,7 @@ import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import { nativeSourcePath } from "./native-source-path.ts";
 
 const inputPath = process.argv[2];
 const outputName = process.argv[3];
@@ -52,7 +53,10 @@ const result = buildLocalBinary({
 	context,
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
-	cSource: emitProgramTranslationUnits(definition, { maligatorSurface: true }),
+	cSource: emitProgramTranslationUnits(definition, {
+		sourcePath: nativeSourcePath,
+		maligatorSurface: true,
+	}),
 	verbose: true,
 	cacheSuffix: derivation.cacheSuffix,
 });

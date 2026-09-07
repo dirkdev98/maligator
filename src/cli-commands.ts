@@ -56,6 +56,7 @@ import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
+import { nativeSourcePath } from "./native-source-path.ts";
 import {
 	createProfileCapture,
 	finalizeProfileCapture,
@@ -753,6 +754,7 @@ function compileAndBuild(
 	const programImage = frontend.programImage;
 	const output = reporter.phase("Generate native code", () =>
 		emitProgramTranslationUnits(programImage, {
+			sourcePath: nativeSourcePath,
 			compiled: command.kind !== "build" || command.internal.compiled,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
@@ -1333,6 +1335,7 @@ function executeProfiledTests(
 		session: new FrontendCompilationSession(),
 	});
 	const source = emitProgramTranslationUnits(compiled.programImage, {
+		sourcePath: nativeSourcePath,
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,

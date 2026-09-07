@@ -201,7 +201,11 @@ export function compilerImplementationDigestForRoot(
 		path.join(cacheDirectory, "source-digests", `compiler-cone-${checkoutKey}.json`),
 		"compiler-implementation-cone-v2",
 	);
-	const rootSources = ["build-config-error.ts", "utils.ts"].flatMap((relativePath) => [
+	const rootSources = [
+		"build-config-error.ts",
+		"build-config-values.ts",
+		"utils.ts",
+	].flatMap((relativePath) => [
 		relativePath,
 		"\0",
 		hash("sha256", readFileSync(path.join(resolvedSourceRoot, relativePath)), "hex"),

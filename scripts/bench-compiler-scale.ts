@@ -26,6 +26,7 @@ import type {
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import { nativeSourcePath } from "../src/native-source-path.ts";
 import {
 	sampledCompilerAllocationSummary,
 	topCompilerProfileHotspots,
@@ -713,7 +714,10 @@ async function compileSample(
 	});
 	if (report === undefined) throw new Error("optimizer did not publish its report");
 	const emitStartedAt = performance.now();
-	const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
+	const units = emitProgramTranslationUnits(image, {
+		sourcePath: nativeSourcePath,
+		maligatorSurface: true,
+	});
 	phases.emitMs = performance.now() - emitStartedAt;
 	recordMemory("after-emit");
 	const serializeStartedAt = performance.now();

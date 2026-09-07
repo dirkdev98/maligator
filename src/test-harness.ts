@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 /**
  * Shared native test harness. The feature-acceptance tests (web globals, URL, GC,
  * fibers, reactor, sockets, HTTP, host event loop, servers, fetch) all build a JS
@@ -11,8 +12,6 @@
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
  */
-
-import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
@@ -51,6 +50,7 @@ import type {
 	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
 } from "./native-build-context.ts";
+import { nativeSourcePath } from "./native-source-path.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
 
@@ -332,6 +332,7 @@ function linkProgramImage(
 	name: string,
 ): LocalBuildResult {
 	const emitOptions = {
+		sourcePath: nativeSourcePath,
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,

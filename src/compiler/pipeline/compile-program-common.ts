@@ -1,13 +1,8 @@
-import { assertEvalPolicy, assertRegexpPolicy } from "../frontend/build-policy.ts";
+import { runSemanticAnalysisForGraph } from "../frontend/analyze-module-graph.ts";
+import { validateSemanticBuildPolicy } from "../frontend/build-policy.ts";
 import { certifyProgramClosure } from "../frontend/certify-closure.ts";
 import type { BuildModuleGraphOptions } from "../frontend/module-graph.ts";
 import { buildModuleGraph } from "../frontend/module-graph.ts";
-import { collectPrimordialMutationDiagnostics } from "../frontend/primordial-diagnostics.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "../frontend/semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "../frontend/semantic-program.ts";
 import type { CompilerDiagnostic } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import {
@@ -60,12 +55,10 @@ export function analyzeEntrypoint(
 	const semantic = runPhase("semantic", () => {
 		const result = runSemanticAnalysisForGraph(graph);
 		if (options.buildConfig !== undefined) {
-			assertEvalPolicy(options.buildConfig, collectDisallowedEvalUsage(result));
-			assertRegexpPolicy(options.buildConfig, collectDisallowedRegexpUsage(result));
-			for (const diagnostic of collectPrimordialMutationDiagnostics(
+			for (const diagnostic of validateSemanticBuildPolicy(
 				result,
+				options.buildConfig,
 				facts!.world,
-				{ nodeEnabled: options.buildConfig.surface.node },
 			)) {
 				options.onDiagnostic?.(diagnostic);
 			}
