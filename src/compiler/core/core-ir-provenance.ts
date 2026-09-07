@@ -2466,6 +2466,9 @@ function indexedLengthLoopCandidates(
 				}),
 			),
 		]);
+		// The target region has no exceptional exits; cleanup handlers require ordinary operations.
+		if (exceptionalBlocks.length !== 0) continue;
+
 		candidates.push(
 			Object.freeze({
 				key: `indexed-length-loop:${fn.id}:${load}:${comparison}`,

@@ -415,6 +415,23 @@ describe("late plan migration gates", () => {
 		).toBe(false);
 	});
 
+	it("keeps indexed loops with iterator cleanup on the ordinary lowering path", () => {
+		const compilation = optimize(
+			`globalThis.fill = function fill(groups) {
+			for (const values of groups) {
+				for (let index = 0; index < values.length; index++) values[index] = index;
+			}
+		};`,
+			"core-indexed-loop-cleanup.js",
+		);
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				({ kind }) => kind === "indexed-length-loop",
+			),
+		).toBe(false);
+		expect(() => lower(compilation)).not.toThrow();
+	});
+
 	it("does not overlap indexed length plans with known own-slot loads", () => {
 		const compilation = optimize(
 			`globalThis.fill = function fill() {
