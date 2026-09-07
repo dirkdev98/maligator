@@ -354,10 +354,15 @@ only reproducible input.
 
 - [ ] Finish dynamic-import resolution, import attributes, evaluation order, and error
       ordering. Cover compiled, interpreted, and runtime-loading paths.
-      Reproduce `for-await-resolution-and-error-agen-yield.js` with its surrounding
-      Test262 batch as well as alone: the sloppy batch loses the expected `foo`
-      rejection. Preserve asynchronous evaluation for the `module-graphs-does-not-hang`
-      and `tla-hang-entry` module graphs.
+      Dynamic-import target parse and linking errors must reject the import promise;
+      ambiguous/circular re-exports and duplicate declarations currently fail the
+      enclosing compilation. Preserve top-level-await sibling scheduling and
+      fulfillment/rejection order.
+
+- [ ] Fix default-export initialization and live bindings in self-importing modules.
+      `instn-named-bndng-dflt-gen-anon.js` segfaults in compiled mode and reports a
+      non-callable value in wire mode; adjacent default function, class, and expression
+      cases also fail. Preserve namespace TDZ checks during cycles.
 
 - [ ] Implement import-defer syntax and semantics. Integrate it with linking,
       evaluation state, cycles, and failure propagation.
@@ -380,16 +385,16 @@ only reproducible input.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
-- [ ] Complete script-global environment-record behavior across separately evaluated
-      scripts. Preserve declaration conflicts, deletability, global-object interaction,
-      TDZ, and const writes. Separate Test262 harness execution exposes missing lexical
-      bindings in `resizableArrayBufferUtils.js`, `regExpUtils.js`,
-      `nativeFunctionMatcher.js`, `wellKnownIntrinsicObjects.js`, and
-      `sm/non262-Math-shell.js`; do not expose these bindings as global-object properties.
+- [ ] Preserve Proxy targets and handlers across reentrant trap lookup. The
+      `revoke-as-side-effect.js` case crashes in `getPrototypeOf` after the trap
+      getter revokes the proxy; audit internal methods that reload those slots
+      after calling user code.
 
-- [ ] Fix indexed-length-loop region validity for separately compiled scripts.
-      `test/staging/sm/Array/toSpliced-dense.js` and `with-dense.js` fail the structural
-      contract during VM lowering; preserve the verifier and repair the owning region.
+- [ ] Complete script-global environment-record behavior across separately evaluated
+      scripts. `$262.evalScript` still uses indirect eval, so persistent lexical
+      declarations, declaration conflicts, and global-property attributes diverge
+      from Script evaluation. Keep eval-created declarations distinct from script
+      declarations, including deletability and restricted-global checks.
 
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring. Keep abrupt
       completion and iterator closing correct around exhausted iterators.
