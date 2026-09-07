@@ -4,20 +4,26 @@ This is the sole project roadmap. It contains unfinished work only; completed wo
 belongs in commits, tests, generated reports, and benchmark baselines.
 
 Each task has one owning section. Cross-cutting dependencies may be mentioned, but
-the work itself is not duplicated.
+the work itself is not duplicated. Priority orders performance work; correctness,
+rooting, and resource-safety defects can interrupt that order.
 
 ## Current priorities
 
-1. Close the runtime/native terminal refactor with current contract, phase, size, and
-   benchmark evidence.
-2. Utilize the facts and effects already available in Core through generic SSA,
-   dataflow, representation, escape, region, and whole-program optimizations.
-3. Extend fact and effect precision only together with a concrete optimization that
-   consumes it and measured evidence that the additional complexity pays for itself.
-4. Complete source-closure reduction and generated-code cost modeling so specialization
-   improves runtime without making compilation or artifacts impractical.
-5. Stabilize alpha releases and recoverable resource handling.
-6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness.
+1. Identify the first missing or lost proof at real hot sites, rather than repeating
+   emitter-only searches. Complete the P0 admission audit before choosing another
+   multi-optimization implementation session.
+2. Extend bounded Core analysis and its consumers together: start with callback-aware
+   call summaries, selective effects, and field/representation facts. The first P1
+   implementation is selected by applicability and cost, not by syntax alone.
+3. Improve Core planning and optimization throughput on both Node and the self-hosted
+   compiler. Measure this alongside every analysis extension, not as leftover work.
+4. Use those foundations for scalar materialization and virtual iteration, then
+   source-closure reduction and profitability-aware specialization. These are
+   dependency-ordered workstreams, not parallel requirements for the next session.
+5. Resolve known reliability findings, including the intermittent DNS gate failure;
+   stabilize alpha releases and recoverable resource handling.
+6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
+   backlog below remains in scope; it is not replaced by the performance programme.
 7. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
@@ -58,6 +64,12 @@ Performance recovery should come from standard SSA, dataflow, effect, representa
 and whole-program optimizations. Do not maintain a queue of retired optimizer patterns
 to restore; generic passes may naturally rediscover their useful results.
 
+An emitter-only restriction is not a project-wide restriction on analysis work.
+Prefer preserving and consuming existing facts, but extend analysis when a concrete
+hot consumer needs a stronger proof. An analysis contract may land before its
+consumer with precision, invalidation, and cost tests; it is not a runtime speedup
+until the consumer admits real sites and measurements establish a benefit.
+
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |
@@ -71,42 +83,231 @@ to restore; generic passes may naturally rediscover their useful results.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
+## P0: performance diagnosis and admission
+
+- [ ] Produce a bounded, source-ranked missed-optimization report for current
+      JavaScript, representative compiler inputs, and relevant Express hot paths.
+      Extend the existing fact-flow, candidate, and profile reports rather than
+      building a parallel diagnostics framework. For each leading site, record
+      observed cost, applicable facts, attempted consumer, admission/decline reason,
+      and the expected removal in generated C. Distinguish missing analysis, lost
+      facts, an insufficient semantic contract, absent lowering, budget rejection,
+      and already-specialized code whose runtime kernel is still expensive.
+      Exit with the leading five opportunities and one chosen vertical slice; do
+      not make exhaustive instrumentation a prerequisite to useful implementation.
+
+- [ ] Trace the reported callback, iterator, and scalar-record blockers through
+      Core facts, candidate selection, region/signature admission, variant planning,
+      target/image lowering, and emission. Establish the first failing boundary:
+      ordinary-call-driven signature selection for builtin callbacks, iterator
+      synchronization with an authoritative language object, or field/initializer
+      facts and materialization requirements. Separate absent proofs from valid
+      conservative declines. Retain a reduced positive and negative fixture for
+      each selected blocker; do not assume that its previous workaround is the fix.
+
+- [ ] Establish two distinct cost ledgers on the same source checkpoint: execution
+      of generated applications, and compilation on Node versus the self-hosted
+      compiler. Rank compiler work by phase and sampled source cost, then inspect
+      hot functions' generated paths. Separate excessive compiler work from slow
+      execution of that work. A report must not infer runtime progress from static
+      helper counts, a synthetic-only win, or unchanged generated operations.
+
+## P1: callback-aware interprocedural facts
+
+- [ ] Extend shared builtin descriptors with the callback invocation contracts
+      needed by the selected hot consumer: argument kinds/arity, receiver, return
+      use, invocation multiplicity, retention, and synchronous versus deferred
+      invocation. A sort comparator must receive numeric facts only when element
+      facts justify them. Preserve canonical identity and mutation requirements;
+      builtin names or source closure alone do not prove callback behavior.
+
+- [ ] Feed certified builtin callback edges into the existing bounded signature
+      selection and call-summary machinery, rather than restricting eligibility to
+      ordinary calls. Reuse the per-target and program budgets; account for unknown
+      callers, recursion, defaults, extra arguments, and captured environments.
+      Lower one hot callback consumer through the selected typed entry while
+      retaining required activation checks and generic fallback. Exit with real
+      admitted sites, less executed marshalling/dispatch, semantic parity, and the
+      full discovery/planning cost on both compiler hosts. Do not duplicate the
+      sorting algorithm or create an unbounded callback-specialization matrix.
+
+## P1: selective effects, aliases, and field facts
+
+- [ ] Extend the existing summaries with the parameter-relative effects required
+      by a selected consumer: field reads/writes, aliasing/retention, callback
+      invocation/reentry, and mutation of relevant prototype or buffer state.
+      Preserve useful facts across a proven read-only call or an unrelated write;
+      unknown effects stay conservative. Start with scalar-field calls and callback
+      regions, using bounded summaries and the existing analysis manager rather
+      than a general whole-heap points-to analysis. Test invalidation and recursive
+      summary convergence as well as the positive optimization.
+
+- [ ] Preserve useful value, field, and range facts through joins, selected calls,
+      variant-local planning, and target lowering. Distinguish semantic kind facts
+      at an operation from a physical register's joined storage representation.
+      Diagnose boxed initializers instead of assuming every boxed value requires
+      an observable object. Keep numeric signed-zero/overflow constraints and
+      pointer-root requirements explicit. Extend the existing bounded range walk
+      only for a demonstrated consumer; a larger walk limit is not an optimization.
+
+- [ ] Extend existing scalar-replacement, field-entry, and conditional-materialization
+      plans to one real multi-field region unlocked by the preceding facts. Keep
+      fields in SSA/native values through admitted operations and materialize only
+      at certified observations or fallbacks. Preserve initializer effects/order,
+      aliases, per-allocation identity, joins, exceptions, and GC roots; never
+      re-evaluate an initializer or manufacture a different fallback object.
+      Exit with reduced executed allocation/slot traffic on a representative
+      workload, not merely a new plan kind or a synthetic object that never escapes.
+
+## P1: compiler throughput and analysis scalability
+
+- [ ] Reduce the largest measured Core planning/optimization costs on both hosts.
+      Attribute candidate discovery, shared-fact/transfer construction, CFG and
+      dominance work, fixed-point iterations, invalidations, and materialization of
+      intermediate data. Use the existing feature indexes, summaries, and analysis
+      manager to skip irrelevant work and rebuild only invalidated results. Reopen
+      a previously optimized subsystem only with fresh residual-cost evidence.
+
+- [ ] Put aggregate work and memory budgets around analysis extensions, including
+      rejected candidates and nested queries, not only admitted entries. Reuse
+      versioned queries within their valid lifetime; bound contexts and recursive
+      propagation and fall back conservatively on budget exhaustion. Record
+      instruction visits, transfer/summary builds, cache reuse, and peak retained
+      data in opt-in diagnostics. Do not trade a cheap emitter for hidden planning
+      scans, uncontrolled cache growth, or a new unconditional whole-program pass.
+
+- [ ] Add representative small, medium, and large compiler-scaling cases to the
+      existing measurement workflow. Alternate Node and rebuilt self-hosted
+      measurements, checking equal generated output within each checkpoint.
+      Exercise production and diagnostic configurations where their paths differ.
+      Accept improvements by end-to-end execution and memory costs; retain phase
+      regressions explicitly and distinguish reduced work from host-specific speed.
+
+## P2: virtual iteration and loop regions
+
+Depends on a P0 hot site and the necessary P1 effect/escape facts. An existing
+iterator cursor is not, by itself, permission to delete its language object.
+
+- [ ] Add an explicit Core ownership/materialization contract for a nonescaping
+      array or fixed-TypedArray iterator whose language identity need not be
+      observable on the admitted path. Define authoritative cursor state, progress,
+      exhaustion, mutation visibility, exception/close behavior, and reconstruction
+      before any fallback. Start with one exact synchronous protocol; preserve own
+      iterator overrides, inherited properties, holes, and required roots/polls.
+      Exit with removal of an actual hot iterator/protocol allocation or dispatch,
+      plus negative tests that retain the authoritative-object implementation.
+
+- [ ] Consume range, storage-stability, and effect facts in a bounded loop region
+      to avoid repeated length, bounds, identity, and element-kind work. Preserve
+      per-iteration length semantics when mutation is possible, and reload backing
+      pointers across invalidating operations. Reuse existing loop/region machinery
+      and separate admission checks from proven interior operations. Do not claim
+      SIMD/vectorization from simpler C, remove necessary polls, enable fast-math,
+      or reorder observable accesses to make a loop look native.
+
+## P2: composable temporary values
+
+- [ ] Extend existing string/capture projections only where the P0 profile shows
+      materialization is a leading cost. Compose a bounded sequence of span,
+      concatenation, length, numeric, or character consumers through an explicit
+      virtual-value contract, instead of adding source-pattern recipes. Preserve
+      UTF-16 indexing, source lifetime, case-conversion semantics, length limits,
+      effects, and fallback materialization. Distinguish string allocation costs
+      from RegExp/native-kernel costs that more compiler analysis will not remove.
+
+## P2: source closure and generated-code profitability
+
+- [ ] Establish a complete source-closed entry/escape set for native reduction,
+      including exports, host callbacks, dynamic loading/eval policy, reflection,
+      and generic/interpreted callers. Use it to remove unreachable functions,
+      unused ABI siblings, bytecode, and metadata only when every required entry
+      and fallback is covered. Retain canonical boxed adapters where observable;
+      locked primordials alone never justify deleting them. Reuse the same closure
+      certificate for runtime-feature reduction and verify all affected loaders,
+      cache identities, debug/profile modes, and mixed execution paths.
+
+- [ ] Extend the existing generated-code cost model to charge for whole admitted
+      regions and ABI siblings, retained generic twins, materialization, guard
+      frequency, and downstream C compilation/linking. Calibrate on small and
+      large representative inputs and expose reasons for budget declines. Keep
+      per-function and whole-program caps; prefer profitable shared mechanisms
+      over many clones. Treat measured runtime, analysis time, build memory, and
+      code-size tradeoffs as separate acceptance dimensions.
+
+- [ ] Investigate large generated translation units and ThinLTO/link cost with
+      matched cold-cache and warm-cache evidence. Separate the single-unit
+      self-compiler executable build from its multi-unit emitted compiler output.
+      Reuse existing unit partitioning and symbol/dependency information before
+      introducing another build path. Change grouping or linkage only when total
+      toolchain time, memory, and runtime measurements support it.
+
 ## Compiler infrastructure
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
       schemas, lowering completeness, effects, representation constraints, safepoint
       policy, and GC declarations. Adding an operation must not leave compiler, wire,
-      native-C, interpreter, or runtime contracts inconsistent.
+      native-C, interpreter, or runtime contracts inconsistent. Callback invocation
+      semantics are owned by the P1 callback work above, not a second descriptor set.
 
 ## Compiler measurement and diagnostics
 
-- [ ] Refresh the production-plan JavaScript, HTTP/Express, and self-compile baseline
-      at the post-terminal-refactor HEAD before ranking performance work. Use warmed
-      paired comparisons with matching checksums and retain the pre-refactor baseline
-      as the comparison point rather than mixing the two architectures.
+- [ ] Make the current-checkpoint paired workflow retain and compare local evidence
+      without requiring a published baseline update. Preserve historical architecture
+      snapshots separately. Refresh published JavaScript, HTTP/Express, and
+      self-compile baselines only through an explicitly authorized update after
+      acceptance; do not rank current work against an unrelated old checkpoint.
 
-- [ ] Report cold process time separately from warmed kernel time and retain sample
-      dispersion. Record host, toolchain, flags, world policy, eval policy, and runtime
-      configuration with each baseline.
+- [ ] Close gaps in the existing report's end-to-end cost accounting: cold process
+      versus warm kernel time; complete analysis discovery/planning; register
+      allocation, lowering, emission and serialization; downstream C compilation
+      plus linking; generated C/binary size and peak build memory. Retain source,
+      host, toolchain, flags, world/eval policy, runtime features, cache state,
+      sample dispersion, and raw paired samples. Node repeats beside development
+      and production native executables are controls, not two Node build modes.
 
-- [ ] Track frontend, analysis, optimization, register allocation, emission,
-      downstream C compilation, linking, generated C size, binary size, and peak build
-      memory. Runtime improvements must not make compilation impractical.
-
-- [ ] Emit source-derived C symbols and line mappings with an optional report relating
-      source, facts, optimized Core, target instructions, generated C, and disassembly.
-      Compiler remarks must describe the final emitted path accurately.
+- [ ] Extend source-derived C symbols/line mappings and the existing source-to-Core,
+      target, C, and disassembly reports with final admitted-entry identities and
+      decline reasons. Retain a sidecar mapping for stripped production artifacts
+      without changing the measured flags or requiring local symbols to survive.
+      Final compiler remarks must agree with the emitted path; static counts and
+      sampled/executed counts must remain distinguishable.
 
 ## Compiler acceptance policy
 
-Every optimization requires focused semantic coverage, optimized-Core validation, the
-relevant allocation or dispatch signal, and repeated representative timings with
-matching checksums. Keep control workloads neutral and record material size or
-compilation tradeoffs.
+Use staged acceptance: inspect applicability and the expected Core/C change, run
+focused correctness tests and a bounded pilot, then invest in repeated representative
+measurements for a promising vertical slice. Do not spend a full benchmark matrix
+proving that a candidate with zero admitted sites changes no executed code. Such a
+candidate may still be compiler-throughput work, but must be measured as that.
 
-World-sensitive work requires locked and mutable coverage, strict and sloppy mutation
-behavior, eval and cross-Realm cases, safe invalidation, and evidence that
-authority-closed guards and fallbacks were actually removed.
+Every accepted runtime optimization requires focused semantic coverage, optimized-Core
+and proof validation, an actual allocation/dispatch/materialization change, and
+repeated representative timings with matching checksums. Analysis-only milestones
+need explicit precision, invalidation, budget, and cost evidence, with their consumer
+still tracked as unfinished. Structural simplification is not a measured speedup.
+
+Measure both compiler hosts when analysis/planning changes. Include discovery and
+rejected candidates; tiny warmed per-entry timings are not total compiler overhead.
+Use the same frozen input and configuration, rebuild native hosts from the checkpoint
+under test, and require Node/native output parity within each checkpoint. Keep
+intentional baseline/candidate output differences distinct from host divergence.
+
+Report controls individually, including negative and inconclusive results. Preserve
+raw samples; do not treat marginal and paired medians as interchangeable or attribute
+a combined win to every constituent change. Prevent unexplained material regressions
+and record accepted phase, memory, size, and compilation tradeoffs explicitly. A
+synthetic fixture establishes a mechanism, not its importance in real applications.
+
+World-sensitive work requires applicable locked/mutable, strict/sloppy, mutation,
+eval and cross-Realm coverage, safe invalidation, and evidence that only disproven
+guards/fallbacks were removed. Preserve exception, OOM, rooting, suspension, debug,
+profiling, and mixed-execution contracts at their owning layer.
+
+Follow AGENTS.md and docs/testing.md for the relevant gates. Full standards/full
+release runs and baseline updates remain separate approvals. Keep detailed evidence
+and completed/rejected experiment history outside this unfinished-work roadmap;
+retain reproduction sources and helpers with their evidence instead of deleting the
+only reproducible input.
 
 # Release and product readiness
 
@@ -241,6 +442,14 @@ API adapters own their public surfaces, and the host owns DNS, sockets, TLS, clo
 entropy, cancellation, and reactor completions.
 
 ## Active host work
+
+- [ ] Resolve the intermittent GC-stressed `reactortest` mocked DNS system-error/
+      metadata assertion. Retain the original failure and distinguish a test
+      quiescence error from a worker completion/work-release lifecycle defect using
+      controlled scheduling and explicit ownership observations. The suspected
+      handoff race is unconfirmed; successful repeated runs do not close it. Add
+      deterministic regression coverage without retries, sleeps, or disabled checks
+      as the correctness fix.
 
 - [ ] Finish H1 with Happy Eyeballs racing, bounded teardown for resolvers stuck in
       getaddrinfo, a public one-turn pump, embedder access to the wake source, and
@@ -466,3 +675,14 @@ observed.
 - Add io_uring only after epoll validates the completion-oriented reactor interface.
 - Reconsider timezone-offset caching only if Date profiling makes it a top-five
   self-time contributor.
+
+- Reopen VM-independent leaf workers only when actual activation overhead is a
+  leading cost and existing eligibility covers real hot sites; neutral structural
+  simplification is not justification for broader eligibility on its own.
+- Redesign persistent object layouts, specialize collection storage, or eliminate
+  generator/async objects only after a representative profile and explicit
+  identity/escape/completion contract establish the need. They are not prerequisites
+  for the bounded P1 work.
+- Start another emitter-only sweep when the fact-flow report identifies sufficient
+  existing proofs that still select a general path; do not rediscover already
+  implemented primitive kernels or mistake inline helpers for unavoidable calls.
