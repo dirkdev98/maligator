@@ -73,6 +73,7 @@
 		"update": "npx npm-check --update --save-exact",
 		"version:alpha": "node ./scripts/release.ts version-alpha",
 		"wasm:build": "node ./scripts/build-wasm.ts",
+		"wasm:check": "node ./scripts/check-explorer-wasm.ts",
 		"wasm:doctor": "node ./scripts/build-wasm.ts --doctor"
 	},
 	"dependencies": {

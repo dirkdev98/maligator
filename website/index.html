@@ -1553,6 +1553,23 @@ Mal.serve({
 						"openCompiledMs": 2450.464958,
 						"closedInterpretedMs": 3905.377666,
 						"openInterpretedMs": 3883.802042
+					},
+					{
+						"commit": "699dbbf7",
+						"date": "2026-09-06T21:53:41+02:00",
+						"workload": "javascript-v1",
+						"runs": 5,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1163.924333,
+						"openCompiledMs": 1301.928625,
+						"closedInterpretedMs": 3938.980625,
+						"openInterpretedMs": 3935.026959
 					}
 				],
 				"selfCompile": [
@@ -11874,7 +11891,7 @@ Mal.serve({
 					}
 				],
 				"binary": {
-					"binaryBytes": 4050632,
+					"binaryBytes": 8295400,
 					"binaryPlatform": "aarch64-apple-darwin",
 					"binaryProfile": "production"
 				}

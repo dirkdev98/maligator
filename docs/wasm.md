@@ -76,3 +76,39 @@ Runtime portability preserves the main fiber's GC roots and lifecycle while omit
 native stack switching. Optional process-CPU profiling, POSIX signal controls and
 page-release hints are unavailable. Normal GC, stress collection and verification
 remain active. The tests exercise errors, recovery, limits and actual collections.
+
+## Website compiler explorer
+
+`npm run site:build` builds the compiler reactor, bundles the browser UI and worker,
+and embeds their assets into the standalone website binary. It requires the pinned
+Wasm toolchain described above. The compiler's 35.5 MB Wasm module is embedded only
+as its roughly 4 MB Brotli representation. Asset URLs include content hashes and
+use immutable caching, strong validators, and `application/wasm` with
+`Content-Encoding: br`. The native server only serves assets named in its embedded
+manifest. The browser needs HTTPS or localhost and Brotli support.
+
+Run the binary path printed by the build with `SITE_HOST=127.0.0.1 PORT=3000`, then
+open `http://127.0.0.1:3000/explorer`. Compilation uses the same compiler pipeline as
+`npm run explore:outputs`; snippets are neither executed nor sent to the server.
+All eleven examples use the editable-source path. The worker exposes no filesystem
+preopens, network callbacks, or host runtime surfaces. Enabling a snippet's build
+settings changes compiler policy and generated output; it does not enable imports
+or those features in the compiler's own runtime.
+
+The page retains up to eight results within a conservative 16 MiB cache budget,
+keyed by exact source, normalized configuration, schema, and compiler identity.
+Source is limited to 64 KiB UTF-8 and serialized output to 8 MiB. Loading has a
+30-second deadline; compilation has a 10-second deadline. Cancellation or timeout
+terminates the worker. Its Wasm memory is capped at 256 MiB; completed workers are
+recycled at 128 MiB or after five idle minutes. The compiled module and result cache
+can survive worker recycling. Output panes render at most 300 lines per page;
+copy/download actions use the complete selected stage.
+
+After `npm run wasm:build`, `npm run wasm:check` compares complete serialized stage
+outputs against the Node-hosted compiler for every builtin and additional policy,
+error-recovery, Unicode, and medium-size cases. `npm run wasm:check -- --stress`
+repeats them with GC verification and counted collections. Reports are written to
+`.cache/explorer-parity.json` and `.cache/explorer-parity-stress.json`. Browser
+lifecycle and HTTP-policy tests are ordinary unit tests; the reactor ABI integration
+is in the full-only unit lane and can be selected directly. Full Test262 and full
+gates remain separate checks.

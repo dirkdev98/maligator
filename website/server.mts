@@ -1,47 +1,52 @@
 import { readFileSync } from "node:fs";
+import { siteResponse } from "./responses.ts";
+import type { ExplorerAsset, SiteResource } from "./responses.ts";
 
-const pages = new Map([
-	["/", readFileSync(mal.assets.materialize("site"), "utf8")],
-	["/compatibility", readFileSync(mal.assets.materialize("compatibility"), "utf8")],
-	["/explorer", readFileSync(mal.assets.materialize("explorer"), "utf8")],
+const explorerRoot = mal.assets.materialize("explorer");
+const pages = new Map<string, SiteResource>([
+	[
+		"/",
+		{
+			body: readFileSync(mal.assets.materialize("site"), "utf8"),
+			type: "text/html; charset=utf-8",
+		},
+	],
+	[
+		"/compatibility",
+		{
+			body: readFileSync(mal.assets.materialize("compatibility"), "utf8"),
+			type: "text/html; charset=utf-8",
+		},
+	],
+	[
+		"/explorer",
+		{
+			body: readFileSync(`${explorerRoot}/index.html`, "utf8"),
+			type: "text/html; charset=utf-8",
+			explorer: true,
+		},
+	],
 ]);
+const assets = JSON.parse(
+	readFileSync(`${explorerRoot}/manifest.json`, "utf8"),
+) as Array<ExplorerAsset>;
+for (const asset of assets) {
+	pages.set(asset.url, {
+		body: readFileSync(`${explorerRoot}/${asset.file}`),
+		type: asset.type,
+		bytes: asset.bytes,
+		etag: `"${asset.digest}"`,
+		encoding: asset.encoding,
+		immutable: true,
+		explorer: true,
+	});
+}
 const hostname = process.env.SITE_HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? "3000");
-
 const server = Mal.serve({
 	hostname,
 	port,
-	fetch(request) {
-		const url = new URL(request.url);
-		const pathname =
-			url.pathname === "/index.html"
-				? "/"
-				: url.pathname === "/compatibility.html"
-					? "/compatibility"
-					: url.pathname === "/explorer.html"
-						? "/explorer"
-						: url.pathname;
-		const html = pages.get(pathname);
-		if (html === undefined) {
-			return new Response("Not found", { status: 404 });
-		}
-		if (request.method !== "GET" && request.method !== "HEAD") {
-			return new Response("Method not allowed", {
-				status: 405,
-				headers: { Allow: "GET, HEAD" },
-			});
-		}
-		return new Response(request.method === "HEAD" ? null : html, {
-			headers: {
-				"Cache-Control": "public, max-age=300",
-				"Content-Security-Policy":
-					"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-				"Content-Type": "text/html; charset=utf-8",
-				"Referrer-Policy": "no-referrer",
-				"X-Content-Type-Options": "nosniff",
-			},
-		});
-	},
+	fetch: (request) => siteResponse(request, pages),
 });
 
 // eslint-disable-next-line no-console -- The standalone server needs one startup status line.

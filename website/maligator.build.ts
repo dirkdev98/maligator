@@ -8,7 +8,11 @@ export default defineBuild({
 	assets: {
 		site: { type: "file", path: "website/index.html" },
 		compatibility: { type: "file", path: "website/compatibility.html" },
-		explorer: { type: "file", path: ".cache/output-explorer/index.html" },
+		explorer: {
+			type: "directory",
+			path: ".cache/explorer-site/current",
+			include: ["index.html", "manifest.json", "*.js", "*.css", "*.wasm.br", "*.txt"],
+		},
 	},
 	engine: {
 		eval: false,
