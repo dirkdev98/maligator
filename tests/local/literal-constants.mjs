@@ -130,6 +130,17 @@ function conditional(x) {
 }
 console.log(conditional(1), conditional(0), conditional(4));
 
+function shadowThroughNestedLiteral(value) {
+	const child = [1, 2];
+	const parents = [child];
+	parents.forEach((array) => {
+		array.includes = () => value;
+	});
+	return child.includes("missing");
+}
+if (!shadowThroughNestedLiteral(true) || shadowThroughNestedLiteral(false))
+	throw new Error("nested literal method shadowing");
+
 let nullPrototypeThrew = false;
 try {
 	({ __proto__: null, a: [1] }).toString();

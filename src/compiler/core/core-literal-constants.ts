@@ -8,7 +8,7 @@ import type {
 } from "../shared/literal-prototype-methods.ts";
 import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { CoreEditor } from "./core-editor.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -56,7 +56,7 @@ function literalGraph(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	root: CoreInstructionId,
-	uses: ReadonlyMap<CoreValueId, ReadonlyArray<Use>>,
+	uses: (value: CoreValueId) => ReadonlyArray<Use>,
 ): Literal | undefined {
 	const allocations = new Set<CoreInstructionId>();
 	const initializers = new Set<CoreInstructionId>();
@@ -130,7 +130,7 @@ function literalGraph(
 					if (!Number.isSafeInteger(length) || length < 0 || length > 4096)
 						return undefined;
 					const elements = new Map<number, CoreValueId>();
-					for (const use of uses.get(action.value) ?? []) {
+					for (const use of uses(action.value)) {
 						if (
 							fn.instructionKind(use.instruction) !== "operation" ||
 							fn.instructionOpcodeName(use.instruction) !== "defineProperty" ||
@@ -294,23 +294,62 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 		)
 			return undefined;
 		const fn = program.function(item.function);
-		const uses = new Map<CoreValueId, Array<Use>>();
 		const roots = new Set<CoreInstructionId>();
+		const propertyNames = new Map<CoreInstructionId, LiteralPrototypeKey>();
 		for (const instruction of fn.instructionIds()) {
-			const args = operands(fn, instruction);
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "loadPropertyStatic" && opcode !== "loadProperty") continue;
+			const root = definition(
+				fn,
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+			);
 			if (
-				fn.instructionKind(instruction) === "operation" &&
-				propertyName(program, fn, instruction) !== undefined
-			) {
-				const root = definition(fn, args[0]!);
-				if (root !== undefined) roots.add(root);
-			}
-			for (const [operand, value] of args.entries()) {
-				const entries = uses.get(value) ?? [];
-				entries.push({ instruction, operand });
-				uses.set(value, entries);
-			}
+				root === undefined ||
+				fn.instructionKind(root) !== "operation" ||
+				(receiverKind(fn, root, undefined) === undefined &&
+					fn.instructionOpcodeName(root) !== "instantiateLiteralTemplate")
+			)
+				continue;
+			const name = propertyName(program, fn, instruction);
+			if (name === undefined) continue;
+			roots.add(root);
+			propertyNames.set(instruction, name);
 		}
+		if (roots.size === 0) return undefined;
+		const useIndex = new Map<CoreValueId, ReadonlyArray<Use>>();
+		const uses = (value: CoreValueId): ReadonlyArray<Use> => {
+			const cached = useIndex.get(value);
+			if (cached !== undefined) return cached;
+			const entries: Array<Use> = [];
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				entries.push({
+					instruction: fn.kernel.useInstruction(use),
+					operand: fn.kernel.useOperand(use),
+				});
+			}
+			entries.sort(
+				(left, right) =>
+					left.instruction - right.instruction || left.operand - right.operand,
+			);
+			useIndex.set(value, entries);
+			return entries;
+		};
+		const blockOrders = new Map<CoreBlockId, Map<CoreInstructionId, number>>();
+		const instructionOrder = (block: CoreBlockId): Map<CoreInstructionId, number> => {
+			let order = blockOrders.get(block);
+			if (order === undefined) {
+				order = new Map();
+				for (const instruction of fn.instructionIds(block))
+					order.set(instruction, order.size);
+				blockOrders.set(block, order);
+			}
+			return order;
+		};
 		let editor: CoreEditor | undefined;
 		for (const root of roots) {
 			if (!fn.isInstructionLive(root) || fn.instructionKind(root) !== "operation")
@@ -322,17 +361,10 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			const properties = new Set<CoreInstructionId>();
 			const calls = new Map<CoreInstructionId, number>();
 			const block = fn.instructionBlock(root);
-			const order = new Map(
-				[...fn.instructionIds(block)].map((instruction, index) => [instruction, index]),
-			);
-			for (const use of uses.get(receiver) ?? []) {
-				if (
-					use.operand !== 0 ||
-					fn.instructionKind(use.instruction) !== "operation" ||
-					propertyName(program, fn, use.instruction) === undefined
-				)
-					continue;
-				const name = propertyName(program, fn, use.instruction)!;
+			for (const use of uses(receiver)) {
+				if (use.operand !== 0) continue;
+				const name = propertyNames.get(use.instruction);
+				if (name === undefined) continue;
 				const methodIndex = literalPrototypeMethodIndex(kind, name);
 				if (methodIndex === undefined) continue;
 				const ownKeys =
@@ -343,7 +375,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 						: templateOwnKeys(literal.words);
 				if (ownKeys?.some((index) => string(program, index) === name)) continue;
 				const callee = result(fn, use.instruction);
-				const callUses = uses.get(callee) ?? [];
+				const callUses = uses(callee);
 				if (
 					fn.kernel.valueHandlerUseCount(callee) !== 0 ||
 					callUses.length === 0 ||
@@ -361,7 +393,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			}
 			const stableMethods =
 				literal !== undefined &&
-				(uses.get(receiver) ?? []).every(
+				uses(receiver).every(
 					(use) =>
 						literal.initializers.has(use.instruction) ||
 						(properties.has(use.instruction) && use.operand === 0) ||
@@ -372,11 +404,12 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 							)),
 				);
 			if ((kind === "array" || kind === "object") && !stableMethods) {
+				const order = instructionOrder(block);
 				for (const property of properties) {
 					// Without whole-lifetime containment, an earlier write or escape can shadow the method.
 					if (
 						fn.instructionBlock(property) === block &&
-						!(uses.get(receiver) ?? []).some(
+						!uses(receiver).some(
 							(use) =>
 								use.instruction !== property &&
 								!literal?.initializers.has(use.instruction) &&
@@ -387,8 +420,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 					)
 						continue;
 					properties.delete(property);
-					for (const use of uses.get(result(fn, property)) ?? [])
-						calls.delete(use.instruction);
+					for (const use of uses(result(fn, property))) calls.delete(use.instruction);
 				}
 			}
 			if (calls.size === 0) continue;
@@ -405,7 +437,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 				for (const allocation of literal.allocations) {
 					const value = result(fn, allocation);
 					if (fn.kernel.valueHandlerUseCount(value) !== 0) reusable = false;
-					for (const use of uses.get(value) ?? []) {
+					for (const use of uses(value)) {
 						if (
 							literal.initializers.has(use.instruction) ||
 							literal.allocations.has(use.instruction) ||
@@ -421,7 +453,9 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 					if (
 						fn.instructionBlock(call) === block &&
 						[...literal.initializers].some(
-							(initializer) => order.get(initializer)! >= order.get(call)!,
+							(initializer) =>
+								instructionOrder(block).get(initializer)! >=
+								instructionOrder(block).get(call)!,
 						)
 					)
 						reusable = false;

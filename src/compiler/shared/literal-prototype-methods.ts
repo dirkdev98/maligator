@@ -200,18 +200,22 @@ export const literalPrototypeMethods: ReadonlyArray<LiteralPrototypeMethod> =
 		})),
 	);
 
+const methodIndices = new Map<LiteralReceiverKind, Map<LiteralPrototypeKey, number>>();
+for (let index = 0; index < literalPrototypeMethods.length; index++) {
+	const method = literalPrototypeMethods[index]!;
+	let indices = methodIndices.get(method.receiver);
+	if (indices === undefined) {
+		indices = new Map();
+		methodIndices.set(method.receiver, indices);
+	}
+	indices.set(method.key, index);
+}
+
 export function literalPrototypeMethodIndex(
 	receiver: LiteralReceiverKind,
 	key: LiteralPrototypeKey,
 ): number | undefined {
-	let index = literalPrototypeMethods.findIndex(
-		(method) => method.receiver === receiver && method.key === key,
-	);
-	if (index < 0)
-		index = literalPrototypeMethods.findIndex(
-			(method) => method.receiver === "object" && method.key === key,
-		);
-	return index < 0 ? undefined : index;
+	return methodIndices.get(receiver)?.get(key) ?? methodIndices.get("object")!.get(key);
 }
 
 export function generateLiteralPrototypeMethods(): string {
