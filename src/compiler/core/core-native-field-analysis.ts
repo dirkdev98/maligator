@@ -107,8 +107,12 @@ export function coreNumericFieldArgument(
 		layout.keys.length > 4 ||
 		layout.keys.length === 0 ||
 		fields.keys.some((key) => !layout.keys.includes(key)) ||
-		layout.initialValues.some(
-			(value) => !["number", "int32"].includes(facts.valueKinds.exactScalar(value) ?? ""),
+		fields.keys.some(
+			(key) =>
+				!["number", "int32"].includes(
+					facts.valueKinds.exactScalar(layout.initialValues[layout.keys.indexOf(key)]!) ??
+						"",
+				),
 		)
 	)
 		return undefined;

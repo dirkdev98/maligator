@@ -831,6 +831,23 @@ function emitCompiledVariant(
 		});
 		nextStackSlot += loads.length + 1;
 	}
+	const fieldCalls = nativeContract.fieldCalls?.map((site): NativeFieldCall => {
+		const allocation = fn.instructions[site.allocationIp];
+		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Invalid field call allocation");
+		const numericKeys = new Set(
+			site.entries.flatMap(
+				(entry) =>
+					directCompiledEntries.get(
+						directCompiledEntryKey(entry.functionIndex, entry.entryId),
+					)?.fieldParameters?.keys ?? [],
+			),
+		);
+		const boxedSlots = allocation.keyStringIndices.map((key) =>
+			numericKeys.has(key) ? undefined : nextStackSlot++,
+		);
+		return { ...site, allocation, boxedSlots };
+	});
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -887,7 +904,7 @@ function emitCompiledVariant(
 			]),
 		),
 		directEntry?.fieldParameters,
-		nativeContract.fieldCalls,
+		fieldCalls,
 		nativeContract.literalSwitches,
 		stringConstants,
 	);
@@ -2018,7 +2035,7 @@ function emitBody(
 	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
 	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
 	directFields?: NativeDirectEntryPlan["fieldParameters"],
-	fieldCalls?: NativeFunctionPlan["fieldCalls"],
+	fieldCalls?: ReadonlyArray<NativeFieldCall>,
 	literalSwitches?: NativeFunctionPlan["literalSwitches"],
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): EmittedBody | null {
@@ -2548,15 +2565,14 @@ function emitBody(
 	const fieldAllocations = new Map<number, NativeFieldCall>();
 	const fieldCallSites = new Map<number, NativeFieldCall>();
 	for (const site of fieldCalls ?? []) {
-		const allocation = fn.instructions[site.allocationIp];
-		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
-			throw new Error("Invalid field call allocation");
-		const lowered = { ...site, allocation };
-		fieldAllocations.set(site.allocationIp, lowered);
-		fieldCallSites.set(site.callIp, lowered);
-		for (let field = 0; field < allocation.count; field++)
-			lines.push(`f64 __field_${site.allocationIp}_${field} = 0;`);
+		fieldAllocations.set(site.allocationIp, site);
+		fieldCallSites.set(site.callIp, site);
+		for (let field = 0; field < site.allocation.count; field++) {
+			if (site.boxedSlots[field] === undefined)
+				lines.push(`f64 __field_${site.allocationIp}_${field} = 0;`);
+		}
 	}
+
 	const fieldLoads = new Map(
 		directFields?.loads.map((load) => [load.instructionIp, load.field]),
 	);
@@ -3031,6 +3047,7 @@ interface NativeFieldCall {
 	readonly allocationIp: number;
 	readonly callIp: number;
 	readonly allocation: Extract<BytecodeInstruction, { opcode: "CREATE_OBJECT_SHAPED" }>;
+	readonly boxedSlots: ReadonlyArray<number | undefined>;
 	readonly entries: ReadonlyArray<{
 		readonly functionIndex: number;
 		readonly entryId: number;
@@ -3532,11 +3549,14 @@ function emitInstruction(
 		context.fieldAllocation !== undefined &&
 		instruction.opcode === "CREATE_OBJECT_SHAPED"
 	) {
+		const site = context.fieldAllocation;
 		return [
-			...instruction.valueRegisters.map(
-				(register, field) =>
-					`__field_${ip}_${field} = ${isNumericRep(reps[register]!) ? num(register) : `mal_ops_number_as_f64(${boxed(register)})`};`,
-			),
+			...instruction.valueRegisters.map((register, field) => {
+				const slot = site.boxedSlots[field];
+				return slot === undefined
+					? `__field_${ip}_${field} = ${isNumericRep(reps[register]!) ? num(register) : `mal_ops_number_as_f64(${boxed(register)})`};`
+					: `__gc_slots[${slot}] = ${boxed(register)};`;
+			}),
 			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 		];
 	}
@@ -3554,7 +3574,11 @@ function emitInstruction(
 			.map((key) => `vm->string_constant_atoms[${relocation.stringIndex(key)}]`)
 			.join(", ");
 		const values = site.allocation.keyStringIndices
-			.map((_, field) => `mal_ops_number_value(__field_${site.allocationIp}_${field})`)
+			.map((_, field) =>
+				site.boxedSlots[field] === undefined
+					? `mal_ops_number_value(__field_${site.allocationIp}_${field})`
+					: `__gc_slots[${site.boxedSlots[field]}]`,
+			)
 			.join(", ");
 		const rest = emitInstruction(
 			instruction,
@@ -3577,6 +3601,9 @@ function emitInstruction(
 			`  r${site.allocation.dst} = mal_vm_create_object_shaped(vm,${shape},(MalValue[]){${values}},${site.allocation.count});`,
 			`}`,
 			...rest,
+			...site.boxedSlots.flatMap((slot) =>
+				slot === undefined ? [] : [`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`],
+			),
 		];
 	}
 	switch (instruction.opcode) {

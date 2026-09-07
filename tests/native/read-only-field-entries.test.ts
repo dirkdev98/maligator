@@ -19,6 +19,17 @@ describe("read-only parameter field entries", () => {
 		expect(
 			programImage.native.functions.flatMap((fn) => fn.fieldCalls ?? []).length,
 		).toBeGreaterThan(0);
+		expect(
+			programImage.native.functions.some((fn) =>
+				fn.fieldCalls?.some((site) => {
+					const allocation =
+						programImage.runtime.functions[fn.functionIndex]!.instructions[
+							site.allocationIp
+						]!;
+					return allocation.opcode === "CREATE_OBJECT_SHAPED" && allocation.count === 4;
+				}),
+			),
+		).toBe(true);
 		for (const binary of [compiled, interpreted])
 			assertExactLines(runToStdout(binary, { env: STRESS_ENV }), [
 				"read-only-field-entries PASS",

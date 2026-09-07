@@ -21,7 +21,12 @@ const rules = [new Standard(), new Volume(), new Priority()];
 let initializers = 0;
 let total = 0;
 for (let index = 0; index < 60; index++) {
-	const order = { net: index * 7, quantity: (initializers++, (index % 9) + 1) };
+	const order = {
+		net: index * 7,
+		quantity: (initializers++, (index % 9) + 1),
+		category: "retail",
+		active: true,
+	};
 	total += rules[index % 3].quote(order);
 	const garbage = [{ value: index }];
 	if (garbage[0].value !== index) throw new Error("surrounding allocation");
@@ -34,13 +39,27 @@ Standard.prototype.quote = function replacement(order) {
 	return order.net + order.quantity;
 };
 let replacementTotal = 0;
+let metadataInitializers = 0;
+function metadata(index) {
+	metadataInitializers++;
+	return { value: index, label: "order-" + index };
+}
 for (let index = 0; index < 6; index++) {
-	const order = { net: index * 7, quantity: (initializers++, index + 1) };
+	const order = {
+		net: index * 7,
+		quantity: (initializers++, index + 1),
+		metadata: metadata(index),
+		category: "category-" + index,
+	};
 	replacementTotal += rules[index % 3].quote(order);
 }
 check(replacementTotal, 141);
 check(retained.net, 21);
 check(retained.quantity, 4);
+check(retained.metadata.value, 3);
+check(retained.metadata.label, "order-3");
+check(retained.category, "category-3");
+check(metadataInitializers, 6);
 check(initializers, 66);
 let getterReads = 0;
 const getter = {
