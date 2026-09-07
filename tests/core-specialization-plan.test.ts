@@ -999,7 +999,13 @@ describe("late Core specialization plan", () => {
 		const definition = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`if (!((function () {
-					const nested = function () { return typeof this; };
+					let rounds = 1;
+					while (rounds-- > 0) Math.abs(rounds);
+					const nested = function () {
+						let count = 1;
+						while (count-- > 0) Math.abs(count);
+						return typeof this;
+					};
 					return nested() === "undefined" && typeof this === "undefined";
 				})())) throw new Error("unexpected this value");`,
 				"direct-entry-function-local-site.js",

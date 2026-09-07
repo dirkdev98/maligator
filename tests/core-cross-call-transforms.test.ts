@@ -556,6 +556,69 @@ describe("bounded Core cross-call transforms", () => {
 		}
 	});
 
+	it.each([
+		["early returns", "if (value < 0) return -value; return value + 1;"],
+		[
+			"diamond",
+			"let result; if (value < 0) result = -value; else result = value + 1; return result * 2;",
+		],
+	])("inlines bounded %s and preserves caller-local proofs", (_name, body) => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function outer(value) {
+				function helper(input) { const value = +input; ${body} }
+				return helper(value);
+			}`,
+				"core-inline-dag.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		expect(callInstructions(optimized!, outer.id)).toEqual([]);
+		expect(
+			coreOperations(outer).some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "<",
+			),
+		).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+		for (const operation of coreOperations(outer)) {
+			const refinement = outer.instructionEffectRefinement(operation.id);
+			if (refinement === undefined) continue;
+			expect(outer.fact(refinement.proof).claims).toContainEqual(
+				expect.objectContaining({ kind: "effect", instruction: operation.id }),
+			);
+		}
+	});
+
+	it("keeps cyclic and exception-handling helpers outside the acyclic inliner", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function outer(value) {
+				function cycle(input) { while (input > 2) input /= 2; return input; }
+				function handled(input) { try { return +input; } catch { return 0; } }
+				return cycle(value) + handled(value);
+			}`,
+				"core-inline-rejected-graphs.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		expect(callInstructions(optimized!, outer.id)).toHaveLength(2);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("keeps the generic call and records its decision only in the plan", () => {
 		const program = analysisProgram();
 		const caller = appendCaller(program, 1);
