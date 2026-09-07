@@ -412,12 +412,13 @@ export function analyzeCoreValueKinds(
 		} else if (kind === KIND_TRANSFER_COPY) {
 			incoming = mask(transferInputs[inputStart]! as CoreValueId);
 		} else if (kind === KIND_TRANSFER_NUMERIC_UNARY) {
-			incoming = compilerValueKindMaskIsSubset(
-				mask(transferInputs[inputStart]! as CoreValueId),
-				COMPILER_VALUE_KIND_NUMBER,
-			)
-				? COMPILER_VALUE_KIND_NUMBER
-				: COMPILER_VALUE_KIND_TOP;
+			const input = mask(transferInputs[inputStart]! as CoreValueId);
+			incoming =
+				input === 0
+					? 0
+					: compilerValueKindMaskIsSubset(input, COMPILER_VALUE_KIND_NUMBER)
+						? COMPILER_VALUE_KIND_NUMBER
+						: COMPILER_VALUE_KIND_TOP;
 		} else if (kind === KIND_TRANSFER_BINARY || kind === KIND_TRANSFER_ADD) {
 			const left = mask(transferInputs[inputStart]! as CoreValueId);
 			const right = mask(transferInputs[inputStart + 1]! as CoreValueId);

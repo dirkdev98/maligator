@@ -51,6 +51,67 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it.each(["-", "+", "~", "increment", "decrement", "tonumeric"])(
+		"infers %s independently of block order through forward dependencies and loop joins",
+		(operator) => {
+			for (const consumerFirst of [false, true]) {
+				for (const unknown of [false, true]) {
+					const program = new CoreProgram(coreOpcodeRegistry);
+					const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+					const entry = builder.createBlock([{ representation: "boxed" }]);
+					const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+					const first = builder.createBlock([{ representation: "boxed" }]);
+					const second = builder.createBlock([{ representation: "boxed" }]);
+					const producer = consumerFirst ? second : first;
+					const consumer = consumerFirst ? first : second;
+					const exit = builder.createBlock();
+					const [constant] = builder.appendInstruction(entry, "createNumber", [], {
+						attributes: { value: 3 },
+					});
+					builder.setTerminator(entry, {
+						kind: "jump",
+						edge: { block: producer, arguments: [unknown ? input : constant!] },
+					});
+					const initial = inspectCoreBlockParameters(builder, producer)[0]!.value;
+					const joined = inspectCoreBlockParameters(builder, consumer)[0]!.value;
+					const [seed] = builder.appendInstruction(producer, "unary", [initial], {
+						attributes: { operator },
+					});
+					builder.setTerminator(producer, {
+						kind: "jump",
+						edge: { block: consumer, arguments: [seed!] },
+					});
+					const [updated] = builder.appendInstruction(consumer, "unary", [joined], {
+						attributes: { operator },
+					});
+					const [scaled] = builder.appendInstruction(
+						consumer,
+						"binary",
+						[updated!, constant!],
+						{ attributes: { operator: "*" } },
+					);
+					builder.setTerminator(consumer, {
+						kind: "branch",
+						condition: input,
+						consequent: { block: consumer, arguments: [scaled!] },
+						alternate: { block: exit, arguments: [] },
+					});
+					builder.setTerminator(exit, { kind: "return", value: scaled! });
+					const finished = builder.finish(entry);
+					const kinds = analyzeCoreValueKinds(
+						program.function(finished.function),
+						buildCoreControlFlow(program, finished.function),
+					);
+					for (const value of [seed!, joined, updated!, scaled!]) {
+						expect(kinds.latticeMask(value)).toBe(
+							unknown ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+						);
+					}
+				}
+			}
+		},
+	);
+
 	it.each([
 		{ closed: false, stores: 1, expected: COMPILER_VALUE_KIND_TOP },
 		{ closed: true, stores: 0, expected: COMPILER_VALUE_KIND_TOP },
