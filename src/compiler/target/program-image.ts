@@ -1211,6 +1211,7 @@ export function validateNativeNumericSortCallback(
 	const entry = functions[callback.functionIndex]?.directEntries[callback.entryId];
 	if (
 		(callback.operation !== "sort" && callback.operation !== "toSorted") ||
+		(callback.viaCall !== undefined && callback.viaCall !== true) ||
 		!Number.isInteger(callback.functionIndex) ||
 		callback.functionIndex < 0 ||
 		!Number.isInteger(callback.entryId) ||

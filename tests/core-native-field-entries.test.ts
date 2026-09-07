@@ -15,6 +15,51 @@ import {
 } from "../src/compiler/target/render-native-c.ts";
 
 describe("numeric own-field native entry contracts", () => {
+	it.each([
+		"r.x + (r.y > 0)",
+		"r.x + (r.y > 0 ? null : undefined)",
+		"Math.abs(r.x) + Math.ceil(r.y)",
+	])("uses certified field computations for %s", (expression) => {
+		for (const primordials of ["locked", "mutable"] as const) {
+			const image = deserializeCompilerArtifact(
+				serializeCompilerArtifact(
+					compileSemanticProgramToProgramImage(
+						analyzeSourceAndRunSemanticAnalysis(
+							`
+					class Price { quote(r) { return ${expression}; } }
+					const price = new Price();
+					for (let i = 0; i < 3; i++) globalThis.result = price.quote({x:i, y:1, metadata:'retail'});
+				`,
+							"field-unions.js",
+						),
+						{
+							facts: compilerProgramFactsFromConfig(
+								resolveBuildConfig({ engine: { primordials } }),
+							),
+						},
+					),
+				),
+			);
+			const calls = image.native.functions.flatMap((fn) => fn.fieldCalls ?? []);
+			if (primordials === "mutable" && expression.startsWith("Math.")) {
+				expect(calls).toHaveLength(0);
+				continue;
+			}
+			expect(calls).toHaveLength(1);
+			const target = calls[0]!.entries[0]!;
+			const native = image.native.functions[target.functionIndex]!;
+			const emitted = emitCompiledFunction(
+				image.runtime.functions[target.functionIndex]!,
+				native,
+				target.functionIndex,
+				"",
+				false,
+			)!;
+			expect(emitted.directEntries).toHaveLength(1);
+			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
+		}
+	});
+
 	it("specializes all three pricing methods and retains a guarded materialization fallback", () => {
 		const image = compactProgramImageConstants(
 			compileSemanticProgramToProgramImage(

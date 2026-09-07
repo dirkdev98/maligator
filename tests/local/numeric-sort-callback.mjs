@@ -129,3 +129,59 @@ console.log(
 	"array-copy-effects",
 	new Array(3).fill(4).toSorted(effectsCompare).join(","),
 );
+
+function detachedSort(receiver) {
+	const sort = receiver.sort;
+	return sort.call(receiver, compare);
+}
+function detachedCopy(receiver) {
+	return receiver.toSorted.call(receiver, compare);
+}
+for (const input of [[3, 1, 2], new Float64Array([3, 1, 2]), [3, "1", 2]]) {
+	console.log(
+		"detached",
+		show(detachedCopy(input)),
+		show(input),
+		show(detachedSort(input)),
+	);
+}
+console.log("prototype-call", show(Array.prototype.sort.call([4, 1, 2], compare)));
+const customSort = function (fn) {
+	return fn(8, 3) + this.extra;
+};
+console.log("detached-override", detachedSort({ sort: customSort, extra: 100 }));
+customSort.call = function (receiver, fn) {
+	return fn(9, 2) + receiver.extra + 1;
+};
+console.log("detached-call-override", detachedSort({ sort: customSort, extra: 200 }));
+console.log(
+	"detached-noncallable",
+	detachedSort({
+		sort: {
+			call(receiver, fn) {
+				return fn(7, 1);
+			},
+		},
+	}),
+);
+try {
+	detachedSort({ sort: 3 });
+} catch (error) {
+	console.log("detached-invalid", error.name);
+}
+try {
+	detachedSort(new BigInt64Array([2n, 1n]));
+} catch (error) {
+	console.log("detached-bigint", error.name);
+}
+globalThis.throwComparator = true;
+try {
+	Float64Array.prototype.sort.call(new Float64Array([2, 1]), effectsCompare);
+} catch (error) {
+	console.log("detached-throw", error.message);
+}
+globalThis.throwComparator = false;
+console.log(
+	"detached-effects",
+	show(Float64Array.prototype.toSorted.call(new Float64Array([5, 2, 7]), effectsCompare)),
+);

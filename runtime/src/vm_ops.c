@@ -7321,32 +7321,41 @@ void mal_vm_op_await_compiled(
 }
 
 MalCompletion mal_builtin_sort_numeric(
-    MalVm *vm, MalCallCache *fallback_cache, bool copy, i32 function_index,
+    MalVm *vm, MalCallCache *fallback_cache, bool copy, bool via_call, i32 function_index,
     MalNumericSortComparator comparator, MalValue callee, MalValue receiver,
     const MalValue *args, i32 arg_count
 ) {
     MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
         ? mal_native_function_object_callback(mal_value_to_native_function_object(callee)) : nullptr;
-    bool array_sort = expected == (copy ? mal_builtin_array_to_sorted : mal_builtin_array_sort);
-    bool typed_sort = expected == (copy ? mal_builtin_typed_array_to_sorted : mal_builtin_typed_array_sort);
+    if (arg_count != (via_call ? 2 : 1))
+        return mal_vm_call_cached(vm, fallback_cache, callee, receiver, args, arg_count);
+    MalValue sort_callee = via_call ? receiver : callee;
+    MalValue sort_receiver = via_call ? args[0] : receiver;
+    MalValue callback = args[via_call ? 1 : 0];
+    MalNativeFunctionCallback sort = mal_value_is_native_function_object(sort_callee)
+        ? mal_native_function_object_callback(mal_value_to_native_function_object(sort_callee)) : nullptr;
+    bool array_sort = sort == (copy ? mal_builtin_array_to_sorted : mal_builtin_array_sort);
+    bool typed_sort = sort == (copy ? mal_builtin_typed_array_to_sorted : mal_builtin_typed_array_sort);
     bool admitted = comparator != nullptr && function_index >= 0 &&
-        function_index < vm->runtime_image->function_count && arg_count == 1 &&
-        ((array_sort && mal_value_is_array_object(receiver)) ||
-         (typed_sort && mal_value_is_typed_array_object(receiver) &&
-          mal_value_to_typed_array_object(receiver)->kind < MAL_TA_BIGINT64)) &&
-        mal_value_is_function_object(args[0]) &&
-        mal_function_object_function_index(mal_value_to_function_object(args[0])) == function_index;
+        function_index < vm->runtime_image->function_count &&
+        (!via_call || expected == mal_builtin_function_prototype_call) &&
+        ((array_sort && mal_value_is_array_object(sort_receiver)) ||
+         (typed_sort && mal_value_is_typed_array_object(sort_receiver) &&
+          mal_value_to_typed_array_object(sort_receiver)->kind < MAL_TA_BIGINT64)) &&
+        mal_value_is_function_object(callback) &&
+        mal_function_object_function_index(mal_value_to_function_object(callback)) == function_index;
 #if MAL_REALMS
-    admitted = admitted && mal_vm_callee_realm(vm, callee) == vm->current_realm;
+    admitted = admitted && mal_vm_callee_realm(vm, callee) == vm->current_realm &&
+        mal_vm_callee_realm(vm, sort_callee) == vm->current_realm;
 #endif
     if (!admitted) return mal_vm_call_cached(vm, fallback_cache, callee, receiver, args, arg_count);
     MalExactScriptCall exact = {
         .previous = vm->exact_script_call,
-        .callee = args[0],
+        .callee = callback,
         .function_index = function_index,
         .numeric_sort_comparator = comparator,
         .function = &vm->runtime_image->functions[function_index],
-        .env = mal_value_to_function_object(args[0])->creation_env,
+        .env = mal_value_to_function_object(callback)->creation_env,
     };
     vm->exact_script_call = &exact;
     MalCompletion completion = mal_vm_call_exact_native(vm, expected, callee, receiver, args, arg_count);

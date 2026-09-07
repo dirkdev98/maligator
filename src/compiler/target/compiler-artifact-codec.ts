@@ -38,7 +38,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 59;
+export const COMPILER_ARTIFACT_VERSION = 60;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -798,9 +798,8 @@ function writeCompilerArtifact(
 				w.u8(
 					numericCallback === undefined
 						? 0
-						: numericCallback.operation === "sort"
-							? 1
-							: 2,
+						: (numericCallback.operation === "sort" ? 1 : 2) +
+								(numericCallback.viaCall ? 2 : 0),
 				);
 				if (numericCallback !== undefined) {
 					w.i32(numericCallback.functionIndex);
@@ -2965,14 +2964,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				const directCallbackFunctionIndex = r.i32();
 				const directEntryId = r.i32();
 				const numericCallbackTag = r.u8();
-				if (numericCallbackTag > 2)
+				if (numericCallbackTag > 4)
 					throw new RangeError("Invalid numeric sort callback tag");
 				const numericSortCallback =
 					numericCallbackTag === 0
 						? undefined
 						: {
 								operation:
-									numericCallbackTag === 1 ? ("sort" as const) : ("toSorted" as const),
+									numericCallbackTag % 2 === 1
+										? ("sort" as const)
+										: ("toSorted" as const),
+								...(numericCallbackTag > 2 ? { viaCall: true as const } : {}),
 								functionIndex: r.i32(),
 								entryId: r.i32(),
 							};

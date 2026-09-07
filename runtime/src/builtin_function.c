@@ -55,7 +55,7 @@ static MalValue mal_builtin_throw_type_error(MalVm *vm, MalValue this_value, con
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.call called on a non-callable");
         return mal_value_new_undefined();

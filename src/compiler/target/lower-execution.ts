@@ -2536,6 +2536,7 @@ export function lowerCoreCompilationToExecutionProgram(
 					new Map<CoreInstructionId, CompilerNumericSortCallback>();
 				calls.set(site.instruction, {
 					operation: site.numericSortCallback,
+					...(site.numericSortCallbackViaCall ? { viaCall: true as const } : {}),
 					functionIndex: functionMap.coreToExecution[entry.function]!,
 					entryId: entry.id,
 				});

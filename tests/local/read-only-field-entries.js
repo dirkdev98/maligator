@@ -104,4 +104,46 @@ for (let index = 0; index < 8; index++) {
 	const actual = zeroRules[index % 2].quote({ net, quantity: 0 });
 	check(actual, index % 2 ? 15 : NaN);
 }
+class PrimitiveFields {
+	calculate(order) {
+		return order.net + (order.quantity > 0);
+	}
+}
+class NullableFields {
+	calculate(order) {
+		return order.net + (order.quantity > 0 ? null : undefined);
+	}
+}
+class MathFields {
+	calculate(order) {
+		return Math.abs(order.net) + Math.ceil(order.quantity);
+	}
+}
+const broaderRules = [new PrimitiveFields(), new NullableFields(), new MathFields()];
+for (let index = 0; index < 9; index++) {
+	const quantity = index % 2 ? -0.5 : 0.5;
+	const result = broaderRules[index % 3].calculate({
+		net: -index,
+		quantity,
+		metadata: { index },
+	});
+	check(
+		result,
+		index % 3 === 0
+			? -index + (quantity > 0)
+			: index % 3 === 1
+				? quantity > 0
+					? -index
+					: NaN
+				: index + Math.ceil(quantity),
+	);
+}
+PrimitiveFields.prototype.calculate = function replacement(order) {
+	retained = order;
+	return order.net;
+};
+for (let index = 0; index < 3; index++) {
+	broaderRules[index].calculate({ net: index, quantity: 1, metadata: { index } });
+}
+check(retained.metadata.index, 0);
 console.log("read-only-field-entries PASS");

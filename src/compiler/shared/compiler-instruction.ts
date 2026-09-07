@@ -52,6 +52,7 @@ export interface CompilerShapeCaseCandidate {
 }
 
 export interface CompilerNumericSortCallback {
+	readonly viaCall?: true;
 	readonly operation: "sort" | "toSorted";
 	readonly functionIndex: number;
 	readonly entryId: number;

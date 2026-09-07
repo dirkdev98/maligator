@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -10,29 +11,42 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("read-only parameter field entries", () => {
-	it("preserves object observation and overridden methods under GC stress", () => {
-		const { compiled, interpreted, programImage } = buildBackendPairFromOneProgramImage({
-			fixture: "tests/local/read-only-field-entries.js",
-			name: "read-only-field-entries",
-			outDir: mkdtempSync(join(tmpdir(), "mal-read-only-fields-")),
-		});
-		expect(
-			programImage.native.functions.flatMap((fn) => fn.fieldCalls ?? []).length,
-		).toBeGreaterThan(0);
-		expect(
-			programImage.native.functions.some((fn) =>
-				fn.fieldCalls?.some((site) => {
-					const allocation =
-						programImage.runtime.functions[fn.functionIndex]!.instructions[
-							site.allocationIp
-						]!;
-					return allocation.opcode === "CREATE_OBJECT_SHAPED" && allocation.count === 4;
-				}),
-			),
-		).toBe(true);
-		for (const binary of [compiled, interpreted])
-			assertExactLines(runToStdout(binary, { env: STRESS_ENV }), [
-				"read-only-field-entries PASS",
-			]);
-	}, 600_000);
+	it.each(["locked", "mutable"] as const)(
+		"preserves object observation and overridden methods with %s primordials under GC stress",
+		(primordials) => {
+			const { compiled, interpreted, programImage } = buildBackendPairFromOneProgramImage(
+				{
+					fixture: "tests/local/read-only-field-entries.js",
+					name: "read-only-field-entries",
+					config: resolveBuildConfig({
+						engine: {
+							primordials,
+							eval: primordials === "mutable",
+							realms: primordials === "mutable",
+						},
+					}),
+					outDir: mkdtempSync(join(tmpdir(), "mal-read-only-fields-")),
+				},
+			);
+			expect(
+				programImage.native.functions.flatMap((fn) => fn.fieldCalls ?? []).length,
+			).toBeGreaterThan(0);
+			expect(
+				programImage.native.functions.some((fn) =>
+					fn.fieldCalls?.some((site) => {
+						const allocation =
+							programImage.runtime.functions[fn.functionIndex]!.instructions[
+								site.allocationIp
+							]!;
+						return allocation.opcode === "CREATE_OBJECT_SHAPED" && allocation.count === 4;
+					}),
+				),
+			).toBe(true);
+			for (const binary of [compiled, interpreted])
+				assertExactLines(runToStdout(binary, { env: STRESS_ENV }), [
+					"read-only-field-entries PASS",
+				]);
+		},
+		600_000,
+	);
 });

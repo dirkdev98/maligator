@@ -5715,7 +5715,10 @@ function emitInstruction(
 				];
 			}
 			const numericCallback = callPlan?.numericSortCallback;
-			if (numericCallback !== undefined && args.length === 1) {
+			if (
+				numericCallback !== undefined &&
+				args.length === (numericCallback.viaCall ? 2 : 1)
+			) {
 				const entry = directCompiledEntries.get(
 					directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 				);
@@ -5729,7 +5732,7 @@ function emitInstruction(
 				) {
 					return [
 						`static MalCallCache __cc_${ip};`,
-						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						poll,

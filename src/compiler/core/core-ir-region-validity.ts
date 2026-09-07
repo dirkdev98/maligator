@@ -1948,6 +1948,15 @@ export function verifyCoreOptimizationPlan(
 		}
 		for (const site of entry.callSites) {
 			if (
+				site.numericSortCallbackViaCall !== undefined &&
+				(site.numericSortCallbackViaCall !== true ||
+					site.numericSortCallback === undefined)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has an invalid callback invocation`,
+				);
+
+			if (
 				site.numericSortCallback !== undefined &&
 				((site.numericSortCallback !== "sort" &&
 					site.numericSortCallback !== "toSorted") ||

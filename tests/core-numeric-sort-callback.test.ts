@@ -59,6 +59,34 @@ describe("numeric sort callback entries", () => {
 		},
 	);
 
+	it.each([
+		"array.sort.call(array, compare)",
+		"array['toSorted']['call'](array, compare)",
+		"Array.prototype.sort.call(array, compare)",
+		"(() => { const sort = array.sort; return sort.call(array, compare); })()",
+	])("certifies detached builtin invocation: %s", (expression) => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						`
+				function compare(a, b) { return a - b; }
+				const array = [3, 1, 2];
+				globalThis.result = ${expression};
+			`,
+						"detached-sort.js",
+					),
+				),
+			),
+		);
+		const plans = callbackPlans(image);
+		expect(plans.length).toBeGreaterThan(0);
+		expect(plans.every((plan) => plan.numericSortCallback!.viaCall === true)).toBe(true);
+		expect(emitProgramImage(image, { debugInfo: false })).toContain(
+			"mal_builtin_sort_numeric(vm,",
+		);
+	});
+
 	it("selects the same guarded contract for numeric and mixed Arrays", () => {
 		for (const receiver of ["[3, 1, 2]", "[3, '1', 2]"]) {
 			const image = compile(undefined, "sort", receiver);
@@ -77,12 +105,30 @@ describe("numeric sort callback entries", () => {
 		expect(callbackPlans(compile(body))).toEqual([]);
 	});
 
+	it.each(["a", "a, b, extra", "...args"])(
+		"does not force comparator parameters %s into the two-number ABI",
+		(parameters) => {
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`
+				function compare(${parameters}) { return 1; }
+				const array = [3, 1, 2];
+				globalThis.result = array.sort.call(array, compare);
+			`,
+					"unsupported-sort-arity.js",
+				),
+			);
+			expect(callbackPlans(image)).toEqual([]);
+		},
+	);
+
 	it("rejects forged numeric callback ABI coordinates", () => {
 		const image = compile();
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
 		for (const altered of [
 			{ ...callback, functionIndex: image.runtime.functions.length },
 			{ ...callback, entryId: 9 },
+			{ ...callback, viaCall: false as unknown as true },
 		]) {
 			const forged = {
 				...image,

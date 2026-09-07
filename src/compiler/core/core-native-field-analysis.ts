@@ -5,7 +5,11 @@ import {
 } from "../shared/compiler-facts.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactBundle } from "./core-ir-provenance.ts";
-import type { CoreEntryFields, CorePlanRepresentation } from "./core-ir-regions.ts";
+import type {
+	CoreDirectEntryPlan,
+	CoreEntryFields,
+	CorePlanRepresentation,
+} from "./core-ir-regions.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -64,7 +68,9 @@ export function coreReadOnlyNumericParameterFields(
 			const builtin = attrs.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
 			if (
 				builtin === undefined ||
-				!["Math.floor", "Math.max", "Math.min"].includes(builtin.operation) ||
+				!builtin.operation.startsWith("Math.") ||
+				builtin.semantics.kind !== "known" ||
+				builtin.semantics.value.result !== "number" ||
 				!knownBuiltinCallProves(builtin, builtin.operation) ||
 				!compilerFactIsWorldInvariant(builtin.identity)
 			)
@@ -77,6 +83,7 @@ export function coreReadOnlyNumericParameterFields(
 				"createF64",
 				"createBoolean",
 				"createUndefined",
+				"createNull",
 				"binary",
 				"unary",
 				"move",
@@ -134,11 +141,14 @@ export function coreNumericFieldArgument(
 export function coreFieldEntryHasNumericComputations(
 	fn: CoreFunctionStore,
 	representations: ReadonlyArray<CorePlanRepresentation>,
+	operatorInputs: CoreDirectEntryPlan["operatorInputs"],
 ): boolean {
+	const certified = new Set(operatorInputs?.map(({ instruction }) => instruction));
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (!["binary", "unary", "call"].includes(opcode)) continue;
+		if (certified.has(instruction)) continue;
 		for (
 			let index = opcode === "call" ? 2 : 0;
 			index < fn.kernel.instructionOperandCount(instruction);

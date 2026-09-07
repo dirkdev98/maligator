@@ -186,7 +186,8 @@ export function coreNativeEntryProofIsCurrent(
 				site.instruction === current.instruction &&
 				(site.guarded === true) === (current.guarded === true) &&
 				site.fieldObject === current.fieldObject &&
-				site.numericSortCallback === current.numericSortCallback
+				site.numericSortCallback === current.numericSortCallback &&
+				site.numericSortCallbackViaCall === current.numericSortCallbackViaCall
 			);
 		})
 	);

@@ -1208,25 +1208,34 @@ function directEntryCandidates(
 	}
 	for (const caller of [...live].sort((left, right) => left - right)) {
 		const fn = program.function(caller);
+		const propertyName = (value: CoreValueId | undefined): string | undefined => {
+			if (value === undefined || fn.kernel.valueDefinitionKind(value) !== 1)
+				return undefined;
+			const load = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (fn.instructionOpcodeName(load) !== "loadPropertyStatic") return undefined;
+			const key = fn.instructionAttributes(load).stringIndex;
+			const units = typeof key === "number" ? program.stringConstants[key] : undefined;
+			return units === undefined || units.length > 8
+				? undefined
+				: String.fromCharCode(...units);
+		};
 		for (const site of summaries.targets.outgoing(caller)) {
 			if (fn.instructionOpcodeName(site.instruction) !== "call") continue;
+
 			if (
 				site.targets.functions.length === 0 &&
-				site.arguments?.length === 1 &&
-				fn.kernel.valueDefinitionKind(site.callee) === 1
+				(site.arguments?.length === 1 || site.arguments?.length === 2)
 			) {
-				const load = coreInstructionId(fn.kernel.valueDefinitionOwner(site.callee));
-				const key = fn.instructionAttributes(load).stringIndex;
-				const units = typeof key === "number" ? program.stringConstants[key] : undefined;
-				const operation =
-					units === undefined || units.length > 8
-						? undefined
-						: String.fromCharCode(...units);
+				const viaCall = propertyName(site.callee) === "call";
+				const operation = propertyName(viaCall ? site.receiver : site.callee);
 				if (
-					fn.instructionOpcodeName(load) === "loadPropertyStatic" &&
+					site.arguments.length === (viaCall ? 2 : 1) &&
 					(operation === "sort" || operation === "toSorted")
 				) {
-					const callbackTargets = summaries.targets.targets(caller, site.arguments[0]!);
+					const callbackTargets = summaries.targets.targets(
+						caller,
+						site.arguments[viaCall ? 1 : 0]!,
+					);
 					const target =
 						callbackTargets.functions.length === 1
 							? callbackTargets.functions[0]
@@ -1242,12 +1251,13 @@ function directEntryCandidates(
 							observation.indices.length === 0
 						) {
 							const calls = callsByTarget.get(target) ?? [];
-							// Admission checks builtin, numeric receiver, and callback identities together.
+							// Property names nominate candidates; runtime admission proves both calls.
 							calls.push({
 								caller,
 								instruction: site.instruction,
 								guarded: true,
 								numericSortCallback: operation,
+								...(viaCall ? { numericSortCallbackViaCall: true as const } : {}),
 							});
 							callsByTarget.set(target, calls);
 						}
@@ -1354,7 +1364,13 @@ function directEntryCandidates(
 						fieldCalls,
 						fields,
 					);
-					if (coreFieldEntryHasNumericComputations(fn, variant.valueRepresentations)) {
+					if (
+						coreFieldEntryHasNumericComputations(
+							fn,
+							variant.valueRepresentations,
+							variant.operatorInputs,
+						)
+					) {
 						fieldParameters = fields;
 						selectedCalls = fieldCalls;
 						valueRepresentations = variant.valueRepresentations;
