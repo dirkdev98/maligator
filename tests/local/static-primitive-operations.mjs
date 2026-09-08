@@ -1412,3 +1412,97 @@ exoticString.extra = 1;
 exoticAlias.extra++;
 show(exoticString.extra);
 show(exoticString !== new String("A😀"));
+
+function repeatedPrimitiveWork(text, value) {
+	const source = String(text),
+		number = Number(value),
+		bigint = BigInt(value);
+	const trimmed = source.trim(),
+		replaced = source.replace("a", "x"),
+		formatted = number.toFixed(2);
+	numericCollect();
+	show(trimmed + source.trim());
+	show(replaced + source.replace("a", "x"));
+	show(formatted + number.toFixed(2));
+	let next = number;
+	const before = next.toFixed(2);
+	next++;
+	show(before + next.toFixed(2));
+	const parsed = parseFloat(source),
+		width = BigInt.asIntN(8, bigint);
+	show(parsed + parseFloat(source));
+	show(width + BigInt.asIntN(8, bigint));
+	const h = Math.hypot(number, 2, 3);
+	show(h === Math.hypot(number, 2, 3));
+	const encoded = encodeURI(source);
+	show(encoded + encodeURI(source));
+	show(source.split(",") !== source.split(","));
+	source.trim();
+	source.slice(1);
+	source.includes("a");
+	source.split(",");
+	number.toFixed(2);
+	Math.hypot(number, 2, 3);
+	parseFloat(source);
+}
+for (const text of [" a,b ", "123.5", "é😀"]) repeatedPrimitiveWork(text, 257);
+let reuseEvents = "";
+const repeatedNumberInput = {
+	valueOf() {
+		reuseEvents += "n";
+		return reuseEvents.length;
+	},
+};
+show(Number(repeatedNumberInput) + Number(repeatedNumberInput));
+show(reuseEvents);
+function ignoredArgument() {
+	reuseEvents += "e";
+	return {};
+}
+function deadPrimitiveWork(input) {
+	const text = String(input);
+	text.trim(ignoredArgument());
+	Math.abs(1, ignoredArgument());
+	Number.isFinite(ignoredArgument());
+	Math.hypot(Symbol());
+}
+show(capturedFailure(() => deadPrimitiveWork(" x ")).name);
+show(reuseEvents);
+show(
+	capturedFailure(() => {
+		encodeURI(String("\ud800"));
+	}).name,
+);
+show(
+	capturedFailure(() => {
+		String.fromCodePoint(-1);
+	}).name,
+);
+show(
+	capturedFailure(() => {
+		BigInt.asIntN(-1, 0n);
+	}).name,
+);
+async function primitiveAcrossAwait(value) {
+	const text = String(value),
+		first = text.trim();
+	await 0;
+	numericCollect();
+	return first + text.trim();
+}
+primitiveAcrossAwait(" await ").then(show);
+
+function incrementFormatting(value) {
+	value++;
+	return value.toFixed(2);
+}
+show(incrementFormatting(1));
+show(capturedFailure(() => incrementFormatting(1n)).name);
+function arithmeticFormatting(value) {
+	return [
+		(Number(value) + 1).toFixed(2),
+		(BigInt(value) + 1n).toString(16),
+		(~BigInt(value)).toString(16),
+	].join("|");
+}
+show(arithmeticFormatting(257));

@@ -126,6 +126,14 @@ selection, and all argument expressions still execute before the failure. The co
 never throws the JavaScript error during compilation. Compiler artifact version 70
 encodes the failure identity separately from the runtime call.
 
+Repeated primitive calls can share a completed value within one basic block when
+all observed inputs have immutable primitive semantics. The first call and every
+argument expression retain their original evaluation position. Calls with user
+coercions, callbacks, entropy, registry creation, locale state, or fresh object
+results do not use this rule. Suspension clears the available-value set. Unused
+calls are removed only after a separate proof that they cannot throw; immutable
+constant descriptions distinguish bit patterns and never merge fresh symbols.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

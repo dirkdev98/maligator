@@ -16,6 +16,161 @@ function inspect(expression: string, locked = true) {
 
 describe("primitive operation results", () => {
 	it.each([
+		["const s=String(x); const a=s.trim(); return a+s.trim();", "String.prototype.trim"],
+		[
+			"const s=String(x); const a=s.slice(1); return a+s.slice(1);",
+			"String.prototype.slice",
+		],
+		[
+			"const s=String(x); const a=s.replace('a','b'); return a+s.replace('a','b');",
+			"String.prototype.replace",
+		],
+		[
+			"const n=Number(x); const a=n.toFixed(2); return a+n.toFixed(2);",
+			"Number.prototype.toFixed",
+		],
+		["const a=Number.isFinite(x); return a+Number.isFinite(x);", "Number.isFinite"],
+		["const n=+x; const a=Math.hypot(n,2,3); return a+Math.hypot(n,2,3);", "Math.hypot"],
+		[
+			"const b=BigInt(x); const a=BigInt.asIntN(8,b); return a+BigInt.asIntN(8,b);",
+			"BigInt.asIntN",
+		],
+		["const s=String(x); const a=encodeURI(s); return a+encodeURI(s);", "encodeURI"],
+		["const s=String(x); const a=escape(s); return a+escape(s);", "globalThis.escape"],
+	])("reuses the completed immutable result of %s", (body, operation) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x){${body}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			output.core.filter(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+			),
+		).toHaveLength(1);
+	});
+	it.each([
+		["Number(x)+Number(x)", "Number"],
+		["parseFloat(x)+parseFloat(x)", "parseFloat"],
+		["Math.random()+Math.random()", "Math.random"],
+		["String(x).replace('a',x)+String(x).replace('a',x)", "String.prototype.replace"],
+	])(
+		"retains repeated coercion, callback or entropy work for %s",
+		(expression, operation) => {
+			expect(
+				inspect(expression).core.filter(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+				),
+			).toHaveLength(2);
+		},
+	);
+	it.each([
+		["const a=String(x),b=String(x);return a.trim()+b.trim();", "String.prototype.trim"],
+		[
+			"let a=Number(x);const b=a.toFixed(2);a++;return b+a.toFixed(2);",
+			"Number.prototype.toFixed",
+		],
+	])(
+		"does not confuse equal result-kind descriptions with equal values in %s",
+		(body, operation) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){${body}}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				output.core.filter(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+				),
+			).toHaveLength(2);
+		},
+	);
+	it.each([
+		["(Number(x)+1).toFixed(2)", "Number.prototype.toFixed"],
+		["(-Number(x)).toFixed(2)", "Number.prototype.toFixed"],
+		["(BigInt(x)+1n).toString(16)", "BigInt.prototype.toString"],
+		["(~BigInt(x)).toString(16)", "BigInt.prototype.toString"],
+	])("keeps the numeric result kind through %s", (expression, operation) => {
+		expect(
+			inspect(expression).core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+			),
+		).toBe(true);
+	});
+	it("does not select Number formatting for an unknown numeric increment", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x){x++;return x.toFixed(2);}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			output.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.operation === "Number.prototype.toFixed",
+			),
+		).toBe(false);
+	});
+	it("retains separate fresh split results", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x){const s=String(x);return s.split(',')===s.split(',');}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			output.core.filter(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.operation === "String.prototype.split",
+			),
+		).toHaveLength(2);
+	});
+	it.each([
+		[
+			"const s=String(x); s.trim(); s.slice(1); s.includes('a'); s.split(',');",
+			[
+				"String.prototype.trim",
+				"String.prototype.slice",
+				"String.prototype.includes",
+				"String.prototype.split",
+			],
+		],
+		[
+			"const n=Number(x); n.toFixed(2); Math.hypot(n,2); isNaN(n);",
+			["Number.prototype.toFixed", "Math.hypot", "isNaN"],
+		],
+		[
+			"const s=String(x); parseInt(s,16); parseFloat(s); escape(s);",
+			["parseInt", "parseFloat", "globalThis.escape"],
+		],
+		[
+			"Number.isInteger(x); Number.isSafeInteger(x);",
+			["Number.isInteger", "Number.isSafeInteger"],
+		],
+	])("removes unused certified nonthrowing calls in %s", (body, operations) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x){${body}return x;}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			output.core.filter(
+				(op) =>
+					op.opcode === "callKnown" &&
+					operations.includes(op.attributes.operation as string),
+			),
+		).toEqual([]);
+	});
+	it.each([
+		"String(x).repeat(x)",
+		"BigInt(x)",
+		"encodeURI(String(x))",
+		"Math.random()",
+		"String(x).replace('a',x)",
+		"Number(x)",
+	])("keeps unused coercions, exceptions and callbacks at %s", (expression) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x){${expression};return x;}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(output.core.some((op) => op.opcode === "callKnown")).toBe(true);
+	});
+	it.each([
 		"new BigInt(x)",
 		"new Symbol(x)",
 		"new Math.abs(x)",

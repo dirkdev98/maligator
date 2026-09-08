@@ -1129,45 +1129,69 @@ export class CoreStaticValueAnalysis {
 				}
 			}
 		}
+		let operatorBrand: "number" | "boolean" | "string" | "bigint" | undefined;
 		if (
 			opcode === "binary" &&
-			attributes.operator === "+" &&
-			operands.some((operand) => {
-				const fact = this.query(operand);
-				return fact.kind === "known" && fact.brand === "string";
-			})
+			["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"].includes(
+				attributes.operator as string,
+			)
 		) {
-			return primitive(
-				intern.intern({
-					kind: "engine-payload",
-					format: "dynamic-result",
-					targetContract: "string-concatenation",
-					words: [],
-					contentsComplete: false,
-				}),
-				"string",
-			);
+			const inputs = operands.map((operand) => this.query(operand));
+			if (
+				attributes.operator === "+" &&
+				inputs.some((input) => input.kind === "known" && input.brand === "string")
+			)
+				operatorBrand = "string";
+			else if (
+				attributes.operator !== ">>>" &&
+				inputs.every((input) => input.kind === "known" && input.brand === "bigint")
+			)
+				operatorBrand = "bigint";
+			else if (
+				inputs.every(
+					(input) =>
+						input.kind === "known" &&
+						["undefined", "null", "boolean", "number", "string"].includes(input.brand),
+				)
+			)
+				operatorBrand = "number";
 		}
-		if (
-			opcode === "unary" &&
-			["+", "!", "tostring"].includes(attributes.operator as string)
-		) {
-			const brand =
+		if (opcode === "unary") {
+			operatorBrand =
 				attributes.operator === "+"
 					? "number"
 					: attributes.operator === "!"
 						? "boolean"
-						: "string";
+						: attributes.operator === "tostring" || attributes.operator === "typeof"
+							? "string"
+							: undefined;
+			if (
+				["tonumeric", "increment", "decrement", "-", "~"].includes(
+					attributes.operator as string,
+				)
+			) {
+				const input = this.query(operands[0]!);
+				if (input.kind === "known") {
+					if (input.brand === "bigint") operatorBrand = "bigint";
+					else if (
+						["undefined", "null", "boolean", "number", "string"].includes(input.brand)
+					)
+						operatorBrand = "number";
+				}
+			}
+		}
+		if (operatorBrand !== undefined)
 			return primitive(
 				intern.intern({
 					kind: "engine-payload",
 					format: "dynamic-result",
-					targetContract: brand,
+					targetContract: operatorBrand,
 					words: [],
+					contentsComplete: false,
 				}),
-				brand,
+				operatorBrand,
 			);
-		}
+
 		if (this.#context?.facts.world.primordialPolicy === "locked") {
 			let canonical: string | undefined;
 			if (opcode === "loadIntrinsic") canonical = attributes.intrinsic as string;

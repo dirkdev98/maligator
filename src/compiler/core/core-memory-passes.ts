@@ -63,6 +63,7 @@ import { resolveKnownOperations } from "./core-known-operations.ts";
 import { reuseLiteralConstants } from "./core-literal-constants.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { reusePrimitiveCallResults } from "./core-primitive-call-reuse.ts";
 import {
 	eliminatePrimitiveWrappers,
 	lowerPrimitiveOperations,
@@ -2314,6 +2315,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	resolveKnownOperations,
 	eliminatePrimitiveWrappers,
 	lowerPrimitiveOperations,
+	reusePrimitiveCallResults,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
@@ -2341,6 +2343,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	resolveKnownOperations,
 	eliminatePrimitiveWrappers,
 	lowerPrimitiveOperations,
+	reusePrimitiveCallResults,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
