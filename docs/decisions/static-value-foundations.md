@@ -142,6 +142,13 @@ and callback or conversion failures retain the original exception destination.
 Unknown search values and callbacks keep the runtime protocol path. No application
 callback executes in the compiler.
 
+Math folding distinguishes specified special cases from approximated finite results.
+Zero, infinity, NaN and domain branches are evaluated without invoking host libm;
+general transcendental results remain target operations. Number exponentiation and
+`Math.pow` share the same certified cases. A number raised to a zero exponent can
+lose the power operation after its producer effects, and one-argument numeric
+`hypot` becomes absolute value through the normal representation pass.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

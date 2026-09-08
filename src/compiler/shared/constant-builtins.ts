@@ -18,6 +18,69 @@ import { normalizeUnicode, transformUnicodeCase } from "./unicode-transform.ts";
 
 const absent: ConstantValue = { kind: "undefined" };
 
+function mathUnarySpecialCase(operation: string, value: number): number | undefined {
+	switch (operation) {
+		case "Math.sin":
+		case "Math.tan":
+			if (value === 0) return value;
+			return !Number.isFinite(value) ? NaN : undefined;
+		case "Math.asin":
+			if (value === 0) return value;
+			return Math.abs(value) > 1 || Number.isNaN(value) ? NaN : undefined;
+		case "Math.acos":
+			if (value === 1) return 0;
+			return Math.abs(value) > 1 || Number.isNaN(value) ? NaN : undefined;
+		case "Math.atan":
+			return value === 0 || Number.isNaN(value) ? value : undefined;
+		case "Math.cbrt":
+		case "Math.sinh":
+		case "Math.asinh":
+			return value === 0 || !Number.isFinite(value) ? value : undefined;
+		case "Math.acosh":
+			if (value < 1 || Number.isNaN(value)) return NaN;
+			if (value === 1) return 0;
+			return value === Infinity ? Infinity : undefined;
+		case "Math.atanh":
+			if (value === 0) return value;
+			if (Math.abs(value) > 1 || Number.isNaN(value)) return NaN;
+			if (value === 1) return Infinity;
+			return value === -1 ? -Infinity : undefined;
+		case "Math.cos":
+			if (value === 0) return 1;
+			return !Number.isFinite(value) ? NaN : undefined;
+		case "Math.cosh":
+			if (value === 0) return 1;
+			if (Number.isNaN(value)) return NaN;
+			return !Number.isFinite(value) ? Infinity : undefined;
+		case "Math.tanh":
+			if (value === 0 || Number.isNaN(value)) return value;
+			if (value === Infinity) return 1;
+			return value === -Infinity ? -1 : undefined;
+		case "Math.exp":
+			if (value === 0) return 1;
+			if (value === -Infinity) return 0;
+			return !Number.isFinite(value) ? value : undefined;
+		case "Math.expm1":
+			if (value === 0 || Number.isNaN(value) || value === Infinity) return value;
+			return value === -Infinity ? -1 : undefined;
+		case "Math.log":
+		case "Math.log2":
+		case "Math.log10":
+			if (value === 0) return -Infinity;
+			if (value < 0 || Number.isNaN(value)) return NaN;
+			if (value === 1) return 0;
+			return value === Infinity ? Infinity : undefined;
+		case "Math.log1p":
+			if (value === 0 || Number.isNaN(value) || value === Infinity) return value;
+			if (value === -1) return -Infinity;
+			return value < -1 ? NaN : undefined;
+		case "Math.sqrt":
+			if (value < 0) return NaN;
+			return value === 0 || !Number.isFinite(value) ? value : undefined;
+	}
+	return undefined;
+}
+
 function numeric(value: ConstantValue | undefined): number | undefined {
 	if (value === undefined || value.kind === "bigint") return undefined;
 	if (value.kind === "number") return value.value;
@@ -533,6 +596,18 @@ export function evaluateConstantBuiltin(
 		return result({ kind: "bigint", value: narrowed });
 	}
 	if (operation.startsWith("Math.")) {
+		if (operation === "Math.hypot") {
+			if (args.length + work > workLimit) return unsupported("work-limit");
+			const values = args.map(numeric);
+			work += args.length;
+			if (values.some((value) => value === undefined)) return unsupported();
+			if (values.some((value) => value === Infinity || value === -Infinity))
+				return number(Infinity);
+			if (values.some((value) => Number.isNaN(value))) return number(NaN);
+			if (values.every((value) => value === 0)) return number(0);
+			if (values.length === 1) return number(Math.abs(values[0]!));
+			return unsupported();
+		}
 		if (operation === "Math.min" || operation === "Math.max") {
 			if (args.length + work > workLimit) return unsupported("work-limit");
 			let value = operation === "Math.min" ? Infinity : -Infinity;
@@ -546,6 +621,31 @@ export function evaluateConstantBuiltin(
 		}
 		const value = numeric(first);
 		if (value === undefined) return unsupported();
+		if (operation === "Math.pow") {
+			const exponent = numeric(argument(1));
+			if (exponent === undefined) return unsupported();
+			const evaluated = evaluateConstantOperation(
+				"number.binary:**",
+				[
+					{ kind: "number", value },
+					{ kind: "number", value: exponent },
+				],
+				target,
+				workLimit - work,
+			);
+			return { ...evaluated, work: work + evaluated.work };
+		}
+		if (operation === "Math.atan2") {
+			const x = numeric(argument(1));
+			if (x === undefined) return unsupported();
+			if (Number.isNaN(value) || Number.isNaN(x)) return number(NaN);
+			if (value === 0 && (x > 0 || Object.is(x, 0))) return number(value);
+			if (Number.isFinite(value) && x === Infinity)
+				return number(value < 0 || Object.is(value, -0) ? -0 : 0);
+			return unsupported();
+		}
+		const special = mathUnarySpecialCase(operation, value);
+		if (special !== undefined) return number(special);
 		switch (operation) {
 			case "Math.abs":
 				return number(Math.abs(value));

@@ -1550,3 +1550,100 @@ for (const failure of ["call", "conversion", "symbol"]) {
 		show(error.name + ":" + count);
 	}
 }
+
+function zeroPower(value) {
+	return Math.pow(+value, 0);
+}
+function oneHypot(value) {
+	return Math.hypot(+value);
+}
+show(Math.sin(-0));
+show(Math.sin(Infinity));
+show(Math.sin(NaN));
+show(Math.cos(0));
+show(Math.cos(-Infinity));
+show(Math.tan(-0));
+show(Math.tan(Infinity));
+show(Math.asin(-0));
+show(Math.asin(2));
+show(Math.acos(1));
+show(Math.acos(-2));
+show(Math.atan(-0));
+show(Math.atan(NaN));
+show(Math.asinh(-Infinity));
+show(Math.sinh(-0));
+show(Math.cosh(-Infinity));
+show(Math.tanh(-Infinity));
+show(Math.acosh(1));
+show(Math.acosh(0));
+show(Math.atanh(-1));
+show(Math.atanh(2));
+show(Math.cbrt(-0));
+show(Math.cbrt(Infinity));
+show(Math.sqrt(-0));
+show(Math.sqrt(-1));
+show(Math.log(1));
+show(Math.log(-0));
+show(Math.log2(-1));
+show(Math.log10(Infinity));
+show(Math.log1p(-0));
+show(Math.log1p(-1));
+show(Math.exp(-Infinity));
+show(Math.exp(0));
+show(Math.expm1(-Infinity));
+show(Math.expm1(-0));
+show(Math.hypot());
+show(Math.hypot(-0, 0));
+show(Math.hypot(NaN, Infinity, 2));
+show(Math.hypot(NaN, 0));
+show(Math.hypot(-2));
+show(Math.atan2(-0, 1));
+show(Math.atan2(-1, Infinity));
+show(Math.atan2(NaN, 0));
+show(Math.pow(NaN, 0));
+show(Math.pow(-0, 3));
+show(Math.pow(-0, -3));
+show(Math.pow(-Infinity, -3));
+show(Math.pow(-1, Infinity));
+show(Math.pow(-1, 3));
+show(Math.pow(-2, 0.5));
+show(Math.pow(2, -1074));
+for (const value of [NaN, -0, 0, -Infinity, Infinity, -3]) {
+	show(zeroPower(value));
+	show(oneHypot(value));
+}
+let specialMathEffects = 0;
+show(
+	Math.pow(
+		{
+			valueOf() {
+				specialMathEffects++;
+				return NaN;
+			},
+		},
+		0,
+	),
+);
+show(
+	Math.hypot(
+		{
+			valueOf() {
+				specialMathEffects++;
+				return 3;
+			},
+		},
+		Infinity,
+	),
+);
+show(specialMathEffects);
+for (const operation of [
+	() => Math.pow(Symbol(), 0),
+	() => Math.hypot(1n, Infinity),
+	() => zeroPower(Symbol()),
+]) {
+	try {
+		operation();
+	} catch (error) {
+		show(error.name);
+	}
+}

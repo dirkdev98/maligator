@@ -6,6 +6,21 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("target-certified constant evaluation", () => {
+	it("preserves Number exponentiation special cases across signs, zero and infinities", () => {
+		for (const base of [-Infinity, -2, -1, -0, 0, 1, 2, Infinity, NaN]) {
+			for (const exponent of [-Infinity, -3, -0.5, -0, 0, 0.5, 1, 2, 3, Infinity, NaN]) {
+				const result = evaluateConstantOperation("number.binary:**", [
+					{ kind: "number", value: base },
+					{ kind: "number", value: exponent },
+				]);
+				if (result.kind === "value" && result.value.kind === "number")
+					expect(
+						Object.is(result.value.value, base ** exponent),
+						`${base} ** ${exponent}`,
+					).toBe(true);
+			}
+		}
+	});
 	it.each(["little", "big"] as const)(
 		"preserves binary64 values independently of %s byte order",
 		(endianness) => {

@@ -1,3 +1,4 @@
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import {
 	evaluateConstantBuiltin,
 	evaluateConstantStringSplit,
@@ -404,6 +405,40 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					sequenceEdits += elements.length * 2;
 				}
 				continue;
+			}
+			if (operation === "Math.pow") {
+				const base = inputs[numericOperation ? 0 : 1],
+					exponent = inputs[numericOperation ? 1 : 2];
+				if (base !== undefined && exponent !== undefined) {
+					const fact = analysis.query(base),
+						power = analysis.constant(exponent);
+					if (
+						fact.kind === "known" &&
+						fact.brand === "number" &&
+						power?.kind === "number" &&
+						power.value === 0
+					) {
+						plans.push({ instruction, value: { kind: "number", value: 1 } });
+						continue;
+					}
+				}
+			}
+			if (operation === "Math.hypot" && inputs.length === 2) {
+				const fact = analysis.query(inputs[1]!);
+				if (fact.kind === "known" && fact.brand === "number") {
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "callKnown",
+							inputs,
+							attributes: {
+								operation: "Math.abs",
+								worldAssumptions: { ...builtinWorldAssumptions("Math.abs", "primitive") },
+							},
+						},
+					});
+					continue;
+				}
 			}
 			const evaluated = evaluateConstantBuiltin(
 				operation,

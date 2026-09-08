@@ -120,9 +120,27 @@ export function evaluateConstantOperation(
 			case "!=":
 			case "!==":
 				return boolean(a !== b);
-			// Integral powers of two are exact; other powers depend on the target libm.
 			case "**": {
+				if (Number.isNaN(b)) return number(NaN);
 				if (b === 0) return number(1);
+				if (Number.isNaN(a)) return number(NaN);
+				if (!Number.isFinite(b)) {
+					const magnitude = Math.abs(a);
+					return number(magnitude === 1 ? NaN : magnitude > 1 === b > 0 ? Infinity : 0);
+				}
+				const odd = Math.abs(b % 2) === 1;
+				if (!Number.isFinite(a)) {
+					const magnitude = b > 0 ? Infinity : 0;
+					return number(a < 0 && odd ? -magnitude : magnitude);
+				}
+				if (a === 0) {
+					const magnitude = b > 0 ? 0 : Infinity;
+					return number(Object.is(a, -0) && odd ? -magnitude : magnitude);
+				}
+				if (a < 0 && b % 1 !== 0) return number(NaN);
+				if (Math.abs(a) === 1) return number(a < 0 && odd ? -1 : 1);
+				if (b === 1) return number(a);
+				// Integral powers of two are exact; general finite powers depend on target libm.
 				if (a !== 2 || b % 1 !== 0 || b < -1074 || b > 1023)
 					return unsupported("uncertified-operation");
 				let value = 1;

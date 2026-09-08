@@ -15,6 +15,88 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each([
+		"Math.sin(-0)",
+		"Math.sin(Infinity)",
+		"Math.cos(0)",
+		"Math.cos(-Infinity)",
+		"Math.tan(-0)",
+		"Math.tan(Infinity)",
+		"Math.asin(-0)",
+		"Math.asin(2)",
+		"Math.acos(1)",
+		"Math.acos(-2)",
+		"Math.atan(-0)",
+		"Math.atan(NaN)",
+		"Math.asinh(-Infinity)",
+		"Math.sinh(-0)",
+		"Math.cosh(-Infinity)",
+		"Math.tanh(-Infinity)",
+		"Math.acosh(1)",
+		"Math.acosh(0)",
+		"Math.atanh(-1)",
+		"Math.atanh(2)",
+		"Math.cbrt(-0)",
+		"Math.cbrt(Infinity)",
+		"Math.sqrt(-0)",
+		"Math.sqrt(-1)",
+		"Math.log(1)",
+		"Math.log(-0)",
+		"Math.log2(-1)",
+		"Math.log10(Infinity)",
+		"Math.log1p(-0)",
+		"Math.log1p(-1)",
+		"Math.exp(-Infinity)",
+		"Math.expm1(-Infinity)",
+		"Math.expm1(-0)",
+		"Math.exp(0)",
+		"Math.hypot()",
+		"Math.hypot(-0,0)",
+		"Math.hypot(NaN,Infinity,2)",
+		"Math.hypot(NaN,0)",
+		"Math.hypot(-2)",
+		"Math.atan2(-0,1)",
+		"Math.atan2(-1,Infinity)",
+		"Math.atan2(NaN,0)",
+		"Math.pow(NaN,0)",
+		"Math.pow(-0,3)",
+		"Math.pow(-0,-3)",
+		"Math.pow(-Infinity,-3)",
+		"Math.pow(-1,Infinity)",
+		"Math.pow(-1,3)",
+		"Math.pow(-2,0.5)",
+		"Math.pow(2,-1074)",
+	])("folds the target-independent Math special case %s", (expression) => {
+		const output = inspect(expression);
+		expect(
+			output.core.some(
+				(op) =>
+					op.opcode === "callKnown" ||
+					op.opcode === "mathUnaryNumber" ||
+					op.opcode === "mathBinaryNumber",
+			),
+		).toBe(false);
+	});
+	it.each(["Math.pow(+x,0)", "Math.hypot(+x)"])(
+		"specializes a fixed Math parameter in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(
+				output.core.some((op) =>
+					["Math.pow", "Math.hypot"].includes(op.attributes.operation as string),
+				),
+			).toBe(false);
+			expect(
+				output.core.some((op) => op.opcode === "unary" && op.attributes.operator === "+"),
+			).toBe(true);
+		},
+	);
+	it.each(["Math.pow(x,0)", "Math.pow(1,x)", "Math.hypot(x,Infinity)"])(
+		"retains coercion and possible failure in %s",
+		(expression) => {
+			expect(inspect(expression).core.some((op) => op.opcode === "callKnown")).toBe(true);
+		},
+	);
 	it.each(["replace", "replaceAll"])(
 		"lowers static %s matches into residual callbacks",
 		(method) => {
