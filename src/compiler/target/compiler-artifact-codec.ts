@@ -7,6 +7,7 @@ import type {
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
@@ -39,7 +40,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 67;
+export const COMPILER_ARTIFACT_VERSION = 68;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -920,6 +921,19 @@ function writeCompilerArtifact(
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				w.u8(18);
+			} else if (
+				plan.kind === "string-collation" &&
+				instruction.opcode === "CALL_KNOWN" &&
+				instruction.operation === "String.prototype.localeCompare" &&
+				!instruction.construct &&
+				instruction.argumentMode === undefined &&
+				isStringCollationPlan(plan.plan)
+			) {
+				w.u8(19);
+				w.u32(plan.plan.locale.length);
+				for (let index = 0; index < plan.plan.locale.length; index++)
+					w.u8(plan.plan.locale.charCodeAt(index));
+				w.u8(plan.plan.options);
 			} else if (
 				plan.kind === "exact-operator-input-kinds" &&
 				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
@@ -3168,6 +3182,23 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "exact-typed-array-element",
 					elementKind: numericTypedArrayKindFromTag(r.u8()),
 				};
+			} else if (
+				tag === 19 &&
+				instruction.opcode === "CALL_KNOWN" &&
+				instruction.operation === "String.prototype.localeCompare" &&
+				!instruction.construct &&
+				instruction.argumentMode === undefined
+			) {
+				const length = r.count(1);
+				if (length > 128)
+					throw new RangeError("program-image-codec: invalid collation locale");
+				let locale = "";
+				for (let index = 0; index < length; index++)
+					locale += String.fromCharCode(r.u8());
+				const plan = { locale, options: r.u8() };
+				if (!isStringCollationPlan(plan))
+					throw new RangeError("program-image-codec: invalid collation plan");
+				nativeInstructions[instructionIndex] = { kind: "string-collation", plan };
 			} else if (
 				tag === 17 &&
 				(instruction.opcode === "LOAD_PROPERTY" ||

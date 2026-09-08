@@ -103,4 +103,112 @@ const locales = new Proxy(
 if (enabled) throws(() => cases("I", locales), "Error");
 else equal(cases("I", locales), "i|I");
 equal(events, enabled ? "gh" : "");
+
+function genericCompare(a, b, locale, options) {
+	return String(a).localeCompare(b, locale, options);
+}
+function preparedSwedish(a, b) {
+	return String(a).localeCompare(String(b), "sv");
+}
+function preparedDeprecatedLocale(a, b) {
+	return String(a).localeCompare(String(b), "sh");
+}
+function preparedNumeric(a, b) {
+	return String(a).localeCompare(String(b), "en-US", { numeric: true });
+}
+function preparedBase(a, b) {
+	return String(a).localeCompare(String(b), "de", {
+		sensitivity: "base",
+		caseFirst: "upper",
+	});
+}
+function preparedCase(a, b) {
+	return String(a).localeCompare(String(b), "lt", {
+		sensitivity: "case",
+		caseFirst: "lower",
+		numeric: 1n,
+	});
+}
+globalThis.genericCompare = genericCompare;
+globalThis.preparedSwedish = preparedSwedish;
+globalThis.preparedDeprecatedLocale = preparedDeprecatedLocale;
+globalThis.preparedNumeric = preparedNumeric;
+globalThis.preparedBase = preparedBase;
+globalThis.preparedCase = preparedCase;
+for (const [a, b] of [
+	["ä", "z"],
+	["a", "A"],
+	["2", "10"],
+	["e\u0301", "é"],
+	["I", "ı"],
+	["", ""],
+	["😀\ud800", "😀\udc00"],
+	["a".repeat(80) + "z", "a".repeat(80) + "é"],
+]) {
+	for (let repeat = 0; repeat < 3; repeat++) {
+		equal(preparedSwedish(a, b), genericCompare(a, b, "sv"));
+		equal(preparedDeprecatedLocale(a, b), genericCompare(a, b, "sh"));
+		equal(preparedNumeric(a, b), genericCompare(a, b, "en-US", { numeric: true }));
+		equal(
+			preparedBase(a, b),
+			genericCompare(a, b, "de", { sensitivity: "base", caseFirst: "upper" }),
+		);
+		equal(
+			preparedCase(a, b),
+			genericCompare(a, b, "lt", {
+				sensitivity: "case",
+				caseFirst: "lower",
+				numeric: 1n,
+			}),
+		);
+	}
+}
+events = "";
+const collect = globalThis.__mal_collect_garbage;
+if (typeof collect !== "function") throw new Error("locale fixture requires the GC hook");
+const collationReceiver = {
+	toString() {
+		events += "receiver;";
+		collect();
+		return "a";
+	},
+};
+const collationArgument = {
+	toString() {
+		events += "argument;";
+		collect();
+		return "b";
+	},
+};
+String.prototype.localeCompare.call(collationReceiver, collationArgument, "sv");
+equal(events, "receiver;argument;");
+events = "";
+String.prototype.localeCompare.call(collationReceiver, collationArgument, "sv", {
+	get numeric() {
+		events += "numeric;";
+		collect();
+		return true;
+	},
+});
+equal(events, enabled ? "receiver;argument;numeric;" : "receiver;argument;");
+const collationOptions = { numeric: false };
+const collationMutator = {
+	toString() {
+		collationOptions.numeric = true;
+		return "10";
+	},
+};
+equal(
+	String.prototype.localeCompare.call(collationMutator, "2", "en-US", collationOptions),
+	enabled ? 1 : -1,
+);
+function invalidPreparedLocale(a, b) {
+	return String.prototype.localeCompare.call(a, b, "bad_locale");
+}
+globalThis.invalidPreparedLocale = invalidPreparedLocale;
+throws(() => invalidPreparedLocale(Symbol(), "a"), "TypeError");
+throws(() => invalidPreparedLocale("a", Symbol()), "TypeError");
+if (enabled) throws(() => invalidPreparedLocale("a", "b"), "RangeError");
+else equal(invalidPreparedLocale("a", "b"), -1);
+
 console.log("locale cases passed");

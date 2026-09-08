@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { evaluateConstantBuiltin } from "../src/compiler/shared/constant-builtins.ts";
+import {
+	serializeCompilerArtifact,
+	deserializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function inspect(expression: string, locked = true) {
@@ -11,6 +15,78 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each([
+		"String(x).localeCompare('a')",
+		"String(x).localeCompare('a','sv')",
+		"String.prototype.localeCompare.call(x,'a','de')",
+		"String(x).localeCompare('a','en-US',{numeric:true,sensitivity:'base',caseFirst:'upper'})",
+		"String(x).localeCompare('a','tr',{sensitivity:'case'})",
+		"String(x).localeCompare('a','en-US',{numeric:1n,caseFirst:'lower'})",
+	])("prepares immutable target collation for %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.c.source).toContain("mal_builtin_string_locale_compare_prepared(");
+		expect(output.c.source).not.toContain(
+			"mal_known_native_mal_builtin_string_prototype_locale_compare",
+		);
+		const plans = output.image.native.functions
+			.flatMap((fn) => fn.instructions)
+			.filter((plan) => plan?.kind === "string-collation");
+		expect(plans.length).toBeGreaterThan(0);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
+		expect(
+			restored.native.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((plan) => plan?.kind === "string-collation"),
+		).toEqual(plans);
+	});
+	it("rejects malformed collation plans in compiler artifacts", () => {
+		for (const plan of [
+			{ locale: "en", options: 3 },
+			{ locale: "en", options: 5 },
+			{ locale: "en", options: 48 },
+			{ locale: "en", options: NaN },
+			{ locale: "é", options: 2 },
+			{ locale: "a".repeat(129), options: 2 },
+		]) {
+			const output = inspect("String(x).localeCompare('a','en')");
+			const image = {
+				...output.image,
+				native: {
+					...output.image.native,
+					functions: output.image.native.functions.map((fn) => ({
+						...fn,
+						instructions: fn.instructions.map((hint) =>
+							hint?.kind === "string-collation" ? { ...hint, plan } : hint,
+						),
+					})),
+				},
+			};
+			expect(() => serializeCompilerArtifact(image)).toThrow(/native instruction plan/);
+		}
+	});
+	it.each([
+		"String(x).localeCompare('a',x)",
+		"String(x).localeCompare('a','en',x)",
+		"String(x).localeCompare('a','en',{get numeric(){return x;}})",
+		"String.prototype.localeCompare.call(x,'a','en',{numeric:true})",
+		"String(x).localeCompare('a','en',{usage:'search'})",
+		"String(x).localeCompare('a','en',{sensitivity:'invalid'})",
+	])("retains generic collation obligations for %s", (expression) => {
+		expect(inspect(expression).c.source).not.toContain(
+			"mal_builtin_string_locale_compare_prepared(",
+		);
+	});
+	it("retains mutable collation identity and option reentrancy", () => {
+		expect(inspect("String(x).localeCompare('a','sv')", false).c.source).not.toContain(
+			"mal_builtin_string_locale_compare_prepared(",
+		);
+		const output = inspectStaticValueFunction(
+			"function probe(x){const options={numeric:false};const receiver={toString(){options.numeric=true;return '10';}};return String.prototype.localeCompare.call(receiver,x,'en',options);}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(output.c.source).not.toContain("mal_builtin_string_locale_compare_prepared(");
+	});
+
 	it.each(["replace", "replaceAll"])(
 		"uses plain-string %s kernels while retaining callback work",
 		(method) => {

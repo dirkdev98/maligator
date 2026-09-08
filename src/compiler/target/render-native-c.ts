@@ -5298,6 +5298,23 @@ function emitInstruction(
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
 		case "CALL_KNOWN": {
+			if (
+				nativePlan?.kind === "string-collation" &&
+				instruction.operation === "String.prototype.localeCompare" &&
+				!instruction.construct &&
+				instruction.argumentMode === undefined
+			) {
+				const { locale, options } = nativePlan.plan;
+				const bytes = Array.from(locale, (letter) => letter.charCodeAt(0));
+				const that = instruction.arguments[0];
+				const result = `collation_result_${ip}`;
+				return [
+					`MalValue ${result} = mal_builtin_string_locale_compare_prepared(vm, ${boxedOperand(instruction.thisValue)}, ${that === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(that)}, (const byte[]){ ${bytes.length === 0 ? "0" : bytes.join(", ")} }, ${bytes.length}, ${options});`,
+					throwCheck(),
+					`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+					poll,
+				];
+			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
 				if (instruction.operation === "String.prototype.charCodeAt") {
 					const positionOperand = instruction.arguments[0];

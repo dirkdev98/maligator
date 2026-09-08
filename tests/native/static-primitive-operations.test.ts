@@ -25,7 +25,9 @@ describe("primitive operation differential", () => {
 					outDir,
 				});
 				for (const binary of [pair.compiled, pair.interpreted])
-					expect(runToStdout(binary, { env: STRESS_ENV })).toBe("locale cases passed\n");
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						"locale cases passed\n",
+					);
 			} finally {
 				rmSync(outDir, { recursive: true, force: true });
 			}

@@ -101,6 +101,16 @@ only when the target enables Intl. Generic locale calls retain full locale-list
 validation and receiver coercion order. Catalog proofs separately check the target's
 feature availability, including the value reached through a protected global binding.
 
+String collation plans retain their raw locale tag and flat ICU option bits in the
+compiler artifact. They require a constant locale and complete private option data;
+option specialization also requires primitive receiver/argument coercions to exclude
+reentrant mutation. Native code performs those coercions before target-side locale
+validation, then uses a 16-entry thread-local cache of immutable ICU plans. The cache
+owns no VM references and is scoped to the linked ICU data. The runtime image retains
+the original call and option observations. Dynamic options, getters, unsupported
+plans and mutable primordial identities use the generic implementation. Options
+objects may still materialize; the prepared path removes repeated Collator setup.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

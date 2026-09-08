@@ -9,6 +9,7 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
+import { coreStringCollationPlan } from "./core-string-collation.ts";
 import { coreStaticStringRawParts } from "./core-string-construction.ts";
 import type { CoreStringPart } from "./core-string-construction.ts";
 
@@ -299,6 +300,22 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					});
 					continue;
 				}
+			}
+			if (
+				operation === "String.prototype.localeCompare" &&
+				attributes.stringCollationPlan === undefined
+			) {
+				const plan = coreStringCollationPlan(program, analysis, instruction, inputs);
+				if (plan !== undefined)
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "callKnown",
+							inputs,
+							attributes: { ...attributes, stringCollationPlan: { ...plan } },
+						},
+					});
+				continue;
 			}
 			if (operation === "String.raw") {
 				const stringParts = coreStaticStringRawParts(

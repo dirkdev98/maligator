@@ -1017,30 +1017,35 @@ static bool intl_number_format_digits(
 }
 #endif
 
-// ---------------------------------------------------------------------------
-// Intl.Collator
-// ---------------------------------------------------------------------------
-
 #if MAL_INTL_HAS_COLLATOR
 static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
-    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-
-    MalString *locale = intl_resolve_locale(vm, locales);
+    MalValue roots[9] = {
+        arg_count > 0 ? args[0] : mal_value_new_undefined(),
+        arg_count > 1 ? args[1] : mal_value_new_undefined(), new_target,
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 9);
+    MalValue result = mal_value_new_undefined();
+    MalString *locale = intl_resolve_locale(vm, roots[0]);
     if (locale == nullptr) {
-        return mal_value_new_undefined();
+        goto done;
     }
 
+    roots[3] = mal_value_from_string(locale);
     bool present;
-    MalString *usage = mal_intrinsic_ascii(vm, "sort");
-    if (!intl_option_string(vm, options, "usage", &usage, &present)) {
-        return mal_value_new_undefined();
+    MalString *usage = nullptr;
+    if (!intl_option_string(vm, roots[1], "usage", &usage, &present)) {
+        goto done;
     }
+    if (usage == nullptr) usage = mal_intrinsic_ascii(vm, "sort");
+    roots[4] = mal_value_from_string(usage);
     MalString *sensitivity = nullptr;
-    if (!intl_option_string(vm, options, "sensitivity", &sensitivity, &present)) {
-        return mal_value_new_undefined();
+    if (!intl_option_string(vm, roots[1], "sensitivity", &sensitivity, &present)) {
+        goto done;
     }
     i32 strength = 2; // "variant"
     i32 case_level = 0;
@@ -1059,19 +1064,20 @@ static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const 
         sensitivity = mal_intrinsic_ascii(vm, "variant");
     }
 
+    roots[5] = mal_value_from_string(sensitivity);
     bool numeric_present;
     bool numeric = false;
-    if (!intl_option_bool(vm, options, "numeric", &numeric, &numeric_present)) {
-        return mal_value_new_undefined();
+    if (!intl_option_bool(vm, roots[1], "numeric", &numeric, &numeric_present)) {
+        goto done;
     }
     bool ignore_present;
     bool ignore_punctuation = false;
-    if (!intl_option_bool(vm, options, "ignorePunctuation", &ignore_punctuation, &ignore_present)) {
-        return mal_value_new_undefined();
+    if (!intl_option_bool(vm, roots[1], "ignorePunctuation", &ignore_punctuation, &ignore_present)) {
+        goto done;
     }
     MalString *case_first = nullptr;
-    if (!intl_option_string(vm, options, "caseFirst", &case_first, &present)) {
-        return mal_value_new_undefined();
+    if (!intl_option_string(vm, roots[1], "caseFirst", &case_first, &present)) {
+        goto done;
     }
     i32 case_first_code = 0;
     if (case_first != nullptr) {
@@ -1083,41 +1089,48 @@ static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const 
     } else {
         case_first = mal_intrinsic_ascii(vm, "false");
     }
+    roots[6] = mal_value_from_string(case_first);
     MalString *collation = nullptr;
-    if (!intl_option_string(vm, options, "collation", &collation, &present)) {
-        return mal_value_new_undefined();
+    if (!intl_option_string(vm, roots[1], "collation", &collation, &present)) {
+        goto done;
     }
     if (collation == nullptr) {
         collation = mal_intrinsic_ascii(vm, "default");
     }
 
+    roots[7] = mal_value_from_string(collation);
+    locale = mal_value_to_string(roots[3]);
     byte locale_buf[160];
     usize locale_len;
     if (!intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid locale");
-        return mal_value_new_undefined();
+        goto done;
     }
     void *handle = mal_i18n_collator_new(locale_buf, locale_len, strength, case_level, numeric ? 1 : 0, case_first_code);
     if (handle == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create collator for locale");
-        return mal_value_new_undefined();
+        goto done;
     }
 
-    MalObject *resolved = mal_intrinsic_new_object(vm);
-    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
-    intl_resolved_set(vm, resolved, "usage", mal_value_from_string(usage));
-    intl_resolved_set(vm, resolved, "sensitivity", mal_value_from_string(sensitivity));
-    intl_resolved_set(vm, resolved, "ignorePunctuation", mal_value_new_boolean(ignore_punctuation));
-    intl_resolved_set(vm, resolved, "collation", mal_value_from_string(collation));
-    intl_resolved_set(vm, resolved, "numeric", mal_value_new_boolean(numeric));
-    intl_resolved_set(vm, resolved, "caseFirst", mal_value_from_string(case_first));
+    roots[8] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "locale", roots[3]);
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "usage", roots[4]);
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "sensitivity", roots[5]);
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "ignorePunctuation", mal_value_new_boolean(ignore_punctuation));
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "collation", roots[7]);
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "numeric", mal_value_new_boolean(numeric));
+    intl_resolved_set(vm, mal_value_to_object(roots[8]), "caseFirst", roots[6]);
 
-    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_COLLATOR_PROTOTYPE);
+    MalObject *prototype = intl_resolve_prototype(vm, roots[2], MAL_INTRINSIC_INTL_COLLATOR_PROTOTYPE);
     if (prototype == nullptr) {
-        return mal_value_new_undefined();
+        mal_i18n_collator_free(handle);
+        goto done;
     }
-    MalIntlObject *collator = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_COLLATOR, handle, mal_value_from_object(resolved));
-    return mal_value_from_intl_object(collator);
+    MalIntlObject *collator = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_COLLATOR, handle, roots[8]);
+    result = mal_value_from_intl_object(collator);
+ done:
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 static MalValue intl_collator_compare_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue callee) {
@@ -1215,10 +1228,10 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
 // else the UTF-16 code-unit fallback. Always defined (builtin_string.c calls it).
 MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
 #if MAL_INTL_HAS_COLLATOR
-    MalValue roots[3] = {
+    MalValue roots[5] = {
         this_string,
         mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), locales, options,
     };
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, countof(roots));
@@ -1231,10 +1244,10 @@ MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_
     }
     roots[1] = mal_value_from_string(that);
 
-    bool use_default = mal_value_is_undefined(locales) && mal_value_is_undefined(options);
+    bool use_default = mal_value_is_undefined(roots[3]) && mal_value_is_undefined(roots[4]);
     void *compare_handle = nullptr;
     if (!use_default) {
-        MalValue ctor_args[2] = {locales, options};
+        MalValue ctor_args[2] = {roots[3], roots[4]};
         roots[2] = intl_collator_constructor(
             vm, mal_value_new_undefined(), ctor_args, 2,
             mal_value_new_undefined(), mal_value_new_undefined());
@@ -3607,3 +3620,39 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 #endif // MAL_INTL
 
 #include "generated/known_native_builtin_intl_c.inc"
+
+MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options) {
+#if MAL_INTL_HAS_COLLATOR
+    MalValue roots[2] = {this_string, that};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    MalValue result = mal_value_new_undefined();
+    MalString *right;
+    if (!mal_vm_to_string(vm, roots[1], &right)) goto done;
+    roots[1] = mal_value_from_string(right);
+    (void) mal_string_code_units(mal_value_to_string(roots[0]));
+    (void) mal_string_code_units(mal_value_to_string(roots[1]));
+    MalString *left = mal_value_to_string(roots[0]);
+    right = mal_value_to_string(roots[1]);
+    u8 hit = 0;
+    i32 order = mal_i18n_prepared_collator_compare_utf16(
+        (const uint8_t *) locale, locale_length, options,
+        (const uint16_t *) mal_string_code_units(left), mal_string_length(left),
+        (const uint16_t *) mal_string_code_units(right), mal_string_length(right), &hit);
+    if (hit) MAL_PERF_COUNT(intl_collation_cache_hits);
+    else MAL_PERF_COUNT(intl_collation_cache_misses);
+    if (order < -1 || order > 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create collator for locale");
+        goto done;
+    }
+    result = mal_value_from_i32(order);
+ done:
+    mal_gc_unroot(&root_span);
+    return result;
+#else
+    (void) locale;
+    (void) locale_length;
+    (void) options;
+    return intl_fallback_locale_compare(vm, this_string, that);
+#endif
+}

@@ -34,3 +34,5 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 
 // Canonicalize the entire locale list before selecting the first requested case mapping.
 bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale);
+
+MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options);

@@ -1494,6 +1494,17 @@ static MalValue mal_builtin_string_prototype_locale_compare(MalVm *vm, MalValue 
         vm, string_value, that, locales, options);
 }
 
+MalValue mal_builtin_string_locale_compare_prepared(MalVm *vm, MalValue receiver, MalValue that, const byte *locale, usize locale_length, u8 options) {
+    MalValue roots[2] = {receiver, that};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    MalString *string = mal_builtin_string_this_to_string(vm, roots[0]);
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : mal_intl_locale_compare_prepared(vm, mal_value_from_string(string), roots[1], locale, locale_length, options);
+    mal_gc_unroot(&root_span);
+    return result;
+}
+
 static bool mal_builtin_string_ascii_units(const c16 *source, usize length) {
     usize index = 0;
     while (length - index >= 4) {

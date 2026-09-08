@@ -175,6 +175,7 @@
 				"src/compiler/core/core-specialization-recipes.ts",
 				"src/compiler/core/core-static-values.ts",
 				"src/compiler/core/core-string-construction.ts",
+				"src/compiler/core/core-string-collation.ts",
 				"src/compiler/core/core-static-value-selection.ts",
 				"src/compiler/core/core-static-value-calls.ts",
 				"src/compiler/core/core-static-value-cells.ts",

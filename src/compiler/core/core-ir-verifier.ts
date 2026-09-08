@@ -5,6 +5,7 @@ import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -417,6 +418,14 @@ function verifyInstructionRows(
 						operandCount < 2)
 				)
 					fail("Invalid known-operation argument list");
+				if (
+					attributes.stringCollationPlan !== undefined &&
+					(attributes.operation !== "String.prototype.localeCompare" ||
+						attributes.construct ||
+						attributes.argumentMode !== undefined ||
+						!isStringCollationPlan(attributes.stringCollationPlan))
+				)
+					fail("Invalid string collation plan");
 				if (
 					attributes.specialized !== undefined &&
 					(attributes.specialized !== attributes.operation ||

@@ -2,6 +2,7 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
+import type { StringCollationPlan } from "./string-collation-plan.ts";
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
@@ -405,6 +406,7 @@ export type CompilerInstruction =
 			construct?: true;
 			argumentMode?: KnownArgumentMode;
 			specialized?: DirectBuiltinOperationId;
+			stringCollationPlan?: StringCollationPlan;
 			knownBuiltinCall: KnownBuiltinCall;
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }

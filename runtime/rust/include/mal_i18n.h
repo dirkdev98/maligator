@@ -74,6 +74,9 @@ void *mal_i18n_collator_new(const uint8_t *locale, size_t locale_len, int32_t st
 int32_t mal_i18n_collator_compare_utf16(void *handle, const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len);
 /* Default en-US plan: -1/0/1, or 2 if the baked plan could not be built. */
 int32_t mal_i18n_default_collator_compare_utf16(const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len);
+/* Prepared options: strength bits 0-1, case level bit 2, numeric bit 3, case first bits 4-5.
+ * Locale bytes are canonicalized on cache miss; returns -1/0/1, or 2 on invalid input. */
+int32_t mal_i18n_prepared_collator_compare_utf16(const uint8_t *locale, size_t locale_len, int32_t options, const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len, uint8_t *cache_hit);
 void mal_i18n_collator_free(void *handle); /* null-tolerant; ABI v2+ */
 
 /* ---- Intl.PluralRules ----

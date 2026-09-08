@@ -171,6 +171,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_case_changed_allocations,
         (unsigned long long) mal_perf_stats.string_case_changed_code_units
     );
+    fprintf(stderr, "[perf-intl-collation-stats] hits=%llu misses=%llu\n",
+        (unsigned long long) mal_perf_stats.intl_collation_cache_hits,
+        (unsigned long long) mal_perf_stats.intl_collation_cache_misses);
     fprintf(
         stderr,
         "[perf-string-allocation-stats] allocations=%llu code_units=%llu "

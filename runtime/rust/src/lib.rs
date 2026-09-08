@@ -221,13 +221,21 @@ pub unsafe extern "C" fn mal_i18n_collator_new(
     numeric: i32,
     case_first: i32,
 ) -> *mut core::ffi::c_void {
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return core::ptr::null_mut();
+    };
+    match new_collator(locale, strength, case_level, numeric, case_first) {
+        Some(collator) => Box::into_raw(Box::new(collator)) as *mut core::ffi::c_void,
+        None => core::ptr::null_mut(),
+    }
+}
+
+#[cfg(feature = "intl-collator")]
+fn new_collator(locale: icu_locale::Locale, strength: i32, case_level: i32, numeric: i32, case_first: i32) -> Option<icu_collator::CollatorBorrowed<'static>> {
     use icu_collator::options::{CaseLevel, CollatorOptions, Strength};
     use icu_collator::preferences::{CollationCaseFirst, CollationNumericOrdering};
     use icu_collator::{Collator, CollatorPreferences};
 
-    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return core::ptr::null_mut();
-    };
     // case-first and numeric are locale preferences in ICU4X 2.x, not options.
     let mut prefs = CollatorPreferences::from(&locale);
     prefs.case_first = Some(match case_first {
@@ -251,11 +259,79 @@ pub unsafe extern "C" fn mal_i18n_collator_new(
         options.case_level = Some(CaseLevel::On);
     }
 
-    // try_new returns a CollatorBorrowed<'static> (it borrows the baked
-    // compiled_data); box that exact type so the compare side derefs it correctly.
-    match Collator::try_new(prefs, options) {
-        Ok(collator) => Box::into_raw(Box::new(collator)) as *mut core::ffi::c_void,
-        Err(_) => core::ptr::null_mut(),
+    Collator::try_new(prefs, options).ok()
+}
+
+#[cfg(feature = "intl-collator")]
+type CachedCollation = (Vec<u8>, i32, icu_collator::CollatorBorrowed<'static>);
+
+#[cfg(feature = "intl-collator")]
+thread_local! {
+    // Borrowed ICU plans are not Sync; bounded TLS owns no VM or JavaScript references.
+    static PREPARED_COLLATORS: std::cell::RefCell<std::collections::VecDeque<CachedCollation>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+#[cfg(feature = "intl-collator")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_prepared_collator_compare_utf16(
+    locale_ptr: *const u8, locale_len: usize, options: i32,
+    a_ptr: *const u16, a_len: usize, b_ptr: *const u16, b_len: usize,
+    cache_hit: *mut u8,
+) -> i32 {
+    if !cache_hit.is_null() { unsafe { *cache_hit = 0; } }
+    if locale_len > 128 || options < 0 || options >= 48 || options & 3 == 3 ||
+        (options & 4 != 0 && options & 3 != 0) { return 2; }
+    let key = unsafe { nullable_slice(locale_ptr, locale_len) };
+    PREPARED_COLLATORS.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(index) = cache.iter().position(|(locale, flags, _)| locale == key && *flags == options) {
+            let entry = cache.remove(index).unwrap();
+            let result = compare_utf16_with_collator(&entry.2, a_ptr, a_len, b_ptr, b_len);
+            cache.push_back(entry);
+            if !cache_hit.is_null() { unsafe { *cache_hit = 1; } }
+            return result;
+        }
+        let Some(mut locale) = parse_locale(locale_ptr, locale_len) else { return 2; };
+        icu_locale::LocaleCanonicalizer::new_extended().canonicalize(&mut locale);
+        // Match the C constructor's canonical tag capacity before preparing its plan.
+        if locale.to_string().len() >= 160 { return 2; }
+        let Some(collator) = new_collator(locale, options & 3, (options >> 2) & 1, (options >> 3) & 1, options >> 4) else { return 2; };
+        let result = compare_utf16_with_collator(&collator, a_ptr, a_len, b_ptr, b_len);
+        if cache.len() == 16 { cache.pop_front(); }
+        cache.push_back((key.to_vec(), options, collator));
+        result
+    })
+}
+
+#[cfg(all(test, feature = "intl-collator"))]
+mod collation_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_collation_preserves_options_and_bounds_cache_retention() {
+        PREPARED_COLLATORS.with(|slot| slot.borrow_mut().clear());
+        let locale = b"en-US";
+        let a = [0x0032, 0x00e4];
+        let b = [0x0031, 0x0030, 0x0061];
+        for flags in 0..48 {
+            if flags & 3 == 3 || (flags & 4 != 0 && flags & 3 != 0) { continue; }
+            let mut hit = 255;
+            unsafe {
+                let fresh = mal_i18n_collator_new(locale.as_ptr(), locale.len(), flags & 3, (flags >> 2) & 1, (flags >> 3) & 1, flags >> 4);
+                assert!(!fresh.is_null());
+                let expected = mal_i18n_collator_compare_utf16(fresh, a.as_ptr(), a.len(), b.as_ptr(), b.len());
+                mal_i18n_collator_free(fresh);
+                assert_eq!(mal_i18n_prepared_collator_compare_utf16(locale.as_ptr(), locale.len(), flags, a.as_ptr(), a.len(), b.as_ptr(), b.len(), &mut hit), expected);
+                assert_eq!(hit, 0);
+                assert_eq!(mal_i18n_prepared_collator_compare_utf16(locale.as_ptr(), locale.len(), flags, a.as_ptr(), a.len(), b.as_ptr(), b.len(), &mut hit), expected);
+                assert_eq!(hit, 1);
+            }
+            PREPARED_COLLATORS.with(|slot| assert!(slot.borrow().len() <= 16));
+        }
+        let mut hit = 255;
+        unsafe { mal_i18n_prepared_collator_compare_utf16(locale.as_ptr(), locale.len(), 0, a.as_ptr(), a.len(), b.as_ptr(), b.len(), &mut hit); }
+        assert_eq!(hit, 0);
     }
 }
 
