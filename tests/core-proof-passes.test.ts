@@ -128,9 +128,7 @@ describe("Core local proofs and representations", () => {
 							? COMPILER_VALUE_KIND_NUMBER
 							: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
 				);
-				expect(kinds.kindMask(result!)).toBe(
-					form === "unknown" ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
-				);
+				expect(kinds.kindMask(result!)).toBe(COMPILER_VALUE_KIND_NUMBER);
 			}
 		},
 	);
@@ -188,7 +186,9 @@ describe("Core local proofs and representations", () => {
 					);
 					for (const value of [seed!, joined, updated!, scaled!]) {
 						expect(kinds.latticeMask(value)).toBe(
-							unknown ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+							unknown && operator !== "+"
+								? COMPILER_VALUE_KIND_TOP
+								: COMPILER_VALUE_KIND_NUMBER,
 						);
 					}
 				}

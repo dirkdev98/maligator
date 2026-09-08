@@ -35,6 +35,7 @@ export function coreStaticMemberOperation(
 export function coreStaticConstantOperation(
 	program: CoreProgram,
 	id: StaticDescriptionId,
+	editor?: CoreEditor,
 ): CoreStaticMemberOperation | undefined {
 	const constant = program.staticDescriptions.description(id);
 	switch (constant.kind) {
@@ -68,19 +69,23 @@ export function coreStaticConstantOperation(
 			};
 		}
 		case "string": {
-			const index = program.stringConstants.findIndex(
+			let index = program.stringConstants.findIndex(
 				(units) =>
 					units.length === constant.codeUnits.length &&
 					units.every((unit, index) => unit === constant.codeUnits[index]),
 			);
+			if (index < 0 && editor !== undefined)
+				index = editor.appendStringConstants([constant.codeUnits]);
 			return index < 0
 				? undefined
 				: { opcode: "createString", inputs: [], attributes: { stringIndex: index } };
 		}
 		case "bigint": {
-			const index = program.bigintConstants.findIndex(
+			let index = program.bigintConstants.findIndex(
 				(value) => String(value) === constant.decimal,
 			);
+			if (index < 0 && editor !== undefined)
+				index = editor.appendBigintConstants([BigInt(constant.decimal)]);
 			return index < 0
 				? undefined
 				: { opcode: "createBigint", inputs: [], attributes: { bigintIndex: index } };

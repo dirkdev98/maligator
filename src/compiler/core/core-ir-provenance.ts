@@ -1744,7 +1744,8 @@ function exactStringSplitCallCandidate(
 	if (
 		fn.instructionKind(call) === "operation" &&
 		fn.instructionOpcodeName(call) === "callKnown" &&
-		fn.instructionAttributes(call).specialized !== undefined &&
+		!fn.instructionAttributes(call).construct &&
+		fn.instructionAttributes(call).argumentMode === undefined &&
 		fn.instructionAttributes(call).operation === "String.prototype.split" &&
 		instructionResultCount(fn, call) === 1 &&
 		control.reachable.has(fn.instructionBlock(call))
@@ -2852,7 +2853,12 @@ function stringSplitProjectionCandidates(
 		if (fn.instructionKind(call) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(call);
 		const direct = opcode === "callKnown";
-		if (direct && fn.instructionAttributes(call).specialized === undefined) continue;
+		if (
+			direct &&
+			(fn.instructionAttributes(call).construct ||
+				fn.instructionAttributes(call).argumentMode !== undefined)
+		)
+			continue;
 		if (
 			(opcode !== "call" && opcode !== "callKnown") ||
 			(direct

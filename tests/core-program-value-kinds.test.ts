@@ -134,7 +134,7 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 
 describe("whole-program Core value kinds", () => {
 	it.each(["-", "+", "~", "increment", "decrement", "tonumeric"])(
-		"preserves unresolved %s results across a forward call edge",
+		"propagates normal-completion %s result kinds across a forward call edge",
 		(operator) => {
 			for (const unknown of [false, true]) {
 				const program = analysisProgram();
@@ -165,7 +165,9 @@ describe("whole-program Core value kinds", () => {
 				);
 				const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
 				expect(kinds.summary(callerId).returnKind).toBe(
-					unknown ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+					unknown && operator !== "+"
+						? COMPILER_VALUE_KIND_TOP
+						: COMPILER_VALUE_KIND_NUMBER,
 				);
 			}
 		},

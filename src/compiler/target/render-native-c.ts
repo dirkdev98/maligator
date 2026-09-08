@@ -5162,6 +5162,14 @@ function emitInstruction(
 				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
 					return [storeNumber(dst, expression)];
 			}
+			if (operator === "+" && reps[dst] === "number") {
+				const value = `unary_number_${ip}`;
+				return [
+					`MalValue ${value} = mal_vm_unary_op(vm, MAL_UNARY_PLUS, ${boxed(src)});`,
+					throwCheck(),
+					`r${dst} = ${callValue(dst, value)};`,
+				];
+			}
 			if (isNumericRep(reps[dst]!)) return null;
 			// Logical not yields a boolean: !ToBoolean(src). This is exactly
 			// mal_vm_unary_op(NOT) = mal_value_new_boolean(!mal_value_is_truthy(.)).
@@ -5218,7 +5226,14 @@ function emitInstruction(
 							: null;
 				if (expression !== null) return [storeNumber(instruction.dst, expression), poll];
 			}
-			if (instruction.specialized === undefined) {
+			if (
+				instruction.specialized === undefined &&
+				!(
+					instruction.operation === "String.prototype.split" &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined
+				)
+			) {
 				const args = instruction.arguments.map(boxedOperand);
 				const arguments_ =
 					args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`;

@@ -91,7 +91,6 @@ describe("Core literal constants", () => {
 	it.each([
 		'return "hello".slice(x);',
 		"return (42).toString(x);",
-		"return true.toString();",
 		"return [1,2].map(x);",
 		"return [1,2][Symbol.iterator]();",
 	])("resolves canonical prototype methods: %s", (body) => {

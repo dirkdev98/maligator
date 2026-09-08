@@ -141,7 +141,6 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
 	"directStringCharCodeAtPosition",
-	"primitiveStringLength",
 	"directFunctionCall",
 	"directCallTargetFunctionIndex",
 ]);

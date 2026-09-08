@@ -386,9 +386,18 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			if (
+				attributes.primitiveStringLength !== undefined &&
+				(descriptor.opcode !== "loadPropertyStatic" ||
+					attributes.primitiveStringLength !== true ||
+					String.fromCharCode(
+						...(program.stringConstants[attributes.stringIndex as number] ?? []),
+					) !== "length")
+			)
+				fail("Invalid primitive String length hint");
 			if (descriptor.opcode === "loadPrimordial") {
 				const node = getPrimordialCatalog().nodes[attributes.nodeIndex as number];
-				if (node === undefined || (node[2] & 1) === 0)
+				if (node === undefined || (node[2] & 9) === 0)
 					fail("Invalid primordial identity");
 				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, node[0], world);
 			} else if (descriptor.opcode === "callKnown") {

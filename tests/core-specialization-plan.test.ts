@@ -377,7 +377,7 @@ describe("late Core specialization plan", () => {
 		for (const [kind, source] of [
 			[
 				"string-split-projection",
-				`function first() { return "alpha,beta".split(",")[0]; }
+				`function first(value) { return String(value).split(",")[0]; }
 				globalThis.first = first;`,
 			],
 			[

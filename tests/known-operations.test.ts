@@ -34,9 +34,6 @@ describe("known-operation dispatch", () => {
 		["new WeakSet().has(input)", "WeakSet.prototype.has"],
 		["new ArrayBuffer(input).slice(0)", "ArrayBuffer.prototype.slice"],
 		["new DataView(input).getInt8(0)", "DataView.prototype.getInt8"],
-		["new Number(input).valueOf()", "Number.prototype.valueOf"],
-		["new String(input).valueOf()", "String.prototype.valueOf"],
-		["new Boolean(input).valueOf()", "Boolean.prototype.valueOf"],
 		["new RegExp(input).test(input)", "RegExp.prototype.test"],
 		["new Error(input).toString()", "Error.prototype.toString"],
 		["new Promise(input).then(input)", "Promise.prototype.then"],
@@ -66,6 +63,36 @@ describe("known-operation dispatch", () => {
 		expect(result.structure.genericLookups).toBe(0);
 		expect(result.c.source).toContain("mal_vm_call_known_native(vm, mal_known_native_");
 	});
+	it.each(["Number", "String", "Boolean"])(
+		"resolves valueOf before a %s wrapper escapes",
+		(constructor) => {
+			const result = inspectStaticValueFunction(
+				`
+			function probe(input) {
+				const box = new ${constructor}(input);
+				const value = box.valueOf();
+				return [box, value];
+			}
+			globalThis.probe = probe;
+		`,
+				"probe",
+			);
+			const calls = result.fn.instructions.filter(
+				(instruction) => instruction.opcode === "CALL_KNOWN",
+			);
+			expect(
+				calls.some(
+					(instruction) => instruction.operation === constructor && instruction.construct,
+				),
+			).toBe(true);
+			expect(
+				calls.some(
+					(instruction) => instruction.operation === `${constructor}.prototype.valueOf`,
+				),
+			).toBe(true);
+			expect(result.structure.genericLookups).toBe(0);
+		},
+	);
 	it("keeps mutable-world method lookup", () => {
 		const result = inspectStaticValueFunction(
 			"function probe(input) { return new Date(input).getTime(); } globalThis.probe = probe;",

@@ -1,3 +1,4 @@
+import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -1064,6 +1065,16 @@ export class CoreStaticValueAnalysis {
 			environmentDependencies: [],
 		});
 		const intern = program.staticDescriptions;
+		if (
+			opcode === "loadIntrinsic" &&
+			(attributes.intrinsic === "NaN" || attributes.intrinsic === "Infinity")
+		)
+			return primitive(
+				intern.intern(
+					staticNumberDescription(attributes.intrinsic === "NaN" ? NaN : Infinity),
+				),
+				"number",
+			);
 		if (opcode === "move") {
 			const input = this.query(operands[0]!);
 			return input.kind === "known" ? { ...input, value } : input;
@@ -1113,9 +1124,38 @@ export class CoreStaticValueAnalysis {
 				}
 			}
 		}
+		if (
+			opcode === "unary" &&
+			["+", "!", "tostring"].includes(attributes.operator as string)
+		) {
+			const brand =
+				attributes.operator === "+"
+					? "number"
+					: attributes.operator === "!"
+						? "boolean"
+						: "string";
+			return primitive(
+				intern.intern({
+					kind: "engine-payload",
+					format: "dynamic-result",
+					targetContract: brand,
+					words: [],
+				}),
+				brand,
+			);
+		}
 		if (this.#context?.facts.world.primordialPolicy === "locked") {
 			let canonical: string | undefined;
 			if (opcode === "loadIntrinsic") canonical = attributes.intrinsic as string;
+			if (opcode === "loadGlobalProperty") {
+				const name = this.string(attributes.nameStringIndex as number);
+				if (this.#context.facts.immutableGlobalBindings.get(name)?.kind === "known")
+					canonical = provePrimordialAccess(
+						this.#context.facts.world,
+						{ kind: "intrinsic", id: "globalThis", realm: "current" },
+						name,
+					)?.resolution?.value?.[0];
+			}
 			if (opcode === "loadPrimordial")
 				canonical = getPrimordialCatalog().nodes[attributes.nodeIndex as number]?.[0];
 			if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
@@ -1140,7 +1180,7 @@ export class CoreStaticValueAnalysis {
 					const base = this.queryAt(operands[0]!, instruction);
 					if (base.kind === "known")
 						canonical = (
-							base.canonical !== undefined
+							base.canonical !== undefined && base.brand !== "symbol"
 								? provePrimordialAccess(
 										this.#context.facts.world,
 										{ kind: "intrinsic", id: base.canonical, realm: "current" },
@@ -1153,11 +1193,18 @@ export class CoreStaticValueAnalysis {
 			const node = canonical === undefined ? undefined : primordialNode(canonical);
 			if (node !== undefined) {
 				const symbol = (node[2] & 8) !== 0;
+				const symbolDescription = symbol
+					? node[5].find((alias) => /^Symbol\.[A-Za-z]+$/.test(alias))
+					: undefined;
 				return {
 					...primitive(
 						intern.intern(
 							symbol
-								? { kind: "symbol", reference: { kind: "well-known", key: node[0] } }
+								? {
+										kind: "symbol",
+										description: symbolDescription,
+										reference: { kind: "well-known", key: node[0] },
+									}
 								: {
 										kind: "engine-payload",
 										format: "primordial-reference",
@@ -1220,14 +1267,21 @@ export class CoreStaticValueAnalysis {
 					(callee.canonical === "Symbol" || callee.canonical === "Symbol.for")
 				) {
 					const input =
-						operands[2] === undefined ? undefined : this.constant(operands[2]);
-					const key = input?.kind === "string" ? input.value : undefined;
+						operands[2] === undefined
+							? { kind: "undefined" as const }
+							: this.constant(operands[2]);
 					const registered = callee.canonical === "Symbol.for";
+					const converted = evaluateConstantBuiltin("String", undefined, [input]);
+					const key =
+						converted.kind === "value" && converted.value.kind === "string"
+							? converted.value.value
+							: undefined;
+					const description = !registered && input?.kind === "undefined" ? null : key;
 					return {
 						...primitive(
 							intern.intern({
 								kind: "symbol",
-								...(key === undefined ? {} : { description: key }),
+								...(description === undefined ? {} : { description }),
 								...(registered && key !== undefined
 									? { reference: { kind: "registry", key } as const }
 									: {}),
@@ -1369,6 +1423,46 @@ export class CoreStaticValueAnalysis {
 						["object", "array", "function"].includes(argument.brand)
 					)
 						return { ...argument, value };
+					if (
+						argument.kind === "known" &&
+						["number", "string", "boolean", "bigint", "symbol"].includes(argument.brand)
+					) {
+						const exactBrand =
+							argument.brand === "bigint"
+								? "BigInt"
+								: argument.brand[0]!.toUpperCase() + argument.brand.slice(1);
+						const prototype: StaticPrototype = {
+							kind: "intrinsic",
+							id: `${exactBrand}.prototype`,
+						};
+						return {
+							kind: "known",
+							value,
+							description: intern.intern({
+								kind: "object",
+								prototype,
+								properties: [],
+								ownKeysComplete: argument.brand !== "string",
+								unknownOwnKeys:
+									argument.brand === "string"
+										? { numeric: true, named: ["length"] }
+										: undefined,
+							}),
+							brand: "object",
+							exactBrand,
+							prototype,
+							construction: {
+								kind: opcode,
+								callee: canonical,
+								instruction,
+								arguments: args,
+							},
+							identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+							state: "initial-allocation",
+							operands: [],
+							environmentDependencies: ["primordials.locked", "realm.current"],
+						};
+					}
 					if (
 						argument.kind === "unknown" ||
 						!["undefined", "null"].includes(argument.brand)
@@ -1684,6 +1778,14 @@ export class CoreStaticValueAnalysis {
 
 	inherited(value: CoreStaticValue, key: PrimordialKey) {
 		if (this.#context === undefined) return undefined;
+		if (value.brand === "string" && typeof key === "string") {
+			if (key === "length") return undefined;
+			if (/^(0|[1-9][0-9]*)$/.test(key)) {
+				const text = this.#program.staticDescriptions.description(value.description);
+				if (text.kind !== "string" || Number(key) < text.codeUnits.length)
+					return undefined;
+			}
+		}
 		if (["string", "number", "boolean", "bigint", "symbol"].includes(value.brand)) {
 			const prototype = {
 				string: "String",
@@ -1747,6 +1849,8 @@ export class CoreStaticValueAnalysis {
 		if (fact.kind === "unknown") return undefined;
 		const description = this.#program.staticDescriptions.description(fact.description);
 		switch (description.kind) {
+			case "null":
+				return { kind: "null", value: null };
 			case "undefined":
 				return { kind: "undefined" };
 			case "boolean":

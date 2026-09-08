@@ -64,6 +64,10 @@ import { reuseLiteralConstants } from "./core-literal-constants.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import {
+	eliminatePrimitiveWrappers,
+	lowerPrimitiveOperations,
+} from "./core-primitive-operations.ts";
+import {
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	foldStaticPropertyReads,
@@ -2308,6 +2312,8 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,
+	eliminatePrimitiveWrappers,
+	lowerPrimitiveOperations,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
@@ -2333,6 +2339,8 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,
+	eliminatePrimitiveWrappers,
+	lowerPrimitiveOperations,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,

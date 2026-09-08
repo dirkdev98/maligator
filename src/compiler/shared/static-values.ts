@@ -41,7 +41,7 @@ export type StaticDescription =
 	| { readonly kind: "bigint"; readonly decimal: string }
 	| {
 			readonly kind: "symbol";
-			readonly description?: string;
+			readonly description?: string | null;
 			readonly reference?: {
 				readonly kind: "well-known" | "registry";
 				readonly key: string;
@@ -180,7 +180,9 @@ export class StaticDescriptionInterner {
 	}
 }
 
-export function staticNumberDescription(value: number): StaticDescription {
+export function staticNumberDescription(
+	value: number,
+): Extract<StaticDescription, { kind: "number" }> {
 	const bits = new DataView(new ArrayBuffer(8));
 	bits.setFloat64(0, value, true);
 	return { kind: "number", low: bits.getUint32(0, true), high: bits.getUint32(4, true) };

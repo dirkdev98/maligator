@@ -795,7 +795,11 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						return (
 							(scalar === "int32" || scalar === "number") &&
 							definition !== undefined &&
-							["createNumber", "createF64"].includes(fn.instructionOpcodeName(definition))
+							(["createNumber", "createF64"].includes(
+								fn.instructionOpcodeName(definition),
+							) ||
+								(fn.instructionOpcodeName(definition) === "unary" &&
+									fn.instructionAttributes(definition).operator === "+"))
 						);
 					})
 				)
@@ -884,7 +888,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				return (
 					definition !== undefined &&
 					(fn.instructionOpcodeName(definition) === "createNumber" ||
-						fn.instructionOpcodeName(definition) === "createF64")
+						fn.instructionOpcodeName(definition) === "createF64" ||
+						(fn.instructionOpcodeName(definition) === "unary" &&
+							fn.instructionAttributes(definition).operator === "+"))
 				);
 			};
 			const numericRewrite =

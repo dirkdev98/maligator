@@ -362,6 +362,15 @@ export class CoreEditor {
 		return start;
 	}
 
+	appendBigintConstants(values: ReadonlyArray<bigint>): number {
+		this.#assertActive();
+		if (values.length === 0) return this.program.bigintConstants.length;
+		const start = this.program._appendBigintConstants(this.#mutation, values);
+		this.#programDomains.add("data");
+		this.#edits++;
+		return start;
+	}
+
 	appendSourcePositions(positions: ReadonlyArray<CoreSourcePosition>): number {
 		this.#assertActive();
 		if (positions.length === 0) return this.program.sourcePositions.length;

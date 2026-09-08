@@ -1,6 +1,47 @@
 import type { WorldFacts } from "./compiler-facts.ts";
 import { getPrimordialCatalog } from "./primordial-catalog-data.ts";
-import type { PrimordialNode, PrimordialProperty } from "./primordial-catalog-types.ts";
+import type {
+	PrimordialNode,
+	PrimordialProperty,
+	PrimordialValue,
+} from "./primordial-catalog-types.ts";
+import { staticNumberDescription } from "./static-values.ts";
+import type { StaticDescription } from "./static-values.ts";
+
+export function primordialConstantDescription(
+	value: PrimordialValue | null,
+):
+	| Extract<
+			StaticDescription,
+			{ readonly kind: "number" | "boolean" | "string" | "bigint" | "null" | "undefined" }
+	  >
+	| undefined {
+	if (value === null || typeof value === "number" || value[0] === "runtime")
+		return undefined;
+	if (value[0] === "string")
+		return {
+			kind: "string",
+			codeUnits: Array.from({ length: value[1].length }, (_, index) =>
+				value[1].charCodeAt(index),
+			),
+		};
+	if (value[0] === "bigint") return { kind: "bigint", decimal: value[1] };
+	const high = parseInt(value[1].slice(0, 8), 16),
+		low = parseInt(value[1].slice(8), 16);
+	if (high === 0x7ff90000) return staticNumberDescription(low | 0);
+	if (high === 0x7ff80000) {
+		if (low === 2) return { kind: "null" };
+		if (low === 3) return { kind: "undefined" };
+		if (low === 4 || low === 5) return { kind: "boolean", value: low === 4 };
+		if (low === 1 || low === 6 || low === 7 || low === 8)
+			return staticNumberDescription(
+				low === 1 ? NaN : low === 6 ? -0 : low === 7 ? Infinity : -Infinity,
+			);
+		return undefined;
+	}
+	if ((high & 0x7ff80000) === 0x7ff80000) return undefined;
+	return { kind: "number", high, low };
+}
 
 export type PrimordialKey = string | { readonly symbol: string };
 
@@ -145,6 +186,23 @@ export function provePrimordialAccess(
 		"realm.current",
 		"own-descriptor.exact-or-absent",
 	];
+	// The global object stays extensible, but its protected primordial bindings are immutable.
+	if (
+		receiver.kind === "intrinsic" &&
+		node[0] === "globalThis" &&
+		resolution?.owner === node &&
+		(resolution.descriptor[1] & 16) !== 0 &&
+		(resolution.descriptor[1] & 13) === 0
+	) {
+		return {
+			kind: "descriptor",
+			resolution,
+			dependencies: [
+				...dependencies,
+				`protected-global:${typeof key === "string" ? key : key.symbol}`,
+			],
+		};
+	}
 	const seen = new Set<string>();
 	while (node !== undefined) {
 		if ((node[2] & 1) === 0 || seen.has(node[0])) return undefined;

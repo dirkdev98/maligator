@@ -935,8 +935,8 @@ describe("Core local canonicalization", () => {
 
 	it("erases locked Math dispatch only for exact native-number calls", () => {
 		const program = optimizedClosedModule(
-			`function exact() {
-				const first = 1.25;
+			`function exact(value) {
+				const first = +value;
 				const second = -0;
 				return Math.floor(first) + Math.max(first, second);
 			}

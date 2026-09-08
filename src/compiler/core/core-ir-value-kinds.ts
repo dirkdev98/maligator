@@ -264,13 +264,15 @@ function addOperationTransfer(
 			: undefined;
 	if (opcode === "unary" && operandCount === 1 && typeof operator === "string") {
 		const constant =
-			operator === "!"
-				? COMPILER_VALUE_KIND_BOOLEAN
-				: operator === "typeof" || operator === "tostring"
-					? COMPILER_VALUE_KIND_STRING
-					: operator === "void"
-						? COMPILER_VALUE_KIND_UNDEFINED
-						: undefined;
+			operator === "+"
+				? COMPILER_VALUE_KIND_NUMBER
+				: operator === "!"
+					? COMPILER_VALUE_KIND_BOOLEAN
+					: operator === "typeof" || operator === "tostring"
+						? COMPILER_VALUE_KIND_STRING
+						: operator === "void"
+							? COMPILER_VALUE_KIND_UNDEFINED
+							: undefined;
 		if (constant !== undefined) {
 			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, constant);
 		} else if (NUMERIC_UNARY_OPERATORS.has(operator)) {

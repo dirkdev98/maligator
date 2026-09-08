@@ -958,11 +958,12 @@ describe("wire loader side-data validation", () => {
 		const entrypoint = path.join(directory, "string-split-projection-region.mjs");
 		writeFileSync(
 			entrypoint,
-			`function project() {
-				const fields = "alpha;beta".split(";");
+			`function project(value) {
+				const fields = String(value).split(";");
 				return fields[1] + fields[0] + fields.length;
 			}
-			globalThis.result = project();\n`,
+			globalThis.project = project;
+			globalThis.result = project("alpha;beta");\n`,
 		);
 		const projectionDefinition = compileEntrypoint(entrypoint, {
 			stripTypes: stripCompactTypes,

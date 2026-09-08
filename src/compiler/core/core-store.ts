@@ -2792,6 +2792,17 @@ export class CoreProgram {
 		return start;
 	}
 
+	_appendBigintConstants(
+		mutation: CoreStoreMutation,
+		values: ReadonlyArray<bigint>,
+	): number {
+		this.#requireMutation(mutation);
+		if (this.#sealed) throw new Error("Core program is sealed");
+		const start = this.#bigintConstants.length;
+		this.#bigintConstants = Object.freeze([...this.#bigintConstants, ...values]);
+		return start;
+	}
+
 	_appendSourcePositions(
 		mutation: CoreStoreMutation,
 		positions: ReadonlyArray<CoreSourcePosition>,

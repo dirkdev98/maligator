@@ -88,9 +88,9 @@ describe("tagged VM call operands", () => {
 		const definition = compileWithLockedBuiltins(`
 			function invoke(dynamic) {
 				return [
-					"alpha,beta".split(","),
-					(17).valueOf(),
-					true.valueOf(),
+					"alpha,beta".split(",", dynamic),
+					(17).toString(dynamic),
+					Object.prototype.isPrototypeOf.call(true, dynamic),
 					Object.is(undefined, dynamic),
 					Object.is(null, false),
 				];

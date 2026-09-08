@@ -1,4 +1,4 @@
-export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-v1";
+export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-v2";
 
 export interface ConstantEvaluationTarget {
 	readonly contract: string;
@@ -19,6 +19,7 @@ export const PORTABLE_CONSTANT_TARGET: ConstantEvaluationTarget = Object.freeze(
 });
 
 export type ConstantValue =
+	| { readonly kind: "null"; readonly value: null }
 	| { readonly kind: "number"; readonly value: number }
 	| { readonly kind: "boolean"; readonly value: boolean }
 	| { readonly kind: "string"; readonly value: string }
@@ -168,6 +169,25 @@ export function evaluateConstantOperation(
 	}
 	if (operation === "string.length" && left?.kind === "string")
 		return number(left.value.length);
+	if (operation.startsWith("bigint.unary:") && left?.kind === "bigint") {
+		const halfRange = 1n << 126n;
+		const minimum = -halfRange - halfRange,
+			maximum = halfRange - 1n + halfRange;
+		if (left.value < minimum || left.value > maximum)
+			return unsupported("target-contract");
+		switch (operation.slice(13)) {
+			case "-":
+				return left.value === minimum
+					? unsupported("target-contract")
+					: result({ kind: "bigint", value: -left.value });
+			case "~":
+				return result({ kind: "bigint", value: ~left.value });
+			case "!":
+				return boolean(left.value === 0n);
+			case "tonumeric":
+				return result(left);
+		}
+	}
 	if (
 		operation.startsWith("bigint.binary:") &&
 		left?.kind === "bigint" &&

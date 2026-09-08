@@ -2,14 +2,21 @@ import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import type { KnownArgumentMode } from "../shared/known-operations.ts";
 import { knownOperationCall, knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
+import {
+	provePrimordialAccess,
+	primordialConstantDescription,
+} from "../shared/primordial-catalog.ts";
 import type { PrimordialKey } from "../shared/primordial-catalog.ts";
+import type { StaticDescriptionId } from "../shared/static-values.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
-import { coreStaticMemberOperation } from "./core-static-value-selection.ts";
+import {
+	coreStaticMemberOperation,
+	coreStaticConstantOperation,
+} from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
@@ -183,6 +190,10 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			attributes: Record<string, CoreAttributeValue>;
 			store?: boolean;
 		}> = [];
+		const constants: Array<{
+			instruction: CoreInstructionId;
+			description: StaticDescriptionId;
+		}> = [];
 		const call = (
 			instruction: CoreInstructionId,
 			operation: string,
@@ -212,7 +223,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			});
 		};
 		for (const instruction of fn.instructionIds()) {
-			if (plans.length >= context.remainingEdits) break;
+			if (plans.length + constants.length * 2 + 2 > context.remainingEdits) break;
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction),
 				args = inputs(fn, instruction);
@@ -296,7 +307,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			const base = analysis.queryAt(args[0]!, instruction);
 			if (base.kind !== "known") continue;
 			const proof =
-				base.canonical === undefined
+				base.canonical === undefined || base.brand === "symbol"
 					? analysis.inherited(base, key)
 					: provePrimordialAccess(
 							compilationContext.facts.world,
@@ -317,7 +328,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 					);
 			} else if (resolution.getter !== undefined) {
 				call(instruction, resolution.getter[0], [args[0]!]);
-			} else if (resolution.value !== undefined && (resolution.value[2] & 1) !== 0) {
+			} else if (resolution.value !== undefined && (resolution.value[2] & 9) !== 0) {
 				const nodeIndex =
 					typeof resolution.descriptor[2] === "number" ? resolution.descriptor[2] : -1;
 				if (getPrimordialCatalog().nodes[nodeIndex] !== resolution.value)
@@ -337,10 +348,24 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						},
 					},
 				});
+			} else {
+				const description = primordialConstantDescription(resolution.descriptor[2]);
+				if (description !== undefined)
+					constants.push({
+						instruction,
+						description: program.staticDescriptions.intern(description),
+					});
 			}
 		}
-		if (plans.length === 0) return undefined;
+		if (plans.length === 0 && constants.length === 0) return undefined;
 		const editor = CoreEditor.open(program, fn.id);
+		for (const plan of constants) {
+			const constant = coreStaticConstantOperation(program, plan.description, editor);
+			if (constant !== undefined)
+				editor.replaceInstruction(plan.instruction, constant.opcode, constant.inputs, {
+					attributes: constant.attributes,
+				});
+		}
 		for (const plan of plans) {
 			const options = {
 				attributes: plan.attributes,

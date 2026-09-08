@@ -33,6 +33,7 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function malFunctionRows(source: string): Array<Array<string>> {
 	return [...source.matchAll(/^\s+MAL_FUNCTION_ROW\((.*)\),$/gm)].map((match) =>
@@ -3051,17 +3052,38 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
 	});
 
-	it("projects exact locked primitive String split calls after Core dispatch erasure", () => {
+	it("projects canonical String split calls with dynamic primitive contents", () => {
+		const output = emitLocked(`
+			function first(value) { return String(value).split(",")[0]; }
+			globalThis.first = first;
+		`);
+		expect(output).toContain("mal_builtin_string_split_projection_locked(vm,");
+		expect(output).toContain("mal_builtin_string_split_direct(vm,");
+		expect(output).not.toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("folds a constant String split projection without allocation or dispatch", () => {
 		const code = `
 			function first() {
 				return "alpha,beta".split(",")[0];
 			}
 			globalThis.first = first;
 		`;
-		const lockedOutput = emitLocked(code);
-		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
-		expect(lockedOutput).toContain("mal_builtin_string_split_direct(vm,");
-		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
+		const output = inspectStaticValueFunction(code, "first");
+		expect(output.structure.allocations).toBe(0);
+		expect(output.structure.genericCalls).toBe(0);
+		expect(output.structure.genericLookups).toBe(0);
+		expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(false);
+		const strings = output.fn.instructions.flatMap((instruction) =>
+			instruction.opcode === "CREATE_STRING"
+				? [
+						String.fromCharCode(
+							...output.image.runtime.stringConstants[instruction.stringIndex]!,
+						),
+					]
+				: [],
+		);
+		expect(strings).toEqual(["alpha"]);
 	});
 
 	it("streams a closed indexed String split loop directly into trim", () => {
