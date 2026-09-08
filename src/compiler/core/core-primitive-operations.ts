@@ -188,6 +188,23 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index),
 			);
 			const numericOperation = fn.instructionOpcodeName(instruction) !== "callKnown";
+			if (
+				[
+					"Number.isNaN",
+					"Number.isFinite",
+					"Number.isInteger",
+					"Number.isSafeInteger",
+				].includes(operation) &&
+				fn.kernel.valueUseCount(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				) === 0 &&
+				fn.kernel.valueHandlerUseCount(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				) === 0
+			) {
+				plans.push({ instruction, value: { kind: "undefined" } });
+				continue;
+			}
 			if (operation === "Object.prototype.toString") {
 				const fact = analysis.query(inputs[0]!);
 				if (
@@ -514,7 +531,8 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						: input.brand[0]!.toUpperCase() + input.brand.slice(1);
 			}
 			const pending: Array<CoreValueId> = [root],
-				visited = new Set<CoreValueId>();
+				visited = new Set<CoreValueId>(),
+				truthiness = new Set<CoreInstructionId>();
 			let safe = true;
 			while (pending.length && safe) {
 				const value = pending.pop()!;
@@ -538,6 +556,8 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						consumerAttributes = fn.instructionAttributes(consumer);
 					if (opcode === "move")
 						pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
+					else if (opcode === "unary" && consumerAttributes.operator === "!")
+						truthiness.add(consumer);
 					else if (
 						wrapper === "String" &&
 						opcode === "loadPropertyStatic" &&
@@ -589,8 +609,12 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					}
 				}
 			}
-			if (!safe || context.remainingEdits < 1) continue;
+			if (!safe || context.remainingEdits < truthiness.size + 1) continue;
 			const editor = CoreEditor.open(program, fn.id);
+			for (const consumer of truthiness)
+				editor.replaceInstruction(consumer, "createBoolean", [], {
+					attributes: { value: false },
+				});
 			if (operation === "Object")
 				editor.replaceInstruction(instruction, "move", [args[1]!]);
 			else if (

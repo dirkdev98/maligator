@@ -421,6 +421,31 @@ static MalString *mal_builtin_number_safe_integer_radix_string(MalHeap *heap, f6
     return mal_string_new_ascii(heap, cursor, (usize) (end - cursor));
 }
 
+MalValue mal_builtin_number_to_string_numeric(MalVm *vm, f64 number, i32 radix) {
+    if (radix == 10 || !isfinite(number)) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
+    // Every safe integer has an exact u64 magnitude, so common IDs, masks, and
+    // counters use integer division rather than the general f64 expansion.
+    if (trunc(number) == number && fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
+        return mal_value_from_string(
+            mal_builtin_number_safe_integer_radix_string(&vm->heap, number, radix)
+        );
+    }
+
+    byte buffer[1200];
+    i32 length = mal_number_format_radix(
+        number, radix, buffer, (i32) sizeof(buffer)
+    );
+    if (length <= 0 || (usize) length > sizeof(buffer)) {
+        abort();
+    }
+    return mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, buffer, (usize) length)
+    );
+}
+
 static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -444,29 +469,7 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
         return mal_value_new_undefined();
     }
 
-    i32 int_radix = (i32) radix;
-    if (int_radix == 10 || !isfinite(number)) {
-        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
-    }
-
-    // Every safe integer has an exact u64 magnitude, so common IDs, masks, and
-    // counters use integer division rather than the general f64 expansion.
-    if (trunc(number) == number && fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
-        return mal_value_from_string(
-            mal_builtin_number_safe_integer_radix_string(&vm->heap, number, int_radix)
-        );
-    }
-
-    byte buffer[1200];
-    i32 length = mal_number_format_radix(
-        number, int_radix, buffer, (i32) sizeof(buffer)
-    );
-    if (length <= 0 || (usize) length > sizeof(buffer)) {
-        abort();
-    }
-    return mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, buffer, (usize) length)
-    );
+    return mal_builtin_number_to_string_numeric(vm, number, (i32) radix);
 }
 
 static MalValue mal_builtin_number_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -554,6 +557,28 @@ static i32 mal_builtin_number_format_zero_precision(
     return (i32) length;
 }
 
+MalValue mal_builtin_number_to_fixed_numeric(MalVm *vm, f64 number, i32 digits) {
+    if (isnan(number)) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "NaN"));
+    }
+    // For magnitudes >= 1e21 the spec falls back to ToString(number).
+    if (fabs(number) >= 1e21) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
+    byte buffer[160];
+    i32 length;
+    if (trunc(number) == number &&
+        fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
+        length = mal_builtin_number_format_safe_integer_fixed(
+            number, digits, buffer, sizeof(buffer));
+    } else {
+        length = mal_number_format_fixed(
+            number, digits, buffer, (i32) sizeof(buffer));
+    }
+    return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
+}
+
 static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -577,25 +602,35 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
         return mal_value_new_undefined();
     }
 
-    if (isnan(number)) {
-        return mal_value_from_string(mal_intrinsic_ascii(vm, "NaN"));
-    }
-    // For magnitudes >= 1e21 the spec falls back to ToString(number).
-    if (fabs(number) >= 1e21) {
+    return mal_builtin_number_to_fixed_numeric(vm, number, (i32) digits);
+}
+
+MalValue mal_builtin_number_to_exponential_numeric(MalVm *vm, f64 number, i32 digits) {
+    if (!isfinite(number)) {
         return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
     }
 
-    byte buffer[160];
-    i32 length;
-    if (trunc(number) == number &&
-        fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
-        length = mal_builtin_number_format_safe_integer_fixed(
-            number, (i32) digits, buffer, sizeof(buffer));
-    } else {
-        length = mal_number_format_fixed(
-            number, (i32) digits, buffer, (i32) sizeof(buffer));
+    if (number == 0.0) {
+        byte out[105];
+        i32 length = mal_builtin_number_format_zero_exponential(
+            digits < 0 ? 0 : digits, out);
+        return mal_builtin_number_format_result(
+            vm, out, length, sizeof(out));
     }
-    return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
+
+    if (digits < 0) {
+        byte buffer[32];
+        i32 length = mal_number_format_shortest_exponential(
+            number, buffer, (i32) sizeof(buffer)
+        );
+        return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
+    }
+
+    byte out[256];
+    i32 length = mal_number_format_exponential(
+        number, digits, out, (i32) sizeof(out)
+    );
+    return mal_builtin_number_format_result(vm, out, length, sizeof(out));
 }
 
 static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -627,25 +662,25 @@ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue 
         return mal_value_new_undefined();
     }
 
+    return mal_builtin_number_to_exponential_numeric(vm, number, digits_undefined ? -1 : (i32) digits);
+}
+
+MalValue mal_builtin_number_to_precision_numeric(MalVm *vm, f64 number, i32 precision) {
+    if (!isfinite(number) || precision < 0) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
     if (number == 0.0) {
-        byte out[105];
-        i32 length = mal_builtin_number_format_zero_exponential(
-            digits_undefined ? 0 : (i32) digits, out);
+        byte out[102];
+        i32 length = mal_builtin_number_format_zero_precision(
+            precision, out);
         return mal_builtin_number_format_result(
             vm, out, length, sizeof(out));
     }
 
-    if (digits_undefined) {
-        byte buffer[32];
-        i32 length = mal_number_format_shortest_exponential(
-            number, buffer, (i32) sizeof(buffer)
-        );
-        return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
-    }
-
     byte out[256];
-    i32 length = mal_number_format_exponential(
-        number, (i32) digits, out, (i32) sizeof(out)
+    i32 length = mal_number_format_precision(
+        number, precision, out, (i32) sizeof(out)
     );
     return mal_builtin_number_format_result(vm, out, length, sizeof(out));
 }
@@ -678,19 +713,7 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
         return mal_value_new_undefined();
     }
 
-    if (number == 0.0) {
-        byte out[102];
-        i32 length = mal_builtin_number_format_zero_precision(
-            (i32) precision, out);
-        return mal_builtin_number_format_result(
-            vm, out, length, sizeof(out));
-    }
-
-    byte out[256];
-    i32 length = mal_number_format_precision(
-        number, (i32) precision, out, (i32) sizeof(out)
-    );
-    return mal_builtin_number_format_result(vm, out, length, sizeof(out));
+    return mal_builtin_number_to_precision_numeric(vm, number, (i32) precision);
 }
 
 static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

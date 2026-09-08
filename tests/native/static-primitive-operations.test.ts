@@ -11,6 +11,25 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it("matches constant radix spellings to the target formatter across all bases and binary64 extremes", () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-radix-"));
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture: "tests/local/static-number-radix.mjs",
+				name: "radix",
+				config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+				outDir,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary)).toBe("280 target radix cases passed\n");
+				expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
+					"280 target radix cases passed\n",
+				);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 600_000);
 	it.each(["locked", "mutable"] as const)(
 		"preserves values and coercion order with %s primordials",
 		(primordials) => {

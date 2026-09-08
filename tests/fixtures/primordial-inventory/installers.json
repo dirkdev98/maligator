@@ -89,7 +89,7 @@
 	},
 	{
 		"file": "builtin_number.c",
-		"sha256": "cf505a7721ca35908b3a83cc00bb6a91412867aac7d02bfbaa0b5b19fb124f8a"
+		"sha256": "9624ccc365df23a1967d60b836f81faa379e69d04660d35220955fc921aa396c"
 	},
 	{
 		"file": "builtin_object.c",

@@ -768,6 +768,20 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
 		let kinds: CoreValueKindAnalysis | undefined;
 		let editor: CoreEditor | undefined;
+		const canScalarizeNumber = (value: CoreValueId) => {
+			if (fn.valueRepresentation(value) === "f64") return true;
+			const scalar = (kinds ??= context.analysis(
+				CORE_LOCAL_VALUE_KIND_ANALYSIS,
+			)).exactScalar(value);
+			const definition = definingInstruction(fn, value);
+			return (
+				(scalar === "int32" || scalar === "number") &&
+				definition !== undefined &&
+				(["createNumber", "createF64"].includes(fn.instructionOpcodeName(definition)) ||
+					(fn.instructionOpcodeName(definition) === "unary" &&
+						fn.instructionAttributes(definition).operator === "+"))
+			);
+		};
 		for (const instruction of calls) {
 			if (!fn.isInstructionLive(instruction)) continue;
 			if (fn.instructionOpcodeName(instruction) === "callKnown") {
@@ -775,6 +789,32 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				if (attributes.construct || attributes.argumentMode !== undefined) continue;
 				const operation = attributes.operation;
 				if (typeof operation !== "string") continue;
+				const numberPredicate = [
+					"Number.isNaN",
+					"Number.isFinite",
+					"Number.isInteger",
+					"Number.isSafeInteger",
+				].includes(operation);
+				if (
+					numberPredicate ||
+					[
+						"Number.prototype.toString",
+						"Number.prototype.toFixed",
+						"Number.prototype.toExponential",
+						"Number.prototype.toPrecision",
+					].includes(operation)
+				) {
+					const receiver = instructionOperand(fn, instruction, numberPredicate ? 1 : 0);
+					if (
+						receiver !== undefined &&
+						fn.valueRepresentation(receiver) !== "f64" &&
+						canScalarizeNumber(receiver)
+					) {
+						editor ??= CoreEditor.open(program, item.function);
+						editor.setValueRepresentation(receiver, "f64");
+					}
+					continue;
+				}
 				const descriptor = builtinOperations.find(({ id }) => id === operation);
 				const numericOpcode = MATH_UNARY_OPERATIONS.has(operation)
 					? "mathUnaryNumber"
@@ -786,27 +826,15 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				if (
 					descriptor.nativeNumberArity !== arguments_.length ||
 					fn.kernel.instructionResultCount(instruction) !== 1 ||
-					!arguments_.every((value) => {
-						if (fn.valueRepresentation(value) === "f64") return true;
-						const scalar = (kinds ??= context.analysis(
-							CORE_LOCAL_VALUE_KIND_ANALYSIS,
-						)).exactScalar(value);
-						const definition = definingInstruction(fn, value);
-						return (
-							(scalar === "int32" || scalar === "number") &&
-							definition !== undefined &&
-							(["createNumber", "createF64"].includes(
-								fn.instructionOpcodeName(definition),
-							) ||
-								(fn.instructionOpcodeName(definition) === "unary" &&
-									fn.instructionAttributes(definition).operator === "+"))
-						);
-					})
+					!arguments_.every(canScalarizeNumber)
 				)
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
 				editor.replaceInstruction(instruction, numericOpcode, arguments_, {
-					attributes: { operation, worldAssumptions: attributes.worldAssumptions },
+					attributes: {
+						operation,
+						worldAssumptions: attributes.worldAssumptions,
+					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 				});
 				for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");

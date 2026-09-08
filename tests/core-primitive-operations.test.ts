@@ -11,6 +11,66 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each(["isFinite", "isInteger", "isSafeInteger"])(
+		"specializes Number.%s without coercing unknown inputs",
+		(method) => {
+			const unknown = inspect(`Number.${method}.call(null,x)`);
+			expect(unknown.c.source).not.toContain("mal_vm_call_known_native");
+			const numeric = inspect(`Number.${method}(+x)`);
+			expect(numeric.c.source).toContain("isfinite(");
+			expect(numeric.c.source).not.toContain("_known(");
+			const unused = inspectStaticValueFunction(
+				`function probe(x){Number.${method}(x());} globalThis.probe=probe;`,
+				"probe",
+				{ locked: true },
+			);
+			expect(
+				unused.core.some(
+					(operation) => operation.attributes.operation === `Number.${method}`,
+				),
+			).toBe(false);
+			expect(unused.structure.genericCalls).toBe(1);
+		},
+	);
+
+	it.each([
+		["toString(16)", "string"],
+		["toFixed(2)", "fixed"],
+		["toExponential()", "exponential"],
+		["toExponential(100)", "exponential"],
+		["toPrecision(3)", "precision"],
+		["toPrecision()", "precision"],
+	])("uses a typed target kernel for dynamic numbers with %s", (call, kernel) => {
+		const output = inspect(`(+x).${call}`);
+		expect(output.c.source).toContain(`mal_builtin_number_to_${kernel}_numeric(vm, r`);
+		expect(output.c.source).not.toContain("mal_vm_call_known_native");
+	});
+
+	it.each(["toFixed(x)", "toString(1)", "toPrecision(0)", "toExponential(101)"])(
+		"retains option validation and coercion for %s",
+		(call) => {
+			const output = inspect(`(+x).${call}`);
+			expect(output.c.source).not.toContain("_numeric(vm,");
+			expect(output.c.source).toContain("mal_vm_call_known_native");
+		},
+	);
+
+	it.each(["Boolean", "Number", "String"])(
+		"eliminates %s wrappers observed only by truthiness and typeof",
+		(constructor) => {
+			for (const expression of [
+				`!new ${constructor}(x)`,
+				`typeof new ${constructor}(x)`,
+				`typeof new ${constructor}(x) === 'object'`,
+			]) {
+				const output = inspect(expression);
+				expect(output.core.some((operation) => operation.attributes.construct)).toBe(
+					false,
+				);
+			}
+		},
+	);
+
 	it.each([
 		"Number.MAX_VALUE",
 		"Number.MIN_VALUE.toString()",
@@ -30,6 +90,9 @@ describe("primitive operation results", () => {
 		"(1.005).toPrecision(3)",
 		"(1.25).toExponential(1)",
 		"(255).toString(16)",
+		"(0.1).toString(3)",
+		"Number.MIN_VALUE.toString(2)",
+		"Number.MAX_VALUE.toString(2)",
 		"BigInt('0xff')",
 		"Number(123n)",
 		"Object(1n).valueOf()",

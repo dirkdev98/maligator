@@ -7,7 +7,10 @@ import type {
 	ConstantEvaluationTarget,
 	ConstantValue,
 } from "./constant-evaluator.ts";
-import { formatConstantNumber } from "./constant-number-format.ts";
+import {
+	formatConstantNumber,
+	formatConstantNumberRadix,
+} from "./constant-number-format.ts";
 
 const absent: ConstantValue = { kind: "undefined" };
 
@@ -368,16 +371,10 @@ export function evaluateConstantBuiltin(
 		const parameter = supplied === undefined ? undefined : integer(supplied);
 		if (method === "toString" && parameter !== undefined && parameter !== 10) {
 			if (parameter < 2 || parameter > 36) return unsupported();
-			if (!Number.isFinite(value))
-				return string(value !== value ? "NaN" : value < 0 ? "-Infinity" : "Infinity");
-			if (!Number.isSafeInteger(value)) return unsupported();
-			let magnitude = Math.abs(value),
-				digits = "";
-			do {
-				digits = "0123456789abcdefghijklmnopqrstuvwxyz"[magnitude % parameter] + digits;
-				magnitude = Math.floor(magnitude / parameter);
-			} while (magnitude !== 0);
-			return string((value < 0 ? "-" : "") + digits);
+			work += 1100;
+			if (work > workLimit) return unsupported("work-limit");
+			const formatted = formatConstantNumberRadix(value, parameter);
+			return formatted === undefined ? unsupported() : string(formatted);
 		}
 		// Binary64 expansion has at most 1100 decimal digits, independent of the value.
 		work += 1100;

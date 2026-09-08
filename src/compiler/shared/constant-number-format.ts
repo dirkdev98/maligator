@@ -215,3 +215,141 @@ export function formatConstantNumber(
 	}
 	return undefined;
 }
+
+function compareLimbs(left: ReadonlyArray<number>, right: ReadonlyArray<number>): number {
+	if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+	for (let index = left.length - 1; index >= 0; index--) {
+		if (left[index] !== right[index]) return left[index]! < right[index]! ? -1 : 1;
+	}
+	return 0;
+}
+
+function subtractLimbs(left: Array<number>, right: ReadonlyArray<number>): void {
+	let borrow = 0;
+	for (let index = 0; index < left.length; index++) {
+		const value = left[index]! - (right[index] ?? 0) - borrow;
+		left[index] = value < 0 ? value + BASE : value;
+		borrow = value < 0 ? 1 : 0;
+	}
+	while (left.length > 1 && left.at(-1) === 0) left.pop();
+}
+
+function addLimbs(
+	left: ReadonlyArray<number>,
+	right: ReadonlyArray<number>,
+): Array<number> {
+	const result: Array<number> = [];
+	let carry = 0;
+	for (let index = 0; index < Math.max(left.length, right.length); index++) {
+		const value = (left[index] ?? 0) + (right[index] ?? 0) + carry;
+		result.push(value % BASE);
+		carry = value >= BASE ? 1 : 0;
+	}
+	if (carry !== 0) result.push(carry);
+	return result;
+}
+
+/** Uses the runtime's rounding intervals and whole-integer parity for odd bases. */
+export function formatConstantNumberRadix(
+	value: number,
+	radix: number,
+): string | undefined {
+	if (!Number.isInteger(radix) || radix < 2 || radix > 36) return undefined;
+	if (radix === 10 || !Number.isFinite(value) || value === 0)
+		return formatConstantNumber(value, "toString");
+	const magnitude = Math.abs(value);
+	const bits = new DataView(new ArrayBuffer(8));
+	bits.setFloat64(0, magnitude, true);
+	const low = bits.getUint32(0, true),
+		high = bits.getUint32(4, true);
+	const rawExponent = high >>> 20;
+	const fraction = (high & 0xfffff) * 4294967296 + low;
+	const significand = fraction + (rawExponent === 0 ? 0 : 4503599627370496);
+	const asymmetric = rawExponent > 1 && fraction === 0;
+	const shift = asymmetric ? 2 : 1;
+	const scale = (rawExponent === 0 ? -1074 : rawExponent - 1075) - shift;
+	const remainder = limbsFromInteger(significand);
+	multiply(remainder, asymmetric ? 4 : 2);
+	let denominator = [1];
+	const lower = [1],
+		upper = [asymmetric ? 2 : 1];
+	const power = (limbs: Array<number>, base: number, exponent: number) => {
+		let factor = 1;
+		for (let index = 0; index < exponent; index++) {
+			if (factor * base > BASE) {
+				multiply(limbs, factor);
+				factor = 1;
+			}
+			factor *= base;
+		}
+		multiply(limbs, factor);
+	};
+	if (scale < 0) power(denominator, 2, -scale);
+	else {
+		power(remainder, 2, scale);
+		power(lower, 2, scale);
+		power(upper, 2, scale);
+	}
+	// The logarithm is only a scale estimate; exact comparisons decide normalization and rounding.
+	let exponent = Math.floor(Math.log(magnitude) / Math.log(radix)) + 1;
+	if (exponent > 1) power(denominator, radix, exponent - 1);
+	else if (exponent < 1) {
+		power(remainder, radix, 1 - exponent);
+		power(lower, radix, 1 - exponent);
+		power(upper, radix, 1 - exponent);
+	}
+	for (;;) {
+		const next = [...denominator];
+		multiply(next, radix);
+		if (compareLimbs(remainder, next) < 0) break;
+		denominator = next;
+		exponent++;
+	}
+	while (compareLimbs(remainder, denominator) < 0) {
+		multiply(remainder, radix);
+		multiply(lower, radix);
+		multiply(upper, radix);
+		exponent--;
+	}
+	const inclusive = (low & 1) === 0;
+	const digits: Array<number> = [];
+	let parity = 0;
+	for (;;) {
+		if (digits.length === 64) return undefined;
+		let digit = 0;
+		while (compareLimbs(remainder, denominator) >= 0) {
+			subtractLimbs(remainder, denominator);
+			digit++;
+		}
+		digits.push(digit);
+		parity = (parity * (radix & 1) + (digit & 1)) & 1;
+		const lowerOrder = compareLimbs(remainder, lower);
+		const upperOrder = compareLimbs(addLimbs(remainder, upper), denominator);
+		const below = lowerOrder < 0 || (inclusive && lowerOrder === 0);
+		const above = upperOrder > 0 || (inclusive && upperOrder === 0);
+		if (below || above) {
+			const twice = [...remainder];
+			multiply(twice, 2);
+			const halfOrder = compareLimbs(twice, denominator);
+			const up =
+				below && above ? halfOrder > 0 || (halfOrder === 0 && parity !== 0) : above;
+			if (up) {
+				let index = digits.length - 1;
+				while (index >= 0 && digits[index] === radix - 1) digits[index--] = 0;
+				if (index < 0) {
+					digits.unshift(1);
+					exponent++;
+				} else digits[index] = digits[index]! + 1;
+			}
+			while (digits.length > 1 && digits.at(-1) === 0) digits.pop();
+			break;
+		}
+		multiply(remainder, radix);
+		multiply(lower, radix);
+		multiply(upper, radix);
+	}
+	const encoded = digits
+		.map((digit) => "0123456789abcdefghijklmnopqrstuvwxyz"[digit])
+		.join("");
+	return `${value < 0 ? "-" : ""}${plain({ digits: encoded, point: exponent })}`;
+}

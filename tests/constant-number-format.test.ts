@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatConstantNumber } from "../src/compiler/shared/constant-number-format.ts";
+import {
+	formatConstantNumber,
+	formatConstantNumberRadix,
+} from "../src/compiler/shared/constant-number-format.ts";
 
 describe("exact constant Number formatting", () => {
 	it("matches shortest and explicit precision output across binary64 exponents", () => {
@@ -49,5 +52,27 @@ describe("exact constant Number formatting", () => {
 		expect(formatConstantNumber(1, "toFixed", 101)).toBeUndefined();
 		expect(formatConstantNumber(1, "toPrecision", 0)).toBeUndefined();
 		expect(formatConstantNumber(1, "toExponential", -1)).toBeUndefined();
+	});
+	it.each([
+		[0.1, 3, "0.0022002200220022002200220022002201"],
+		[Math.PI, 16, "3.243f6a8885a3"],
+		[-0.1, 7, "-0.04620462046204620463"],
+		[9007199254740992, 16, "20000000000000"],
+		[1.0000000000000002, 2, "1.0000000000000000000000000000000000000000000000000001"],
+	] as const)(
+		"formats %s in base %s using the target's binary rounding interval",
+		(value, radix, expected) => {
+			expect(formatConstantNumberRadix(value, radix)).toBe(expected);
+		},
+	);
+	it("retains the full binary exponent range without a significant-digit cutoff", () => {
+		expect(formatConstantNumberRadix(Number.MIN_VALUE, 2)).toBe(`0.${"0".repeat(1073)}1`);
+		expect(formatConstantNumberRadix(Number.MAX_VALUE, 2)).toBe(
+			`${"1".repeat(53)}${"0".repeat(971)}`,
+		);
+		for (let radix = 2; radix <= 36; radix++) {
+			expect(formatConstantNumberRadix(radix, radix)).toBe("10");
+			expect(formatConstantNumberRadix(-radix, radix)).toBe("-10");
+		}
 	});
 });

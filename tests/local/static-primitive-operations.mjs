@@ -1,6 +1,49 @@
 function show(value) {
 	console.log(typeof value, Object.is(value, -0) ? "-0" : String(value));
 }
+function numberPredicates(value) {
+	return [
+		Number.isFinite.call(null, value),
+		Number.isInteger.call(null, value),
+		Number.isSafeInteger.call(null, value),
+	].join("|");
+}
+for (const value of [
+	null,
+	undefined,
+	false,
+	"",
+	"1",
+	Symbol("predicate"),
+	1n,
+	{},
+	new Number(1),
+	-0,
+	1,
+	1.5,
+	Number.MAX_SAFE_INTEGER,
+	Number.MAX_SAFE_INTEGER + 1,
+	NaN,
+	Infinity,
+]) {
+	show(numberPredicates(value));
+}
+show(
+	numberPredicates({
+		valueOf() {
+			throw new Error("predicate coercion");
+		},
+	}),
+);
+let predicateEffects = 0;
+function predicateInput() {
+	predicateEffects++;
+	return {};
+}
+Number.isFinite(predicateInput());
+Number.isInteger(predicateInput());
+Number.isSafeInteger(predicateInput());
+show(predicateEffects);
 show((1.25).toFixed(2));
 show(Number.MAX_VALUE);
 show(Number.MIN_VALUE.toString());
@@ -23,6 +66,59 @@ function wrappedFixed(value) {
 	return new Number(value).toFixed(2);
 }
 show(wrappedFixed(1.25));
+function numericFormats(value) {
+	return [
+		(+value).toString(),
+		(+value).toFixed(2),
+		(+value).toExponential(),
+		(+value).toExponential(4),
+		(+value).toPrecision(3),
+		(+value).toPrecision(),
+	].join("|");
+}
+for (const value of [
+	0,
+	-0,
+	1.005,
+	-1.25,
+	1e21,
+	Number.MIN_VALUE,
+	Number.MAX_VALUE,
+	NaN,
+	Infinity,
+	-Infinity,
+]) {
+	show(numericFormats(value));
+}
+let formatEvents = "";
+show(
+	numericFormats({
+		valueOf() {
+			formatEvents += "n";
+			return 1.25;
+		},
+	}),
+);
+show(formatEvents);
+function formatOptions(value, digits) {
+	return (+value).toExponential(digits);
+}
+show(
+	formatOptions(Infinity, {
+		valueOf() {
+			formatEvents += "d";
+			return -1;
+		},
+	}),
+);
+show(formatEvents);
+for (const value of [Symbol("number"), 1n]) {
+	try {
+		show(numericFormats(value));
+	} catch (error) {
+		show(error.name);
+	}
+}
 function tag(value) {
 	return Object.prototype.toString.call(new Boolean(value));
 }
@@ -246,6 +342,31 @@ const a = wrapper(1),
 show(a !== b);
 show(typeof a);
 show(new String("abc").valueOf());
+function observeWrappers(value) {
+	return [
+		!new Boolean(value),
+		!new Number(value),
+		!new String(value),
+		typeof new Boolean(value),
+		typeof new Number(value),
+		typeof new String(value),
+	].join("|");
+}
+show(observeWrappers(false));
+show(observeWrappers(input));
+show(events);
+for (const observe of [
+	(value) => !new Number(value),
+	(value) => !new String(value),
+	(value) => typeof new Number(value),
+	(value) => typeof new String(value),
+]) {
+	try {
+		show(observe(Symbol("wrapper")));
+	} catch (error) {
+		show(error.name);
+	}
+}
 for (const operation of [
 	() => str(Symbol("x")),
 	() => num(Symbol("x")),

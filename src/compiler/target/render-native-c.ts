@@ -156,6 +156,22 @@ function nativeMathUnaryExpr(operation: string, argument: string): string | null
 	}
 }
 
+const NUMBER_FORMAT_KERNELS: Readonly<
+	Record<string, readonly [string, number, number, number]>
+> = {
+	"Number.prototype.toString": ["string", 2, 36, 10],
+	"Number.prototype.toFixed": ["fixed", 0, 100, 0],
+	"Number.prototype.toExponential": ["exponential", 0, 100, -1],
+	"Number.prototype.toPrecision": ["precision", 1, 100, -1],
+};
+
+const NUMBER_PREDICATES = new Set([
+	"Number.isNaN",
+	"Number.isFinite",
+	"Number.isInteger",
+	"Number.isSafeInteger",
+]);
+
 const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
 function nativeMathBinaryExpr(
@@ -5211,6 +5227,42 @@ function emitInstruction(
 		}
 		case "CALL_KNOWN": {
 			if (!instruction.construct && instruction.argumentMode === undefined) {
+				if (
+					NUMBER_PREDICATES.has(instruction.operation) &&
+					instruction.arguments[0] !== undefined
+				) {
+					const number = nativeNumberOperand(instruction.arguments[0]);
+					if (number !== null) {
+						const predicate =
+							instruction.operation === "Number.isNaN"
+								? `isnan(${number})`
+								: instruction.operation === "Number.isFinite"
+									? `isfinite(${number})`
+									: `isfinite(${number}) && trunc(${number}) == ${number}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
+						return [storeBoolean(instruction.dst, predicate), poll];
+					}
+				}
+				const format = NUMBER_FORMAT_KERNELS[instruction.operation];
+				if (format !== undefined) {
+					const receiver = nativeNumberOperand(instruction.thisValue);
+					const option =
+						instruction.arguments[0] === undefined
+							? { kind: "undefined" as const }
+							: decodeVmValueOperand(instruction.arguments[0]);
+					const digits =
+						option.kind === "undefined"
+							? format[3]
+							: option.kind === "number" &&
+								  option.value >= format[1] &&
+								  option.value <= format[2]
+								? option.value
+								: undefined;
+					if (receiver !== null && digits !== undefined)
+						return [
+							`r${instruction.dst} = mal_builtin_number_to_${format[0]}_numeric(vm, ${receiver}, ${digits});`,
+							poll,
+						];
+				}
 				const arguments_ = instruction.arguments.map(nativeNumberOperand);
 				const expression =
 					arguments_.length === 1 && arguments_[0] !== null
@@ -5229,7 +5281,8 @@ function emitInstruction(
 			if (
 				instruction.specialized === undefined &&
 				!(
-					instruction.operation === "String.prototype.split" &&
+					(instruction.operation === "String.prototype.split" ||
+						NUMBER_PREDICATES.has(instruction.operation)) &&
 					!instruction.construct &&
 					instruction.argumentMode === undefined
 				)
