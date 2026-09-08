@@ -11,6 +11,79 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each([
+		["clz32", "+x", "mal_builtin_math_clz32_number"],
+		["f16round", "+x", "mal_builtin_math_f16round_number"],
+		["imul", "+x, 3", "mal_builtin_math_imul_number"],
+		["pow", "2, +x", "mal_builtin_math_pow_number"],
+		["atan2", "+x, -0", "atan2"],
+		["hypot", "+x, 3, 4", "mal_builtin_math_hypot_numbers"],
+		["min", "+x, 3, 4", "mal_builtin_math_min_max_numbers"],
+		["max", "+x, 3, 4", "mal_builtin_math_min_max_numbers"],
+	])(
+		"uses the numeric %s kernel only with proven inputs",
+		(method, arguments_, kernel) => {
+			const output = inspect(`Math.${method}(${arguments_})`);
+			expect(output.c.source).toContain(`${kernel}(`);
+			expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+			expect(inspect(`Math.${method}(x, x, x)`).c.source).not.toContain(`${kernel}(`);
+			expect(inspect(`Math.${method}(${arguments_})`, false).c.source).not.toContain(
+				`${kernel}(`,
+			);
+		},
+	);
+
+	it("passes completed numeric results directly into Math kernels", () => {
+		const output = inspect("Math.pow(Number(x), Math.f16round(+x))");
+		expect(output.c.source).toContain("mal_builtin_math_pow_number(");
+		expect(output.c.source).toContain("mal_builtin_math_f16round_number(");
+	});
+
+	it("keeps each entropy draw even when the result is unused", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(){Math.random();Math.random();return 1;}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(output.c.source.match(/mal_builtin_math_random_number\(\)/g)).toHaveLength(2);
+	});
+
+	it("retains iterator semantics while bypassing sumPrecise dispatch", () => {
+		expect(inspect("Math.sumPrecise(x)").c.source).toContain(
+			"mal_builtin_math_sum_precise_known(",
+		);
+		expect(inspect("Math.sumPrecise(x)", false).c.source).not.toContain(
+			"mal_builtin_math_sum_precise_known(",
+		);
+	});
+
+	it("rounds float16 constants at every finite binade boundary and half-way point", () => {
+		for (let exponent = -24; exponent <= 15; exponent++) {
+			const step = 2 ** Math.max(exponent - 10, -24);
+			for (const magnitude of [
+				2 ** exponent,
+				2 ** exponent + step / 2,
+				2 ** exponent + 1.5 * step,
+			]) {
+				for (const sign of [-1, 1]) {
+					for (const value of [
+						sign * magnitude,
+						sign * (magnitude - step / 2 ** 20),
+						sign * (magnitude + step / 2 ** 20),
+					]) {
+						expect(
+							evaluateConstantBuiltin("Math.f16round", undefined, [
+								{ kind: "number", value },
+							]),
+						).toMatchObject({
+							kind: "value",
+							value: { kind: "number", value: Math.f16round(value) },
+						});
+					}
+				}
+			}
+		}
+	});
+
 	it.each(["at", "charAt", "codePointAt"])(
 		"reads static UTF-16 text at dynamic numeric positions with %s",
 		(method) => {
@@ -296,28 +369,51 @@ describe("primitive operation results", () => {
 		},
 	);
 
-	it.each(["sin", "round", "exp"])(
-		"uses target Math.%s after one dynamic numeric conversion",
-		(method) => {
-			const output = inspect(`Math.${method}(+x)`);
-			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
-				false,
-			);
-			expect(
-				output.core.filter(
-					(operation) =>
-						operation.opcode === "unary" && operation.attributes.operator === "+",
-				),
-			).toHaveLength(1);
-			expect(
-				output.core.some(
-					(operation) =>
-						operation.opcode === "mathUnaryNumber" &&
-						operation.attributes.operation === `Math.${method}`,
-				),
-			).toBe(true);
-		},
-	);
+	it.each([
+		"abs",
+		"floor",
+		"ceil",
+		"trunc",
+		"sqrt",
+		"cbrt",
+		"sign",
+		"log",
+		"log2",
+		"log10",
+		"exp",
+		"sin",
+		"cos",
+		"tan",
+		"asin",
+		"acos",
+		"atan",
+		"sinh",
+		"cosh",
+		"tanh",
+		"asinh",
+		"acosh",
+		"atanh",
+		"log1p",
+		"expm1",
+		"fround",
+		"round",
+	])("uses target Math.%s after one dynamic numeric conversion", (method) => {
+		const output = inspect(`Math.${method}(+x)`);
+		expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(false);
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "+",
+			),
+		).toHaveLength(1);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "mathUnaryNumber" &&
+					operation.attributes.operation === `Math.${method}`,
+			),
+		).toBe(true);
+	});
 
 	it("limits output and search work before producing a constant", () => {
 		const receiver = { kind: "string", value: "abc" } as const;

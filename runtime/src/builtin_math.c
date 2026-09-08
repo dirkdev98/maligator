@@ -244,6 +244,11 @@ static MalValue mal_builtin_math_round(MalVm *vm, MalValue this_value, const Mal
     return mal_builtin_math_round_number(x);
 }
 
+f64 mal_builtin_math_clz32_number(f64 x) {
+    u32 value = mal_ops_number_to_uint32(x);
+    return value == 0 ? 32 : __builtin_clz(value);
+}
+
 static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -252,8 +257,13 @@ static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const Mal
     if (!mal_builtin_math_to_number(vm, args, arg_count, 0, &x)) {
         return mal_value_new_nan();
     }
-    u32 value = mal_ops_number_to_uint32(x);
-    return mal_value_from_i32(value == 0 ? 32 : __builtin_clz(value));
+    return mal_ops_number_value(mal_builtin_math_clz32_number(x));
+}
+
+f64 mal_builtin_math_imul_number(f64 left, f64 right) {
+    u32 a = mal_ops_number_to_uint32(left);
+    u32 b = mal_ops_number_to_uint32(right);
+    return (i32) (a * b);
 }
 
 static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -268,15 +278,13 @@ static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalV
     if (!mal_builtin_math_to_number(vm, args, arg_count, 1, &right)) {
         return mal_value_new_nan();
     }
-    u32 a = mal_ops_number_to_uint32(left);
-    u32 b = mal_ops_number_to_uint32(right);
-    return mal_value_from_i32((i32) (a * b));
+    return mal_ops_number_value(mal_builtin_math_imul_number(left, right));
 }
 
 // Spec "applying the ** operator": C pow disagrees with the spec on NaN
 // exponents and on |base| == 1 with an infinite exponent, so handle those
 // special cases by hand before delegating to libm.
-static f64 mal_builtin_math_pow_op(f64 base, f64 exponent) {
+f64 mal_builtin_math_pow_number(f64 base, f64 exponent) {
     if (isnan(exponent)) {
         return NAN;
     }
@@ -294,7 +302,6 @@ static f64 mal_builtin_math_pow_op(f64 base, f64 exponent) {
         if (abs_base > 1.0) {
             return exponent > 0.0 ? INFINITY : 0.0;
         }
-        // abs_base < 1.0
         return exponent > 0.0 ? 0.0 : INFINITY;
     }
     return pow(base, exponent);
@@ -312,7 +319,7 @@ static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalVa
     if (!mal_builtin_math_to_number(vm, args, arg_count, 1, &exponent)) {
         return mal_value_new_nan();
     }
-    return mal_ops_number_value(mal_builtin_math_pow_op(base, exponent));
+    return mal_ops_number_value(mal_builtin_math_pow_number(base, exponent));
 }
 
 static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -330,130 +337,92 @@ static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const Mal
     return mal_ops_number_value(atan2(y, x));
 }
 
-// Math.hypot: coerce every argument first (ToNumber order, abrupt completions
-// propagate), then if any coerced value is an infinity the result is +Infinity
-// even when another is NaN; otherwise NaN if any is NaN.
+typedef struct {
+    bool any_infinity;
+    bool any_nan;
+    f64 scale;
+    f64 scaled_sum;
+} MalHypotState;
+
+static void mal_builtin_math_hypot_add(MalHypotState *state, f64 value) {
+    if (isinf(value)) {
+        state->any_infinity = true;
+    } else if (isnan(value)) {
+        state->any_nan = true;
+    } else {
+        // Rescaling keeps finite squares representable without changing coercion order.
+        f64 magnitude = fabs(value);
+        if (magnitude > state->scale) {
+            f64 ratio = state->scale / magnitude;
+            state->scaled_sum = state->scaled_sum * ratio * ratio + 1.0;
+            state->scale = magnitude;
+        } else if (magnitude != 0.0) {
+            f64 ratio = magnitude / state->scale;
+            state->scaled_sum += ratio * ratio;
+        }
+    }
+}
+
+static f64 mal_builtin_math_hypot_finish(const MalHypotState *state) {
+    if (state->any_infinity) return INFINITY;
+    if (state->any_nan) return NAN;
+    return state->scale == 0.0 ? 0.0 : state->scale * sqrt(state->scaled_sum);
+}
+
+f64 mal_builtin_math_hypot_numbers(const f64 *args, i32 arg_count) {
+    if (arg_count == 1) return fabs(args[0]);
+    if (arg_count == 2) {
+        if (isinf(args[0]) || isinf(args[1])) return INFINITY;
+        if (isnan(args[0]) || isnan(args[1])) return NAN;
+        return hypot(args[0], args[1]);
+    }
+    MalHypotState state = {0};
+    for (i32 i = 0; i < arg_count; i++) mal_builtin_math_hypot_add(&state, args[i]);
+    return mal_builtin_math_hypot_finish(&state);
+}
+
 static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-
-    if (arg_count == 0) {
-        return mal_value_from_i32(0);
+    if (arg_count <= 2) {
+        f64 numbers[2];
+        for (i32 i = 0; i < arg_count; i++) {
+            if (!mal_builtin_math_value_to_number(vm, args[i], &numbers[i])) return mal_value_new_nan();
+        }
+        return mal_ops_number_value(mal_builtin_math_hypot_numbers(numbers, arg_count));
     }
-    if (arg_count == 1) {
-        f64 value;
-        if (!mal_builtin_math_value_to_number(vm, args[0], &value)) {
-            return mal_value_new_nan();
-        }
-        return mal_ops_number_value(fabs(value));
-    }
-    if (arg_count == 2) {
-        f64 left;
-        if (!mal_builtin_math_value_to_number(vm, args[0], &left)) {
-            return mal_value_new_nan();
-        }
-        f64 right;
-        if (!mal_builtin_math_value_to_number(vm, args[1], &right)) {
-            return mal_value_new_nan();
-        }
-        if (isinf(left) || isinf(right)) {
-            return mal_ops_number_value(INFINITY);
-        }
-        if (isnan(left) || isnan(right)) {
-            return mal_value_new_nan();
-        }
-        return mal_ops_number_value(hypot(left, right));
-    }
-
-    bool any_infinity = false;
-    bool any_nan = false;
-    f64 scale = 0.0;
-    f64 scaled_sum = 0.0;
+    MalHypotState state = {0};
     for (i32 i = 0; i < arg_count; i++) {
         f64 value;
-        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) {
-            return mal_value_new_nan();
-        }
-        if (isinf(value)) {
-            any_infinity = true;
-            continue;
-        }
-        if (isnan(value)) {
-            any_nan = true;
-            continue;
-        }
-
-        // Accumulate scaled squares as values are coerced. Folding already
-        // converted Numbers is not observable, while changing the scale when
-        // a larger magnitude arrives avoids both overflow and a second pass.
-        f64 magnitude = fabs(value);
-        if (magnitude > scale) {
-            f64 ratio = scale / magnitude;
-            scaled_sum = scaled_sum * ratio * ratio + 1.0;
-            scale = magnitude;
-        } else if (magnitude != 0.0) {
-            f64 ratio = magnitude / scale;
-            scaled_sum += ratio * ratio;
-        }
+        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) return mal_value_new_nan();
+        mal_builtin_math_hypot_add(&state, value);
     }
-
-    if (any_infinity) {
-        return mal_ops_number_value(INFINITY);
-    }
-    if (any_nan) {
-        return mal_value_new_nan();
-    }
-    if (scale == 0.0) {
-        return mal_ops_number_value(0.0);
-    }
-    return mal_ops_number_value(scale * sqrt(scaled_sum));
+    return mal_ops_number_value(mal_builtin_math_hypot_finish(&state));
 }
 
-// Math.min / Math.max must coerce *all* arguments in order. Folding each
-// successfully coerced Number into native state is not observable, so no
-// temporary argument array is needed. NaN poisons the eventual result; +0 is
-// treated as greater than -0 so min/max pick the spec-correct signed zero.
+static f64 mal_builtin_math_min_max_add(f64 result, f64 value, bool is_max) {
+    if (isnan(result) || isnan(value)) return NAN;
+    if (result == 0.0 && value == 0.0) {
+        bool negative = is_max ? signbit(result) && signbit(value) : signbit(result) || signbit(value);
+        return negative ? -0.0 : 0.0;
+    }
+    return is_max ? (value > result ? value : result) : (value < result ? value : result);
+}
+
+f64 mal_builtin_math_min_max_numbers(const f64 *args, i32 arg_count, bool is_max) {
+    f64 result = is_max ? -INFINITY : INFINITY;
+    for (i32 i = 0; i < arg_count; i++) result = mal_builtin_math_min_max_add(result, args[i], is_max);
+    return result;
+}
+
 static MalValue mal_builtin_math_min_max(MalVm *vm, const MalValue *args, i32 arg_count, bool is_max) {
     f64 result = is_max ? -INFINITY : INFINITY;
-    bool result_is_neg_zero = false;
-    bool saw_nan = false;
+    // A NaN result cannot short-circuit the remaining observable conversions.
     for (i32 i = 0; i < arg_count; i++) {
         f64 value;
-        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) {
-            return mal_value_new_nan();
-        }
-        if (isnan(value)) {
-            saw_nan = true;
-            continue;
-        }
-        bool value_is_neg_zero = (value == 0.0 && signbit(value));
-        if (is_max) {
-            if (value > result) {
-                result = value;
-                result_is_neg_zero = value_is_neg_zero;
-            } else if (value == 0.0 && result == 0.0 && result_is_neg_zero && !value_is_neg_zero) {
-                // +0 beats -0 for max.
-                result = value;
-                result_is_neg_zero = false;
-            }
-        } else {
-            if (value < result) {
-                result = value;
-                result_is_neg_zero = value_is_neg_zero;
-            } else if (value == 0.0 && result == 0.0 && !result_is_neg_zero && value_is_neg_zero) {
-                // -0 beats +0 for min.
-                result = value;
-                result_is_neg_zero = true;
-            }
-        }
-    }
-
-    if (saw_nan) {
-        return mal_value_new_nan();
-    }
-    if (result == 0.0 && result_is_neg_zero) {
-        return mal_value_from_f64(-0.0);
+        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) return mal_value_new_nan();
+        result = mal_builtin_math_min_max_add(result, value, is_max);
     }
     return mal_ops_number_value(result);
 }
@@ -473,12 +442,7 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
 }
 
 static MalValue mal_builtin_math_min_max_two(f64 left, f64 right, bool is_max) {
-    if (isnan(left) || isnan(right)) return mal_value_new_nan();
-    if (left == 0.0 && right == 0.0) {
-        bool negative = is_max ? signbit(left) && signbit(right) : signbit(left) || signbit(right);
-        return negative ? mal_value_from_f64(-0.0) : mal_value_from_i32(0);
-    }
-    return mal_ops_number_value(is_max ? (left > right ? left : right) : (left < right ? left : right));
+    return mal_ops_number_value(mal_builtin_math_min_max_add(left, right, is_max));
 }
 
 f64 mal_builtin_math_binary_number_known(MalMathBinaryOp operation, f64 left, f64 right) {
@@ -529,6 +493,10 @@ bool mal_builtin_math_binary_fast(
     return false;
 }
 
+f64 mal_builtin_math_f16round_number(f64 x) {
+    return mal_float16_bits_to_f64(mal_float16_f64_to_bits(x));
+}
+
 static MalValue mal_builtin_math_f16round(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -537,8 +505,7 @@ static MalValue mal_builtin_math_f16round(MalVm *vm, MalValue this_value, const 
     if (!mal_builtin_math_to_number(vm, args, arg_count, 0, &x)) {
         return mal_value_new_nan();
     }
-    return mal_ops_number_value(
-        mal_float16_bits_to_f64(mal_float16_f64_to_bits(x)));
+    return mal_ops_number_value(mal_builtin_math_f16round_number(x));
 }
 
 // Math.sumPrecise: exact (infinitely precise then single-rounded) summation of
@@ -749,9 +716,10 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
     (void) this_value;
     (void) new_target;
     (void) callee;
+    return mal_builtin_math_sum_precise_known(vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+}
 
-    MalValue items = arg_count > 0 ? args[0] : mal_value_new_undefined();
-
+MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items) {
     MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, items, &record)) {
         return mal_value_new_nan();
@@ -957,6 +925,10 @@ static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const Ma
     (void) new_target;
     (void) callee;
 
+    return mal_ops_number_value(mal_builtin_math_random_number());
+}
+
+f64 mal_builtin_math_random_number(void) {
     // xorshift64*: fast and plenty for a non-cryptographic Math.random.
     // Several isolates may execute on different host threads. Advance the shared
     // process generator with a CAS so concurrent draws cannot race, repeat a state,
@@ -973,7 +945,7 @@ static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const Ma
         &mal_builtin_math_random_state, &previous, x,
         memory_order_relaxed, memory_order_relaxed));
 
-    return mal_value_from_f64((f64) ((x * 0x2545F4914F6CDD1DULL) >> 11) / (f64) (1ULL << 53));
+    return (f64) ((x * 0x2545F4914F6CDD1DULL) >> 11) / (f64) (1ULL << 53);
 }
 
 void mal_builtin_math_install(MalVm *vm) {

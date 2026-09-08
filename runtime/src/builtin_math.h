@@ -95,3 +95,13 @@ f64 mal_builtin_math_binary_number_known(
 bool mal_builtin_math_binary_fast(
     MalValue callee, MalMathBinaryOp *cached_op, MalValue left, MalValue right, MalValue *result
 );
+
+// Callers prove canonical identity and numeric inputs; these kernels never coerce.
+f64 mal_builtin_math_clz32_number(f64 argument);
+f64 mal_builtin_math_imul_number(f64 left, f64 right);
+f64 mal_builtin_math_pow_number(f64 base, f64 exponent);
+f64 mal_builtin_math_f16round_number(f64 argument);
+f64 mal_builtin_math_hypot_numbers(const f64 *arguments, i32 argument_count);
+f64 mal_builtin_math_min_max_numbers(const f64 *arguments, i32 argument_count, bool is_max);
+f64 mal_builtin_math_random_number(void);
+MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items);

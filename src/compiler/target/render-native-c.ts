@@ -186,6 +186,14 @@ const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.codePointAt": "CODE_POINT_AT",
 };
 
+const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> = {
+	"Math.clz32": ["mal_builtin_math_clz32_number", 1],
+	"Math.f16round": ["mal_builtin_math_f16round_number", 1],
+	"Math.imul": ["mal_builtin_math_imul_number", 2],
+	"Math.pow": ["mal_builtin_math_pow_number", 2],
+	"Math.atan2": ["atan2", 2],
+};
+
 const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
 function nativeMathBinaryExpr(
@@ -5288,9 +5296,55 @@ function emitInstruction(
 							poll,
 						];
 				}
+				if (instruction.operation === "Math.random") {
+					return [storeNumber(instruction.dst, "mal_builtin_math_random_number()"), poll];
+				}
+				if (instruction.operation === "Math.sumPrecise") {
+					const items = instruction.arguments[0];
+					const result = `sum_result_${ip}`;
+					return [
+						`MalValue ${result} = mal_builtin_math_sum_precise_known(vm, ${items === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(items)});`,
+						throwCheck(),
+						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+						poll,
+					];
+				}
+				const numericKernel = MATH_NUMBER_KERNELS[instruction.operation];
+				if (numericKernel !== undefined) {
+					const arguments_ = Array.from({ length: numericKernel[1] }, (_, index) => {
+						const operand = instruction.arguments[index];
+						return operand === undefined ? "NAN" : nativeNumberOperand(operand);
+					});
+					if (arguments_.every((argument) => argument !== null)) {
+						return [
+							storeNumber(
+								instruction.dst,
+								`${numericKernel[0]}(${arguments_.join(", ")})`,
+							),
+							poll,
+						];
+					}
+				}
+				if (
+					["Math.min", "Math.max", "Math.hypot"].includes(instruction.operation) &&
+					instruction.arguments.length <= 64
+				) {
+					const arguments_ = instruction.arguments.map(nativeNumberOperand);
+					if (arguments_.every((argument) => argument !== null)) {
+						const values =
+							arguments_.length === 0
+								? "nullptr"
+								: `((f64[]){ ${arguments_.join(", ")} })`;
+						const expression =
+							instruction.operation === "Math.hypot"
+								? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
+								: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
+						return [storeNumber(instruction.dst, expression), poll];
+					}
+				}
 				const arguments_ = instruction.arguments.map(nativeNumberOperand);
 				const expression =
-					arguments_.length === 1 && arguments_[0] !== null
+					arguments_.length >= 1 && arguments_[0] !== null
 						? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
 						: arguments_.length === 2 &&
 							  arguments_.every((value) => value !== null) &&

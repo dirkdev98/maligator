@@ -108,6 +108,25 @@ function integer(value: number): number {
 	return value !== value || value === 0 ? 0 : Math.trunc(value);
 }
 
+function roundFloat16(value: number): number {
+	const magnitude = Math.abs(value);
+	if (!Number.isFinite(value) || value === 0) return value;
+	const sign = value < 0 ? -1 : 1;
+	if (magnitude < 2 ** -25) return sign * 0;
+	if (magnitude >= 65520) return sign * Infinity;
+	const bits = new DataView(new ArrayBuffer(8));
+	bits.setFloat64(0, magnitude, false);
+	const exponent = ((bits.getUint32(0, false) >>> 20) & 2047) - 1023;
+	const step = 2 ** Math.max(exponent - 10, -24);
+	const units = magnitude / step;
+	const lower = Math.floor(units);
+	const remainder = units - lower;
+	// Power-of-two scaling is exact; only the half-way decision rounds the input.
+	const rounded =
+		remainder > 0.5 || (remainder === 0.5 && lower % 2 !== 0) ? lower + 1 : lower;
+	return sign * rounded * step;
+}
+
 function whitespace(unit: number): boolean {
 	return (
 		(unit >= 9 && unit <= 13) ||
@@ -480,6 +499,13 @@ export function evaluateConstantBuiltin(
 				return number(Math.round(value));
 			case "Math.sign":
 				return number(Math.sign(value));
+			case "Math.f16round":
+				return number(roundFloat16(value));
+			case "Math.fround": {
+				const bits = new DataView(new ArrayBuffer(4));
+				bits.setFloat32(0, value, false);
+				return number(bits.getFloat32(0, false));
+			}
 			case "Math.clz32":
 				return number(Math.clz32(value));
 			case "Math.imul": {

@@ -778,12 +778,20 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				CORE_LOCAL_VALUE_KIND_ANALYSIS,
 			)).exactScalar(value);
 			const definition = definingInstruction(fn, value);
+			const operation =
+				definition === undefined
+					? undefined
+					: fn.instructionAttributes(definition).operation;
 			return (
 				(scalar === "int32" || scalar === "number") &&
 				definition !== undefined &&
 				(["createNumber", "createF64"].includes(fn.instructionOpcodeName(definition)) ||
 					(fn.instructionOpcodeName(definition) === "unary" &&
-						fn.instructionAttributes(definition).operator === "+"))
+						fn.instructionAttributes(definition).operator === "+") ||
+					(fn.instructionOpcodeName(definition) === "callKnown" &&
+						!fn.instructionAttributes(definition).construct &&
+						typeof operation === "string" &&
+						builtinPrimitiveResult(operation) === "number"))
 			);
 		};
 		for (const instruction of calls) {
@@ -870,6 +878,17 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						editor.setValueRepresentation(receiver, "f64");
 					}
 					continue;
+				}
+				if (operation.startsWith("Math.")) {
+					for (const argument of copyInstructionOperands(fn, instruction).slice(1)) {
+						if (
+							fn.valueRepresentation(argument) !== "f64" &&
+							canScalarizeNumber(argument)
+						) {
+							editor ??= CoreEditor.open(program, item.function);
+							editor.setValueRepresentation(argument, "f64");
+						}
+					}
 				}
 				const descriptor = builtinOperations.find(({ id }) => id === operation);
 				const numericOpcode = MATH_UNARY_OPERATIONS.has(operation)

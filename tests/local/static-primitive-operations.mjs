@@ -546,3 +546,169 @@ try {
 } catch (error) {
 	show(error.name);
 }
+
+function numericMath(x, y, z, targetAtan2) {
+	show(Math.clz32(+x));
+	show(Math.f16round(+x));
+	show(Math.fround(+x));
+	show(Math.imul(+x, +y));
+	show(Math.pow(+x, +y));
+	show(Object.is(Math.atan2(+x, +y), targetAtan2(x, y)));
+	show(Math.min(+x, +y, +z));
+	show(Math.max(+x, +y, +z));
+	show(Math.hypot(+x, +y, +z) === Infinity);
+	show(Number.isNaN(Math.hypot(+x, +y, +z)));
+}
+globalThis.numericMath = numericMath;
+for (const x of [
+	-Infinity,
+	-65520,
+	-1,
+	-0,
+	0,
+	2 ** -25,
+	1 + 2 ** -11,
+	65520,
+	Infinity,
+	NaN,
+]) {
+	for (const y of [-Infinity, -3, -0, 0, 3, Infinity, NaN])
+		numericMath(x, y, 4, Math.atan2);
+}
+for (const method of [
+	"min",
+	"max",
+	"hypot",
+	"pow",
+	"atan2",
+	"imul",
+	"f16round",
+	"clz32",
+]) {
+	events = "";
+	const left = {
+		valueOf() {
+			events += "l";
+			return NaN;
+		},
+	};
+	const right = {
+		valueOf() {
+			events += "r";
+			throw new Error("stop");
+		},
+	};
+	try {
+		show(Math[method](left, right));
+	} catch (error) {
+		show(error.message);
+	}
+	show(events);
+}
+events = "";
+function mathExtra() {
+	events += "e";
+	return 1;
+}
+show(Math.pow(2, 3, mathExtra()));
+show(Math.f16round(1, mathExtra()));
+show(events);
+show(Math.pow(NaN, 0));
+show(Math.pow(-1, Infinity));
+show(Math.pow(1, NaN));
+show(Math.hypot(3, 4));
+show(Math.hypot(3, 4, 12));
+show(Math.hypot(3e200, 4e200) / 1e200);
+show(Math.hypot(3e-200, 4e-200) / 1e-200);
+let randomInRange = true;
+let randomVaries = false;
+const randomFirst = Math.random();
+for (let i = 0; i < 64; i++) {
+	const draw = Math.random();
+	randomInRange = randomInRange && draw >= 0 && draw < 1;
+	randomVaries = randomVaries || draw !== randomFirst;
+}
+show(randomInRange && randomVaries);
+
+function unaryMath(x, callbacks) {
+	const number = +x;
+	const actual = [
+		Math.abs(number),
+		Math.floor(number),
+		Math.ceil(number),
+		Math.trunc(number),
+		Math.sqrt(number),
+		Math.cbrt(number),
+		Math.sign(number),
+		Math.log(number),
+		Math.log2(number),
+		Math.log10(number),
+		Math.exp(number),
+		Math.sin(number),
+		Math.cos(number),
+		Math.tan(number),
+		Math.asin(number),
+		Math.acos(number),
+		Math.atan(number),
+		Math.sinh(number),
+		Math.cosh(number),
+		Math.tanh(number),
+		Math.asinh(number),
+		Math.acosh(number),
+		Math.atanh(number),
+		Math.log1p(number),
+		Math.expm1(number),
+		Math.fround(number),
+		Math.round(number),
+	];
+	for (let i = 0; i < actual.length; i++) {
+		if (!Object.is(actual[i], callbacks[i](number)))
+			throw new Error("Math kernel mismatch " + i);
+	}
+}
+globalThis.unaryMath = unaryMath;
+const mathCallbacks = [
+	Math.abs,
+	Math.floor,
+	Math.ceil,
+	Math.trunc,
+	Math.sqrt,
+	Math.cbrt,
+	Math.sign,
+	Math.log,
+	Math.log2,
+	Math.log10,
+	Math.exp,
+	Math.sin,
+	Math.cos,
+	Math.tan,
+	Math.asin,
+	Math.acos,
+	Math.atan,
+	Math.sinh,
+	Math.cosh,
+	Math.tanh,
+	Math.asinh,
+	Math.acosh,
+	Math.atanh,
+	Math.log1p,
+	Math.expm1,
+	Math.fround,
+	Math.round,
+];
+for (const value of [
+	-Infinity,
+	-65520,
+	-1,
+	-0.5,
+	-0,
+	0,
+	2 ** -25,
+	0.5,
+	1,
+	65520,
+	Infinity,
+	NaN,
+])
+	unaryMath(value, mathCallbacks);
+show("Math kernels match target runtime");
