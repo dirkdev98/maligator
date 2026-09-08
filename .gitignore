@@ -11,6 +11,7 @@ local*.js
 tsconfig.tsbuildinfo
 
 tests/local/tmp*.js
+maligator_static_values*
 *_todo.md
 .claude
 AGENTS.local.md
