@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "858488d4d56fa11800e5d5278f7dec727325014cbca08fba54c41cb112d80fa7"
+		"sha256": "c4c417641d453d32da2ed14fcca510baccff3332f1d508639ed8eca6b5ad3d19"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -141,7 +141,7 @@
 	},
 	{
 		"file": "builtin_uri.c",
-		"sha256": "e25a4b00869c9d57065a88b738061c96c03039e147a5bc1998cd351e18f30b81"
+		"sha256": "b66a729f33c2b85e4c5dc89902a1b6af4fb701ccc3dd75da8659d74ec61df924"
 	},
 	{
 		"file": "builtin_weak_ref.c",

@@ -277,3 +277,7 @@ MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool c
 MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool start, bool end);
 MalValue mal_builtin_string_is_well_formed_known(MalString *string);
 MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string);
+
+// Canonical primitive-string calls; replacement and attribute coercion remain observable.
+MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalString *search, MalValue replacement, bool all);
+MalValue mal_builtin_string_html_known(MalVm *vm, MalString *string, MalValue attribute_value, const byte *tag, const byte *attribute);

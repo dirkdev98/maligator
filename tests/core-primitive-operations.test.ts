@@ -11,6 +11,80 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each(["replace", "replaceAll"])(
+		"uses plain-string %s kernels while retaining callback work",
+		(method) => {
+			for (const expression of [
+				`String(x).${method}('a', x)`,
+				`'ab'.${method}(String(x), '$&')`,
+				`'ab'.${method}('a', x)`,
+			]) {
+				const output = inspect(expression);
+				expect(output.c.source).toContain("mal_builtin_string_replace_known(");
+				expect(output.c.source).not.toContain(
+					"mal_known_native_mal_builtin_string_prototype_replace",
+				);
+			}
+			expect(inspect(`'ab'.${method}(x, 'c')`).c.source).toContain(
+				"mal_vm_call_known_native(",
+			);
+			expect(inspect(`String(x).${method}('a', 'b')`, false).c.source).not.toContain(
+				"mal_builtin_string_replace_known(",
+			);
+		},
+	);
+	it.each([
+		"anchor",
+		"big",
+		"blink",
+		"bold",
+		"fixed",
+		"fontcolor",
+		"fontsize",
+		"italics",
+		"link",
+		"small",
+		"strike",
+		"sub",
+		"sup",
+	])("folds legacy %s constants and directly builds dynamic strings", (method) => {
+		expect(
+			inspect(`'a<&'.${method}('b"c')`).core.some((op) => op.opcode === "callKnown"),
+		).toBe(false);
+		const output = inspect(`String(x).${method}(x)`);
+		expect(output.c.source).toContain("mal_builtin_string_html_known(");
+		expect(output.c.source).not.toContain(
+			`mal_known_native_mal_builtin_string_prototype_${method}`,
+		);
+		expect(inspect(`String(x).${method}(x)`, false).c.source).not.toContain(
+			"mal_builtin_string_html_known(",
+		);
+	});
+	it.each([
+		"encodeURI",
+		"encodeURIComponent",
+		"decodeURI",
+		"decodeURIComponent",
+		"escape",
+		"unescape",
+	])("lowers canonical %s on primitive strings", (operation) => {
+		const helper = operation.startsWith("encode")
+			? "encode"
+			: operation.startsWith("decode")
+				? "decode"
+				: operation;
+		const output = inspect(`${operation}(String(x))`);
+		expect(output.c.source).toContain(`mal_builtin_uri_${helper}_known(`);
+		const callback = operation
+			.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+			.replace("_u_r_i", "_uri");
+		expect(output.c.source).not.toContain(`mal_known_native_mal_builtin_${callback}`);
+		expect(inspect(`${operation}(x)`).c.source).toContain("mal_vm_call_known_native(");
+		expect(inspect(`${operation}(String(x))`, false).c.source).not.toContain(
+			`mal_builtin_uri_${helper}_known(`,
+		);
+	});
+
 	it.each([
 		"trim",
 		"trimStart",

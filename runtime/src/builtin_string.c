@@ -1688,19 +1688,10 @@ done:
     return result;
 }
 
-/** Annex B CreateHTML, including the legacy quote-only attribute escaping. */
-static MalValue mal_builtin_string_create_html(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    const byte *tag,
-    const byte *attribute
+MalValue mal_builtin_string_html_known(
+    MalVm *vm, MalString *string, MalValue attribute_value_input,
+    const byte *tag, const byte *attribute
 ) {
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
     MalValue roots[2] = {
         mal_value_from_string(string),
         mal_value_new_undefined(),
@@ -1713,7 +1704,7 @@ static MalValue mal_builtin_string_create_html(
     usize quote_count = 0;
     if (attribute != nullptr) {
         attribute_value = mal_builtin_string_coerce(
-            vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+            vm, attribute_value_input);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             mal_gc_unroot(&root_span);
             return mal_value_new_undefined();
@@ -1831,8 +1822,10 @@ static MalValue mal_builtin_string_create_html(
         MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,              \
         MalValue new_target, MalValue callee                                               \
     ) {                                                                                   \
-        return mal_builtin_string_create_html(                                             \
-            vm, this_value, args, arg_count, tag, attribute);                             \
+        MalString *string = mal_builtin_string_this_to_string(vm, this_value);             \
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined(); \
+        return mal_builtin_string_html_known(vm, string,                                  \
+            arg_count > 0 ? args[0] : mal_value_new_undefined(), tag, attribute);            \
     }
 
 MAL_DEFINE_CREATE_HTML_METHOD(anchor, "a", "name")
@@ -3093,15 +3086,10 @@ static MalValue mal_builtin_string_replace_literal(
         mal_string_new_owned(&vm->heap, output, result_length));
 }
 
-static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    MalValue replace_value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalString *search, MalValue replace_value, bool all) {
     MalValue roots[4] = {
         mal_value_from_string(string),
-        mal_value_new_undefined(),
+        mal_value_from_string(search),
         replace_value,
         mal_value_new_undefined(),
     };
@@ -3110,15 +3098,6 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
     StrBuf out = {0};
     MalValue result = mal_value_new_undefined();
 
-    MalString *search = mal_builtin_string_coerce(
-        vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        goto done;
-    }
-    roots[1] = mal_value_from_string(search);
-
-    // A callable replaceValue is invoked with (matched, position, string); else
-    // it is ToString'd and used as a $-substitution template.
     bool functional = mal_value_is_callable(roots[2]);
     MalString *replacement = nullptr;
     if (!functional) {
@@ -3169,8 +3148,7 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
             }
         }
 
-        // Gap before the match, then the (substituted or functional) replacement.
-        if (!strbuf_append(vm, &out, su + seg_start, position - seg_start)) {
+        if (position > seg_start && !strbuf_append(vm, &out, su + seg_start, position - seg_start)) {
             goto done;
         }
         if (functional) {
@@ -3232,7 +3210,6 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
         }
     }
 
-    // Trailing segment after the last match.
     if (seg_start < length) {
         if (!strbuf_append(vm, &out, su + seg_start, length - seg_start)) {
             goto done;
@@ -3244,6 +3221,19 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
 
 done:
     mal_u16_buffer_dispose(&out);
+    mal_gc_unroot(&root_span);
+    return result;
+}
+
+static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalValue roots[2] = {mal_value_from_string(string), arg_count > 1 ? args[1] : mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    MalString *search = mal_builtin_string_coerce(vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : mal_builtin_string_replace_known(vm, mal_value_to_string(roots[0]), search, roots[1], all);
     mal_gc_unroot(&root_span);
     return result;
 }

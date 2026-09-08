@@ -122,6 +122,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_set.h"',
 	'#include "builtin_number.h"',
 	'#include "builtin_string.h"',
+	'#include "builtin_uri.h"',
 	'#include "builtin_regexp.h"',
 	'#include "builtin_math.h"',
 	// Native-C for-of lowering uses the iterator-record helpers.

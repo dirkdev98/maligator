@@ -180,6 +180,31 @@ const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>>
 	"String.prototype.endsWith": ["ENDS_WITH", "INFINITY"],
 };
 
+const STRING_HTML_KERNELS: Readonly<Record<string, readonly [string, string?]>> = {
+	anchor: ["a", "name"],
+	big: ["big"],
+	blink: ["blink"],
+	bold: ["b"],
+	fixed: ["tt"],
+	fontcolor: ["font", "color"],
+	fontsize: ["font", "size"],
+	italics: ["i"],
+	link: ["a", "href"],
+	small: ["small"],
+	strike: ["strike"],
+	sub: ["sub"],
+	sup: ["sup"],
+};
+
+const URI_KERNELS: Readonly<Record<string, readonly [string, boolean?]>> = {
+	encodeURI: ["encode", false],
+	encodeURIComponent: ["encode", true],
+	decodeURI: ["decode", true],
+	decodeURIComponent: ["decode", false],
+	"globalThis.escape": ["escape"],
+	"globalThis.unescape": ["unescape"],
+};
+
 const STRING_RANGE_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.slice": "SLICE",
 	"String.prototype.substring": "SUBSTRING",
@@ -5422,6 +5447,66 @@ function emitInstruction(
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					poll,
 				];
+				const uri = URI_KERNELS[instruction.operation];
+				if (
+					uri !== undefined &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined &&
+					instruction.arguments[0] !== undefined
+				) {
+					const input = instruction.arguments[0];
+					const value = boxedOperand(input);
+					const result = `uri_result_${ip}`;
+					const direct = [
+						`MalValue ${result} = mal_builtin_uri_${uri[0]}_known(vm, mal_value_to_string(${value})${uri[1] === undefined ? "" : `, ${uri[1]}`});`,
+						throwCheck(),
+						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+						poll,
+					];
+					if (operandRep(input) === "string") return direct;
+					return [
+						`if (mal_value_is_string(${value})) {`,
+						...direct.map((line) => `  ${line}`),
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (
+					["String.prototype.replace", "String.prototype.replaceAll"].includes(
+						instruction.operation,
+					) &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined &&
+					instruction.arguments[0] !== undefined
+				) {
+					const receiver = boxedOperand(instruction.thisValue);
+					const search = boxedOperand(instruction.arguments[0]);
+					const replacement = instruction.arguments[1];
+					const result = `replace_result_${ip}`;
+					const direct = [
+						`MalValue ${result} = mal_builtin_string_replace_known(vm, mal_value_to_string(${receiver}), mal_value_to_string(${search}), ${replacement === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(replacement)}, ${instruction.operation === "String.prototype.replaceAll"});`,
+						throwCheck(),
+						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+						poll,
+					];
+					const guards = [
+						...(operandRep(instruction.thisValue) === "string"
+							? []
+							: [`mal_value_is_string(${receiver})`]),
+						...(operandRep(instruction.arguments[0]) === "string"
+							? []
+							: [`mal_value_is_string(${search})`]),
+					];
+					if (guards.length === 0) return direct;
+					return [
+						`if (${guards.join(" && ")}) {`,
+						...direct.map((line) => `  ${line}`),
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (
 					!instruction.construct &&
 					instruction.argumentMode === undefined &&
@@ -5442,7 +5527,12 @@ function emitInstruction(
 							: String.fromCharCode(...units);
 					const absent = decoded === undefined || decoded.kind === "undefined";
 					let expression: string | undefined;
-					if (
+					const html = Object.hasOwn(STRING_HTML_KERNELS, method)
+						? STRING_HTML_KERNELS[method]
+						: undefined;
+					if (html !== undefined) {
+						expression = `mal_builtin_string_html_known(vm, ${string}, ${first === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(first)}, "${html[0]}", ${html[1] === undefined ? "nullptr" : `"${html[1]}"`})`;
+					} else if (
 						["trim", "trimStart", "trimLeft", "trimEnd", "trimRight"].includes(method)
 					) {
 						expression = `mal_builtin_string_trim_known(vm, ${string}, ${method !== "trimEnd" && method !== "trimRight"}, ${method !== "trimStart" && method !== "trimLeft"})`;

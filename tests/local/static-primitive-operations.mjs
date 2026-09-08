@@ -995,3 +995,138 @@ for (const form of [null, Symbol(), "nfc", "NFKC"]) {
 		show(error.name);
 	}
 }
+
+function replaceStrings(text, search, replacement) {
+	const source = String(text),
+		needle = String(search);
+	show(source.replace(needle, replacement));
+	show(source.replaceAll(needle, replacement));
+}
+globalThis.replaceStrings = replaceStrings;
+for (const text of ["", "ababa", "a😀\ud800z", "abcdefgh".repeat(20)]) {
+	for (const search of ["", "a", "aba", "😀", "\ud800", "missing"]) {
+		for (const replacement of ["", "x", "$$", "$&", "$`", "$'", "$1$<x>", "$$$&$`$'"])
+			replaceStrings(text, search, replacement);
+	}
+}
+let replacementEvents = "";
+function replacementCallback(match, index, source) {
+	replacementEvents += `${this === undefined}:${arguments.length}:${match}:${index}:${source};`;
+	return {
+		toString() {
+			replacementEvents += "convert;";
+			return "x";
+		},
+	};
+}
+replaceStrings("aba", "a", replacementCallback);
+replaceStrings("ab", "", replacementCallback);
+show(replacementEvents);
+replacementEvents = "";
+replaceStrings("aba", "missing", {
+	toString() {
+		replacementEvents += "convert;";
+		return "x";
+	},
+});
+show(replacementEvents);
+try {
+	replaceStrings("aba", "a", (match, index) => {
+		if (index > 0) throw new Error("replacement");
+		return match;
+	});
+} catch (error) {
+	show(error.message);
+}
+
+function legacyHtml(text, attribute) {
+	const source = String(text);
+	return [
+		source.anchor(attribute),
+		source.big(),
+		source.blink(),
+		source.bold(),
+		source.fixed(),
+		source.fontcolor(attribute),
+		source.fontsize(attribute),
+		source.italics(),
+		source.link(attribute),
+		source.small(),
+		source.strike(),
+		source.sub(),
+		source.sup(),
+	].join("|");
+}
+globalThis.legacyHtml = legacyHtml;
+for (const text of ["", "a<&", "😀\ud800", "abc".repeat(30)])
+	for (const attribute of [
+		undefined,
+		null,
+		'a"b"<&',
+		{
+			toString() {
+				return 'c"d';
+			},
+		},
+	])
+		show(legacyHtml(text, attribute));
+let htmlEvents = "";
+show(
+	legacyHtml(
+		{
+			toString() {
+				htmlEvents += "source;";
+				return "a";
+			},
+		},
+		{
+			toString() {
+				htmlEvents += "attribute;";
+				return "b";
+			},
+		},
+	),
+);
+show(htmlEvents);
+try {
+	legacyHtml("a", Symbol("attribute"));
+} catch (error) {
+	show(error.name);
+}
+
+function uriEncode(text) {
+	const source = String(text);
+	return [encodeURI(source), encodeURIComponent(source), escape(source)].join("|");
+}
+function uriDecode(text) {
+	const source = String(text);
+	return [decodeURI(source), decodeURIComponent(source), unescape(source)].join("|");
+}
+globalThis.uriEncode = uriEncode;
+globalThis.uriDecode = uriDecode;
+for (const text of ["", "abc", "a b?x=#&", "😀中é", "a/b".repeat(50)])
+	show(uriEncode(text));
+for (const text of ["", "abc", "%2f%3f%23%26%20", "%F0%9F%98%80", "%C3%A9", "%25uD800"])
+	show(uriDecode(text));
+for (const text of ["\ud800", "\udc00", "a\ud800b"])
+	try {
+		uriEncode(text);
+	} catch (error) {
+		show(error.name);
+	}
+for (const text of [
+	"%",
+	"%a",
+	"%xx",
+	"%80",
+	"%C0%80",
+	"%E0%A0",
+	"%ED%A0%80",
+	"%F4%90%80%80",
+	"%F5%80%80%80",
+])
+	try {
+		uriDecode(text);
+	} catch (error) {
+		show(error.name);
+	}

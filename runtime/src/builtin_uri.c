@@ -80,7 +80,7 @@ static inline void mal_uri_write_octet(c16 *output, usize *offset, u8 octet) {
 // ECMA-262 Encode(string, unescapedSet), with a validation/size pass followed
 // by one exact heap allocation. The overwhelmingly common unchanged path
 // returns the already-coerced string without allocating.
-static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool component) {
+MalValue mal_builtin_uri_encode_known(MalVm *vm, MalString *string, bool component) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
     usize result_length = length;
@@ -219,7 +219,7 @@ static bool mal_uri_decode_escape(
 
 // ECMA-262 Decode(string, reservedSet), using an exact two-pass result. Inputs
 // without percent escapes return the existing string immediately.
-static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool preserve_reserved) {
+MalValue mal_builtin_uri_decode_known(MalVm *vm, MalString *string, bool preserve_reserved) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
     usize result_length = length;
@@ -287,7 +287,7 @@ static MalValue mal_builtin_decode_uri(MalVm *vm, MalValue this_value, const Mal
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_decode(vm, string, true);
+    return mal_builtin_uri_decode_known(vm, string, true);
 }
 
 static MalValue mal_builtin_decode_uri_component(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -298,7 +298,7 @@ static MalValue mal_builtin_decode_uri_component(MalVm *vm, MalValue this_value,
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_decode(vm, string, false);
+    return mal_builtin_uri_decode_known(vm, string, false);
 }
 
 static MalValue mal_builtin_encode_uri(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -309,7 +309,7 @@ static MalValue mal_builtin_encode_uri(MalVm *vm, MalValue this_value, const Mal
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_encode(vm, string, false);
+    return mal_builtin_uri_encode_known(vm, string, false);
 }
 
 static MalValue mal_builtin_encode_uri_component(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -320,7 +320,7 @@ static MalValue mal_builtin_encode_uri_component(MalVm *vm, MalValue this_value,
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_encode(vm, string, true);
+    return mal_builtin_uri_encode_known(vm, string, true);
 }
 
 static bool mal_uri_escape_unescaped(c16 c) {
@@ -331,16 +331,7 @@ static bool mal_uri_escape_unescaped(c16 c) {
         c == '.' || c == '/';
 }
 
-/** Annex B escape(string), operating on UTF-16 code units rather than scalars. */
-static MalValue mal_builtin_escape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    MalString *string;
-    if (!mal_uri_to_string(vm, args, arg_count, &string)) {
-        return mal_value_new_undefined();
-    }
-
+MalValue mal_builtin_uri_escape_known(MalVm *vm, MalString *string) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
     usize result_length = length;
@@ -390,16 +381,7 @@ static bool mal_uri_hex_quad(const c16 *units, c16 *out) {
     return true;
 }
 
-/** Annex B unescape(string); malformed escapes are copied verbatim. */
-static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    MalString *string;
-    if (!mal_uri_to_string(vm, args, arg_count, &string)) {
-        return mal_value_new_undefined();
-    }
-
+MalValue mal_builtin_uri_unescape_known(MalVm *vm, MalString *string) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
     usize result_length = length;
@@ -443,6 +425,18 @@ static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalVa
         }
     }
     return mal_value_from_string(mal_string_new_owned(&vm->heap, output, result_length));
+}
+
+static MalValue mal_builtin_escape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalString *string;
+    if (!mal_uri_to_string(vm, args, arg_count, &string)) return mal_value_new_undefined();
+    return mal_builtin_uri_escape_known(vm, string);
+}
+
+static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalString *string;
+    if (!mal_uri_to_string(vm, args, arg_count, &string)) return mal_value_new_undefined();
+    return mal_builtin_uri_unescape_known(vm, string);
 }
 
 static MalValue mal_uri_make_function(MalVm *vm, const byte *name, MalNativeFunctionCallback callback) {
