@@ -66,7 +66,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		const plans: Array<
 			| { instruction: CoreInstructionId; value: ConstantValue }
 			| { instruction: CoreInstructionId; elements: ReadonlyArray<string> }
-			| { instruction: CoreInstructionId; stringParts: ReadonlyArray<CoreStringPart> }
+			| {
+					instruction: CoreInstructionId;
+					stringParts: ReadonlyArray<CoreStringPart>;
+			  }
 			| {
 					instruction: CoreInstructionId;
 					operation: CoreStaticMemberOperation;
@@ -165,7 +168,12 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
-			if (attributes.construct || attributes.argumentMode !== undefined) continue;
+			if (
+				attributes.construct ||
+				attributes.argumentMode !== undefined ||
+				attributes.knownBuiltinError !== undefined
+			)
+				continue;
 			const operation = attributes.operation as string;
 			if (
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
@@ -263,7 +271,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 									? description.description === null
 										? { kind: "undefined" }
 										: { kind: "string", value: description.description }
-									: { kind: "string", value: `Symbol(${description.description ?? ""})` };
+									: {
+											kind: "string",
+											value: `Symbol(${description.description ?? ""})`,
+										};
 						}
 						if (value !== undefined) {
 							plans.push({ instruction, value });
@@ -331,7 +342,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						context.remainingEdits
 				) {
 					if (stringParts.length === 1 && typeof stringParts[0] === "string")
-						plans.push({ instruction, value: { kind: "string", value: stringParts[0] } });
+						plans.push({
+							instruction,
+							value: { kind: "string", value: stringParts[0] },
+						});
 					else {
 						plans.push({ instruction, stringParts });
 						sequenceEdits += stringParts.length * 3;
@@ -361,6 +375,24 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			);
 			if (evaluated.kind === "value") {
 				plans.push({ instruction, value: evaluated.value });
+				continue;
+			}
+			if (
+				evaluated.kind === "throw" &&
+				evaluated.builtinError !== undefined &&
+				!numericOperation
+			) {
+				plans.push({
+					instruction,
+					operation: {
+						opcode: "callKnown",
+						inputs,
+						attributes: {
+							...attributes,
+							knownBuiltinError: evaluated.builtinError,
+						},
+					},
+				});
 				continue;
 			}
 			if (numericOperation) continue;
@@ -399,7 +431,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			) {
 				const fact = analysis.query(inputs[1]);
 				if (fact.kind === "known" && fact.brand === operation.toLowerCase())
-					plans.push({ instruction, operation: { opcode: "move", inputs: [inputs[1]] } });
+					plans.push({
+						instruction,
+						operation: { opcode: "move", inputs: [inputs[1]] },
+					});
 			}
 		}
 		if (plans.length === 0) return undefined;

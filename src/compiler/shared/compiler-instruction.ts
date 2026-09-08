@@ -1,6 +1,7 @@
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
 import type { StringCollationPlan } from "./string-collation-plan.ts";
 
@@ -407,6 +408,7 @@ export type CompilerInstruction =
 			argumentMode?: KnownArgumentMode;
 			specialized?: DirectBuiltinOperationId;
 			stringCollationPlan?: StringCollationPlan;
+			knownBuiltinError?: KnownBuiltinError;
 			knownBuiltinCall: KnownBuiltinCall;
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }

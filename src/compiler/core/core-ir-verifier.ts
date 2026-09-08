@@ -2,6 +2,7 @@ import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts"
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
+import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -418,6 +419,14 @@ function verifyInstructionRows(
 						operandCount < 2)
 				)
 					fail("Invalid known-operation argument list");
+				if (
+					attributes.knownBuiltinError !== undefined &&
+					(attributes.construct ||
+						attributes.argumentMode !== undefined ||
+						attributes.stringCollationPlan !== undefined ||
+						!isKnownBuiltinError(attributes.knownBuiltinError))
+				)
+					fail("Invalid known builtin error");
 				if (
 					attributes.stringCollationPlan !== undefined &&
 					(attributes.operation !== "String.prototype.localeCompare" ||

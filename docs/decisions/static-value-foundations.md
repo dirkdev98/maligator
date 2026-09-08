@@ -119,6 +119,13 @@ unchanged primitive results reuse their immutable cell. Valid numeric radix path
 still check the receiver brand. Coercing global `isNaN`/`isFinite` use native predicates
 only for proven or guarded numbers, independently of the noncoercing Number methods.
 
+Certified builtin failures retain the original known call and exception edge in Core
+and the runtime image. Native metadata selects a target error kind and fixed message;
+execution allocates a fresh error at that call site. Earlier unknown coercions prevent
+selection, and all argument expressions still execute before the failure. The compiler
+never throws the JavaScript error during compilation. Compiler artifact version 69
+encodes the failure identity separately from the runtime call.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

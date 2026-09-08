@@ -1275,3 +1275,83 @@ show(
 	),
 );
 show(bigintWidth(8, rootedBigInt));
+
+function capturedFailure(action) {
+	try {
+		action();
+	} catch (error) {
+		return error;
+	}
+	throw new Error("Expected builtin failure");
+}
+const failurePairs = [
+	[() => (1).toString(1), (x) => (1).toString(x), 1],
+	[() => Infinity.toFixed(101), (x) => Infinity.toFixed(x), 101],
+	[() => (1).toExponential(-1), (x) => (1).toExponential(x), -1],
+	[() => (1).toPrecision(0), (x) => (1).toPrecision(x), 0],
+	[() => BigInt(1.5), (x) => BigInt(x), 1.5],
+	[() => BigInt(null), (x) => BigInt(x), null],
+	[() => BigInt("12x"), (x) => BigInt(x), "12x"],
+	[() => BigInt.asIntN(-1, 1n), (x) => BigInt.asIntN(x, 1n), -1],
+	[() => BigInt.asUintN(0, 1), (x) => BigInt.asUintN(0, x), 1],
+	[() => String.fromCodePoint(-1), (x) => String.fromCodePoint(x), -1],
+	[() => "a".repeat(-1), (x) => "a".repeat(x), -1],
+	[() => "a".normalize("invalid"), (x) => "a".normalize(x), "invalid"],
+	[() => decodeURIComponent("%xx"), (x) => decodeURIComponent(x), "%xx"],
+	[() => encodeURI("\ud800"), (x) => encodeURI(x), "\ud800"],
+	[
+		() => Number.prototype.valueOf.call(true),
+		(x) => Number.prototype.valueOf.call(x),
+		true,
+	],
+	[
+		() => Boolean.prototype.toString.call(1),
+		(x) => Boolean.prototype.toString.call(x),
+		1,
+	],
+	[() => String.prototype.valueOf.call(1), (x) => String.prototype.valueOf.call(x), 1],
+	[() => BigInt.prototype.toString.call(1), (x) => BigInt.prototype.toString.call(x), 1],
+	[() => Symbol.prototype.toString.call(1), (x) => Symbol.prototype.toString.call(x), 1],
+	[() => Symbol.keyFor(1), (x) => Symbol.keyFor(x), 1],
+];
+for (const [constant, dynamic, argument] of failurePairs) {
+	const a = capturedFailure(constant);
+	const b = capturedFailure(() => dynamic(argument));
+	if (a.name !== b.name || a.message !== b.message || a === capturedFailure(constant))
+		throw new Error("Failure identity or diagnostic mismatch");
+	show(a.name);
+}
+let failureTrace = "";
+function effectArgument() {
+	failureTrace += "e";
+	return {
+		valueOf() {
+			failureTrace += "v";
+			throw new Error("coercion");
+		},
+	};
+}
+show(capturedFailure(() => String.fromCodePoint(-1, effectArgument())).name);
+show(failureTrace);
+failureTrace = "";
+show(capturedFailure(() => String.fromCodePoint(effectArgument(), -1)).message);
+show(failureTrace);
+failureTrace = "";
+show(capturedFailure(() => BigInt.asIntN(-1, effectArgument())).name);
+show(failureTrace);
+for (let index = 0; index < 2; index++) {
+	try {
+		"x".repeat(-1);
+	} catch (error) {
+		show(error.name);
+		numericCollect();
+	} finally {
+		failureTrace += "f";
+	}
+}
+show(failureTrace);
+show(Infinity.toExponential(101));
+show(NaN.toPrecision(0));
+show(BigInt.asIntN(8, "255"));
+show(BigInt.asUintN(0, true));
+show(BigInt.asIntN(1000, -1n));

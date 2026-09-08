@@ -11,6 +11,8 @@ import {
 	formatConstantNumber,
 	formatConstantNumberRadix,
 } from "./constant-number-format.ts";
+import { knownBuiltinErrors } from "./known-builtin-errors.ts";
+import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import { UNICODE_VERSION } from "./unicode-data.ts";
 import { normalizeUnicode, transformUnicodeCase } from "./unicode-transform.ts";
 
@@ -191,6 +193,13 @@ export function evaluateConstantBuiltin(
 		value,
 		work,
 	});
+	const failure = (builtinError: KnownBuiltinError): ConstantEvaluation => ({
+		kind: "throw",
+		error: knownBuiltinErrors[builtinError].error,
+		builtinError,
+		stage: "invocation",
+		work,
+	});
 	const number = (value: number) => result({ kind: "number", value });
 	const boolean = (value: boolean) => result({ kind: "boolean", value });
 	const string = (value: string) =>
@@ -210,6 +219,27 @@ export function evaluateConstantBuiltin(
 		)
 	)
 		return { kind: "unsupported", reason: "target-contract", work };
+	const brands = ["Number", "Boolean", "String", "BigInt", "Symbol"] as const;
+	for (const brand of brands) {
+		if (
+			receiver !== undefined &&
+			operation.startsWith(`${brand}.prototype.`) &&
+			(brand !== "String" ||
+				operation === "String.prototype.valueOf" ||
+				operation === "String.prototype.toString") &&
+			receiver.kind !== brand.toLowerCase()
+		) {
+			const failures = {
+				Number: "numberReceiver",
+				Boolean: "booleanReceiver",
+				String: "stringReceiver",
+				BigInt: "bigintReceiver",
+				Symbol: "symbolReceiver",
+			} as const;
+			return failure(failures[brand]);
+		}
+	}
+	if (operation === "Symbol.keyFor" && first !== undefined) return failure("symbolKey");
 	if (
 		["parseInt", "Number.parseInt", "parseFloat", "Number.parseFloat"].includes(operation)
 	) {
@@ -288,7 +318,7 @@ export function evaluateConstantBuiltin(
 					return string(legacyEscape(source, true));
 			}
 		} catch {
-			return unsupported();
+			return failure("uri");
 		}
 	}
 	if (operation === "Boolean")
@@ -310,11 +340,11 @@ export function evaluateConstantBuiltin(
 		if (first.kind === "boolean")
 			return result({ kind: "bigint", value: first.value ? 1n : 0n });
 		if (first.kind === "number") {
-			if (first.value % 1 !== 0 || first.value < -(2 ** 127) || first.value >= 2 ** 127)
-				return unsupported();
+			if (first.value % 1 !== 0) return failure("bigintNumber");
+			if (first.value < -(2 ** 127) || first.value >= 2 ** 127) return unsupported();
 			return result({ kind: "bigint", value: BigInt(first.value) });
 		}
-		if (first.kind !== "string") return unsupported();
+		if (first.kind !== "string") return failure("bigintValue");
 		if (first.value.length + work > workLimit) return unsupported("work-limit");
 		work += first.value.length;
 		let start = 0,
@@ -336,7 +366,7 @@ export function evaluateConstantBuiltin(
 						: 8;
 			cursor = 2;
 		}
-		if (cursor === source.length) return unsupported();
+		if (cursor === source.length) return failure("bigintString");
 		const half = 1n << 126n,
 			minimum = -half - half,
 			maximum = half - 1n + half,
@@ -344,7 +374,7 @@ export function evaluateConstantBuiltin(
 		let value = 0n;
 		for (; cursor < source.length; cursor++) {
 			const digit = digitValue(source.charCodeAt(cursor));
-			if (digit < 0 || digit >= radix) return unsupported();
+			if (digit < 0 || digit >= radix) return failure("bigintString");
 			const next = BigInt(digit);
 			const limit = negative ? (minimum + next) / base : (maximum - next) / base;
 			if (negative && value < limit) return unsupported();
@@ -356,8 +386,8 @@ export function evaluateConstantBuiltin(
 	if (operation === "BigInt.prototype.toString") {
 		if (receiver?.kind !== "bigint") return unsupported();
 		const radix = first?.kind === "undefined" ? 10 : numeric(first);
-		if (radix === undefined || integer(radix) < 2 || integer(radix) > 36)
-			return unsupported();
+		if (radix === undefined) return unsupported();
+		if (integer(radix) < 2 || integer(radix) > 36) return failure("numberRadix");
 		const base = BigInt(integer(radix));
 		let remaining = receiver.value > 0n ? -receiver.value : receiver.value,
 			output = "";
@@ -391,11 +421,21 @@ export function evaluateConstantBuiltin(
 		if (supplied === undefined && first?.kind !== "undefined") return unsupported();
 		const parameter = supplied === undefined ? undefined : integer(supplied);
 		if (method === "toString" && parameter !== undefined && parameter !== 10) {
-			if (parameter < 2 || parameter > 36) return unsupported();
+			if (parameter < 2 || parameter > 36) return failure("numberRadix");
 			work += 1100;
 			if (work > workLimit) return unsupported("work-limit");
 			const formatted = formatConstantNumberRadix(value, parameter);
 			return formatted === undefined ? unsupported() : string(formatted);
+		}
+		if (parameter !== undefined) {
+			if (method === "toFixed" && (parameter < 0 || parameter > 100))
+				return failure("numberFixed");
+			if (Number.isFinite(value)) {
+				if (method === "toExponential" && (parameter < 0 || parameter > 100))
+					return failure("numberExponential");
+				if (method === "toPrecision" && (parameter < 1 || parameter > 100))
+					return failure("numberPrecision");
+			}
 		}
 		// Binary64 expansion has at most 1100 decimal digits, independent of the value.
 		work += 1100;
@@ -455,16 +495,34 @@ export function evaluateConstantBuiltin(
 				);
 	}
 	if (operation === "BigInt.asIntN" || operation === "BigInt.asUintN") {
-		const bits = numeric(first),
-			value = argument(1);
-		if (bits === undefined || value?.kind !== "bigint") return unsupported();
+		const bits = numeric(first);
+		let value = argument(1);
+		if (bits === undefined) return unsupported();
+		if (integer(bits) < 0 || integer(bits) > 9007199254740991)
+			return failure("bigintWidth");
+		if (value === undefined) return unsupported();
+		if (value.kind === "number" || value.kind === "null" || value.kind === "undefined")
+			return failure("bigintValue");
+		if (value.kind !== "bigint") {
+			const converted = evaluateConstantBuiltin(
+				"BigInt",
+				undefined,
+				[value],
+				target,
+				workLimit - work,
+			);
+			if (converted.kind !== "value")
+				return { ...converted, work: converted.work + work };
+			if (converted.value.kind !== "bigint") return unsupported();
+			work += converted.work;
+			value = converted.value;
+		}
 		const half = 1n << 126n;
 		if (value.value < -half - half || value.value > half - 1n + half)
 			return unsupported();
 		const width = integer(bits);
-		if (width < 0 || width > 128) return unsupported();
 		if (width === 0) return result({ kind: "bigint", value: 0n });
-		if (width === 128)
+		if (width >= 128)
 			return operation === "BigInt.asIntN" || value.value >= 0n
 				? result(value)
 				: unsupported();
@@ -524,7 +582,7 @@ export function evaluateConstantBuiltin(
 			if (unit === undefined) return unsupported();
 			if (operation === "String.fromCharCode") value += String.fromCharCode(unit);
 			else {
-				if (unit % 1 !== 0 || unit < 0 || unit > 0x10ffff) return unsupported();
+				if (unit % 1 !== 0 || unit < 0 || unit > 0x10ffff) return failure("codePoint");
 				value += String.fromCodePoint(unit);
 			}
 			work++;
@@ -683,7 +741,7 @@ export function evaluateConstantBuiltin(
 		const count = numeric(first);
 		if (count === undefined) return unsupported();
 		const copies = integer(count);
-		if (copies < 0 || copies === Infinity) return unsupported();
+		if (copies < 0 || copies === Infinity) return failure("repeatCount");
 		if (source.length * copies + work > workLimit) return unsupported("work-limit");
 		return string(source.repeat(copies));
 	}
@@ -713,8 +771,9 @@ export function evaluateConstantBuiltin(
 		let transformed;
 		if (method === "normalize") {
 			const form = first?.kind === "undefined" ? "NFC" : text(first);
+			if (form === undefined) return unsupported();
 			if (form !== "NFC" && form !== "NFD" && form !== "NFKC" && form !== "NFKD")
-				return unsupported();
+				return failure("normalization");
 			transformed = normalizeUnicode(source, form, workLimit - work);
 		} else {
 			if (

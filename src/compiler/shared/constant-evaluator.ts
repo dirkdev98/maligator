@@ -1,3 +1,4 @@
+import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import { UNICODE_VERSION } from "./unicode-data.ts";
 
 export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-unicode17-v3";
@@ -31,10 +32,15 @@ export type ConstantValue =
 	| { readonly kind: "undefined" };
 
 export type ConstantEvaluation =
-	| { readonly kind: "value"; readonly value: ConstantValue; readonly work: number }
+	| {
+			readonly kind: "value";
+			readonly value: ConstantValue;
+			readonly work: number;
+	  }
 	| {
 			readonly kind: "throw";
-			readonly error: "RangeError" | "TypeError";
+			readonly error: "RangeError" | "TypeError" | "SyntaxError" | "URIError";
+			readonly builtinError?: KnownBuiltinError;
 			readonly stage: "invocation";
 			readonly work: number;
 	  }
@@ -238,7 +244,12 @@ export function evaluateConstantOperation(
 			case "/":
 			case "%":
 				if (right.value === 0n)
-					return { kind: "throw", error: "RangeError", stage: "invocation", work };
+					return {
+						kind: "throw",
+						error: "RangeError",
+						stage: "invocation",
+						work,
+					};
 				if (left.value === minimum && right.value === -1n)
 					return operation.endsWith("%")
 						? result({ kind: "bigint", value: 0n })

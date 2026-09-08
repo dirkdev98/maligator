@@ -16,6 +16,73 @@ function inspect(expression: string, locked = true) {
 
 describe("primitive operation results", () => {
 	it.each([
+		["Number.prototype.toString.call(true,x)", "numberReceiver"],
+		["Boolean.prototype.valueOf.call(1)", "booleanReceiver"],
+		["String.prototype.valueOf.call(1)", "stringReceiver"],
+		["BigInt.prototype.toString.call(1,x)", "bigintReceiver"],
+		["Symbol.prototype.toString.call(1)", "symbolReceiver"],
+		["Symbol.keyFor(1)", "symbolKey"],
+		["(1).toString(1)", "numberRadix"],
+		["(1n).toString(37)", "numberRadix"],
+		["(Infinity).toFixed(101)", "numberFixed"],
+		["(1).toExponential(-1)", "numberExponential"],
+		["(1).toPrecision(0)", "numberPrecision"],
+		["BigInt(1.5)", "bigintNumber"],
+		["BigInt(null)", "bigintValue"],
+		["BigInt('12x')", "bigintString"],
+		["BigInt.asIntN(-1,x)", "bigintWidth"],
+		["BigInt.asUintN(0,1)", "bigintValue"],
+		["String.fromCodePoint(-1,x)", "codePoint"],
+		["'a'.repeat(-1)", "repeatCount"],
+		["'a'.normalize('invalid')", "normalization"],
+		["decodeURIComponent('%xx')", "uri"],
+		["encodeURI('\\ud800')", "uri"],
+	])("residualizes the known failure at %s", (expression, error) => {
+		const output = inspect(expression);
+		const plans = output.image.native.functions
+			.flatMap((fn) => fn.instructions)
+			.filter((plan) => plan?.kind === "known-builtin-error");
+		expect(plans).toContainEqual({ kind: "known-builtin-error", error });
+		expect(output.c.source).toContain("mal_vm_throw_error(");
+		expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
+		expect(
+			restored.native.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((plan) => plan?.kind === "known-builtin-error"),
+		).toEqual(plans);
+		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
+	});
+	it("rejects unknown residual error identities when loading artifacts", () => {
+		const output = inspect("'a'.normalize('invalid')");
+		const wire = serializeCompilerArtifact(output.image);
+		const bytes = Buffer.from(wire);
+		const offset = bytes.indexOf("normalization");
+		expect(offset).toBeGreaterThanOrEqual(0);
+		bytes[offset] = 0;
+		expect(() => deserializeCompilerArtifact(bytes)).toThrow(/invalid builtin error/);
+	});
+	it.each([
+		"Number.prototype.toFixed.call(x,101)",
+		"(1).toFixed(x)",
+		"String.fromCodePoint(x,-1)",
+		"String.prototype.repeat.call(x,-1)",
+		"BigInt.asIntN(x,1)",
+		"'a'.normalize(x)",
+		"decodeURI(x)",
+		"Infinity.toExponential(101)",
+		"NaN.toPrecision(0)",
+	])(
+		"preserves an earlier coercion or successful nonfinite result for %s",
+		(expression) => {
+			expect(
+				inspect(expression)
+					.image.native.functions.flatMap((fn) => fn.instructions)
+					.filter((plan) => plan?.kind === "known-builtin-error"),
+			).toEqual([]);
+		},
+	);
+	it.each([
 		["parseInt(String(x),16)", "mal_builtin_parse_int_string("],
 		["Number.parseInt(String(x),+x)", "mal_builtin_parse_int_string("],
 		["parseFloat(String(x))", "mal_builtin_parse_float_string("],
@@ -239,9 +306,7 @@ describe("primitive operation results", () => {
 			"mal_vm_call_known_native(",
 		);
 		expect(inspect("'e'.normalize(x)").c.source).toContain("mal_vm_call_known_native(");
-		expect(inspect("'e'.normalize('bad')").c.source).toContain(
-			"mal_vm_call_known_native(",
-		);
+		expect(inspect("'e'.normalize('bad')").c.source).toContain("mal_vm_throw_error(");
 	});
 
 	it("folds private raw segments and emits ordered substitution conversions", () => {
