@@ -201,6 +201,10 @@ typedef struct MalInstruction {
         } instantiate_literal_template;
 
         struct {
+            i32 dst, needle, from_index, data_offset;
+        } query_static_data;
+
+        struct {
             // Side data: [count, name string indices..., global slots...].
             i32 dst, data_offset, cache_slot;
         } create_module_namespace;
@@ -1282,6 +1286,15 @@ typedef struct MalExactScriptCall {
     MalEnv *env;
 } MalExactScriptCall;
 
+enum { MAL_LITERAL_CACHE_CAPACITY = 32, MAL_LITERAL_CACHE_MAX_WORDS = 16384 };
+
+typedef struct {
+    i32 slot;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+} MalLiteralCacheEntry;
+
 typedef struct MalVm {
 #if !MAL_REALMS
     MalValue known_primordial_values[MAL_KNOWN_PRIMORDIAL_COUNT];
@@ -1447,6 +1460,9 @@ typedef struct MalVm {
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
 #endif
     MalCompletion completion;
+    MalLiteralCacheEntry literal_cache_entries[MAL_LITERAL_CACHE_CAPACITY];
+    u32 literal_cache_count;
+    u32 literal_cache_cursor;
     /** Preallocated, permanently rooted exception used when allocation cannot continue. */
     MalValue allocation_error;
 

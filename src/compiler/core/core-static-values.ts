@@ -711,6 +711,55 @@ export class CoreStaticValueAnalysis {
 						length = Math.max(length, Number(key) + 1);
 					continue;
 				}
+				if (
+					receiver &&
+					opcode === "callKnown" &&
+					!attributes.construct &&
+					attributes.argumentMode === undefined &&
+					description.kind === "array" &&
+					length !== null &&
+					length <= 4096 &&
+					!escaped &&
+					complete &&
+					this.#context?.facts.world.primordialPolicy === "locked" &&
+					!this.#context.facts.world.realms
+				) {
+					const operation = attributes.operation;
+					const inheritedAbsent = (key: string) =>
+						this.inherited({ ...initial, prototype }, key)?.kind === "absent";
+					if (
+						operation === "Array.prototype.push" &&
+						length + args.length - 1 <= 4096 &&
+						args.slice(1).every((_, index) => {
+							const key = String(length! + index);
+							return !propertyMap.has(staticPropertyKey(key)) && inheritedAbsent(key);
+						})
+					) {
+						for (const input of args.slice(1)) {
+							const key = String(length++);
+							propertyMap.set(staticPropertyKey(key), {
+								key,
+								enumerable: true,
+								configurable: true,
+								descriptor: { kind: "data", writable: true, value: bind(input) },
+							});
+						}
+						continue;
+					}
+					if (operation === "Array.prototype.pop") {
+						const key = String(length - 1),
+							property = propertyMap.get(staticPropertyKey(key));
+						if (
+							length === 0 ||
+							(property?.descriptor.kind === "data" && property.configurable) ||
+							(property === undefined && inheritedAbsent(key))
+						) {
+							propertyMap.delete(staticPropertyKey(key));
+							length = Math.max(length - 1, 0);
+							continue;
+						}
+					}
+				}
 				const descriptor = this.#fn.registry.byId(
 					this.#fn.instructionOpcode(instruction),
 				);

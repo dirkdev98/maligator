@@ -364,6 +364,7 @@ void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *in
 
 void mal_op_create_array(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_query_static_data(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_create_module_namespace(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_create_template_object(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_with_enter(MalCallable *callable, const MalInstruction *instruction);
@@ -2101,6 +2102,7 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const Ma
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot);
+MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind, MalValue needle, MalValue from_index);
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
 

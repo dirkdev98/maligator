@@ -942,7 +942,14 @@ static bool mal_literal_decode_value(
         case MAL_LITERAL_ARRAY: {
             u32 count;
             if (!mal_literal_read(cursor, &count)) return false;
-            *out = mal_value_from_array_object(mal_intrinsic_new_array(vm, count));
+            MalArrayObject *array = mal_array_object_try_new(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]));
+            if (array == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return false;
+            }
+            mal_array_object_set_length(array, count);
+            *out = mal_value_from_array_object(array);
             *is_container = true;
             *child_count = count;
             return true;
@@ -951,6 +958,7 @@ static bool mal_literal_decode_value(
             u32 count;
             if (!mal_literal_read(cursor, &count)) return false;
             *out = mal_vm_op_create_object(vm);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
             *is_container = true;
             *is_object = true;
             *child_count = count;
@@ -960,6 +968,109 @@ static bool mal_literal_decode_value(
             return false;
     }
     return false;
+}
+
+MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind, MalValue needle, MalValue from_index) {
+    const MalRuntimeImage *image = vm->runtime_image;
+    if (template_offset < 0 || template_offset >= image->literal_template_data_count - 1 ||
+        image->literal_template_data[template_offset] != MAL_LITERAL_ARRAY ||
+        (query_kind != 0 && query_kind != 1)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid static data query");
+        return MAL_VALUE_UNDEFINED;
+    }
+    u32 length = image->literal_template_data[template_offset + 1];
+    if (query_kind == 0 && length == 0) return MAL_VALUE_FALSE;
+    MalValue roots[2] = { needle, from_index };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    u32 start = 0;
+    if (query_kind == 1) {
+        MalKey key;
+        if (!mal_vm_to_property_key(vm, needle, &key)) {
+            mal_gc_unroot(&span);
+            return MAL_VALUE_UNDEFINED;
+        }
+        roots[0] = key.value;
+    } else {
+        f64 number;
+        if (!mal_vm_to_number(vm, from_index, &number)) {
+            mal_gc_unroot(&span);
+            return MAL_VALUE_UNDEFINED;
+        }
+        start = (u32) mal_ops_number_clamp_relative(number, length);
+    }
+    if (start == length) {
+        mal_gc_unroot(&span);
+        return MAL_VALUE_FALSE;
+    }
+    // Coercion can adopt an image; offsets still name the retained prefix of its relocated pools.
+    MalLiteralCursor cursor = {
+        .data = vm->runtime_image->literal_template_data,
+        .count = (u32) vm->runtime_image->literal_template_data_count,
+        .pos = (u32) template_offset + 2,
+    };
+    bool found = false, valid = true;
+    bool numeric_needle = query_kind == 0 && mal_ops_is_number(roots[0]);
+    f64 number_needle = numeric_needle ? mal_ops_number_as_f64(roots[0]) : 0;
+    for (u32 index = 0; index < length; index++) {
+        if (cursor.pos >= cursor.count) { valid = false; break; }
+        u32 tag = cursor.data[cursor.pos];
+        if ((tag >= MAL_LITERAL_ARRAY && tag != MAL_LITERAL_UNDEFINED) ||
+            (query_kind == 1 && tag != MAL_LITERAL_STRING)) { valid = false; break; }
+        bool equal;
+        if (tag == MAL_LITERAL_I32) {
+            cursor.pos++;
+            u32 bits;
+            if (!mal_literal_read(&cursor, &bits)) { valid = false; break; }
+            equal = numeric_needle && number_needle == (i32) bits;
+        } else if (tag == MAL_LITERAL_STRING) {
+            cursor.pos++;
+            u32 slot;
+            if (!mal_literal_read(&cursor, &slot) ||
+                slot >= (u32) vm->runtime_image->string_constant_count) { valid = false; break; }
+            MalString *string = &vm->runtime_image->string_constants[slot];
+            if (query_kind == 1 && mal_ops_is_number(roots[0])) {
+                u32 key_index;
+                equal = mal_vm_string_to_array_index(string, &key_index) &&
+                    mal_ops_number_as_f64(roots[0]) == key_index;
+            } else {
+                equal = mal_value_is_string(roots[0]) &&
+                    mal_string_equals(string, mal_value_to_string(roots[0]));
+            }
+        } else {
+            MalValue element;
+            bool container, object;
+            u32 children;
+            if (!mal_literal_decode_value(vm, &cursor, &element, &container, &object, &children)) { valid = false; break; }
+            if (tag == MAL_LITERAL_HOLE) element = MAL_VALUE_UNDEFINED;
+            equal = mal_ops_strict_equal_bool(element, roots[0]) ||
+                (mal_value_is_nan(element) && mal_value_is_nan(roots[0]));
+        }
+        if (index >= start && equal) { found = true; break; }
+        if (((index + 1) & 1023u) == 0 && mal_gc_poll) {
+            mal_gc_safepoint(vm);
+            cursor.data = vm->runtime_image->literal_template_data;
+            cursor.count = (u32) vm->runtime_image->literal_template_data_count;
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                mal_gc_unroot(&span);
+                return MAL_VALUE_UNDEFINED;
+            }
+        }
+    }
+    mal_gc_unroot(&span);
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid static query payload");
+        return MAL_VALUE_UNDEFINED;
+    }
+    return mal_value_new_boolean(found);
+}
+
+void mal_op_query_static_data(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.query_static_data.data_offset);
+    callable->registers[instruction->as.query_static_data.dst] = mal_vm_query_static_data(
+        callable->vm, data[0], data[1],
+        callable->registers[instruction->as.query_static_data.needle],
+        callable->registers[instruction->as.query_static_data.from_index]);
 }
 
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot) {
@@ -996,15 +1107,20 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         frames = malloc(sizeof(MalLiteralBuildFrame) * capacity);
         active = malloc(sizeof(MalValue) * capacity);
         active_root.slots = active;
-        frames[0] = (MalLiteralBuildFrame) {
-            .container = result,
-            .remaining = root_children,
-            .next_index = 0,
-            .is_object = root_object,
-        };
-        active[0] = result;
-        depth = 1;
-        active_root.count = 1;
+        if (frames == nullptr || active == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            ok = false;
+        } else {
+            frames[0] = (MalLiteralBuildFrame) {
+                .container = result,
+                .remaining = root_children,
+                .next_index = 0,
+                .is_object = root_object,
+            };
+            active[0] = result;
+            depth = 1;
+            active_root.count = 1;
+        }
     }
 
     u32 built = 0;
@@ -1057,8 +1173,20 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
         if (child_container) {
             if (depth == capacity) {
                 capacity *= 2;
-                frames = realloc(frames, sizeof(MalLiteralBuildFrame) * capacity);
-                active = realloc(active, sizeof(MalValue) * capacity);
+                MalLiteralBuildFrame *grown_frames = realloc(frames, sizeof(MalLiteralBuildFrame) * capacity);
+                if (grown_frames == nullptr) {
+                    mal_vm_throw_allocation_error(vm);
+                    ok = false;
+                    break;
+                }
+                frames = grown_frames;
+                MalValue *grown_active = realloc(active, sizeof(MalValue) * capacity);
+                if (grown_active == nullptr) {
+                    mal_vm_throw_allocation_error(vm);
+                    ok = false;
+                    break;
+                }
+                active = grown_active;
                 active_root.slots = active;
             }
             frames[depth] = (MalLiteralBuildFrame) {
@@ -1074,14 +1202,39 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
 
         if ((++built & 1023u) == 0 && mal_gc_poll) {
             mal_gc_safepoint(vm);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                ok = false;
+                break;
+            }
         }
     }
 
     if (!ok) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal template");
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal template");
         result = mal_value_new_undefined();
     }
-    if (ok && cache_slot >= 0) vm->globals[cache_slot] = result;
+    if (ok && cache_slot >= 0 && cursor.pos - (u32) template_offset <= MAL_LITERAL_CACHE_MAX_WORDS) {
+        MalLiteralCacheEntry *entry = &vm->literal_cache_entries[vm->literal_cache_cursor];
+        // Private instances carry no observable identity; active receivers remain independently rooted.
+        if (vm->literal_cache_count == MAL_LITERAL_CACHE_CAPACITY) {
+#if MAL_REALMS
+            entry->realm->globals[entry->slot] = MAL_VALUE_UNDEFINED;
+#else
+            vm->globals[entry->slot] = MAL_VALUE_UNDEFINED;
+#endif
+        } else {
+            vm->literal_cache_count++;
+        }
+        *entry = (MalLiteralCacheEntry) {
+            .slot = cache_slot,
+#if MAL_REALMS
+            .realm = vm->current_realm,
+#endif
+        };
+        vm->literal_cache_cursor = (vm->literal_cache_cursor + 1) % MAL_LITERAL_CACHE_CAPACITY;
+        vm->globals[cache_slot] = result;
+    }
     mal_gc_unroot(&active_root);
     mal_gc_unroot(&result_root);
     free(active);

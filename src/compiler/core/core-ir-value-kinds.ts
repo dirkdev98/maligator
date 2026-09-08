@@ -162,6 +162,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 			return COMPILER_VALUE_KIND_OBJECT;
 		case "isEmpty":
 		case "typeofCompare":
+		case "queryStaticData":
 			return COMPILER_VALUE_KIND_BOOLEAN;
 		default:
 			return undefined;

@@ -31,11 +31,8 @@ function constants(image: ReturnType<typeof compile>) {
 
 describe("Core literal constants", () => {
 	it.each([
-		'return ["foo", "bar"].includes(x, from);',
-		"return ({a: [1, {b: false}]}).hasOwnProperty(x);",
 		"return [1,2,3].slice(x);",
 		'return [{a: [1, {b: "two"}]}, [3, 4]].includes(x);',
-		`return [${Array.from({ length: 200 }, (_, i) => i).join(",")}].includes(x);`,
 	])("pools recursively static nonescaping search receivers: %s", (body) => {
 		const image = compile(body);
 		expect(constants(image)).toHaveLength(1);
@@ -47,6 +44,22 @@ describe("Core literal constants", () => {
 		expect(
 			constants(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
 		).toEqual(constants(image));
+	});
+	it.each([
+		'return ["foo", "bar"].includes(x, from);',
+		"return ({a: [1, {b: false}]}).hasOwnProperty(x);",
+		`return [${Array.from({ length: 200 }, (_, i) => i).join(",")}].includes(x);`,
+	])("queries immutable data before choosing heap storage: %s", (body) => {
+		const image = compile(body);
+		expect(constants(image)).toHaveLength(0);
+		expect(
+			image.runtime.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((instruction) => instruction.opcode === "QUERY_STATIC_DATA"),
+		).toHaveLength(1);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(image)).runtime.functions,
+		).toEqual(image.runtime.functions);
 	});
 	it.each([
 		"return [null, false, true, -0, 2.5, 5n].includes(x);",
@@ -80,7 +93,6 @@ describe("Core literal constants", () => {
 		"return (42).toString(x);",
 		"return true.toString();",
 		"return [1,2].map(x);",
-		"return [1,2].push(x);",
 		"return [1,2][Symbol.iterator]();",
 	])("resolves canonical prototype methods: %s", (body) => {
 		const image = compile(body);

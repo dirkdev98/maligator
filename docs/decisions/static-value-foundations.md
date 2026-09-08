@@ -49,8 +49,9 @@ through constant own reads or certified `includes`, while its original callable 
 remains available. Signatures share variants, capped at four per target. Recursive,
 escaping, identity-sensitive and unsupported signatures retain normal calls and
 materialization. Sloppy helpers that can expose their function identity through a
-callback's `caller` are excluded. General virtual returns and demand-driven allocation
-remain later work; a resolved property or call does not by itself eliminate an object.
+callback's `caller` are excluded. A resolved property or call does not by itself
+eliminate an object; consumer demands and current virtual state determine whether
+its representation can disappear.
 
 `builtin-registry.ts` exports the shared primordial graph, literal entries and
 invocation summaries. The native descriptor audit supplies canonical object and
@@ -109,7 +110,7 @@ The interpreter resolves the same operation through the current VM's primordial
 bindings and ordinary engine entry route. No compiler-host heap pointer is embedded.
 
 `CALL_KNOWN` replaces the former exact-builtin and literal-method wire tags. Runtime
-wire version 44 and compiler artifact version 66 reject older representations.
+wire version 45 and compiler artifact version 67 reject older representations.
 Region plans use absent producer markers when normalization has removed a property
 or intrinsic load, and validate the remaining operation identity and operands.
 
@@ -121,6 +122,52 @@ node scripts/primordial-inventory.ts full .cache/primordial-inventory
 node scripts/generate-known-operations.ts
 node scripts/generate-known-native-entries.ts .cache/primordial-inventory/native-bindings.json
 ```
+
+## Materialization and virtual state
+
+Consumer plans distinguish metadata, contents, mutation, aliases and identity/storage
+exposure. Child escapes propagate to containing recipes. Unknown calls, captured
+aliases, reflection, callbacks and suspension retain fresh identities. Description
+interning shares immutable recipe words; it never merges fresh runtime identities.
+
+Bounded private ordinary arrays and objects can keep local writes, deletes, length
+changes and certified push/pop operations in virtual cells. This transfer is limited
+to 64 cells and 4,096 instruction visits per pass. Constant keys, ordinary writable
+data descriptors and inherited-property absence proofs are required where relevant.
+The existing scalar replacement and SSA passes handle compatible branch and loop
+values. Other joins, handlers and suspension retain or reconstruct runtime storage.
+Unsupported internal slots remain with their owning operation families.
+
+At an observation boundary the compiler reconstructs the current state under the
+original allocation token. Arguments and coercions keep their original evaluation
+positions. Unknown keys, descriptors, cycles and observable calls stop the local
+transfer; the compiler does not replay effects to enter the ordinary runtime path.
+Handler-visible objects remain materialized so partial mutations are visible in
+catch/finally. Escaping aliases share one instance per dynamic evaluation.
+
+Primitive `includes` can use a short comparison chain for at most 16 entries with a
+proven offset, or `queryStaticData` over an immutable table for up to 32,768 entries.
+Own-property queries can scan a complete private key table without constructing
+property values. Producers with observable effects still run. Dynamic offsets and
+keys retain `ToNumber`/`ToPropertyKey`, exceptions and GC roots; an empty includes
+table skips offset coercion. Tables use bounded scan code and pooled string/BigInt
+references, with direct numeric comparison for compact int32 words.
+
+Private read-only consumers that still need runtime storage can select lazy cached
+templates. Generated C checks the current VM's slot inline and calls construction
+only on a miss. A VM retains at most 32 cached graphs, each compiler-selected recipe
+bounded to 16,384 words; FIFO eviction clears the owning realm's slot. Live aliases
+remain independently rooted. Strings, BigInts and recipe words belong to the image;
+the retention bound covers materialized graphs, not the immutable program image.
+Fresh instances use the same recipe storage without a cache slot. The runtime's
+mutable backing stores are owned, so these choices introduce no copy-on-write layer.
+
+Construction roots the result and active parent frames, polls during deep graphs,
+preserves allocation exceptions and publishes a cache slot only after success.
+Static queries root coercible operands and refresh image data after calls and GC
+safepoints. Wire loading validates primitive table payloads and operand bounds;
+merging and adoption relocate template references. Interpreter instructions keep
+the 20-byte ABI by storing query metadata in the instruction side-data pool.
 
 ## Native inventory and coverage
 

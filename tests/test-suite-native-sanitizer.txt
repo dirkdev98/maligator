@@ -33,6 +33,8 @@ tests/native/global-var-batch.test.ts
 tests/native/json-parse-source.test.ts
 tests/native/json-stringify-scratch.test.ts
 tests/native/literal-template.test.ts
+tests/native/literal-materialization.test.ts
+tests/native/static-data-query.test.ts
 tests/native/node-buffer.test.ts
 tests/native/node-http-limits.test.ts
 tests/native/node-http-request.test.ts

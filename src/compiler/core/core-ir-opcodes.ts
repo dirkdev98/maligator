@@ -73,6 +73,7 @@ export const CORE_OPCODES = [
 	"initGlobalVars",
 	"initPrivateFields",
 	"instantiateLiteralTemplate",
+	"queryStaticData",
 	"isEmpty",
 	"iteratorClose",
 	"iteratorNext",
@@ -222,6 +223,7 @@ const NO_THROW = new Set<CoreOpcode>([
 ]);
 
 const CALLS_USER_CODE = new Set<CoreOpcode>([
+	"queryStaticData",
 	"arrayRest",
 	"binary",
 	"call",
@@ -324,6 +326,7 @@ const write = (
  * whole-family partitioning.
  */
 const OPCODE_ACCESSES = {
+	queryStaticData: [read("object-slot"), write("object-slot")],
 	// The callee is implicit in the activation rather than an SSA operand.
 	generatorStart: [read("prototype")],
 	// Operation-specific refinements narrow this conservative receiver-state envelope.
@@ -553,6 +556,7 @@ const OBSERVES_OPERANDS = new Set<CoreOpcode>([
  * can be held weakly and `loadIntrinsic` therefore cannot join this set.
  */
 const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
+	"queryStaticData",
 	"binary",
 	"createBigint",
 	"createBoolean",
@@ -587,6 +591,7 @@ function opcodeAccesses(opcode: CoreOpcode): ReadonlyArray<CoreOpcodeAccess> {
 }
 
 const INPUT_ARITIES = {
+	queryStaticData: [2, 2],
 	arrayRest: [1, 1],
 	asyncStart: [0, 0],
 	await: [1, 1],

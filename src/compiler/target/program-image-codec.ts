@@ -27,7 +27,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 44;
+export const WIRE_VERSION = 45;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -842,6 +842,13 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.templateOffset);
 			w.i32(i.cacheSlot ?? -1);
 			return;
+		case "QUERY_STATIC_DATA":
+			w.i32(i.dst);
+			w.i32(i.needle);
+			w.i32(i.fromIndex);
+			w.i32(i.templateOffset);
+			w.i32(i.queryKind === "includes" ? 0 : 1);
+			return;
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
 			w.i32(i.cacheSlot);
@@ -1635,6 +1642,23 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			if (cacheSlot < -1)
 				throw new RangeError("program-image-codec: invalid literal constant slot");
 			return { opcode, dst, templateOffset, ...(cacheSlot < 0 ? {} : { cacheSlot }) };
+		}
+		case "QUERY_STATIC_DATA": {
+			const dst = r.i32(),
+				needle = r.i32(),
+				fromIndex = r.i32(),
+				templateOffset = r.i32(),
+				kind = r.i32();
+			if (kind !== 0 && kind !== 1)
+				throw new RangeError("program-image-codec: invalid static query kind");
+			return {
+				opcode,
+				dst,
+				needle,
+				fromIndex,
+				templateOffset,
+				queryKind: kind === 0 ? "includes" : "has-own",
+			};
 		}
 		case "CREATE_MODULE_NAMESPACE":
 			return {

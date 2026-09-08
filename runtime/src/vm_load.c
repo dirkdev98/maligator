@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 44u
+#define WIRE_VERSION 45u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -634,6 +634,18 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.instantiate_literal_template.template_offset = rd_i32(r);
             o->as.instantiate_literal_template.cache_slot = rd_i32(r);
             return;
+        case WIRE_QUERY_STATIC_DATA: {
+            o->opcode = MAL_OP_QUERY_STATIC_DATA;
+            o->as.query_static_data.dst = rd_i32(r);
+            o->as.query_static_data.needle = rd_i32(r);
+            o->as.query_static_data.from_index = rd_i32(r);
+            i32 offset = rd_i32(r), kind = rd_i32(r);
+            if (!i32_builder_reserve(side_data, r, 2)) return;
+            o->as.query_static_data.data_offset = (i32) side_data->count;
+            side_data->data[side_data->count++] = offset;
+            side_data->data[side_data->count++] = kind;
+            return;
+        }
         case WIRE_CREATE_MODULE_NAMESPACE: {
             o->opcode = MAL_OP_CREATE_MODULE_NAMESPACE;
             o->as.create_module_namespace.dst = rd_i32(r);
@@ -1306,6 +1318,44 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     }
 }
 
+static bool mal_loaded_static_query_valid(const MalRuntimeImage *image, const MalFunction *fn, const MalInstruction *instruction) {
+    i32 side_offset = instruction->as.query_static_data.data_offset;
+    if (side_offset < 0 || side_offset >= fn->instruction_data_count - 1) return false;
+    i32 offset = fn->instruction_data[side_offset];
+    i32 kind = fn->instruction_data[side_offset + 1];
+    i32 registers[] = { instruction->as.query_static_data.dst, instruction->as.query_static_data.needle, instruction->as.query_static_data.from_index };
+    for (usize index = 0; index < sizeof(registers) / sizeof(registers[0]); index++)
+        if (registers[index] < 0 || registers[index] >= fn->register_count) return false;
+    if ((kind != 0 && kind != 1) || offset < 0 || offset >= image->literal_template_data_count - 1) return false;
+    const u32 *data = image->literal_template_data;
+    u32 position = (u32) offset, end = (u32) image->literal_template_data_count;
+    if (data[position++] != MAL_LITERAL_ARRAY) return false;
+    u32 length = data[position++];
+    if (length > end - position) return false;
+    for (u32 index = 0; index < length; index++) {
+        if (position >= end) return false;
+        u32 tag = data[position++];
+        if (kind == 1 && tag != MAL_LITERAL_STRING) return false;
+        u32 words = 0;
+        switch (tag) {
+            case MAL_LITERAL_NULL: case MAL_LITERAL_FALSE: case MAL_LITERAL_TRUE:
+            case MAL_LITERAL_HOLE: case MAL_LITERAL_UNDEFINED: break;
+            case MAL_LITERAL_I32: words = 1; break;
+            case MAL_LITERAL_F64: words = 2; break;
+            case MAL_LITERAL_STRING:
+                if (position >= end || data[position] >= (u32) image->string_constant_count) return false;
+                words = 1; break;
+            case MAL_LITERAL_BIGINT:
+                if (position >= end || data[position] >= (u32) image->bigint_constant_count) return false;
+                words = 1; break;
+            default: return false;
+        }
+        if (words > end - position) return false;
+        position += words;
+    }
+    return true;
+}
+
 static bool mal_loaded_instruction_writes_register(
     const MalInstruction *instruction, i32 target_register
 ) {
@@ -1322,6 +1372,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CREATE_OBJECT_SHAPED, create_object_shaped);
         MAL_WRITES_DST(MAL_OP_CREATE_ARRAY, create_array);
         MAL_WRITES_DST(MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, instantiate_literal_template);
+        MAL_WRITES_DST(MAL_OP_QUERY_STATIC_DATA, query_static_data);
         MAL_WRITES_DST(MAL_OP_CREATE_MODULE_NAMESPACE, create_module_namespace);
         MAL_WRITES_DST(MAL_OP_CREATE_TEMPLATE_OBJECT, create_template_object);
         MAL_WRITES_DST(MAL_OP_CREATE_UNDEFINED, create_undefined);
@@ -2271,7 +2322,9 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
             const MalInstruction *instruction = &fn->instructions[ip];
-            if (instruction->opcode == MAL_OP_CALL) {
+            if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
+                if (!mal_loaded_static_query_valid(def, fn, instruction)) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_CALL) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call.data_offset];
                 i32 argument_count = data[0];

@@ -1,3 +1,4 @@
+import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { StaticDescriptionInterner } from "../shared/static-values.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -2552,6 +2553,8 @@ export class CoreProgram {
 	#stringConstants: ReadonlyArray<ReadonlyArray<number>> = [];
 	#bigintConstants: ReadonlyArray<bigint> = [];
 	#literalTemplateData: ReadonlyArray<number> = [];
+	#literalTemplates: Map<string, number> | undefined;
+	#literalPoolSlots = new Map<number, number>();
 	#sourcePositions: ReadonlyArray<CoreSourcePosition> = [];
 	#globalCount = 0;
 	readonly #constructionStatistics = {
@@ -2737,15 +2740,42 @@ export class CoreProgram {
 		this.#versions.data++;
 	}
 
-	_appendLiteralConstant(
+	_appendLiteralTemplate(
 		mutation: CoreStoreMutation,
 		data: ReadonlyArray<number>,
-	): { templateOffset: number; cacheSlot: number } {
+		cache: boolean,
+	): { templateOffset: number; cacheSlot?: number } {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
-		const templateOffset = this.#literalTemplateData.length;
-		this.#literalTemplateData = Object.freeze([...this.#literalTemplateData, ...data]);
-		return { templateOffset, cacheSlot: this.#globalCount++ };
+		if (this.#literalTemplates === undefined) {
+			this.#literalTemplates = new Map();
+			for (let offset = 0; offset < this.#literalTemplateData.length; ) {
+				const end = scanLiteralTemplateSegment(
+					this.#literalTemplateData,
+					offset,
+					"Core template data",
+				).endOffset;
+				this.#literalTemplates.set(
+					this.#literalTemplateData.slice(offset, end).join(","),
+					offset,
+				);
+				offset = end;
+			}
+		}
+		const key = data.join(",");
+		let templateOffset = this.#literalTemplates.get(key);
+		if (templateOffset === undefined) {
+			templateOffset = this.#literalTemplateData.length;
+			this.#literalTemplateData = Object.freeze([...this.#literalTemplateData, ...data]);
+			this.#literalTemplates.set(key, templateOffset);
+		}
+		if (!cache) return { templateOffset };
+		let cacheSlot = this.#literalPoolSlots.get(templateOffset);
+		if (cacheSlot === undefined) {
+			cacheSlot = this.#globalCount++;
+			this.#literalPoolSlots.set(templateOffset, cacheSlot);
+		}
+		return { templateOffset, cacheSlot };
 	}
 
 	_appendStringConstants(
@@ -2806,6 +2836,8 @@ export class CoreProgram {
 		);
 		this.#bigintConstants = Object.freeze([...(data.bigintConstants ?? [])]);
 		this.#literalTemplateData = Object.freeze([...(data.literalTemplateData ?? [])]);
+		this.#literalTemplates = undefined;
+		this.#literalPoolSlots.clear();
 		this.#sourcePositions = Object.freeze(
 			(data.sourcePositions ?? []).map((position) => Object.freeze({ ...position })),
 		);

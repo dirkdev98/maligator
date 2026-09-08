@@ -16,17 +16,12 @@ describe("static-value baseline witnesses", () => {
 		(profile) => {
 			for (const observable of [false, true]) {
 				const included = inspect("includes", observable, true, profile);
-				expect(included.structure.operations).toMatchObject([
-					{ receiver: "array", key: "includes" },
-				]);
-				expect(included.structure.pooledMaterializations).toBe(1);
-				expect(included.structure.allocations).toBe(1);
-				expect(included.c.source).toContain("mal_vm_instantiate_literal_template");
-				expect(included.c.source).toContain("mal_vm_call_known");
+				expect(included.structure.operations).toHaveLength(0);
+				expect(included.structure.pooledMaterializations).toBe(0);
+				expect(included.structure.allocations).toBe(0);
+				expect(included.c.source).toContain("mal_vm_query_static_data");
 				expect(
-					included.core.some(
-						(operation) => operation.opcode === "instantiateLiteralTemplate",
-					),
+					included.core.some((operation) => operation.opcode === "queryStaticData"),
 				).toBe(true);
 				const absent = inspect("includex", observable, true, profile);
 				expect(absent.structure.operations).toHaveLength(0);

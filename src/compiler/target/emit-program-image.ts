@@ -301,6 +301,13 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 
 	fn.instructions.forEach((instruction, index) => {
 		switch (instruction.opcode) {
+			case "QUERY_STATIC_DATA":
+				offsets[index] = data.length;
+				data.push(
+					instruction.templateOffset,
+					instruction.queryKind === "includes" ? 0 : 1,
+				);
+				break;
 			case "CALL_REST_ARGUMENTS":
 				offsets[index] = data.length;
 				data.push(
@@ -1763,6 +1770,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset}, .cache_slot = ${instruction.cacheSlot ?? -1} } }`;
+		case "QUERY_STATIC_DATA":
+			return `{ .opcode = MAL_OP_QUERY_STATIC_DATA, .as.query_static_data = { .dst = ${instruction.dst}, .needle = ${instruction.needle}, .from_index = ${instruction.fromIndex}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_MODULE_NAMESPACE":
 			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .cache_slot = ${instruction.cacheSlot}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_TEMPLATE_OBJECT":

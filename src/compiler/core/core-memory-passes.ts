@@ -70,6 +70,7 @@ import {
 } from "./core-static-value-selection.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreContainedTypedArrayIndexInBounds } from "./core-typed-array-bounds.ts";
+import { materializeVirtualState } from "./core-virtual-state.ts";
 
 const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
 	"Array.prototype.push",
@@ -2306,8 +2307,9 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
 	selectStaticPropertyReads,
 	foldStaticReflections,
-	reuseLiteralConstants,
 	resolveKnownOperations,
+	materializeVirtualState,
+	reuseLiteralConstants,
 	lowerKnownOperationResults,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
@@ -2330,8 +2332,9 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
 	selectStaticPropertyReads,
 	foldStaticReflections,
-	reuseLiteralConstants,
 	resolveKnownOperations,
+	materializeVirtualState,
+	reuseLiteralConstants,
 	lowerKnownOperationResults,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,

@@ -9,6 +9,23 @@ export interface LiteralTemplateSegment {
 	readonly bigintReferences: ReadonlyArray<LiteralTemplateReference>;
 }
 
+export function validateStaticQueryTemplate(
+	data: ReadonlyArray<number>,
+	offset: number,
+	kind: "includes" | "has-own",
+): LiteralTemplateSegment {
+	const segment = scanLiteralTemplateSegment(data, offset, "static query");
+	if (data[offset] !== 8) throw new RangeError("static query requires an array payload");
+	let position = offset + 2;
+	for (let index = 0; index < data[offset + 1]!; index++) {
+		const tag = data[position++]!;
+		if ((tag >= 8 && tag !== 11) || (kind === "has-own" && tag !== 5))
+			throw new RangeError("static query requires primitive data or own string keys");
+		position += tag === 4 ? 2 : tag === 3 || tag === 5 || tag === 6 ? 1 : 0;
+	}
+	return segment;
+}
+
 export function copyLiteralTemplateData(data: ReadonlyArray<number>): Array<number> {
 	const copy = new Array<number>(data.length);
 	for (let index = 0; index < data.length; index++) copy[index] = data[index]!;

@@ -292,6 +292,11 @@ function cloneInstruction(
 					? {}
 					: { cacheSlot: instruction.cacheSlot + base.global }),
 			};
+		case "QUERY_STATIC_DATA":
+			return {
+				...instruction,
+				templateOffset: instruction.templateOffset + base.template,
+			};
 		case "LOAD_UNDECLARED":
 		case "GLOBAL_BINDING_QUERY":
 		case "LOAD_GLOBAL_PROPERTY":

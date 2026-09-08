@@ -509,6 +509,8 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
 
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
+    vm->literal_cache_count = 0;
+    vm->literal_cache_cursor = 0;
 #if !MAL_REALMS
     memset(vm->known_primordial_values, 0, sizeof(vm->known_primordial_values));
 #endif
@@ -1205,6 +1207,9 @@ static void mal_vm_rebase_instruction(
             in->as.instantiate_literal_template.template_offset += template_base;
             if (in->as.instantiate_literal_template.cache_slot >= 0)
                 in->as.instantiate_literal_template.cache_slot += global_base;
+            break;
+        case MAL_OP_QUERY_STATIC_DATA:
+            instruction_data[in->as.query_static_data.data_offset] += template_base;
             break;
         case MAL_OP_LOAD_UNDECLARED:
             in->as.load_undeclared.name_string_index += string_base;
@@ -2251,6 +2256,9 @@ static void mal_vm_run_until_frame_count(
                 break;
             case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_instantiate_literal_template(frame, instruction));
+                break;
+            case MAL_OP_QUERY_STATIC_DATA:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_query_static_data(frame, instruction));
                 break;
             case MAL_OP_CREATE_MODULE_NAMESPACE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_module_namespace(frame, instruction));

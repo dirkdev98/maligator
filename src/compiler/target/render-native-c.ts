@@ -3799,9 +3799,21 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = ${profileCall("allocation", `mal_vm_op_create_array(vm, ${instruction.length})`)};`,
 			];
-		case "INSTANTIATE_LITERAL_TEMPLATE":
+		case "INSTANTIATE_LITERAL_TEMPLATE": {
+			const instantiate = `r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.cacheSlot === undefined ? "-1" : relocation.globalIndex(instruction.cacheSlot)});`;
+			if (instruction.cacheSlot !== undefined)
+				return [
+					`r${instruction.dst} = vm->globals[${relocation.globalIndex(instruction.cacheSlot)}];`,
+					`if (mal_value_is_undefined(r${instruction.dst})) {`,
+					instantiate,
+					throwCheck(),
+					"}",
+				];
+			return [instantiate, throwCheck()];
+		}
+		case "QUERY_STATIC_DATA":
 			return [
-				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.cacheSlot === undefined ? "-1" : relocation.globalIndex(instruction.cacheSlot)});`,
+				`r${instruction.dst} = ${profileCall(instruction.queryKind === "includes" ? "call" : "property", `mal_vm_query_static_data(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.queryKind === "includes" ? 0 : 1}, ${boxed(instruction.needle)}, ${boxed(instruction.fromIndex)})`)};`,
 				throwCheck(),
 			];
 		case "CREATE_FUNCTION":

@@ -12,6 +12,7 @@ import {
 	copyLiteralTemplateData,
 	compactLiteralTemplateSegments,
 	remapLiteralTemplateConstants,
+	validateStaticQueryTemplate,
 } from "../shared/literal-template-data.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
@@ -691,6 +692,14 @@ export type BytecodeInstruction =
 			cacheSlot?: number;
 			dst: number;
 			templateOffset: number;
+	  }
+	| {
+			opcode: "QUERY_STATIC_DATA";
+			dst: number;
+			needle: number;
+			fromIndex: number;
+			templateOffset: number;
+			queryKind: "includes" | "has-own";
 	  }
 	| {
 			opcode: "CREATE_MODULE_NAMESPACE";
@@ -1831,6 +1840,38 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmExactArrayLengthLoads(definition);
 	validateVmShapeCases(definition);
 	validateVmSourcePositions(definition);
+	for (const fn of definition.functions)
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "QUERY_STATIC_DATA") continue;
+			if (
+				!["includes", "has-own"].includes(instruction.queryKind) ||
+				[instruction.dst, instruction.needle, instruction.fromIndex].some(
+					(register) =>
+						!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+				)
+			)
+				throw new RangeError("invalid static query operands");
+			const segment = validateStaticQueryTemplate(
+				definition.literalTemplateData,
+				instruction.templateOffset,
+				instruction.queryKind,
+			);
+			if (
+				segment.stringReferences.some(
+					({ index }) =>
+						!Number.isInteger(index) ||
+						index < 0 ||
+						index >= definition.stringConstants.length,
+				) ||
+				segment.bigintReferences.some(
+					({ index }) =>
+						!Number.isInteger(index) ||
+						index < 0 ||
+						index >= definition.bigintConstants.length,
+				)
+			)
+				throw new RangeError("invalid static query constant reference");
+		}
 }
 
 export interface RuntimeImageConstantRetentionEntry {
@@ -2952,6 +2993,15 @@ function lowerInstructionToBytecodeInstruction(
 				...(instruction.cacheSlot === undefined
 					? {}
 					: { cacheSlot: instruction.cacheSlot }),
+			};
+		case "queryStaticData":
+			return {
+				opcode: "QUERY_STATIC_DATA",
+				dst: instruction.registers[0],
+				needle: instruction.registers[1],
+				fromIndex: instruction.registers[2],
+				templateOffset: instruction.templateOffset,
+				queryKind: instruction.queryKind,
 			};
 		case "createModuleNamespace":
 			return {

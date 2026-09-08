@@ -119,6 +119,56 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr).toBe(0);
 	}
 
+	it("validates static-query kinds, registers and primitive payloads", () => {
+		const queryDefinition: RuntimeImage = {
+			...definition,
+			stringConstants: [[120]],
+			literalTemplateData: [8, 1, 5, 0],
+			functions: [
+				{
+					...fn,
+					registerCount: 3,
+					literalShapeCount: 0,
+					instructions: [
+						{
+							opcode: "QUERY_STATIC_DATA",
+							dst: 0,
+							needle: 1,
+							fromIndex: 2,
+							templateOffset: 0,
+							queryKind: "includes",
+						},
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(queryDefinition, { debugInfo: false });
+		acceptsWire("static-query", wire);
+		const encoded = [WIRE_OPCODES.indexOf("QUERY_STATIC_DATA"), 0, 2, 4, 0, 0];
+		const offset = wire.findIndex((_, index) =>
+			encoded.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(offset).toBeGreaterThan(0);
+		for (const [name, operand, byte] of [
+			["kind", 5, 4],
+			["register", 2, 6],
+			["offset", 4, 126],
+		] as const) {
+			const broken = wire.slice();
+			broken[offset + operand] = byte;
+			rejectsWire(`static-query-${name}`, broken);
+		}
+		const payload = [8, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0];
+		const payloadOffset = wire.findIndex((_, index) =>
+			payload.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(payloadOffset).toBeGreaterThan(0);
+		const nested = wire.slice();
+		nested[payloadOffset + 8] = 9;
+		rejectsWire("static-query-nested-object", nested);
+	});
+
 	it("rejects an explicit count that disagrees with its arrays", () => {
 		// Empty definition tables put the first instruction at byte 33 after the
 		// fixed header, source-entry field, and explicit literal-shape count. Its

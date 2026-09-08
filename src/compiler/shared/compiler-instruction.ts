@@ -202,6 +202,12 @@ export type CompilerInstruction =
 			templateOffset: number;
 	  }
 	| {
+			type: "queryStaticData";
+			registers: [number, number, number];
+			templateOffset: number;
+			queryKind: "includes" | "has-own";
+	  }
+	| {
 			// Build an `import * as ns` module namespace exotic object. Each export
 			// names a string constant and the global slot holding its live value.
 			type: "createModuleNamespace";
