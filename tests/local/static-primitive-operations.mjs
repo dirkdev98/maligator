@@ -1506,3 +1506,47 @@ function arithmeticFormatting(value) {
 	].join("|");
 }
 show(arithmeticFormatting(257));
+
+let replacementTrace = [];
+function staticReplacementCallback(match, position, source) {
+	replacementTrace.push(
+		[this === undefined, arguments.length, match, position, source].join(":"),
+	);
+	return {
+		toString() {
+			replacementTrace.push("convert:" + position);
+			globalThis.gc?.();
+			return "[" + position + "]";
+		},
+	};
+}
+show("aba".replaceAll("a", staticReplacementCallback, replacementTrace.push("extra")));
+show(replacementTrace.join("|"));
+replacementTrace = [];
+show("aba".replace("a", staticReplacementCallback));
+show(replacementTrace.join("|"));
+replacementTrace = [];
+show("😀".replaceAll("", staticReplacementCallback));
+show(replacementTrace.join("|"));
+replacementTrace = [];
+show("aba".replaceAll("z", staticReplacementCallback));
+show(replacementTrace.length);
+for (const failure of ["call", "conversion", "symbol"]) {
+	let count = 0;
+	try {
+		show(
+			"aaa".replaceAll("a", () => {
+				count++;
+				if (failure === "call") throw new Error("replacement callback");
+				if (failure === "symbol") return Symbol("replacement");
+				return {
+					toString() {
+						throw new Error("replacement conversion");
+					},
+				};
+			}),
+		);
+	} catch (error) {
+		show(error.name + ":" + count);
+	}
+}

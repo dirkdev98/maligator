@@ -11,7 +11,10 @@ import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
-import { coreStaticStringRawParts } from "./core-string-construction.ts";
+import {
+	coreStaticStringRawParts,
+	coreStaticStringReplacementParts,
+} from "./core-string-construction.ts";
 import type { CoreStringPart } from "./core-string-construction.ts";
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
@@ -355,18 +358,24 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					});
 				continue;
 			}
-			if (operation === "String.raw") {
-				const stringParts = coreStaticStringRawParts(
-					program,
-					fn,
-					analysis,
-					instruction,
-					inputs,
-				);
+			if (
+				operation === "String.raw" ||
+				operation === "String.prototype.replace" ||
+				operation === "String.prototype.replaceAll"
+			) {
+				const stringParts =
+					operation === "String.raw"
+						? coreStaticStringRawParts(program, fn, analysis, instruction, inputs)
+						: coreStaticStringReplacementParts(analysis, operation, inputs);
+				const edits =
+					stringParts?.reduce(
+						(total, part) =>
+							total + (typeof part !== "string" && "callback" in part ? 8 : 3),
+						0,
+					) ?? 0;
 				if (
 					stringParts !== undefined &&
-					plans.length * 4 + sequenceEdits + stringParts.length * 3 + 4 <=
-						context.remainingEdits
+					plans.length * 4 + sequenceEdits + edits + 4 <= context.remainingEdits
 				) {
 					if (stringParts.length === 1 && typeof stringParts[0] === "string")
 						plans.push({
@@ -375,10 +384,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						});
 					else {
 						plans.push({ instruction, stringParts });
-						sequenceEdits += stringParts.length * 3;
+						sequenceEdits += edits;
 					}
+					continue;
 				}
-				continue;
+				if (operation === "String.raw") continue;
 			}
 			if (operation === "String.prototype.split") {
 				const elements = evaluateConstantStringSplit(
@@ -487,14 +497,43 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		for (const plan of plans) {
 			if ("stringParts" in plan) {
 				const block = fn.instructionBlock(plan.instruction);
+				const sourcePosition = fn.instructionSourcePosition(plan.instruction);
 				let result: CoreValueId | undefined;
 				for (const part of plan.stringParts) {
+					let input: CoreValueId | undefined;
+					if (typeof part !== "string") {
+						if ("value" in part) input = part.value;
+						else {
+							const thisArg = editor.insertInstruction(
+								block,
+								plan.instruction,
+								"createUndefined",
+								[],
+								{ sourcePosition },
+							).outputs[0]!;
+							const position = editor.insertInstruction(
+								block,
+								plan.instruction,
+								"createNumber",
+								[],
+								{ sourcePosition, attributes: { value: part.position } },
+							).outputs[0]!;
+							input = editor.insertInstruction(
+								block,
+								plan.instruction,
+								"call",
+								[part.callback, thisArg, part.match, position, part.source],
+								{ sourcePosition },
+							).outputs[0]!;
+						}
+					}
 					const value = editor.insertInstruction(
 						block,
 						plan.instruction,
 						typeof part === "string" ? "createString" : "unary",
-						typeof part === "string" ? [] : [part.value],
+						typeof part === "string" ? [] : [input!],
 						{
+							sourcePosition,
 							attributes:
 								typeof part === "string"
 									? { stringIndex: stringIndex(part) }
@@ -509,7 +548,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 									plan.instruction,
 									"binary",
 									[result, value],
-									{ attributes: { operator: "+" } },
+									{ sourcePosition, attributes: { operator: "+" } },
 								).outputs[0]!;
 				}
 				editor.replaceInstruction(plan.instruction, "move", [result!]);

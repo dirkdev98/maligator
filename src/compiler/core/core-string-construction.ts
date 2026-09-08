@@ -4,7 +4,55 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-export type CoreStringPart = string | { readonly value: CoreValueId };
+export type CoreStringPart =
+	| string
+	| { readonly value: CoreValueId }
+	| {
+			readonly callback: CoreValueId;
+			readonly match: CoreValueId;
+			readonly position: number;
+			readonly source: CoreValueId;
+	  };
+
+export function coreStaticStringReplacementParts(
+	analysis: CoreStaticValueAnalysis,
+	operation: string,
+	inputs: ReadonlyArray<CoreValueId>,
+): ReadonlyArray<CoreStringPart> | undefined {
+	const [source, match, callback] = inputs;
+	if (source === undefined || match === undefined || callback === undefined)
+		return undefined;
+	const receiver = analysis.constant(source),
+		needle = analysis.constant(match),
+		replacer = analysis.query(callback);
+	if (
+		receiver?.kind !== "string" ||
+		needle?.kind !== "string" ||
+		replacer.kind !== "known" ||
+		replacer.brand !== "function" ||
+		(receiver.value.length + 1) * (needle.value.length + 1) > 4096
+	)
+		return undefined;
+	const parts: Array<CoreStringPart> = [];
+	let end = 0,
+		count = 0;
+	for (let start = 0; start <= receiver.value.length; ) {
+		const position = receiver.value.indexOf(needle.value, start);
+		if (position < 0) break;
+		if (++count > 64) return undefined;
+		parts.push(receiver.value.slice(end, position), {
+			callback,
+			match,
+			position,
+			source,
+		});
+		end = position + needle.value.length;
+		if (operation === "String.prototype.replace") break;
+		start = position + Math.max(1, needle.value.length);
+	}
+	parts.push(receiver.value.slice(end));
+	return parts;
+}
 
 export function coreStaticStringRawParts(
 	program: CoreProgram,

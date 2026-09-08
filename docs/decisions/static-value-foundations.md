@@ -134,6 +134,14 @@ results do not use this rule. Suspension clears the available-value set. Unused
 calls are removed only after a separate proof that they cannot throw; immutable
 constant descriptions distinguish bit patterns and never merge fresh symbols.
 
+Static plain-string replacement computes bounded UTF-16 match positions and emits
+ordinary runtime calls to a proven callable replacement. Each call receives the
+match, position and source with an undefined receiver; its result undergoes ToString
+before the next callback runs. Argument expressions remain before the replacement,
+and callback or conversion failures retain the original exception destination.
+Unknown search values and callbacks keep the runtime protocol path. No application
+callback executes in the compiler.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

@@ -15,6 +15,47 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each(["replace", "replaceAll"])(
+		"lowers static %s matches into residual callbacks",
+		(method) => {
+			const output = inspect(
+				`'aba'.${method}('a',(match,position,source)=>x(match,position,source))`,
+			);
+			expect(
+				output.core.some(
+					(op) => op.attributes.operation === `String.prototype.${method}`,
+				),
+			).toBe(false);
+			expect(output.core.filter((op) => op.opcode === "call")).toHaveLength(
+				method === "replace" ? 1 : 2,
+			);
+		},
+	);
+	it("removes a nonmatching replacement without invoking its callback", () => {
+		const output = inspect("'aba'.replaceAll('z',()=>x())");
+		expect(
+			output.core.some(
+				(op) =>
+					op.opcode === "call" ||
+					op.attributes.operation === "String.prototype.replaceAll",
+			),
+		).toBe(false);
+	});
+	it.each([
+		"'aba'.replaceAll('a',x)",
+		"String(x).replaceAll('a',()=>x())",
+		"'aba'.replaceAll(x,()=>x())",
+	])("retains dynamic replacement semantics for %s", (expression) => {
+		expect(
+			inspect(expression).core.some(
+				(op) => op.attributes.operation === "String.prototype.replaceAll",
+			),
+		).toBe(true);
+	});
+	it("retains mutable replacement dispatch", () => {
+		const output = inspect("'aba'.replaceAll('a',()=>x())", false);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
+	});
 	it.each([
 		["const s=String(x); const a=s.trim(); return a+s.trim();", "String.prototype.trim"],
 		[
