@@ -16,6 +16,33 @@ function inspect(expression: string, locked = true) {
 
 describe("primitive operation results", () => {
 	it.each([
+		["parseInt(String(x),16)", "mal_builtin_parse_int_string("],
+		["Number.parseInt(String(x),+x)", "mal_builtin_parse_int_string("],
+		["parseFloat(String(x))", "mal_builtin_parse_float_string("],
+		["Number.parseFloat(String(x))", "mal_builtin_parse_float_string("],
+		["BigInt.asIntN(8,x)", "mal_builtin_bigint_width_number("],
+		["BigInt.asUintN(+x,255n)", "mal_builtin_bigint_width_number("],
+		["BigInt.prototype.toString.call(x,16.9)", "mal_builtin_bigint_to_string_radix("],
+		["isNaN(+x)", "isnan("],
+		["isFinite(+x)", "isfinite("],
+	])("uses numeric parameter kernels for %s", (expression, kernel) => {
+		expect(inspect(expression).c.source).toContain(kernel);
+		expect(inspect(expression, false).c.source).not.toContain(kernel);
+	});
+	it.each([
+		["parseInt(String(x),x)", "mal_builtin_parse_int_string("],
+		["BigInt.asIntN(x,1n)", "mal_builtin_bigint_width_number("],
+		["BigInt.prototype.toString.call(x,1)", "mal_builtin_bigint_to_string_radix("],
+		["BigInt.prototype.toString.call(x,x)", "mal_builtin_bigint_to_string_radix("],
+		["isNaN(x)", "isnan("],
+		["isFinite(x)", "isfinite("],
+	])("retains runtime coercion and invalid parameters for %s", (expression, kernel) => {
+		const source = inspect(expression).c.source;
+		expect(source).toContain(kernel);
+		expect(source).toContain("mal_vm_call_known_native(");
+		expect(source).toContain("if (");
+	});
+	it.each([
 		"String(x).localeCompare('a')",
 		"String(x).localeCompare('a','sv')",
 		"String.prototype.localeCompare.call(x,'a','de')",

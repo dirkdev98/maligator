@@ -5316,6 +5316,54 @@ function emitInstruction(
 				];
 			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
+				if (["isNaN", "isFinite"].includes(instruction.operation)) {
+					const input = instruction.arguments[0];
+					const number = input === undefined ? "NAN" : nativeNumberOperand(input);
+					if (number !== null)
+						return [
+							storeBoolean(
+								instruction.dst,
+								`${instruction.operation === "isNaN" ? "isnan" : "isfinite"}(${number})`,
+							),
+							poll,
+						];
+				}
+				if (["BigInt.asIntN", "BigInt.asUintN"].includes(instruction.operation)) {
+					const width = instruction.arguments[0];
+					const bits = width === undefined ? "0.0" : nativeNumberOperand(width);
+					const input = instruction.arguments[1];
+					if (bits !== null) {
+						const result = `bigint_width_${ip}`;
+						return [
+							`MalValue ${result} = mal_builtin_bigint_width_number(vm, ${bits}, ${input === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(input)}, ${instruction.operation === "BigInt.asIntN"});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					}
+				}
+				if (instruction.operation === "BigInt.prototype.toString") {
+					const input = instruction.arguments[0];
+					const option =
+						input === undefined
+							? { kind: "undefined" as const }
+							: decodeVmValueOperand(input);
+					const radix =
+						option.kind === "undefined"
+							? 10
+							: option.kind === "number"
+								? Math.trunc(option.value)
+								: NaN;
+					if (radix >= 2 && radix <= 36) {
+						const result = `bigint_text_${ip}`;
+						return [
+							`MalValue ${result} = mal_builtin_bigint_to_string_radix(vm, ${boxedOperand(instruction.thisValue)}, ${radix});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					}
+				}
 				if (instruction.operation === "String.prototype.charCodeAt") {
 					const positionOperand = instruction.arguments[0];
 					const position =
@@ -5464,6 +5512,85 @@ function emitInstruction(
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					poll,
 				];
+				if (!instruction.construct && instruction.argumentMode === undefined) {
+					let guard: string | undefined;
+					let direct: Array<string> | undefined;
+					const first = instruction.arguments[0];
+					const second = instruction.arguments[1];
+					if (
+						["parseInt", "parseFloat"].includes(instruction.operation) &&
+						first !== undefined
+					) {
+						const source = boxedOperand(first);
+						const omittedRadix =
+							instruction.operation === "parseFloat" ||
+							second === undefined ||
+							decodeVmValueOperand(second).kind === "undefined";
+						const radix = omittedRadix ? "0.0" : nativeNumberOperand(second);
+						const guards =
+							operandRep(first) === "string" ? [] : [`mal_value_is_string(${source})`];
+						if (radix === null)
+							guards.push(`mal_ops_is_number(${boxedOperand(second!)})`);
+						const number = radix ?? `mal_ops_number_as_f64(${boxedOperand(second!)})`;
+						const expression =
+							instruction.operation === "parseInt"
+								? `mal_builtin_parse_int_string(${source}, ${number})`
+								: `mal_builtin_parse_float_string(${source})`;
+						guard = guards.length === 0 ? "true" : guards.join(" && ");
+						direct = [storeNumber(instruction.dst, expression), poll];
+					} else if (
+						["isNaN", "isFinite"].includes(instruction.operation) &&
+						first !== undefined
+					) {
+						const input = boxedOperand(first);
+						guard = `mal_ops_is_number(${input})`;
+						direct = [
+							storeBoolean(
+								instruction.dst,
+								`${instruction.operation === "isNaN" ? "isnan" : "isfinite"}(mal_ops_number_as_f64(${input}))`,
+							),
+							poll,
+						];
+					} else if (
+						["BigInt.asIntN", "BigInt.asUintN"].includes(instruction.operation) &&
+						first !== undefined
+					) {
+						const width = boxedOperand(first);
+						const result = `bigint_width_${ip}`;
+						guard = `mal_ops_is_number(${width})`;
+						direct = [
+							`MalValue ${result} = mal_builtin_bigint_width_number(vm, mal_ops_number_as_f64(${width}), ${second === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(second)}, ${instruction.operation === "BigInt.asIntN"});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					} else if (
+						instruction.operation === "BigInt.prototype.toString" &&
+						first !== undefined
+					) {
+						const radix = boxedOperand(first);
+						const numeric = nativeNumberOperand(first);
+						const number = numeric ?? `mal_ops_number_as_f64(${radix})`;
+						const result = `bigint_text_${ip}`;
+						guard = `${numeric === null ? `mal_ops_is_number(${radix}) && ` : ""}${number} >= 2.0 && ${number} < 37.0`;
+						direct = [
+							`MalValue ${result} = mal_builtin_bigint_to_string_radix(vm, ${boxedOperand(instruction.thisValue)}, (i32) ${number});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					}
+					if (direct !== undefined && guard !== undefined) {
+						if (guard === "true") return direct;
+						return [
+							`if (${guard}) {`,
+							...direct.map((line) => `  ${line}`),
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
 				const uri = URI_KERNELS[instruction.operation];
 				if (
 					uri !== undefined &&

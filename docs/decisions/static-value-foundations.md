@@ -111,6 +111,14 @@ the original call and option observations. Dynamic options, getters, unsupported
 plans and mutable primordial identities use the generic implementation. Options
 objects may still materialize; the prepared path removes repeated Collator setup.
 
+Primitive-string parsing shares the runtime's UTF-16 parsing kernels. Numeric radices
+and BigInt widths use direct numeric entries, guarded when their registers remain
+boxed. Nonprimitive inputs retain ordered coercion through the known operation.
+BigInt width validation precedes conversion of the value, including width zero;
+unchanged primitive results reuse their immutable cell. Valid numeric radix paths
+still check the receiver brand. Coercing global `isNaN`/`isFinite` use native predicates
+only for proven or guarded numbers, independently of the noncoercing Number methods.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

@@ -306,61 +306,60 @@ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_valu
     return mal_builtin_number_is_safe_integer_known(args, arg_count);
 }
 
+f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {
+    MalRootSpan root;
+    mal_gc_root(&root, &source, 1);
+    MalString *string = mal_value_to_string(source);
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    f64 result = mal_builtin_parse_int_units(units, length, radix);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+f64 mal_builtin_parse_float_string(MalValue source) {
+    MalRootSpan root;
+    mal_gc_root(&root, &source, 1);
+    MalString *string = mal_value_to_string(source);
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    f64 result = mal_builtin_parse_float_units(units, length);
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    // ToString(arg) and ToNumber(radix) run a user toString/valueOf (and unwrap
-    // a primitive wrapper), and propagate any abrupt completion.
-    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    (void) new_target;
+    (void) callee;
+    MalValue roots[2] = {
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue result = mal_value_new_undefined();
     MalString *string;
-    if (mal_value_is_string(input)) {
-        string = mal_value_to_string(input);
-    } else if (!mal_vm_to_string(vm, input, &string)) {
-        return mal_value_new_undefined();
-    }
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
-    f64 radix = 0;
-    if (arg_count >= 2) {
-        if (mal_ops_is_number(args[1])) {
-            radix = mal_ops_number_as_f64(args[1]);
-        } else {
-            // Radix coercion can run arbitrary user code and collect the fresh
-            // ToString result. Keep it rooted through any later flattening too.
-            if (!mal_vm_to_number(vm, args[1], &radix)) {
-                mal_gc_unroot(&root_span);
-                return mal_value_new_undefined();
-            }
-        }
-    }
-    string = mal_value_to_string(string_root);
-    usize length = mal_string_length(string);
-    const c16 *code_units = mal_string_code_units(string);
-    MalValue result = mal_ops_number_value(
-        mal_builtin_parse_int_units(code_units, length, radix));
-    mal_gc_unroot(&root_span);
+    if (!mal_vm_to_string(vm, roots[0], &string)) goto done;
+    roots[0] = mal_value_from_string(string);
+    f64 radix;
+    // Radix coercion may collect the freshly converted string.
+    if (!mal_vm_to_number(vm, roots[1], &radix)) goto done;
+    result = mal_ops_number_value(mal_builtin_parse_int_string(roots[0], radix));
+done:
+    mal_gc_unroot(&root);
     return result;
 }
 
 static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    (void) new_target;
+    (void) callee;
     MalString *string;
-    if (mal_value_is_string(input)) {
-        string = mal_value_to_string(input);
-    } else if (!mal_vm_to_string(vm, input, &string)) {
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
         return mal_value_new_undefined();
     }
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
-    string = mal_value_to_string(string_root);
-    usize length = mal_string_length(string);
-    const c16 *code_units = mal_string_code_units(string);
-    MalValue result = mal_ops_number_value(
-        mal_builtin_parse_float_units(code_units, length));
-    mal_gc_unroot(&root_span);
-    return result;
+    return mal_ops_number_value(mal_builtin_parse_float_string(mal_value_from_string(string)));
 }
 
 static MalValue mal_builtin_global_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

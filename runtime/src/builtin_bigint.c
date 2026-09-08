@@ -1,6 +1,7 @@
 #include "builtin_bigint.h"
 
 #include "bigint128.h"
+#include "gc.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
@@ -119,6 +120,12 @@ static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, i128 *out) {
     return false;
 }
 
+MalValue mal_builtin_bigint_to_string_radix(MalVm *vm, MalValue receiver, i32 radix) {
+    i128 value;
+    if (!mal_builtin_bigint_this(vm, receiver, &value)) return mal_value_new_undefined();
+    return mal_value_from_string(mal_bigint_to_string(&vm->heap, value, radix));
+}
+
 static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -169,64 +176,48 @@ static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_v
     return mal_value_new_undefined();
 }
 
-/**
- * ToIndex(value) for the asIntN/asUintN `bits` argument: ToNumber (with full
- * ToPrimitive for objects), truncate toward zero, NaN → 0, then require a
- * non-negative integer no greater than 2^53 - 1, else RangeError. Returns false
- * (with the throw pending) on a coercion throw or out-of-range index.
- */
-static bool mal_builtin_bigint_bits_arg(MalVm *vm, const MalValue *args, i32 arg_count, i64 *out) {
-    f64 number;
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
-        return false;
-    }
+MalValue mal_builtin_bigint_width_number(MalVm *vm, f64 number, MalValue input, bool is_signed) {
     f64 index = mal_ops_number_to_integer_or_infinity(number);
     if (index < 0 || index > MAL_NUMBER_MAX_SAFE_INTEGER) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid bit count");
-        return false;
+        return mal_value_new_undefined();
     }
-    *out = (i64) index;
-    return true;
+    bool primitive = mal_value_is_bigint(input);
+    i128 value;
+    // Even a zero width must perform ToBigInt after validating the index.
+    if (!mal_bigint_to_bigint(vm, input, &value)) return mal_value_new_undefined();
+    i128 result = is_signed
+        ? mal_bigint128_as_int_n(value, (u64) index)
+        : mal_bigint128_as_uint_n(value, (u64) index);
+    if (primitive && result == value) return input;
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+}
+
+static MalValue mal_builtin_bigint_width(MalVm *vm, const MalValue *args, i32 arg_count, bool is_signed) {
+    MalValue input = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &input, 1);
+    f64 number;
+    MalValue result = mal_value_new_undefined();
+    if (mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
+        result = mal_builtin_bigint_width_number(vm, number, input, is_signed);
+    }
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue mal_builtin_bigint_as_uint_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-
-    // 1. Let bits be ? ToIndex(bits). 2. Let bigint be ? ToBigInt(bigint).
-    i64 bits;
-    if (!mal_builtin_bigint_bits_arg(vm, args, arg_count, &bits)) {
-        return mal_value_new_undefined();
-    }
-
-    i128 value;
-    if (!mal_bigint_to_bigint(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &value)) {
-        return mal_value_new_undefined();
-    }
-
-    i128 result = mal_bigint128_as_uint_n(value, (u64) bits);
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+    return mal_builtin_bigint_width(vm, args, arg_count, false);
 }
 
 static MalValue mal_builtin_bigint_as_int_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-
-    // 1. Let bits be ? ToIndex(bits). 2. Let bigint be ? ToBigInt(bigint).
-    i64 bits;
-    if (!mal_builtin_bigint_bits_arg(vm, args, arg_count, &bits)) {
-        return mal_value_new_undefined();
-    }
-
-    i128 value;
-    if (!mal_bigint_to_bigint(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &value)) {
-        return mal_value_new_undefined();
-    }
-
-    i128 result = mal_bigint128_as_int_n(value, (u64) bits);
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+    return mal_builtin_bigint_width(vm, args, arg_count, true);
 }
 
 void mal_builtin_bigint_install(MalVm *vm) {

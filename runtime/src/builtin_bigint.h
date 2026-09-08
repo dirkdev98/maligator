@@ -3,6 +3,10 @@
 #include "./defaults.h"
 #include "intrinsics.h"
 
+MalValue mal_builtin_bigint_width_number(MalVm *vm, f64 bits, MalValue input, bool is_signed);
+// The caller proves radix is an integer in [2, 36]; receiver branding remains dynamic.
+MalValue mal_builtin_bigint_to_string_radix(MalVm *vm, MalValue receiver, i32 radix);
+
 /**
  * Install the BigInt constructor function and BigInt.prototype.
  */

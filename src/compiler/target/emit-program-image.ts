@@ -121,6 +121,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_map.h"',
 	'#include "builtin_set.h"',
 	'#include "builtin_number.h"',
+	'#include "builtin_bigint.h"',
 	'#include "builtin_string.h"',
 	'#include "builtin_uri.h"',
 	'#include "builtin_regexp.h"',

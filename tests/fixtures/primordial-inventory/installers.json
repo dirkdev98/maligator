@@ -21,7 +21,7 @@
 	},
 	{
 		"file": "builtin_bigint.c",
-		"sha256": "a05b0aa36f13575c48ac3466b7563ed5e925980354849bea09ce132fa8487fa4"
+		"sha256": "b88e93f93097429bc8d6a864ce795df9a8a77fcd4cfcc1bd9072cf96549706db"
 	},
 	{
 		"file": "builtin_boolean.c",
@@ -89,7 +89,7 @@
 	},
 	{
 		"file": "builtin_number.c",
-		"sha256": "9624ccc365df23a1967d60b836f81faa379e69d04660d35220955fc921aa396c"
+		"sha256": "5515d8ddd65158335dd1427c25a7881b0dece21ac97f3d5e91cb5eaf30fffca4"
 	},
 	{
 		"file": "builtin_object.c",

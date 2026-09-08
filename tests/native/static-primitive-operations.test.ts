@@ -88,7 +88,9 @@ describe("primitive operation differential", () => {
 				});
 				for (const binary of [pair.compiled, pair.interpreted]) {
 					expect(runToStdout(binary)).toBe(expected);
-					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						expected,
+					);
 				}
 			} finally {
 				rmSync(outDir, { recursive: true, force: true });

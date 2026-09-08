@@ -3,6 +3,10 @@
 #include "./defaults.h"
 #include "intrinsics.h"
 
+// Requires primitive strings; roots their backing storage through flattening.
+f64 mal_builtin_parse_int_string(MalValue source, f64 radix);
+f64 mal_builtin_parse_float_string(MalValue source);
+
 /**
  * Create the Number constructor and install the Number builtins on the
  * constructor and %Number.prototype%, plus the global parseInt / parseFloat /

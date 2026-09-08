@@ -1130,3 +1130,148 @@ for (const text of [
 	} catch (error) {
 		show(error.name);
 	}
+
+function numericParsers(value, radix) {
+	const text = String(value);
+	const base = +radix;
+	return [
+		parseInt(text, base),
+		Number.parseInt(text),
+		parseFloat(text),
+		Number.parseFloat(text),
+	]
+		.map((value) => (Object.is(value, -0) ? "-0" : String(value)))
+		.join("|");
+}
+function numericGlobals(value) {
+	const number = +value;
+	return isNaN(number) + ":" + isFinite(number);
+}
+function bigintWidth(bits, value) {
+	const width = +bits;
+	return (
+		BigInt.asIntN(width, value).toString(16) +
+		":" +
+		BigInt.asUintN(width, value).toString(2)
+	);
+}
+function bigintRadix(value) {
+	return BigInt.prototype.toString.call(value, 16.9);
+}
+globalThis.numericParsers = numericParsers;
+globalThis.numericGlobals = numericGlobals;
+globalThis.bigintWidth = bigintWidth;
+globalThis.bigintRadix = bigintRadix;
+for (const text of [
+	"",
+	"  -0tail",
+	"\u200312.75e+2rest",
+	"0xff",
+	"-Infinitymore",
+	"1e+",
+	"5e-324",
+	"0".repeat(80) + "1",
+	"😀12",
+	"\ud800",
+])
+	for (const radix of [undefined, 0, 2, 8, 10, 16, 36, 37, NaN, Infinity, 4294967312])
+		show(numericParsers(text, radix));
+for (const value of [undefined, null, true, "x", "12", -0, NaN, Infinity])
+	show(numericGlobals(value));
+for (const width of [0, -0, NaN, 1, 7.9, 8, 32, 64, 100, 127])
+	for (const value of [-257n, -1n, 0n, 1n, 128n, 257n, "255", true, Object(-129n)])
+		show(bigintWidth(width, value));
+for (const value of [-1n, 0n, 1n, 123456789012345678901234567890n, Object(255n)])
+	show(bigintRadix(value));
+let numericEvents = "";
+for (const width of [-1, Infinity, 9007199254740992, 0, 8]) {
+	try {
+		show(
+			bigintWidth(width, {
+				valueOf() {
+					numericEvents += "value;";
+					return 17n;
+				},
+			}),
+		);
+	} catch (error) {
+		show(error.name);
+	}
+}
+show(numericEvents);
+for (const value of [1, undefined, null, Symbol("n"), "bad"])
+	try {
+		show(bigintWidth(0, value));
+	} catch (error) {
+		show(error.name);
+	}
+for (const value of [1, undefined, null, Symbol("n"), "bad"])
+	try {
+		show(bigintRadix(value));
+	} catch (error) {
+		show(error.name);
+	}
+let parseEvents = "";
+show(
+	parseInt(
+		{
+			toString() {
+				parseEvents += "string;";
+				return "ff";
+			},
+		},
+		{
+			valueOf() {
+				parseEvents += "radix;";
+				return 16;
+			},
+		},
+	),
+);
+show(parseEvents);
+try {
+	parseInt(Symbol("input"), {
+		valueOf() {
+			throw new Error("radix touched");
+		},
+	});
+} catch (error) {
+	show(error.name);
+}
+
+const numericCollect = globalThis.__mal_collect_garbage ?? (() => {});
+const rootedRadix = {
+	valueOf() {
+		numericCollect();
+		return 16;
+	},
+};
+show(
+	parseInt(
+		{
+			toString() {
+				numericCollect();
+				return "f".repeat(2);
+			},
+		},
+		rootedRadix,
+	),
+);
+const rootedBigInt = {
+	valueOf() {
+		numericCollect();
+		return -257n;
+	},
+};
+show(
+	BigInt.asIntN(
+		{
+			valueOf() {
+				numericCollect();
+				return 8;
+			},
+		},
+		rootedBigInt,
+	),
+);
+show(bigintWidth(8, rootedBigInt));
