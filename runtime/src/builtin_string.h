@@ -7,13 +7,6 @@
 #include "value_ops.h"
 #include "vm.h"
 
-/**
- * Create the String constructor and install the String builtins on
- * %String.prototype%.
- *
- * There are no wrapper objects: constructing behaves like calling and string
- * methods receive the primitive string as their this value.
- */
 void mal_builtin_string_install(MalVm *vm);
 
 /**
@@ -260,3 +253,18 @@ bool mal_builtin_string_trim_span_direct_licensed(
     usize end,
     MalValue *out
 );
+
+typedef enum MalStringRangeOp {
+    MAL_STRING_RANGE_SLICE,
+    MAL_STRING_RANGE_SUBSTRING,
+    MAL_STRING_RANGE_SUBSTR,
+} MalStringRangeOp;
+
+// Canonical builtin identity, primitive receiver, and numeric bounds are caller proofs.
+MalValue mal_builtin_string_range_numeric(MalVm *vm, MalString *string, f64 start, f64 end, MalStringRangeOp operation);
+MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 count);
+MalValue mal_builtin_string_from_codes_numbers(MalVm *vm, const f64 *numbers, i32 count, bool code_points);
+
+MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 target, MalValue fill, bool pad_start);
+// A guard miss has no effects; a hit may allocate or leave a pending throw.
+bool mal_builtin_string_concat_direct(MalVm *vm, MalValue receiver, const MalValue *arguments, i32 argument_count, MalValue *result);

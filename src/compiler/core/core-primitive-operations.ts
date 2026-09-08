@@ -9,6 +9,8 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
+import { coreStaticStringRawParts } from "./core-string-construction.ts";
+import type { CoreStringPart } from "./core-string-construction.ts";
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
@@ -63,6 +65,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		const plans: Array<
 			| { instruction: CoreInstructionId; value: ConstantValue }
 			| { instruction: CoreInstructionId; elements: ReadonlyArray<string> }
+			| { instruction: CoreInstructionId; stringParts: ReadonlyArray<CoreStringPart> }
 			| {
 					instruction: CoreInstructionId;
 					operation: CoreStaticMemberOperation;
@@ -297,6 +300,28 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					continue;
 				}
 			}
+			if (operation === "String.raw") {
+				const stringParts = coreStaticStringRawParts(
+					program,
+					fn,
+					analysis,
+					instruction,
+					inputs,
+				);
+				if (
+					stringParts !== undefined &&
+					plans.length * 4 + sequenceEdits + stringParts.length * 3 + 4 <=
+						context.remainingEdits
+				) {
+					if (stringParts.length === 1 && typeof stringParts[0] === "string")
+						plans.push({ instruction, value: { kind: "string", value: stringParts[0] } });
+					else {
+						plans.push({ instruction, stringParts });
+						sequenceEdits += stringParts.length * 3;
+					}
+				}
+				continue;
+			}
 			if (operation === "String.prototype.split") {
 				const elements = evaluateConstantStringSplit(
 					analysis.constant(inputs[0]!),
@@ -381,6 +406,36 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			return index;
 		};
 		for (const plan of plans) {
+			if ("stringParts" in plan) {
+				const block = fn.instructionBlock(plan.instruction);
+				let result: CoreValueId | undefined;
+				for (const part of plan.stringParts) {
+					const value = editor.insertInstruction(
+						block,
+						plan.instruction,
+						typeof part === "string" ? "createString" : "unary",
+						typeof part === "string" ? [] : [part.value],
+						{
+							attributes:
+								typeof part === "string"
+									? { stringIndex: stringIndex(part) }
+									: { operator: "tostring" },
+						},
+					).outputs[0]!;
+					result =
+						result === undefined
+							? value
+							: editor.insertInstruction(
+									block,
+									plan.instruction,
+									"binary",
+									[result, value],
+									{ attributes: { operator: "+" } },
+								).outputs[0]!;
+				}
+				editor.replaceInstruction(plan.instruction, "move", [result!]);
+				continue;
+			}
 			if ("elements" in plan) {
 				const words = [8, plan.elements.length];
 				for (const value of plan.elements) words.push(5, stringIndex(value));

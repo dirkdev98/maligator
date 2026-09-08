@@ -853,6 +853,35 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						editor.setValueRepresentation(position, "f64");
 					}
 				}
+				const stringRange = [
+					"String.prototype.slice",
+					"String.prototype.substring",
+					"String.prototype.substr",
+				].includes(operation);
+				if (
+					stringRange ||
+					operation === "String.prototype.repeat" ||
+					operation === "String.prototype.padStart" ||
+					operation === "String.prototype.padEnd" ||
+					operation === "String.fromCharCode" ||
+					operation === "String.fromCodePoint"
+				) {
+					const arguments_ = copyInstructionOperands(fn, instruction).slice(1);
+					const count = stringRange
+						? 2
+						: operation.startsWith("String.prototype.")
+							? 1
+							: arguments_.length;
+					for (const argument of arguments_.slice(0, count)) {
+						if (
+							fn.valueRepresentation(argument) !== "f64" &&
+							canScalarizeNumber(argument)
+						) {
+							editor ??= CoreEditor.open(program, item.function);
+							editor.setValueRepresentation(argument, "f64");
+						}
+					}
+				}
 				const numberPredicate = [
 					"Number.isNaN",
 					"Number.isFinite",

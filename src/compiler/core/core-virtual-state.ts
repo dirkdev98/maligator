@@ -266,7 +266,6 @@ export const materializeVirtualState: CoreFunctionPass = {
 			}
 			if (
 				boundary === root ||
-				transitions === 0 ||
 				removals.size + replacements.size + cells.size * 3 + 4 > context.remainingEdits
 			)
 				continue;
@@ -281,6 +280,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 					if (!consumed.has(fn.kernel.useInstruction(use))) return true;
 				return false;
 			});
+			if (transitions === 0 && escapes) continue;
 			analysis.verify(fact);
 			const editor = CoreEditor.open(program, fn.id);
 			for (const [instruction, cell] of replacements)

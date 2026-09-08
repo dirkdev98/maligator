@@ -1862,7 +1862,11 @@ export class CoreStaticValueAnalysis {
 	constant(value: CoreValueId): ConstantValue | undefined {
 		const fact = this.query(value);
 		if (fact.kind === "unknown") return undefined;
-		const description = this.#program.staticDescriptions.description(fact.description);
+		return this.descriptionConstant(fact.description);
+	}
+
+	descriptionConstant(id: StaticDescriptionId): ConstantValue | undefined {
+		const description = this.#program.staticDescriptions.description(id);
 		switch (description.kind) {
 			case "null":
 				return { kind: "null", value: null };

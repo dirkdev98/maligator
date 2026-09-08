@@ -11,6 +11,99 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it("folds private raw segments and emits ordered substitution conversions", () => {
+		for (const expression of [
+			"String.raw({raw:['a','b','c']},x,2)",
+			"String.raw({raw:['a','b']},1)",
+			"String.raw({raw:[]},x)",
+		]) {
+			const output = inspect(expression);
+			expect(
+				output.core.some((operation) => operation.attributes.operation === "String.raw"),
+			).toBe(false);
+			expect(output.structure.allocations).toBe(0);
+		}
+		const output = inspect("String.raw({raw:['a','b','c']},x,x)");
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "tostring",
+			),
+		).toHaveLength(2);
+	});
+
+	it.each([
+		"String.raw(x,1)",
+		"String.raw({get raw(){return x;}},1)",
+		"String.raw({raw:['a',,'b']},x)",
+	])("retains raw template observations for %s", (expression) => {
+		expect(
+			inspect(expression).core.some(
+				(operation) => operation.attributes.operation === "String.raw",
+			),
+		).toBe(true);
+	});
+
+	it.each(["slice", "substring", "substr"])(
+		"selects numeric String %s bounds with guarded receivers",
+		(method) => {
+			for (const expression of [
+				`'a😀z'.${method}(+x, 3)`,
+				`String(x).${method}(1, +x)`,
+				`String.prototype.${method}.call(x, 1, undefined)`,
+			]) {
+				expect(inspect(expression).c.source).toContain(
+					"mal_builtin_string_range_numeric(",
+				);
+			}
+			expect(inspect(`'abc'.${method}(x)`).c.source).not.toContain(
+				"mal_builtin_string_range_numeric(",
+			);
+			expect(inspect(`'abc'.${method}(+x)`, false).c.source).not.toContain(
+				"mal_builtin_string_range_numeric(",
+			);
+		},
+	);
+
+	it.each(["fromCharCode", "fromCodePoint"])(
+		"constructs String.%s from unboxed numeric inputs",
+		(method) => {
+			const output = inspect(`String.${method}(65, +x, 0xd800)`);
+			expect(output.c.source).toContain("mal_builtin_string_from_codes_numbers(");
+			expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+			expect(inspect(`String.${method}(x)`).c.source).not.toContain(
+				"mal_builtin_string_from_codes_numbers(",
+			);
+		},
+	);
+
+	it.each(["repeat", "padStart", "padEnd"])(
+		"uses the numeric String %s builder without coercing unknown counts",
+		(method) => {
+			const kernel = method === "repeat" ? "repeat" : "pad";
+			for (const expression of [
+				`'abc'.${method}(+x, 'ab')`,
+				`String.prototype.${method}.call(x, 3, x)`,
+			]) {
+				expect(inspect(expression).c.source).toContain(
+					`mal_builtin_string_${kernel}_numeric(`,
+				);
+			}
+			expect(inspect(`'abc'.${method}(x)`).c.source).not.toContain(
+				`mal_builtin_string_${kernel}_numeric(`,
+			);
+		},
+	);
+
+	it("guards primitive concat inputs before its shared builder", () => {
+		expect(inspect("'abc'.concat(x, 'def')").c.source).toContain(
+			"mal_builtin_string_concat_direct(",
+		);
+		expect(inspect("'abc'.concat(x, 'def')", false).c.source).not.toContain(
+			"mal_builtin_string_concat_direct(",
+		);
+	});
+
 	it.each([
 		["clz32", "+x", "mal_builtin_math_clz32_number"],
 		["f16round", "+x", "mal_builtin_math_f16round_number"],

@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "0750d6f63a4035b55086f687eff81aaf87f048278fb72890ab572da756b78a53"
+		"sha256": "38aab6079c41f03b35729d234f602b68d3dc765b8c4d96bc21dbd59470420289"
 	},
 	{
 		"file": "builtin_symbol.c",

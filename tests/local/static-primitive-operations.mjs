@@ -712,3 +712,228 @@ for (const value of [
 ])
 	unaryMath(value, mathCallbacks);
 show("Math kernels match target runtime");
+
+function stringRanges(text, start, end) {
+	show(String(text).slice(+start, +end));
+	show(String(text).substring(+start, +end));
+	show(String(text).substr(+start, +end));
+	show(String.prototype.slice.call(text, 1));
+	show(String.prototype.substring.call(text, 1, undefined));
+	show(String.prototype.substr.call(text, -2, undefined));
+}
+for (const text of ["", "ab", "a😀z", "ab".repeat(80) + "yz".repeat(80)]) {
+	for (const start of [-Infinity, -5, -0, NaN, 1.9, 3, Infinity]) {
+		for (const end of [-Infinity, -1, -0, NaN, 2.9, 8, Infinity])
+			stringRanges(text, start, end);
+	}
+}
+function stringCodes(value) {
+	show(String.fromCharCode(65, +value, 0xd800));
+	try {
+		show(String.fromCodePoint(65, +value, 0xd800));
+	} catch (error) {
+		show(error.name);
+	}
+}
+for (const value of [
+	-Infinity,
+	-1,
+	-0,
+	0,
+	0.9,
+	0xd800,
+	0x10000,
+	0x10ffff,
+	0x110000,
+	2 ** 32 + 97,
+	Infinity,
+	NaN,
+])
+	stringCodes(value);
+function stringBuilders(text, length, fill) {
+	try {
+		show(String(text).repeat(+length));
+	} catch (error) {
+		show(error.name);
+	}
+	try {
+		show(String(text).padStart(+length, fill));
+	} catch (error) {
+		show(error.name);
+	}
+	try {
+		show(String(text).padEnd(+length, fill));
+	} catch (error) {
+		show(error.name);
+	}
+	show(String(text).concat(fill, text));
+}
+for (const text of ["", "ab", "a😀z", "ab".repeat(80)]) {
+	for (const length of [-Infinity, -1, -0, NaN, 0.9, 2, 8, 100, Infinity])
+		stringBuilders(text, length, "xy");
+}
+function paddingEdge(text, length, fill) {
+	show(String(text).padStart(+length, fill));
+	show(String(text).padEnd(+length, fill));
+}
+paddingEdge("abc", Infinity, "");
+paddingEdge("abc", 1e20, "");
+events = "";
+const paddingThrow = {
+	toString() {
+		events += "p";
+		throw new Error("filler");
+	},
+};
+try {
+	paddingEdge("abc", Infinity, paddingThrow);
+} catch (error) {
+	show(error.message);
+}
+show(events);
+function wrappedStringMethods(text) {
+	show(text.slice(1));
+	show(text.substring(1));
+	show(text.substr(1));
+	show(text.repeat(2));
+	show(text.padStart(6, "x"));
+	show(text.trim());
+	show(text.includes("a"));
+	show(text.charAt(1));
+	show(text.concat("x"));
+}
+const customString = new String("original");
+customString.toString = function () {
+	return " abc ";
+};
+wrappedStringMethods(customString);
+customString[Symbol.toPrimitive] = function (hint) {
+	show(hint);
+	return "xyz";
+};
+wrappedStringMethods(customString);
+events = "";
+const rangeReceiver = {
+	toString() {
+		events += "r";
+		return "abc";
+	},
+};
+const rangeStart = {
+	valueOf() {
+		events += "s";
+		return 1;
+	},
+};
+const rangeEnd = {
+	valueOf() {
+		events += "e";
+		return 2;
+	},
+};
+show(String.prototype.slice.call(rangeReceiver, rangeStart, rangeEnd));
+show(events);
+events = "";
+try {
+	String.fromCodePoint(
+		{
+			valueOf() {
+				events += "a";
+				return -1;
+			},
+		},
+		{
+			valueOf() {
+				events += "b";
+				return 65;
+			},
+		},
+	);
+} catch (error) {
+	show(error.name);
+}
+show(events);
+
+function rawTemplate(value) {
+	return String.raw({ raw: ["a", "b", "c"] }, value, value);
+}
+show(rawTemplate("X"));
+events = "";
+show(
+	rawTemplate({
+		toString() {
+			events += "x";
+			return events;
+		},
+	}),
+);
+show(events);
+try {
+	show(rawTemplate(Symbol()));
+} catch (error) {
+	show(error.name);
+}
+show(
+	String.raw(
+		{ raw: [] },
+		{
+			toString() {
+				throw new Error("unused");
+			},
+		},
+	),
+);
+show(
+	String.raw(
+		{ raw: ["only"] },
+		{
+			toString() {
+				throw new Error("unused");
+			},
+		},
+	),
+);
+events = "";
+show(
+	String.raw(
+		{
+			get raw() {
+				events += "r";
+				return {
+					get length() {
+						events += "l";
+						return 2;
+					},
+					get 0() {
+						events += "a";
+						return "a";
+					},
+					get 1() {
+						events += "b";
+						return "b";
+					},
+				};
+			},
+		},
+		{
+			toString() {
+				events += "s";
+				return "s";
+			},
+		},
+	),
+);
+show(events);
+const mutableRaw = ["a", "b"];
+show(
+	String.raw(
+		{ raw: mutableRaw },
+		{
+			toString() {
+				mutableRaw[1] = "changed";
+				return "x";
+			},
+		},
+	),
+);
+show(String.raw({ raw: ["a", , "c"] }, "x", "y"));

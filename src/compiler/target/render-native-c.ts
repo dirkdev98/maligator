@@ -180,6 +180,12 @@ const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>>
 	"String.prototype.endsWith": ["ENDS_WITH", "INFINITY"],
 };
 
+const STRING_RANGE_KERNELS: Readonly<Record<string, string>> = {
+	"String.prototype.slice": "SLICE",
+	"String.prototype.substring": "SUBSTRING",
+	"String.prototype.substr": "SUBSTR",
+};
+
 const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.at": "AT",
 	"String.prototype.charAt": "CHAR_AT",
@@ -5296,6 +5302,27 @@ function emitInstruction(
 							poll,
 						];
 				}
+				if (
+					["String.fromCharCode", "String.fromCodePoint"].includes(
+						instruction.operation,
+					) &&
+					instruction.arguments.length <= 64
+				) {
+					const arguments_ = instruction.arguments.map(nativeNumberOperand);
+					if (arguments_.every((argument) => argument !== null)) {
+						const values =
+							arguments_.length === 0
+								? "nullptr"
+								: `((f64[]){ ${arguments_.join(", ")} })`;
+						const result = `codes_result_${ip}`;
+						return [
+							`MalValue ${result} = mal_builtin_string_from_codes_numbers(vm, ${values}, ${arguments_.length}, ${instruction.operation === "String.fromCodePoint" ? "true" : "false"});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					}
+				}
 				if (instruction.operation === "Math.random") {
 					return [storeNumber(instruction.dst, "mal_builtin_math_random_number()"), poll];
 				}
@@ -5376,6 +5403,94 @@ function emitInstruction(
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					poll,
 				];
+				if (
+					instruction.operation === "String.prototype.concat" &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined
+				) {
+					const result = `concat_result_${ip}`;
+					return [
+						`MalValue ${result};`,
+						`if (mal_builtin_string_concat_direct(vm, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length}, &${result})) {`,
+						`  ${throwCheck()}`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+						`  ${poll}`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (
+					["String.prototype.padStart", "String.prototype.padEnd"].includes(
+						instruction.operation,
+					) &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined
+				) {
+					const operand = instruction.arguments[0];
+					const length =
+						operand === undefined || decodeVmValueOperand(operand).kind === "undefined"
+							? "0.0"
+							: nativeNumberOperand(operand);
+					if (length !== null) {
+						const receiver = boxedOperand(instruction.thisValue);
+						const fill = instruction.arguments[1];
+						const result = `pad_result_${ip}`;
+						const direct = [
+							`MalValue ${result} = mal_builtin_string_pad_numeric(vm, mal_value_to_string(${receiver}), ${length}, ${fill === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(fill)}, ${instruction.operation === "String.prototype.padStart" ? "true" : "false"});`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+						if (operandRep(instruction.thisValue) === "string") return direct;
+						return [
+							`if (mal_value_is_string(${receiver})) {`,
+							...direct.map((line) => `  ${line}`),
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
+				const range = STRING_RANGE_KERNELS[instruction.operation];
+				if (
+					(range !== undefined || instruction.operation === "String.prototype.repeat") &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined &&
+					nativeStringSliceNumberFusionAction === undefined
+				) {
+					const position = (index: number, fallback: string) => {
+						const operand = instruction.arguments[index];
+						return operand === undefined ||
+							decodeVmValueOperand(operand).kind === "undefined"
+							? fallback
+							: nativeNumberOperand(operand);
+					};
+					const start = position(0, "0.0");
+					const end = range === undefined ? "0.0" : position(1, "INFINITY");
+					if (start !== null && end !== null) {
+						const receiver = boxedOperand(instruction.thisValue);
+						const result = `range_result_${ip}`;
+						const expression =
+							range === undefined
+								? `mal_builtin_string_repeat_numeric(vm, mal_value_to_string(${receiver}), ${start})`
+								: `mal_builtin_string_range_numeric(vm, mal_value_to_string(${receiver}), ${start}, ${end}, MAL_STRING_RANGE_${range})`;
+						const direct = [
+							`MalValue ${result} = ${expression};`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+						if (operandRep(instruction.thisValue) === "string") return direct;
+						return [
+							`if (mal_value_is_string(${receiver})) {`,
+							...direct.map((line) => `  ${line}`),
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
 				const search = STRING_SEARCH_KERNELS[instruction.operation];
 				const character = STRING_CHARACTER_KERNELS[instruction.operation];
 				if (
