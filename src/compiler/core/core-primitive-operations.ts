@@ -10,6 +10,7 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import { corePrimitiveBuiltinError } from "./core-primitive-errors.ts";
+import { coreStaticNumberSum } from "./core-static-number-sum.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
@@ -67,6 +68,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		const plans: Array<
 			| { instruction: CoreInstructionId; value: ConstantValue }
 			| { instruction: CoreInstructionId; elements: ReadonlyArray<string> }
+			| {
+					instruction: CoreInstructionId;
+					numberParts: ReadonlyArray<CoreStaticMemberOperation>;
+			  }
 			| {
 					instruction: CoreInstructionId;
 					stringParts: ReadonlyArray<CoreStringPart>;
@@ -418,6 +423,24 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 				if (operation === "String.raw") continue;
 			}
+			if (operation === "Math.sumPrecise") {
+				const sum = coreStaticNumberSum(
+					program,
+					context.compilationContext.facts.world,
+					analysis,
+					instruction,
+					inputs[1],
+				);
+				if (sum?.value !== undefined) plans.push({ instruction, value: sum.value });
+				else if (
+					sum?.elements !== undefined &&
+					plans.length * 4 + sequenceEdits + 8 <= context.remainingEdits
+				) {
+					plans.push({ instruction, numberParts: sum.elements });
+					sequenceEdits += 4;
+				}
+				continue;
+			}
 			if (operation === "String.prototype.split") {
 				const elements = evaluateConstantStringSplit(
 					analysis.constant(inputs[0]!),
@@ -560,6 +583,24 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			return index;
 		};
 		for (const plan of plans) {
+			if ("numberParts" in plan) {
+				const block = fn.instructionBlock(plan.instruction);
+				const sourcePosition = fn.instructionSourcePosition(plan.instruction);
+				const values = plan.numberParts.map(
+					(part) =>
+						editor.insertInstruction(block, plan.instruction, part.opcode, part.inputs, {
+							sourcePosition,
+							attributes: part.attributes,
+						}).outputs[0]!,
+				);
+				editor.replaceInstruction(
+					plan.instruction,
+					values.length === 1 ? "move" : "binary",
+					values,
+					{ attributes: values.length === 1 ? {} : { operator: "+" } },
+				);
+				continue;
+			}
 			if ("stringParts" in plan) {
 				const block = fn.instructionBlock(plan.instruction);
 				const sourcePosition = fn.instructionSourcePosition(plan.instruction);

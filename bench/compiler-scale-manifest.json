@@ -170,6 +170,7 @@
 				"src/compiler/core/core-platform-modules.ts",
 				"src/compiler/core/core-primitive-operations.ts",
 				"src/compiler/core/core-primitive-errors.ts",
+				"src/compiler/core/core-static-number-sum.ts",
 				"src/compiler/core/core-primitive-call-reuse.ts",
 				"src/compiler/core/core-program-flow-analysis.ts",
 				"src/compiler/core/core-program-flow.ts",

@@ -15,6 +15,37 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each(["[1e20,1,-1e20]", "[]", "[-0,-0]", "[+x]", "[+x,1]", "[+x,+x]"])(
+		"eliminates a proved numeric sum input %s",
+		(array) => {
+			const output = inspect(`Math.sumPrecise(${array})`);
+			expect(
+				output.core.some((op) => op.attributes.operation === "Math.sumPrecise"),
+			).toBe(false);
+			expect(output.structure.allocations).toBe(0);
+		},
+	);
+	it.each([
+		"x",
+		"[x]",
+		"[1,,2]",
+		"[1,'2']",
+		"[NaN,'2']",
+		"[+x,1,2]",
+		"Array(65).fill(1)",
+		"Object.assign([1],{[Symbol.iterator]:x})",
+	])("retains unproved sum iteration for %s", (array) => {
+		expect(
+			inspect(`Math.sumPrecise(${array})`).core.some(
+				(op) => op.attributes.operation === "Math.sumPrecise",
+			),
+		).toBe(true);
+	});
+	it("retains mutable-world sum lookup and iteration", () => {
+		const output = inspect("Math.sumPrecise([1,2])", false);
+		expect(output.c.source).not.toContain("mal_math_sum_precise");
+		expect(output.structure.allocations).toBeGreaterThan(0);
+	});
 	it.each([
 		"Math.sin(-0)",
 		"Math.sin(Infinity)",

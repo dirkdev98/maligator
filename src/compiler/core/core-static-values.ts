@@ -455,7 +455,9 @@ export class CoreStaticValueAnalysis {
 			if (
 				fact.kind === "known" &&
 				fact.state === "immutable-value" &&
-				!["object", "array", "function", "symbol"].includes(fact.brand)
+				["undefined", "null", "boolean", "number", "string", "bigint"].includes(
+					intern.description(fact.description).kind,
+				)
 			)
 				return { kind: "constant", description: fact.description };
 			let index = bindingIndices.get(input);
@@ -1671,7 +1673,9 @@ export class CoreStaticValueAnalysis {
 			if (
 				fact.kind === "known" &&
 				fact.state === "immutable-value" &&
-				!["symbol", "function", "array", "object"].includes(fact.brand) &&
+				["undefined", "null", "boolean", "number", "string", "bigint"].includes(
+					intern.description(fact.description).kind,
+				) &&
 				fact.operands.length === 0
 			)
 				return { kind: "constant", description: fact.description };

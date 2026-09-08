@@ -37,33 +37,42 @@ describe("static descriptions and allocation identities", () => {
 		facts.verify(same);
 	});
 
-	it("keeps dynamic leaves in SSA and rejects facts after an editor mutation", () => {
-		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
-		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
-		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
-		const [object] = builder.appendInstruction(entry, "createObjectShaped", [input], {
-			attributes: { keyStringIndices: [0] },
-		});
-		builder.setTerminator(entry, { kind: "return", value: object! });
-		const fn = program.function(builder.finish(entry).function);
-		const facts = new CoreStaticValueAnalysis(program, fn, () =>
-			buildCoreControlFlow(program, fn.id),
-		);
-		const fact = facts.query(object!);
-		if (fact.kind !== "known") throw new Error("Expected known shape");
-		expect(program.staticDescriptions.summary(fact.description).constantContents).toBe(
-			false,
-		);
-		expect(fact.operands).toEqual([input]);
-		expect(fn.valueUseCount(input)).toBe(1);
-		facts.verify(fact, fn.blockTerminator(entry));
-		const editor = CoreEditor.open(program, fn.id);
-		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(object!));
-		editor.replaceInstruction(instruction, "createObject", [], {});
-		editor.commit();
-		expect(() => facts.verify(fact)).toThrow("Stale static-value facts");
-	});
+	it.each([undefined, "+", "!", "typeof"])(
+		"keeps dynamic %s leaves in SSA and rejects facts after an editor mutation",
+		(operator) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const input =
+				operator === undefined
+					? parameter
+					: builder.appendInstruction(entry, "unary", [parameter], {
+							attributes: { operator },
+						})[0]!;
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [input], {
+				attributes: { keyStringIndices: [0] },
+			});
+			builder.setTerminator(entry, { kind: "return", value: object! });
+			const fn = program.function(builder.finish(entry).function);
+			const facts = new CoreStaticValueAnalysis(program, fn, () =>
+				buildCoreControlFlow(program, fn.id),
+			);
+			const fact = facts.query(object!);
+			if (fact.kind !== "known") throw new Error("Expected known shape");
+			expect(program.staticDescriptions.summary(fact.description).constantContents).toBe(
+				false,
+			);
+			expect(fact.operands).toEqual([input]);
+			expect(fn.valueUseCount(input)).toBe(1);
+			facts.verify(fact, fn.blockTerminator(entry));
+			const editor = CoreEditor.open(program, fn.id);
+			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(object!));
+			editor.replaceInstruction(instruction, "createObject", [], {});
+			editor.commit();
+			expect(() => facts.verify(fact)).toThrow("Stale static-value facts");
+		},
+	);
 
 	it("distinguishes holes, undefined, signed zero, and metadata with dynamic operands", () => {
 		const descriptions = new StaticDescriptionInterner();

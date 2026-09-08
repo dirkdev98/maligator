@@ -155,6 +155,15 @@ general transcendental results remain target operations. Number exponentiation a
 lose the power operation after its producer effects, and one-argument numeric
 `hypot` becomes absolute value through the normal representation pass.
 
+`Math.sumPrecise` consumes dense private numeric arrays when the locked-world proof
+establishes the default array iterator and its `next`/`return` behavior. Constant
+inputs use a bounded exact binary accumulator and one ties-to-even rounding, including
+overflow cancellation and signed zero. One or two dynamic Number elements reduce to
+their SSA values and a single addition; their producer effects remain in order.
+Holes, unknown elements, accessors and unproved iterators retain runtime iteration.
+Primitive type facts with unknown contents retain operand bindings in aggregate
+descriptions rather than becoming constant members.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.
