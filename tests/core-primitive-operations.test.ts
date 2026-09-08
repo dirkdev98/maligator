@@ -315,6 +315,34 @@ describe("primitive operation results", () => {
 		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
 	});
 	it.each([
+		["Number(Symbol.iterator)", "symbolNumber"],
+		["new Number(Symbol.iterator)", "symbolNumber"],
+		["new String(Symbol.iterator)", "symbolString"],
+		["BigInt(Symbol.iterator)", "bigintValue"],
+		["Symbol(Symbol.iterator)", "symbolString"],
+		["Symbol.for(Symbol.iterator)", "symbolString"],
+		["Math.sin(Symbol.iterator)", "symbolNumber"],
+		["Math.max(NaN,1n)", "bigintNumberConversion"],
+		["Math.hypot(1,Symbol.iterator)", "symbolNumber"],
+		["String.fromCharCode(1,1n)", "bigintNumberConversion"],
+		["String.fromCodePoint(65,1n)", "bigintNumberConversion"],
+		["(1).toFixed(1n)", "bigintNumberConversion"],
+		["BigInt.asIntN(Symbol.iterator,1n)", "symbolNumber"],
+		["BigInt.asIntN(0,Symbol.iterator)", "bigintValue"],
+		["parseInt('1',1n)", "bigintNumberConversion"],
+		["parseFloat(Symbol.iterator)", "symbolString"],
+		["encodeURI(Symbol.iterator)", "symbolString"],
+		["String.raw(null)", "readNullish"],
+		["Math.sumPrecise(1)", "notIterable"],
+		["Math.sumPrecise()", "readNullish"],
+		["String.prototype.replace.call(null,x,'')", "stringReplaceNullish"],
+		["String.prototype.replaceAll.call(null,x,'')", "stringReplaceAllNullish"],
+		["String.prototype.split.call(null,x)", "stringSplitNullish"],
+		["String.prototype.matchAll.call(null,x)", "stringMatchAllNullish"],
+		["String.prototype.trim.call(null)", "stringNullish"],
+		["String.prototype.replace.call(Symbol.iterator,'a',x)", "symbolString"],
+		["Number.prototype.valueOf.call(Symbol.iterator)", "numberReceiver"],
+		["Symbol.prototype[Symbol.toPrimitive].call(1)", "symbolReceiver"],
 		["Number.prototype.toString.call(true,x)", "numberReceiver"],
 		["Boolean.prototype.valueOf.call(1)", "booleanReceiver"],
 		["String.prototype.valueOf.call(1)", "stringReceiver"],
@@ -351,6 +379,35 @@ describe("primitive operation results", () => {
 				.filter((plan) => plan?.kind === "known-builtin-error"),
 		).toEqual(plans);
 		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
+	});
+	it.each([
+		"Math.max(x,1n)",
+		"BigInt.asIntN(+x,Symbol.iterator)",
+		"String.fromCodePoint(+x,1n)",
+		"parseInt(x,1n)",
+		"String.prototype.replace.call(Symbol.iterator,x,'')",
+		"Number.prototype.valueOf.call(1,Symbol.iterator)",
+		"BigInt.prototype.valueOf.call(1n,Symbol.iterator)",
+		"Number.isFinite(Symbol.iterator)",
+		"Math.random(Symbol.iterator)",
+		"Reflect.construct(Number,[Symbol.iterator],x)",
+	])(
+		"does not skip an earlier effect or invent an ignored conversion in %s",
+		(expression) => {
+			expect(
+				inspect(expression)
+					.image.native.functions.flatMap((fn) => fn.instructions)
+					.some((plan) => plan?.kind === "known-builtin-error"),
+			).toBe(false);
+		},
+	);
+	it.each([
+		"Object(Symbol.iterator)[Symbol.toPrimitive]('string')===Symbol.iterator",
+		"Symbol.prototype[Symbol.toPrimitive].call(Symbol.iterator,x)===Symbol.iterator",
+	])("extracts a primitive Symbol through its canonical protocol in %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.core.some((op) => op.opcode === "callKnown")).toBe(false);
+		expect(output.structure.allocations).toBe(0);
 	});
 	it("rejects unknown residual error identities when loading artifacts", () => {
 		const output = inspect("'a'.normalize('invalid')");

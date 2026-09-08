@@ -27,3 +27,21 @@ try {
 	show(error.name);
 }
 show(events);
+for (const [action, message] of [
+	[() => Math.sumPrecise(1), "Value is not iterable"],
+	[() => Math.sumPrecise(), "Cannot read properties of null or undefined"],
+]) {
+	let first;
+	try {
+		action();
+	} catch (error) {
+		first = error;
+	}
+	if (first?.name !== "TypeError" || first.message !== message)
+		throw new Error("Sum input validation changed");
+	try {
+		action();
+	} catch (error) {
+		if (first === error) throw new Error("Sum error identity was reused");
+	}
+}

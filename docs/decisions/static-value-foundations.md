@@ -123,8 +123,14 @@ Certified builtin failures retain the original known call and exception edge in 
 and the runtime image. Native metadata selects a target error kind and fixed message;
 execution allocates a fresh error at that call site. Earlier unknown coercions prevent
 selection, and all argument expressions still execute before the failure. The compiler
-never throws the JavaScript error during compilation. Compiler artifact version 70
+never throws the JavaScript error during compilation. Compiler artifact version 71
 encodes the failure identity separately from the runtime call.
+
+Primitive brand proofs also select failed numeric/string conversions and wrong
+receivers. They stop at an earlier unknown coercion, range validation or symbol
+protocol; invalid later arguments cannot replace that earlier work. Null receiver
+failures retain each String method's target diagnostic. Number and String constructor
+conversion failures additionally require a proved ordinary constructor target.
 
 Repeated primitive calls can share a completed value within one basic block when
 all observed inputs have immutable primitive semantics. The first call and every

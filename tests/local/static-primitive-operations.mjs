@@ -1313,12 +1313,79 @@ const failurePairs = [
 	[() => BigInt.prototype.toString.call(1), (x) => BigInt.prototype.toString.call(x), 1],
 	[() => Symbol.prototype.toString.call(1), (x) => Symbol.prototype.toString.call(x), 1],
 	[() => Symbol.keyFor(1), (x) => Symbol.keyFor(x), 1],
+	[() => BigInt.asIntN(0, Symbol.iterator), (x) => BigInt.asIntN(0, x), Symbol.iterator],
+	[
+		() => String.prototype.replaceAll.call(null, "a", ""),
+		(x) => String.prototype.replaceAll.call(x, "a", ""),
+		null,
+	],
+	[
+		() => String.prototype.split.call(null, "a"),
+		(x) => String.prototype.split.call(x, "a"),
+		null,
+	],
+	[
+		() => String.prototype.matchAll.call(null, "a"),
+		(x) => String.prototype.matchAll.call(x, "a"),
+		null,
+	],
+	[() => String.prototype.trim.call(null), (x) => String.prototype.trim.call(x), null],
+	[() => Number(Symbol.iterator), (x) => Number(x), Symbol.iterator],
+	[() => new Number(Symbol.iterator), (x) => new Number(x), Symbol.iterator],
+	[() => new String(Symbol.iterator), (x) => new String(x), Symbol.iterator],
+	[() => BigInt(Symbol.iterator), (x) => BigInt(x), Symbol.iterator],
+	[() => Symbol(Symbol.iterator), (x) => Symbol(x), Symbol.iterator],
+	[() => Symbol.for(Symbol.iterator), (x) => Symbol.for(x), Symbol.iterator],
+	[() => Math.sin(Symbol.iterator), (x) => Math.sin(x), Symbol.iterator],
+	[() => Math.max(NaN, 1n), (x) => Math.max(NaN, x), 1n],
+	[() => Math.hypot(1, Symbol.iterator), (x) => Math.hypot(1, x), Symbol.iterator],
+	[() => String.fromCharCode(1, 1n), (x) => String.fromCharCode(1, x), 1n],
+	[() => String.fromCodePoint(65, 1n), (x) => String.fromCodePoint(65, x), 1n],
+	[() => (1).toFixed(1n), (x) => (1).toFixed(x), 1n],
+	[
+		() => BigInt.asIntN(Symbol.iterator, 1n),
+		(x) => BigInt.asIntN(x, 1n),
+		Symbol.iterator,
+	],
+	[() => parseInt("1", 1n), (x) => parseInt("1", x), 1n],
+	[() => parseFloat(Symbol.iterator), (x) => parseFloat(x), Symbol.iterator],
+	[() => encodeURI(Symbol.iterator), (x) => encodeURI(x), Symbol.iterator],
+	[() => String.raw(null), (x) => String.raw(x), null],
+	[
+		() => String.prototype.replace.call(null, "a", ""),
+		(x) => String.prototype.replace.call(x, "a", ""),
+		null,
+	],
+	[
+		() => String.prototype.replace.call(Symbol.iterator, "a", ""),
+		(x) => String.prototype.replace.call(x, "a", ""),
+		Symbol.iterator,
+	],
+	[
+		() => Number.prototype.valueOf.call(Symbol.iterator),
+		(x) => Number.prototype.valueOf.call(x),
+		Symbol.iterator,
+	],
+	[
+		() => Symbol.prototype[Symbol.toPrimitive].call(1),
+		(x) => Symbol.prototype[Symbol.toPrimitive].call(x),
+		1,
+	],
 ];
 for (const [constant, dynamic, argument] of failurePairs) {
 	const a = capturedFailure(constant);
 	const b = capturedFailure(() => dynamic(argument));
 	if (a.name !== b.name || a.message !== b.message || a === capturedFailure(constant))
-		throw new Error("Failure identity or diagnostic mismatch");
+		throw new Error(
+			"Failure identity or diagnostic mismatch: " +
+				a.name +
+				": " +
+				a.message +
+				" / " +
+				b.name +
+				": " +
+				b.message,
+		);
 	show(a.name);
 }
 let failureTrace = "";
@@ -1647,3 +1714,42 @@ for (const operation of [
 		show(error.name);
 	}
 }
+
+failureTrace = "";
+show(capturedFailure(() => Math.max(effectArgument(), 1n)).message);
+show(failureTrace);
+failureTrace = "";
+show(capturedFailure(() => parseInt(effectArgument(), 1n)).name);
+show(failureTrace);
+function codePointBeforeBigInt(value) {
+	return String.fromCodePoint(+value, 1n);
+}
+show(capturedFailure(() => codePointBeforeBigInt(-1)).name);
+show(capturedFailure(() => codePointBeforeBigInt(65)).name);
+show(
+	String.prototype.replace.call(
+		Symbol.iterator,
+		{
+			[Symbol.replace](receiver, replacement) {
+				show(receiver === Symbol.iterator);
+				return replacement;
+			},
+		},
+		"protocol",
+	),
+);
+show(Number.prototype.valueOf.call(1, Symbol.iterator));
+show(BigInt.prototype.valueOf.call(1n, Symbol.iterator));
+show(Object(Symbol.iterator)[Symbol.toPrimitive]("string") === Symbol.iterator);
+let primitiveHintEffects = 0;
+show(
+	Symbol.prototype[Symbol.toPrimitive].call(Symbol.iterator, primitiveHintEffects++) ===
+		Symbol.iterator,
+);
+show(primitiveHintEffects);
+function numberConversionNewTarget(target) {
+	return Reflect.construct(Number, [Symbol.iterator], target);
+}
+show(
+	capturedFailure(() => numberConversionNewTarget({})).message.includes("constructor"),
+);

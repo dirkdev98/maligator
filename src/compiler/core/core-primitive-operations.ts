@@ -9,6 +9,7 @@ import { CoreEditor } from "./core-editor.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { corePrimitiveBuiltinError } from "./core-primitive-errors.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
@@ -229,7 +230,33 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 							},
 						},
 					});
+				else if (target.kind === "known" && target.canonical === operation) {
+					const error = corePrimitiveBuiltinError(analysis, operation, inputs, true);
+					if (error !== undefined)
+						plans.push({
+							instruction,
+							operation: {
+								opcode: "callKnown",
+								inputs,
+								attributes: { ...attributes, knownBuiltinError: error },
+							},
+						});
+				}
 				continue;
+			}
+			if (!numericOperation && attributes.stringCollationPlan === undefined) {
+				const error = corePrimitiveBuiltinError(analysis, operation, inputs);
+				if (error !== undefined) {
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "callKnown",
+							inputs,
+							attributes: { ...attributes, knownBuiltinError: error },
+						},
+					});
+					continue;
+				}
 			}
 			if (
 				[
@@ -487,7 +514,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						attributes: { operator: "!==" },
 					},
 				});
-			} else if (operation.endsWith(".prototype.valueOf")) {
+			} else if (
+				operation.endsWith(".prototype.valueOf") ||
+				operation === "Symbol.prototype[%Symbol.toPrimitive%]"
+			) {
 				const fact = analysis.query(inputs[0]!);
 				if (
 					fact.kind === "known" &&
@@ -783,7 +813,11 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						!(
 							(consumerAttributes.operation as string).startsWith(
 								`${wrapper}.prototype.`,
-							) || consumerAttributes.operation === "Object.prototype.toString"
+							) ||
+							(wrapper === "Symbol" &&
+								consumerAttributes.operation ===
+									"Symbol.prototype[%Symbol.toPrimitive%]") ||
+							consumerAttributes.operation === "Object.prototype.toString"
 						)
 					) {
 						safe = false;

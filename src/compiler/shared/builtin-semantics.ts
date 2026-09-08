@@ -42,7 +42,7 @@ for (const [owner, result, methods] of [
 	["BigInt.prototype", "string", ["toString", "toLocaleString"]],
 	["Symbol", "symbol", ["for"]],
 	["Symbol", "string-or-undefined", ["keyFor"]],
-	["Symbol.prototype", "symbol", ["valueOf", "Symbol.toPrimitive"]],
+	["Symbol.prototype", "symbol", ["valueOf"]],
 	["Symbol.prototype", "string", ["toString"]],
 	["Symbol.prototype", "string-or-undefined", ["description<get>"]],
 	[
@@ -141,6 +141,8 @@ for (const [owner, result, methods] of [
 	for (const method of methods)
 		primitiveResults.set(owner === "" ? method : `${owner}.${method}`, result);
 }
+
+primitiveResults.set("Symbol.prototype[%Symbol.toPrimitive%]", "symbol");
 
 // Normal-completion facts do not license removing coercion, protocol calls, or throws.
 export function builtinPrimitiveResult(

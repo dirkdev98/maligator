@@ -1,4 +1,41 @@
 export const knownBuiltinErrors = {
+	symbolNumber: {
+		error: "TypeError",
+		message: "Cannot convert a Symbol value to a number",
+	},
+	bigintNumberConversion: {
+		error: "TypeError",
+		message: "Cannot convert a BigInt value to a number",
+	},
+	symbolString: {
+		error: "TypeError",
+		message: "Cannot convert a Symbol value to a string",
+	},
+	stringNullish: {
+		error: "TypeError",
+		message: "String.prototype method called on null or undefined",
+	},
+	stringMatchAllNullish: {
+		error: "TypeError",
+		message: "String.prototype.matchAll called on null or undefined",
+	},
+	stringSplitNullish: {
+		error: "TypeError",
+		message: "String.prototype.split called on null or undefined",
+	},
+	stringReplaceNullish: {
+		error: "TypeError",
+		message: "String.prototype.replace called on null or undefined",
+	},
+	stringReplaceAllNullish: {
+		error: "TypeError",
+		message: "String.prototype.replaceAll called on null or undefined",
+	},
+	readNullish: {
+		error: "TypeError",
+		message: "Cannot read properties of null or undefined",
+	},
+	notIterable: { error: "TypeError", message: "Value is not iterable" },
 	bigintConstructor: { error: "TypeError", message: "BigInt is not a constructor" },
 	symbolConstructor: { error: "TypeError", message: "Symbol is not a constructor" },
 	notConstructor: { error: "TypeError", message: "Value is not a constructor" },
@@ -59,4 +96,19 @@ export type KnownBuiltinError = keyof typeof knownBuiltinErrors;
 
 export function isKnownBuiltinError(value: unknown): value is KnownBuiltinError {
 	return typeof value === "string" && Object.hasOwn(knownBuiltinErrors, value);
+}
+
+export function isKnownBuiltinConstructionError(
+	value: unknown,
+): value is KnownBuiltinError {
+	return (
+		typeof value === "string" &&
+		[
+			"notConstructor",
+			"bigintConstructor",
+			"symbolConstructor",
+			"symbolNumber",
+			"symbolString",
+		].includes(value)
+	);
 }
