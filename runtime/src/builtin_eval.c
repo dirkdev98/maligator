@@ -797,3 +797,5 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this) {
                 4,
                 mal_builtin_evaluate_module_sync));
 }
+
+#include "generated/known_native_builtin_eval_c.inc"

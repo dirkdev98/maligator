@@ -601,3 +601,5 @@ void mal_builtin_data_view_install(MalVm *vm) {
     MalPropertyDesc tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "DataView")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);
 }
+
+#include "generated/known_native_builtin_data_view_c.inc"

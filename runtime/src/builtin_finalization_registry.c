@@ -221,3 +221,5 @@ void mal_builtin_finalization_registry_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "register", 2, mal_builtin_fin_reg_register);
     mal_intrinsic_define_method_n(vm, prototype, "unregister", 1, mal_builtin_fin_reg_unregister);
 }
+
+#include "generated/known_native_builtin_finalization_registry_c.inc"

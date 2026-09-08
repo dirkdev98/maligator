@@ -3,11 +3,9 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import {
-	directBuiltinOperationIds,
-	exactBuiltinCallDescriptor,
-} from "../src/compiler/shared/builtin-registry.ts";
+import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { knownOperationIndex } from "../src/compiler/shared/known-operations.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -335,7 +333,7 @@ describe("emit-program-image instruction packing", () => {
 								...fn,
 								instructions: [
 									{
-										opcode: "CALL_BUILTIN",
+										opcode: "CALL_KNOWN",
 										dst: 0,
 										thisValue: 1,
 										argumentCount: 1,
@@ -349,9 +347,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 				{ compiled: false },
 			);
-			expect(emitted).toContain(
-				`.operation = ${exactBuiltinCallDescriptor(operation)!.cOperation}`,
-			);
+			expect(emitted).toContain(`.operation = ${knownOperationIndex(operation)! << 4} }`);
 		}
 	});
 
@@ -3532,7 +3528,7 @@ describe("native update-expression representation", () => {
 		const lines = output.split("\n");
 		const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
 		const constructLine = lines.findIndex((line) =>
-			line.includes("mal_vm_construct_value"),
+			line.includes("mal_vm_call_known_native"),
 		);
 		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_key"));
 

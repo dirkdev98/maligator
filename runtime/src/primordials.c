@@ -9,6 +9,64 @@
 #include "value_ops.h"
 #include "vm_ops.h"
 
+MalValue mal_vm_load_primordial(MalVm *vm, i32 node) {
+    static const struct {
+        i32 kind, parent, intrinsic;
+        const byte *key;
+        i32 symbol;
+    } bindings[] = {
+#define MAL_KNOWN_PRIMORDIAL(index, kind, parent, intrinsic, key, symbol) \
+        [index] = {kind, parent, intrinsic, (const byte *) key, symbol},
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_PRIMORDIAL
+    };
+    if (node < 0 || node >= MAL_KNOWN_PRIMORDIAL_COUNT || bindings[node].kind == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial identity");
+        return MAL_VALUE_UNDEFINED;
+    }
+#if !MAL_REALMS
+    // Locked graph edges retain these values; the cache does not own additional heap identities.
+    if (vm->known_primordial_values[node] != 0) return vm->known_primordial_values[node];
+#endif
+    MalValue value;
+    if (bindings[node].kind == 1) {
+        value = vm->intrinsics[bindings[node].intrinsic];
+    } else {
+        MalValue parent = mal_vm_load_primordial(vm, bindings[node].parent);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+        if (!mal_value_is_object(parent)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial parent");
+            return MAL_VALUE_UNDEFINED;
+        }
+        if (bindings[node].kind == 2) {
+            MalObject *prototype = mal_object_get_prototype(mal_value_to_object(parent));
+            value = prototype == nullptr ? MAL_VALUE_NULL : mal_value_from_object(prototype);
+        } else {
+            MalKey key;
+            if (bindings[node].symbol >= 0) {
+                MalValue symbol = mal_vm_load_primordial(vm, bindings[node].symbol);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+                key = mal_key_from_value(symbol);
+            } else {
+                key = mal_intrinsic_string_key(vm, bindings[node].key);
+            }
+            bool present;
+            MalPropertyDesc descriptor;
+            if (!mal_vm_get_own_property(vm, parent, key, &present, &descriptor)) return MAL_VALUE_UNDEFINED;
+            if (!present) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial descriptor");
+                return MAL_VALUE_UNDEFINED;
+            }
+            value = bindings[node].kind == 4 ? descriptor.getter
+                : bindings[node].kind == 5 ? descriptor.setter : descriptor.value;
+        }
+    }
+#if !MAL_REALMS
+    vm->known_primordial_values[node] = value;
+#endif
+    return value;
+}
+
 void mal_primordials_throw_mutation(MalVm *vm, const byte *operation) {
     mal_vm_throw_error(
         vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,

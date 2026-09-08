@@ -1,7 +1,10 @@
 import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
-import { literalPrototypeMethods } from "../shared/builtin-registry.ts";
+import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
+import { knownArgumentModes } from "../shared/known-operations.ts";
+import { knownOperationIndex } from "../shared/known-operations.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -383,16 +386,37 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
-			if (descriptor.opcode === "callLiteralMethod") {
-				const method =
-					typeof attributes.methodIndex === "number"
-						? literalPrototypeMethods[attributes.methodIndex]
-						: undefined;
-				if (method === undefined) fail("Invalid literal operation identity");
-				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, method.id, world);
-			} else if (
-				["callBuiltin", "mathUnaryNumber", "mathBinaryNumber"].includes(descriptor.opcode)
-			) {
+			if (descriptor.opcode === "loadPrimordial") {
+				const node = getPrimordialCatalog().nodes[attributes.nodeIndex as number];
+				if (node === undefined || (node[2] & 1) === 0)
+					fail("Invalid primordial identity");
+				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, node[0], world);
+			} else if (descriptor.opcode === "callKnown") {
+				if (
+					typeof attributes.operation !== "string" ||
+					knownOperationIndex(attributes.operation) === undefined
+				)
+					fail("Invalid known operation identity");
+				verifyBuiltinWorldAssumptions(
+					attributes.worldAssumptions,
+					attributes.operation,
+					world,
+				);
+				if (
+					attributes.argumentMode !== undefined &&
+					(!knownArgumentModes.some((mode) => mode === attributes.argumentMode) ||
+						operandCount < 2)
+				)
+					fail("Invalid known-operation argument list");
+				if (
+					attributes.specialized !== undefined &&
+					(attributes.specialized !== attributes.operation ||
+						exactBuiltinCallDescriptor(attributes.operation) === undefined ||
+						attributes.construct ||
+						attributes.argumentMode !== undefined)
+				)
+					fail("Invalid known-operation specialization");
+			} else if (["mathUnaryNumber", "mathBinaryNumber"].includes(descriptor.opcode)) {
 				if (typeof attributes.operation !== "string")
 					fail("Missing exact operation identity");
 				verifyBuiltinWorldAssumptions(

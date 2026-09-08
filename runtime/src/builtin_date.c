@@ -1877,3 +1877,5 @@ void mal_builtin_date_install(MalVm *vm) {
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &to_primitive_desc);
 }
+
+#include "generated/known_native_builtin_date_c.inc"

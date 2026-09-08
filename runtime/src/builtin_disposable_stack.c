@@ -1273,3 +1273,5 @@ void mal_builtin_disposable_stack_install(MalVm *vm) {
         &async_tag
     );
 }
+
+#include "generated/known_native_builtin_disposable_stack_c.inc"

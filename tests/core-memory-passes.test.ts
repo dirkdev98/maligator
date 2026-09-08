@@ -658,9 +658,10 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const [key] = builder.appendInstruction(entry, "createString", [], {
 			attributes: { stringIndex: 0 },
 		});
-		const [has] = builder.appendInstruction(entry, "callBuiltin", [map!, key!], {
+		const [has] = builder.appendInstruction(entry, "callKnown", [map!, key!], {
 			attributes: {
 				operation: "Map.prototype.has",
+				specialized: "Map.prototype.has",
 				worldAssumptions: {
 					...builtinWorldAssumptions("Map.prototype.has", "exact-builtin-proof"),
 				},
@@ -673,7 +674,8 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const call = [...fn.instructionIds()].find(
 			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "callBuiltin",
+				fn.instructionOpcodeName(instruction) === "callKnown" &&
+				fn.instructionAttributes(instruction).operation === "Map.prototype.has",
 		);
 		expect(call).toBeDefined();
 		expect(fn.instructionAttributes(call!).exactCollectionReceiver).toBe("Map");
@@ -822,17 +824,19 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const [value] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 42 },
 		});
-		builder.appendInstruction(entry, "callBuiltin", [map!, key!, value!], {
+		builder.appendInstruction(entry, "callKnown", [map!, key!, value!], {
 			attributes: {
 				operation: "Map.prototype.set",
+				specialized: "Map.prototype.set",
 				worldAssumptions: {
 					...builtinWorldAssumptions("Map.prototype.set", "exact-builtin-proof"),
 				},
 			},
 		});
-		const [loaded] = builder.appendInstruction(entry, "callBuiltin", [map!, key!], {
+		const [loaded] = builder.appendInstruction(entry, "callKnown", [map!, key!], {
 			attributes: {
 				operation: "Map.prototype.get",
+				specialized: "Map.prototype.get",
 				worldAssumptions: {
 					...builtinWorldAssumptions("Map.prototype.get", "exact-builtin-proof"),
 				},
@@ -848,7 +852,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const calls = [...fn.instructionIds()].filter(
 			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "callBuiltin",
+				fn.instructionOpcodeName(instruction) === "callKnown",
 		);
 		expect(calls).toHaveLength(2);
 		const callNamed = (operation: string) =>

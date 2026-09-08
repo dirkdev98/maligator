@@ -556,9 +556,13 @@ function specializationAdmissionAnchor(
 				selection.stringSplitProjection.property ?? selection.stringSplitProjection.call
 			);
 		case "string-slice-number":
-			return selection.stringSliceNumber.property;
+			return (
+				selection.stringSliceNumber.property ?? selection.stringSliceNumber.sliceCall
+			);
 		case "regexp-exec-projection":
-			return selection.regexpExecProjection.property;
+			return (
+				selection.regexpExecProjection.property ?? selection.regexpExecProjection.call
+			);
 		case "string-char-code-at-chain":
 			return selection.stringCharCodeAt.property;
 		case "builtin-collection-call-chain":
@@ -1190,8 +1194,9 @@ function verifySpecialization(
 				slice.propertyPlacement !== "call-fallback") ||
 			(slice.propertyPlacement === "call-fallback" &&
 				(slice.builtinIdentities !== "authority-invariant" ||
-					fn.instructionBlock(slice.property) !==
-						fn.instructionBlock(slice.sliceCall))) ||
+					(slice.property !== undefined &&
+						fn.instructionBlock(slice.property) !==
+							fn.instructionBlock(slice.sliceCall)))) ||
 			!validBuiltinPlanGuard(
 				slice.guard,
 				"string-slice-number",
@@ -1321,8 +1326,11 @@ function verifySpecialization(
 				regexp.propertyPlacement !== "call-fallback") ||
 			(regexp.propertyPlacement === "call-fallback" &&
 				(expectedLockedLiteral === undefined ||
-					fn.instructionBlock(regexp.property) !== fn.instructionBlock(regexp.call))) ||
+					(regexp.property !== undefined &&
+						fn.instructionBlock(regexp.property) !==
+							fn.instructionBlock(regexp.call)))) ||
 			(expectedLockedLiteral !== undefined &&
+				regexp.property !== undefined &&
 				fn.instructionBlock(regexp.property) === fn.instructionBlock(regexp.call) &&
 				regexp.propertyPlacement !== "call-fallback") ||
 			!validBuiltinPlanGuard(

@@ -34,7 +34,7 @@ describe("direct builtin immediate operands", () => {
 
 		const calls = pair.programImage.runtime.functions
 			.flatMap((fn) => fn.instructions)
-			.filter((instruction) => instruction.opcode === "CALL_BUILTIN");
+			.filter((instruction) => instruction.opcode === "CALL_KNOWN");
 		expect(calls.length).toBeGreaterThan(0);
 		expect(
 			calls.some(
@@ -55,7 +55,7 @@ describe("direct builtin immediate operands", () => {
 			...fn,
 			instructions: fn.instructions.map((instruction) => {
 				if (
-					instruction.opcode !== "CALL_BUILTIN" ||
+					instruction.opcode !== "CALL_KNOWN" ||
 					instruction.operation !== "Object.is"
 				) {
 					return instruction;

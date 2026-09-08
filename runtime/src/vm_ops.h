@@ -404,12 +404,11 @@ bool mal_op_call_guarded_math(
     MalCallable *callable, const MalInstruction *instruction);
 bool mal_op_call_guarded_builtin(
     MalCallable *callable, const MalInstruction *instruction);
-void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction);
-void mal_op_call_literal_method(MalCallable *callable, const MalInstruction *instruction);
-MalValue mal_vm_call_literal_method(MalVm *vm, i32 method, MalValue receiver, const MalValue *args, i32 count);
-void mal_op_call_builtin_exact_collection(
-    MalCallable *callable, const MalInstruction *instruction
-);
+#include "generated/known_native_entries.inc"
+MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);
+MalValue mal_vm_call_known(MalVm *vm, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);
+void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction);
+
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *instruction);
@@ -725,6 +724,8 @@ void mal_op_store_global(MalCallable *callable, const MalInstruction *instructio
 
 void mal_op_load_global(MalCallable *callable, const MalInstruction *instruction);
 
+MalValue mal_vm_load_primordial(MalVm *vm, i32 node);
+void mal_op_load_primordial(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_intrinsic(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction);

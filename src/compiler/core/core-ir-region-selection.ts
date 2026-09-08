@@ -127,7 +127,7 @@ export interface CoreLocalOptimizationPlanInput {
 const LOCAL_SPECIALIZATION_OPCODES = Object.freeze([
 	"binary",
 	"call",
-	"callBuiltin",
+	"callKnown",
 	"getIterator",
 	"iteratorStep",
 ]);
@@ -585,13 +585,15 @@ function pendingLocalCandidate(
 		candidate.kind === "string-split-cursor" ||
 		candidate.kind === "string-split-projection"
 			? (candidate.property ?? candidate.call)
-			: candidate.kind === "string-slice-number" ||
-				  candidate.kind === "regexp-exec-projection" ||
-				  candidate.kind === "string-char-code-at-chain" ||
-				  candidate.kind === "builtin-collection-call-chain" ||
-				  candidate.kind === "function-call-chain"
-				? candidate.property
-				: anchors[0]!;
+			: candidate.kind === "string-slice-number"
+				? (candidate.property ?? candidate.sliceCall)
+				: candidate.kind === "regexp-exec-projection"
+					? (candidate.property ?? candidate.call)
+					: candidate.kind === "string-char-code-at-chain" ||
+						  candidate.kind === "builtin-collection-call-chain" ||
+						  candidate.kind === "function-call-chain"
+						? candidate.property
+						: anchors[0]!;
 	const admissionDependencies =
 		candidate.kind === "string-split-cursor"
 			? mergePlanGuards(splitCursorProofs!.split!.guard, splitCursorProofs!.trim!.guard)
@@ -863,6 +865,7 @@ function pendingLocalCandidate(
 																	property: candidate.property,
 																	propertyPlacement:
 																		lockedLiteral !== undefined &&
+																		candidate.property !== undefined &&
 																		fn.instructionBlock(candidate.property) ===
 																			fn.instructionBlock(candidate.call)
 																			? "call-fallback"

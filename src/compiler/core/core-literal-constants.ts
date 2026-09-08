@@ -9,8 +9,10 @@ import type {
 	LiteralReceiverKind,
 } from "../shared/builtin-registry.ts";
 import { invocationPreservesPrivateReceiver } from "../shared/builtin-semantics.ts";
+import { knownOperationCall } from "../shared/known-operations.ts";
 import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { CoreEditor } from "./core-editor.ts";
+import type { CoreAttributeValue } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -489,26 +491,25 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			}
 			editor ??= CoreEditor.open(program, item.function);
 			for (const [call, methodIndex] of calls) {
-				editor.replaceInstruction(
-					call,
-					"callLiteralMethod",
-					operands(fn, call).slice(1),
-					{
-						attributes: {
-							methodIndex,
-							worldAssumptions: {
-								...builtinWorldAssumptions(
-									literalPrototypeMethods[methodIndex]!.id,
-									kind === "array" || kind === "object"
-										? "literal-allocation"
-										: "primitive",
-									true,
-								),
-							},
+				editor.replaceInstruction(call, "callKnown", operands(fn, call).slice(1), {
+					attributes: {
+						operation: literalPrototypeMethods[methodIndex]!.id,
+						knownBuiltinCall: knownOperationCall(
+							literalPrototypeMethods[methodIndex]!.id,
+							fn.id,
+						) as unknown as CoreAttributeValue,
+						worldAssumptions: {
+							...builtinWorldAssumptions(
+								literalPrototypeMethods[methodIndex]!.id,
+								kind === "array" || kind === "object"
+									? "literal-allocation"
+									: "primitive",
+								true,
+							),
 						},
-						sourcePosition: fn.instructionSourcePosition(call),
 					},
-				);
+					sourcePosition: fn.instructionSourcePosition(call),
+				});
 			}
 			for (const property of properties) editor.removeInstruction(property);
 			if (reusable && literal !== undefined) {

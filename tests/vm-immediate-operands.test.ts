@@ -99,10 +99,10 @@ describe("tagged VM call operands", () => {
 		`);
 		const instructions = definition.runtime.functions[1]!.instructions;
 		const calls = instructions.filter(
-			(instruction) => instruction.opcode === "CALL_BUILTIN",
+			(instruction) => instruction.opcode === "CALL_KNOWN",
 		);
 		expect(calls).toHaveLength(5);
-		if (calls.some((instruction) => instruction.opcode !== "CALL_BUILTIN")) return;
+		if (calls.some((instruction) => instruction.opcode !== "CALL_KNOWN")) return;
 
 		expect(decodeVmValueOperand(calls[0]!.thisValue).kind).toBe("string");
 		expect(decodeVmValueOperand(calls[0]!.arguments[0]!).kind).toBe("string");

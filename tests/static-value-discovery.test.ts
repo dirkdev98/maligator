@@ -39,7 +39,7 @@ describe("static-value producer discovery", () => {
 			"function probe(x) { return [undefined, , 2].includes(x); } globalThis.probe = probe;",
 			"probe",
 		);
-		expect(result.structure.pooledMaterializations).toBe(1);
+		expect(result.structure.pooledMaterializations).toBe(0);
 		expect(scanLiteralTemplateSegment([8, 3, 11, 7, 3, 2], 0, "fixture").endOffset).toBe(
 			6,
 		);

@@ -371,3 +371,5 @@ void mal_builtin_function_install(MalVm *vm) {
     mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "caller"), &poison);
     mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "arguments"), &poison);
 }
+
+#include "generated/known_native_builtin_function_c.inc"

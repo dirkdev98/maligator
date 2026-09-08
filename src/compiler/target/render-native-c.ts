@@ -9,6 +9,9 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import { knownNativeEntries } from "../shared/known-native-entries.ts";
+import { knownOperationFlags, knownOperations } from "../shared/known-operations.ts";
+import { knownOperationIndex } from "../shared/known-operations.ts";
 import {
 	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
 	nativeStringSwitchHash,
@@ -3282,6 +3285,14 @@ function emitInstruction(
 					? decoded.kind
 					: "boxed";
 	};
+	const callValue = (dst: number, value: string): string =>
+		reps[dst] === "int32"
+			? `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`
+			: reps[dst] === "number"
+				? `mal_ops_number_as_f64(${value})`
+				: reps[dst] === "boolean"
+					? `mal_value_to_boolean(${value})`
+					: value;
 	const storeNumber = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
 	const storeBoolean = (dst: number, expression: string): string =>
@@ -4605,6 +4616,12 @@ function emitInstruction(
 				`r${instruction.dst} = mal_for_in_keys(vm, ${boxed(instruction.source)});`,
 				throwCheck(),
 			];
+		case "LOAD_PRIMORDIAL":
+			return [
+				`r${instruction.dst} = mal_vm_load_primordial(vm, ${instruction.nodeIndex});`,
+				throwCheck(),
+				poll,
+			];
 		case "LOAD_INTRINSIC":
 			return [
 				`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,
@@ -5172,17 +5189,127 @@ function emitInstruction(
 			);
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
-		case "CALL_LITERAL_METHOD": {
-			const args = instruction.arguments.map(boxedOperand);
-			const arguments_ =
-				args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`;
-			return [
-				`r${instruction.dst} = mal_vm_call_literal_method(vm, ${instruction.methodIndex}, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length});`,
-				throwCheck(),
-				poll,
-			];
-		}
-		case "CALL_BUILTIN": {
+		case "CALL_KNOWN": {
+			if (!instruction.construct && instruction.argumentMode === undefined) {
+				const arguments_ = instruction.arguments.map(nativeNumberOperand);
+				const expression =
+					arguments_.length === 1 && arguments_[0] !== null
+						? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
+						: arguments_.length === 2 &&
+							  arguments_.every((value) => value !== null) &&
+							  MATH_BINARY_OPERATIONS.has(instruction.operation)
+							? nativeMathBinaryExpr(
+									instruction.operation,
+									arguments_[0]!,
+									arguments_[1]!,
+								)
+							: null;
+				if (expression !== null) return [storeNumber(instruction.dst, expression), poll];
+			}
+			if (instruction.specialized === undefined) {
+				const args = instruction.arguments.map(boxedOperand);
+				const arguments_ =
+					args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`;
+				const value = `known_result_${ip}`;
+				const fallback = [
+					`MalValue ${value} = mal_vm_call_known_native(vm, ${knownNativeEntries()[knownOperationIndex(instruction.operation)!]}, ${knownOperationIndex(instruction.operation)}, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length}, ${knownOperationFlags(instruction)});`,
+					throwCheck(),
+					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
+					poll,
+				];
+				if (nativeStringSliceNumberFusionAction !== undefined) {
+					const { fusion } = nativeStringSliceNumberFusionAction;
+					const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
+					const number = `__string_slice_number_${fusion.sliceCallIp}_value`;
+					if (nativeStringSliceNumberFusionAction.role === "slice") {
+						return [
+							`${fast} = ${profileCall("string", `mal_builtin_string_slice_to_number_direct_locked(vm, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${number})`)};`,
+							`if (${fast}) {`,
+							`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+							`  ${poll}`,
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+					return [
+						`if (${fast}) {`,
+						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? number : profileCall("boxing", `mal_ops_number_value(${number})`)};`,
+						`  ${poll}`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (
+					nativeRegExpExecProjectionAction?.role === "number" ||
+					nativeRegExpIteratorProjectionAction?.role === "number"
+				) {
+					const exec =
+						nativeRegExpExecProjectionAction?.role === "number"
+							? nativeRegExpExecProjectionAction
+							: undefined;
+					const iterator =
+						nativeRegExpIteratorProjectionAction?.role === "number"
+							? nativeRegExpIteratorProjectionAction
+							: undefined;
+					const action = exec ?? iterator!;
+					const slot = action.site.loads.findIndex(
+						(entry) => entry.ip === action.load?.ip,
+					);
+					if (slot >= 0) {
+						const prefix =
+							exec === undefined
+								? `__regexp_iter_${iterator!.site.projection.stepIp}`
+								: `__regexp_exec_${exec.site.projection.callIp}`;
+						const start = `${prefix}_starts[${slot}]`,
+							end = `${prefix}_ends[${slot}]`;
+						const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${action.site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+						return [
+							`if (${prefix}_projected) {`,
+							`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${parsed})` : parsed};`,
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+							poll,
+						];
+					}
+				}
+				if (nativeRegExpExecProjectionAction?.role === "call") {
+					const { site } = nativeRegExpExecProjectionAction;
+					const projection = site.projection;
+					const indices = site.loads.map((load) => load.captureIndex).join(", ");
+					const outputs = site.loads
+						.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
+						.join(", ");
+					const spanMask = site.loads.reduce(
+						(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
+						0,
+					);
+					const parameters = `vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst}`;
+					if (projection.lockedFreshLiteral)
+						return [
+							`__regexp_exec_${projection.callIp}_projected = false;`,
+							`${profileCall("regexp", `mal_regexp_exec_capture_projection_locked(${parameters})`)};`,
+							throwCheck(),
+							`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
+							poll,
+						];
+					const callee = `mal_vm_load_primordial(vm, ${knownOperations()[knownOperationIndex(instruction.operation)!]!.node})`;
+					return [
+						`__regexp_exec_${projection.callIp}_projected = false;`,
+						`if (${profileCall("regexp", `mal_regexp_exec_capture_projection(vm, ${callee}, ${parameters.slice(4)})`)}) {`,
+						`  ${throwCheck()}`,
+						`  __regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+						poll,
+					];
+				}
+				return fallback;
+			}
+
 			const argsExpr =
 				instruction.arguments.length === 0
 					? "nullptr"
@@ -5407,14 +5534,7 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
-			const callResult = (value: string): string =>
-				reps[instruction.dst] === "int32"
-					? `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`
-					: reps[instruction.dst] === "number"
-						? `mal_ops_number_as_f64(${value})`
-						: reps[instruction.dst] === "boolean"
-							? `mal_value_to_boolean(${value})`
-							: value;
+			const callResult = (value: string): string => callValue(instruction.dst, value);
 			if (nativeStringCharCodeAtChainAction?.role === "call") {
 				const { chain } = nativeStringCharCodeAtChainAction;
 				const captured = `__string_char_code_at_${chain.callIp}_captured`;

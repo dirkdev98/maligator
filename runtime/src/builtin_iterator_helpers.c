@@ -1913,3 +1913,5 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zip", 1, mal_iterator_zip);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zipKeyed", 1, mal_iterator_zip_keyed);
 }
+
+#include "generated/known_native_builtin_iterator_helpers_c.inc"

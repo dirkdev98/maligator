@@ -112,6 +112,7 @@ static void inventory_node(MalVm *vm, usize id) {
         }
         printf(",\"implementation\":%zu,\"callable\":true,\"constructable\":%s,\"slots\":%d",
                callback, fn->is_constructor ? "true" : "false", fn->slot_count);
+        printf(",\"callbackOffset\":\"%" PRIdPTR "\"", (intptr_t) fn->callback - (intptr_t) inventory_forbidden_accessor);
     }
     puts("}");
     MalRootedKeySnapshot keys;

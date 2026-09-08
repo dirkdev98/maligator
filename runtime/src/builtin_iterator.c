@@ -816,3 +816,5 @@ void mal_builtin_iterator_install(MalVm *vm) {
     MalObject *string_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE, iterator_prototype, "String Iterator");
     mal_intrinsic_define_method_n(vm, string_iterator, "next", 0, mal_builtin_string_iterator_next);
 }
+
+#include "generated/known_native_builtin_iterator_c.inc"

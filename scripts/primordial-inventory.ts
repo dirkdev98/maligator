@@ -71,6 +71,54 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 		},
 	});
 	writeFileSync(output, jsonl);
+	if (mode === "full") {
+		const symbols = execFileSync("nm", ["-n", binary], {
+			encoding: "utf8",
+			maxBuffer: 16 * 1024 * 1024,
+		})
+			.split("\n")
+			.flatMap((line) => {
+				const match = /^([0-9a-fA-F]+) [tT] (.+)$/.exec(line);
+				return match === null
+					? []
+					: [
+							{
+								address: BigInt(`0x${match[1]}`),
+								name: match[2]!.replace(process.platform === "darwin" ? /^_/ : /^$/, ""),
+							},
+						];
+			});
+		const anchor = symbols.find(
+			(symbol) => symbol.name === "inventory_forbidden_accessor",
+		);
+		if (anchor === undefined)
+			throw new Error("Native symbol inventory requires an unstripped binary");
+		const callbacks = new Map(
+			symbols.map((symbol) => [
+				(symbol.address - anchor.address).toString(),
+				symbol.name,
+			]),
+		);
+		const native = normalizePrimordialInventory(
+			jsonl,
+			image.runtime.hostInstalls,
+			callbacks,
+		);
+		writeFileSync(
+			path.join(outDir, "native-bindings.json"),
+			`${JSON.stringify(
+				native[0]!.nodes
+					.filter((node) => node.locked && node.callable)
+					.map((node) => {
+						if (node.nativeSymbol === undefined)
+							throw new Error(`Missing native symbol ${node.id}`);
+						return { id: node.id, symbol: node.nativeSymbol };
+					}),
+				null,
+				2,
+			)}\n`,
+		);
+	}
 	writeFileSync(
 		path.join(outDir, `inventory-${mode}.json`),
 		`${JSON.stringify(

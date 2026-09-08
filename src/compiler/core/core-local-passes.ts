@@ -750,7 +750,7 @@ function exactBuiltinReceiver(
 const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["call"],
+	requiredFunctionOpcodesAny: ["call", "callKnown"],
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { ...LOCAL_CHANGES, representations: true },
@@ -761,7 +761,8 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 		const calls = [...fn.instructionIds()].filter(
 			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "call",
+				(fn.instructionOpcodeName(instruction) === "call" ||
+					fn.instructionOpcodeName(instruction) === "callKnown"),
 		);
 		if (calls.length === 0) return undefined;
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
@@ -769,6 +770,45 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 		let editor: CoreEditor | undefined;
 		for (const instruction of calls) {
 			if (!fn.isInstructionLive(instruction)) continue;
+			if (fn.instructionOpcodeName(instruction) === "callKnown") {
+				const attributes = fn.instructionAttributes(instruction);
+				if (attributes.construct || attributes.argumentMode !== undefined) continue;
+				const operation = attributes.operation;
+				if (typeof operation !== "string") continue;
+				const descriptor = builtinOperations.find(({ id }) => id === operation);
+				const numericOpcode = MATH_UNARY_OPERATIONS.has(operation)
+					? "mathUnaryNumber"
+					: operation === "Math.min" || operation === "Math.max"
+						? "mathBinaryNumber"
+						: undefined;
+				if (descriptor === undefined || numericOpcode === undefined) continue;
+				const arguments_ = copyInstructionOperands(fn, instruction).slice(1);
+				if (
+					descriptor.nativeNumberArity !== arguments_.length ||
+					fn.kernel.instructionResultCount(instruction) !== 1 ||
+					!arguments_.every((value) => {
+						if (fn.valueRepresentation(value) === "f64") return true;
+						const scalar = (kinds ??= context.analysis(
+							CORE_LOCAL_VALUE_KIND_ANALYSIS,
+						)).exactScalar(value);
+						const definition = definingInstruction(fn, value);
+						return (
+							(scalar === "int32" || scalar === "number") &&
+							definition !== undefined &&
+							["createNumber", "createF64"].includes(fn.instructionOpcodeName(definition))
+						);
+					})
+				)
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, numericOpcode, arguments_, {
+					attributes: { operation, worldAssumptions: attributes.worldAssumptions },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
+				for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");
+				editor.setValueRepresentation(instructionResult(fn, instruction, 0)!, "f64");
+				continue;
+			}
 			const existingKnownBuiltinCall =
 				fn.instructionAttributes(instruction).knownBuiltinCall;
 			const inputs = copyInstructionOperands(fn, instruction);
@@ -969,9 +1009,10 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					exactRewrite.forwardedArgumentLimit === undefined
 						? arguments_
 						: arguments_.slice(0, exactRewrite.forwardedArgumentLimit);
-				editor.replaceInstruction(instruction, "callBuiltin", [receiver, ...forwarded], {
+				editor.replaceInstruction(instruction, "callKnown", [receiver, ...forwarded], {
 					attributes: {
 						operation: exactRewrite.id,
+						specialized: exactRewrite.id,
 						worldAssumptions: {
 							...builtinWorldAssumptions(exactRewrite.id, "exact-builtin-proof"),
 						},

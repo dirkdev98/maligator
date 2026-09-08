@@ -3605,3 +3605,5 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 }
 
 #endif // MAL_INTL
+
+#include "generated/known_native_builtin_intl_c.inc"

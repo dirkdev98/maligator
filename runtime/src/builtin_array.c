@@ -4711,3 +4711,5 @@ void mal_builtin_array_install(MalVm *vm) {
 
     mal_intrinsic_define_species(vm, constructor_object);
 }
+
+#include "generated/known_native_builtin_array_c.inc"

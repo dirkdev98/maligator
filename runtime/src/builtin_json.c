@@ -1839,3 +1839,5 @@ void mal_builtin_json_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, json, "rawJSON", 1, mal_builtin_json_raw_json);
     mal_intrinsic_define_method_n(vm, json, "isRawJSON", 1, mal_builtin_json_is_raw_json);
 }
+
+#include "generated/known_native_builtin_json_c.inc"

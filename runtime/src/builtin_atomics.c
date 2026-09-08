@@ -613,3 +613,5 @@ void mal_builtin_atomics_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, atomics, "waitAsync", 4, mal_atomics_wait_async);
     mal_intrinsic_define_method_n(vm, atomics, "pause", 0, mal_atomics_pause);
 }
+
+#include "generated/known_native_builtin_atomics_c.inc"

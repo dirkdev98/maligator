@@ -988,3 +988,5 @@ void mal_builtin_map_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_map_prototype_has);
     mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_map_prototype_delete);
 }
+
+#include "generated/known_native_builtin_map_c.inc"

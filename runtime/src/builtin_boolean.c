@@ -107,3 +107,5 @@ void mal_builtin_boolean_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_boolean_prototype_to_string);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_boolean_prototype_value_of);
 }
+
+#include "generated/known_native_builtin_boolean_c.inc"

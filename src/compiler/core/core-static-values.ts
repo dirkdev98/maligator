@@ -1,5 +1,6 @@
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialKey } from "../shared/primordial-catalog.ts";
 import { primordialNode, provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
@@ -43,6 +44,20 @@ const STATIC_CONSTRUCTORS = new Set([
 	"Set",
 	"WeakMap",
 	"WeakSet",
+	"WeakRef",
+	"FinalizationRegistry",
+	"Promise",
+	"DisposableStack",
+	"AsyncDisposableStack",
+	"Error",
+	"EvalError",
+	"RangeError",
+	"ReferenceError",
+	"SyntaxError",
+	"TypeError",
+	"URIError",
+	"AggregateError",
+	"SuppressedError",
 	"Date",
 	"RegExp",
 	"ArrayBuffer",
@@ -357,7 +372,13 @@ export class CoreStaticValueAnalysis {
 				return this.#cells(this.#fn, definition, value, consumer) ?? initial;
 			}
 		}
-		if (initial.kind === "unknown" || initial.state === "immutable-value") return initial;
+		// A pooled template is admitted only when every use preserves private immutable contents.
+		if (
+			initial.kind === "unknown" ||
+			initial.state === "immutable-value" ||
+			initial.state === "pooled-instance"
+		)
+			return initial;
 		const intern = this.#program.staticDescriptions;
 		const description = intern.description(initial.description);
 		if (description.kind !== "array" && description.kind !== "object") return initial;
@@ -367,6 +388,7 @@ export class CoreStaticValueAnalysis {
 				...description,
 				properties: [],
 				ownKeysComplete: false,
+				unknownOwnKeys: undefined,
 				prototype: { kind: "unknown" },
 				...(description.kind === "array" ? { length: null } : {}),
 			}),
@@ -415,6 +437,7 @@ export class CoreStaticValueAnalysis {
 		let prototype = description.prototype;
 		let length = description.kind === "array" ? description.length : null;
 		let complete = description.ownKeysComplete !== false;
+		let unknownOwnKeys = description.unknownOwnKeys;
 		let escaped = isJoined,
 			started = isJoined;
 		const bindings = [...initial.operands];
@@ -462,6 +485,7 @@ export class CoreStaticValueAnalysis {
 		const invalidate = () => {
 			propertyMap.clear();
 			complete = false;
+			unknownOwnKeys = undefined;
 			length = null;
 			prototype = { kind: "unknown" };
 		};
@@ -502,6 +526,7 @@ export class CoreStaticValueAnalysis {
 							prototype,
 							properties,
 							ownKeysComplete: complete,
+							unknownOwnKeys,
 							...(description.kind === "array" ? { length } : {}),
 						}),
 					};
@@ -915,6 +940,7 @@ export class CoreStaticValueAnalysis {
 				...description,
 				prototype,
 				properties,
+				unknownOwnKeys: undefined,
 				ownKeysComplete: descriptions.every(
 					(other) =>
 						(other.kind === "array" || other.kind === "object") &&
@@ -956,13 +982,24 @@ export class CoreStaticValueAnalysis {
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (fn.instructionKind(instruction) !== "operation")
 			return { kind: "unknown", reason: "unsupported-producer" };
-		const opcode = fn.instructionOpcodeName(instruction);
+		const originalOpcode = fn.instructionOpcodeName(instruction);
 		const attributes = fn.instructionAttributes(instruction);
+		if (originalOpcode === "callKnown" && attributes.argumentMode !== undefined)
+			return { kind: "unknown", reason: "unsupported-producer" };
+		const knownOperation =
+			originalOpcode === "callKnown" ? (attributes.operation as string) : undefined;
+		const opcode =
+			originalOpcode === "callKnown"
+				? attributes.construct
+					? "construct"
+					: "call"
+				: originalOpcode;
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operands = Array.from(
 			{ length: fn.kernel.instructionOperandCount(instruction) },
 			(_, index) => fn.kernel.operandAt(operandStart + index),
 		);
+		if (knownOperation !== undefined && opcode === "call") operands.unshift(operands[0]!);
 		const prototype: StaticPrototype = { kind: "unknown" };
 		const primitive = (
 			description: StaticDescriptionId,
@@ -1030,6 +1067,8 @@ export class CoreStaticValueAnalysis {
 		if (this.#context?.facts.world.primordialPolicy === "locked") {
 			let canonical: string | undefined;
 			if (opcode === "loadIntrinsic") canonical = attributes.intrinsic as string;
+			if (opcode === "loadPrimordial")
+				canonical = getPrimordialCatalog().nodes[attributes.nodeIndex as number]?.[0];
 			if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
 				let key: PrimordialKey | undefined;
 				if (opcode === "loadPropertyStatic")
@@ -1091,7 +1130,42 @@ export class CoreStaticValueAnalysis {
 				};
 			}
 			if (opcode === "call" && operands.length >= 2) {
-				const callee = this.query(operands[0]!);
+				const callee =
+					knownOperation === undefined
+						? this.query(operands[0]!)
+						: { kind: "known" as const, canonical: knownOperation };
+				if (callee.kind === "known" && callee.canonical === "Function.prototype.bind") {
+					const target = this.queryAt(operands[1]!, instruction);
+					if (target.kind === "known" && target.brand === "function") {
+						const node =
+							target.canonical === undefined
+								? undefined
+								: primordialNode(target.canonical);
+						const prototype: StaticPrototype =
+							node !== undefined && node[1] >= 0
+								? { kind: "intrinsic", id: getPrimordialCatalog().nodes[node[1]]![0] }
+								: target.prototype;
+						if (prototype.kind === "intrinsic")
+							return {
+								kind: "known",
+								value,
+								brand: "function",
+								exactBrand: "BoundFunction",
+								prototype,
+								description: intern.intern({
+									kind: "object",
+									prototype,
+									properties: [],
+									ownKeysComplete: false,
+									unknownOwnKeys: { numeric: false, named: ["length", "name"] },
+								}),
+								identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+								state: "initial-allocation",
+								operands: [],
+								environmentDependencies: ["primordials.locked", "realm.current"],
+							};
+					}
+				}
 				if (
 					callee.kind === "known" &&
 					(callee.canonical === "Symbol" || callee.canonical === "Symbol.for")
@@ -1126,7 +1200,10 @@ export class CoreStaticValueAnalysis {
 			this.#context?.facts.world.primordialPolicy === "locked" &&
 			(opcode === "construct" || opcode === "call")
 		) {
-			const callee = this.query(operands[0]!);
+			const callee =
+				knownOperation === undefined
+					? this.query(operands[0]!)
+					: { kind: "known" as const, canonical: knownOperation };
 			const canonical = callee.kind === "known" ? callee.canonical : undefined;
 
 			if (opcode === "call" && canonical !== undefined) {
@@ -1229,6 +1306,11 @@ export class CoreStaticValueAnalysis {
 				STATIC_CONSTRUCTORS.has(canonical) &&
 				(opcode === "construct" || canonical === "Array" || canonical === "Object")
 			) {
+				if (knownOperation !== undefined && opcode === "construct") {
+					const target = this.query(operands[0]!);
+					if (target.kind !== "known" || target.canonical !== canonical)
+						return { kind: "unknown", reason: "unsupported-producer" };
+				}
 				const args = operands.slice(opcode === "construct" ? 1 : 2);
 				// Object returns an existing object argument; its identity is never a new allocation.
 				if (canonical === "Object" && args.length !== 0) {
@@ -1301,16 +1383,30 @@ export class CoreStaticValueAnalysis {
 						kind: "object",
 						prototype,
 						properties: [],
-						ownKeysComplete: [
-							"Object",
-							"Map",
-							"Set",
-							"WeakMap",
-							"WeakSet",
-							"Date",
-							"Boolean",
-							"Number",
-						].includes(canonical),
+						ownKeysComplete:
+							!["String", "RegExp"].includes(canonical) &&
+							!canonical.endsWith("Array") &&
+							!canonical.endsWith("Error"),
+						unknownOwnKeys:
+							canonical === "String"
+								? { numeric: true, named: ["length"] }
+								: canonical === "RegExp"
+									? { numeric: false, named: ["lastIndex"] }
+									: canonical.endsWith("Array")
+										? { numeric: true, named: [] }
+										: canonical.endsWith("Error")
+											? {
+													numeric: false,
+													named: [
+														"message",
+														"cause",
+														"errors",
+														"error",
+														"suppressed",
+														"stack",
+													],
+												}
+											: undefined,
 					});
 				return {
 					kind: "known",
@@ -1538,12 +1634,38 @@ export class CoreStaticValueAnalysis {
 	}
 
 	inherited(value: CoreStaticValue, key: PrimordialKey) {
-		if (this.#context === undefined || value.prototype.kind !== "intrinsic")
-			return undefined;
+		if (this.#context === undefined) return undefined;
+		if (["string", "number", "boolean", "bigint", "symbol"].includes(value.brand)) {
+			const prototype = {
+				string: "String",
+				number: "Number",
+				boolean: "Boolean",
+				bigint: "BigInt",
+				symbol: "Symbol",
+			}[value.brand as "string" | "number" | "boolean" | "bigint" | "symbol"];
+			return provePrimordialAccess(
+				this.#context.facts.world,
+				{
+					kind: "primitive",
+					prototype: `${prototype}.prototype`,
+					realm: "current",
+					ownKeys: [],
+					ownKeysComplete: true,
+					stableUntilRead: true,
+				},
+				key,
+			);
+		}
+		if (value.prototype.kind !== "intrinsic") return undefined;
 		const description = this.#program.staticDescriptions.description(value.description);
 		if (
 			(description.kind !== "array" && description.kind !== "object") ||
-			description.ownKeysComplete === false ||
+			(description.ownKeysComplete === false &&
+				(description.unknownOwnKeys === undefined ||
+					(typeof key === "string" &&
+						(description.unknownOwnKeys.named.includes(key) ||
+							(description.unknownOwnKeys.numeric &&
+								(key === "-0" || String(Number(key)) === key)))))) ||
 			description.properties.some((property) =>
 				typeof key === "string" ? property.key === key : typeof property.key !== "string",
 			)

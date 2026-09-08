@@ -78,6 +78,50 @@ The evaluator can describe a required runtime exception; it does not report it a
 compile error. Locale, timezone, Unicode-data-dependent transforms and general
 transcendental functions require separate target certification.
 
+## Known operations
+
+An exact callable identity becomes `callKnown` independently of receiver storage.
+The operation carries its canonical catalog identity, receiver or `new.target`,
+arguments, invocation mode and world dependencies. `loadPrimordial` preserves a
+captured identity when it is also used as a value. Resolution requires the locked
+primordial and realm contract, including the receiver's actual prototype chain and
+own descriptor. A brand alone does not authorize bypassing a property lookup.
+
+Canonical `call`, `apply`, `bind` and Reflect adapters use the same operation.
+Argument-list modes distinguish nullable Function `apply`, strict array-like lists,
+array spread and iterable spread. Normalization preserves argument evaluation,
+constructor validation order and the captured callee. A changed or unproved adapter
+retains ordinary dispatch.
+
+The operation's default effects remain conservative. Exact collection, numeric and
+string/RegExp region proofs may refine or specialize it. Bounded static `includes`
+lowers to boolean operations only after proving indexed reads and offset conversion;
+this permits ordinary DCE without dropping callbacks or coercions. Native numeric
+representation selection recognizes the known-call boxing boundary. Static numeric
+payloads use binary64 unless an int32 encoding preserves the value, including its
+zero sign.
+
+Native callback bindings are generated from a live descriptor capture and the owning
+C definitions, including their feature guards. Generated wrappers enter through
+`mal_vm_call_known_native` and the existing exact-native call/construct frames. They
+retain callee metadata, roots, arguments, completion handling and constructor checks.
+The interpreter resolves the same operation through the current VM's primordial
+bindings and ordinary engine entry route. No compiler-host heap pointer is embedded.
+
+`CALL_KNOWN` replaces the former exact-builtin and literal-method wire tags. Runtime
+wire version 44 and compiler artifact version 66 reject older representations.
+Region plans use absent producer markers when normalization has removed a property
+or intrinsic load, and validate the remaining operation identity and operands.
+
+To regenerate bindings, capture a full inventory and supply its explicit callback
+manifest to the generators:
+
+```sh
+node scripts/primordial-inventory.ts full .cache/primordial-inventory
+node scripts/generate-known-operations.ts
+node scripts/generate-known-native-entries.ts .cache/primordial-inventory/native-bindings.json
+```
+
 ## Native inventory and coverage
 
 Run the environment probe first. Capture each mode exported by

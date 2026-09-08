@@ -1099,3 +1099,5 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     }
     mal_primordials_lock(vm);
 }
+
+#include "generated/known_native_intrinsics_c.inc"

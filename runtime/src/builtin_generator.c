@@ -187,3 +187,5 @@ void mal_builtin_generator_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", mal_value_from_object(generator), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, generator, "constructor", mal_value_from_object((MalObject *) constructor), MAL_PROPERTY_CONFIGURABLE);
 }
+
+#include "generated/known_native_builtin_generator_c.inc"

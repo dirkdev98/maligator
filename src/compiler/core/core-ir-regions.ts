@@ -145,12 +145,12 @@ export interface CorePlanStringSliceNumberSpecialization extends CorePlanSpecial
 	readonly stringSliceNumber: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
-		readonly property: CoreInstructionId;
+		readonly property?: CoreInstructionId;
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly builtinIdentities: CoreBuiltinIdentityDecision;
 		readonly sliceCall: CoreInstructionId;
 		readonly sliceStartInstruction: CoreInstructionId;
-		readonly numberIntrinsic: CoreInstructionId;
+		readonly numberIntrinsic?: CoreInstructionId;
 		readonly numberCall: CoreInstructionId;
 		readonly sliceStart: number;
 	};
@@ -160,7 +160,7 @@ export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpec
 	readonly regexpExecProjection: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
-		readonly property: CoreInstructionId;
+		readonly property?: CoreInstructionId;
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly call: CoreInstructionId;
 		readonly resultValues: ReadonlyArray<CoreValueId>;
@@ -187,7 +187,7 @@ export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpec
 				  }
 				| {
 						readonly kind: "number";
-						readonly intrinsic: CoreInstructionId;
+						readonly intrinsic?: CoreInstructionId;
 						readonly call: CoreInstructionId;
 				  }
 				| {
@@ -215,7 +215,7 @@ export interface CorePlanRegExpIteratorProjectionSpecialization extends CorePlan
 			readonly instruction: CoreInstructionId;
 			readonly key: CoreInstructionId;
 			readonly captureIndex: number;
-			readonly numberIntrinsic: CoreInstructionId;
+			readonly numberIntrinsic?: CoreInstructionId;
 			readonly numberCall: CoreInstructionId;
 		}>;
 	};
@@ -503,7 +503,7 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 	"projected-elements",
 	"whole-region",
 	readonly [
-		Extract<CompilerInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
 		Extract<CompilerInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
 	]
 > {
@@ -538,11 +538,11 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	"regexp-capture-spans",
 	"whole-region",
 	readonly [
-		Extract<CompilerInstruction, { type: "call" }>,
+		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
 		Extract<CompilerInstruction, { type: "loadProperty" }>,
 	]
 > {
-	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
@@ -552,9 +552,9 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	readonly lockedLiteral?: {
 		readonly constructorIntrinsic: Extract<
 			CompilerInstruction,
-			{ type: "loadIntrinsic" }
+			{ type: "loadIntrinsic" | "loadPrimordial" }
 		>;
-		readonly construct: Extract<CompilerInstruction, { type: "construct" }>;
+		readonly construct: Extract<CompilerInstruction, { type: "construct" | "callKnown" }>;
 	};
 	readonly lastIndexEffect: "retained-call-twin";
 	readonly loads: ReadonlyArray<{
@@ -575,8 +575,8 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 			  }
 			| {
 					readonly kind: "number";
-					readonly intrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
-					readonly call: Extract<CompilerInstruction, { type: "call" }>;
+					readonly intrinsic?: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+					readonly call: Extract<CompilerInstruction, { type: "call" | "callKnown" }>;
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
@@ -622,8 +622,8 @@ export interface CoreAllocatedRegExpIteratorProjectionRegion extends CoreAllocat
 		readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
 		readonly key: Extract<CompilerInstruction, { type: "createNumber" }>;
 		readonly captureIndex: number;
-		readonly numberIntrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
-		readonly numberCall: Extract<CompilerInstruction, { type: "call" }>;
+		readonly numberIntrinsic?: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+		readonly numberCall: Extract<CompilerInstruction, { type: "call" | "callKnown" }>;
 	}>;
 }
 
@@ -633,11 +633,11 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 	"primitive-string-span-number",
 	"none",
 	readonly [
-		Extract<CompilerInstruction, { type: "call" }>,
-		Extract<CompilerInstruction, { type: "call" }>,
+		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
+		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
 	]
 > {
-	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	/** Covers both the exact slice method and the exact intrinsic Number consumer. */
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;
@@ -645,8 +645,8 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 		CompilerInstruction,
 		{ type: "createNumber" | "createF64" }
 	>;
-	readonly numberIntrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
-	readonly numberCall: Extract<CompilerInstruction, { type: "call" }>;
+	readonly numberIntrinsic?: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+	readonly numberCall: Extract<CompilerInstruction, { type: "call" | "callKnown" }>;
 	readonly sliceStart: number;
 }
 
@@ -795,7 +795,7 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 	"split-cursor-spans",
 	"on-demand",
 	readonly [
-		Extract<CompilerInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
 		Extract<CompilerInstruction, { type: "jumpIf" }>,
 		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
 		Extract<CompilerInstruction, { type: "jump" }>,

@@ -111,3 +111,5 @@ void mal_builtin_proxy_install(MalVm *vm) {
     // Proxy.revocable(target, handler).
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "revocable", 2, mal_builtin_proxy_revocable);
 }
+
+#include "generated/known_native_builtin_proxy_c.inc"

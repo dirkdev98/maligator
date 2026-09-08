@@ -1038,3 +1038,5 @@ void mal_builtin_math_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, math, "sumPrecise", 1, mal_builtin_math_sum_precise);
     mal_intrinsic_define_method_n(vm, math, "random", 0, mal_builtin_math_random);
 }
+
+#include "generated/known_native_builtin_math_c.inc"

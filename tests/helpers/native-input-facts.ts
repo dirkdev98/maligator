@@ -55,7 +55,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 	};
 	const undefinedOperand = encodeVmValueOperand(-1, { kind: "undefined" });
 	const builtin = (
-		operation: Extract<BytecodeInstruction, { opcode: "CALL_BUILTIN" }>["operation"],
+		operation: Extract<BytecodeInstruction, { opcode: "CALL_KNOWN" }>["operation"],
 		args: Array<number>,
 		value: unknown,
 		thisValue = undefinedOperand,
@@ -64,7 +64,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 			operation.endsWith(".has") || operation.endsWith(".delete") ? "boolean" : "boxed",
 		);
 		instructions.push({
-			opcode: "CALL_BUILTIN",
+			opcode: "CALL_KNOWN",
 			dst,
 			operation,
 			thisValue,

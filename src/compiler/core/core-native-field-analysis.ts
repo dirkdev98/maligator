@@ -63,15 +63,19 @@ export function coreReadOnlyNumericParameterFields(
 			mathLoads.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 			continue;
 		}
-		if (opcode === "call") {
-			callees.add(operands[0]!);
+		if (opcode === "call" || opcode === "callKnown") {
+			if (attrs.construct || attrs.argumentMode !== undefined) return undefined;
+			if (opcode === "call") callees.add(operands[0]!);
 			const builtin = attrs.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
 			if (
 				builtin === undefined ||
 				!builtin.operation.startsWith("Math.") ||
 				builtin.semantics.kind !== "known" ||
 				builtin.semantics.value.result !== "number" ||
-				!knownBuiltinCallProves(builtin, builtin.operation) ||
+				(opcode === "call"
+					? !knownBuiltinCallProves(builtin, builtin.operation)
+					: builtin.identity.kind !== "known" ||
+						builtin.identity.value !== builtin.operation) ||
 				!compilerFactIsWorldInvariant(builtin.identity)
 			)
 				return undefined;
@@ -147,10 +151,10 @@ export function coreFieldEntryHasNumericComputations(
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (!["binary", "unary", "call"].includes(opcode)) continue;
+		if (!["binary", "unary", "call", "callKnown"].includes(opcode)) continue;
 		if (certified.has(instruction)) continue;
 		for (
-			let index = opcode === "call" ? 2 : 0;
+			let index = opcode === "call" ? 2 : opcode === "callKnown" ? 1 : 0;
 			index < fn.kernel.instructionOperandCount(instruction);
 			index++
 		) {

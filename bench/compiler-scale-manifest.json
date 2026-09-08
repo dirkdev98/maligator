@@ -146,6 +146,8 @@
 				"src/compiler/core/core-ir-value-kinds.ts",
 				"src/compiler/core/core-ir-verifier.ts",
 				"src/compiler/core/core-ir.ts",
+				"src/compiler/core/core-known-operation-results.ts",
+				"src/compiler/core/core-known-operations.ts",
 				"src/compiler/core/core-literal-constants.ts",
 				"src/compiler/core/core-local-optimizer.ts",
 				"src/compiler/core/core-local-passes.ts",

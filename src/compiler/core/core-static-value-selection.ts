@@ -54,10 +54,17 @@ export function coreStaticConstantOperation(
 			const bits = new DataView(new ArrayBuffer(8));
 			bits.setUint32(0, constant.low, true);
 			bits.setUint32(4, constant.high, true);
+			const value = bits.getFloat64(0, true);
 			return {
-				opcode: "createNumber",
+				opcode:
+					Number.isInteger(value) &&
+					value >= -0x80000000 &&
+					value <= 0x7fffffff &&
+					!Object.is(value, -0)
+						? "createNumber"
+						: "createF64",
 				inputs: [],
-				attributes: { value: bits.getFloat64(0, true) },
+				attributes: { value },
 			};
 		}
 		case "string": {
@@ -356,7 +363,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (
 					opcode === "call" ||
-					opcode === "callBuiltin" ||
+					opcode === "callKnown" ||
 					opcode === "typeofCompare" ||
 					(opcode === "unary" &&
 						fn.instructionAttributes(instruction).operator === "typeof")
@@ -367,7 +374,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 		},
 	},
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["call", "callBuiltin", "unary", "typeofCompare"],
+	requiredFunctionOpcodesAny: ["call", "callKnown", "unary", "typeofCompare"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -415,7 +422,13 @@ export const foldStaticReflections: CoreFunctionPass = {
 				edits += 2;
 				continue;
 			}
-			if (opcode !== "call" && opcode !== "callBuiltin") continue;
+			if (opcode !== "call" && opcode !== "callKnown") continue;
+			if (
+				opcode === "callKnown" &&
+				(fn.instructionAttributes(instruction).construct ||
+					fn.instructionAttributes(instruction).argumentMode !== undefined)
+			)
+				continue;
 			let canonical: string | undefined;
 			const argument = opcode === "call" ? 2 : 1;
 			if (fn.kernel.instructionOperandCount(instruction) <= argument) continue;

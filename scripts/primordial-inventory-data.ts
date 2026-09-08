@@ -13,6 +13,7 @@ interface RawNode {
 	locked?: boolean;
 	prototype?: RawValue;
 	implementation?: number;
+	callbackOffset?: string;
 	callable?: boolean;
 	constructable?: boolean;
 	slots?: number;
@@ -42,6 +43,7 @@ export interface InventoryHostInstall {
 export function normalizePrimordialInventory(
 	jsonl: string,
 	hostInstalls: ReadonlyArray<InventoryHostInstall>,
+	callbackSymbols?: ReadonlyMap<string, string>,
 ) {
 	const phases = new Map<string, Array<RawRecord>>();
 	let current: Array<RawRecord> | undefined;
@@ -55,13 +57,16 @@ export function normalizePrimordialInventory(
 			current.push(row);
 		}
 	}
-	return [...phases].map(([phase, rows]) => normalizePhase(phase, rows, hostInstalls));
+	return [...phases].map(([phase, rows]) =>
+		normalizePhase(phase, rows, hostInstalls, callbackSymbols),
+	);
 }
 
 function normalizePhase(
 	phase: string,
 	rows: ReadonlyArray<RawRecord>,
 	hostInstalls: ReadonlyArray<InventoryHostInstall>,
+	callbackSymbols?: ReadonlyMap<string, string>,
 ) {
 	const nodes = new Map(
 		rows.filter((row) => row.type === "node").map((row) => [row.id, row]),
@@ -216,6 +221,9 @@ function normalizePhase(
 					? {}
 					: {
 							implementation: implementations.get(node.implementation)!,
+							...(callbackSymbols === undefined
+								? {}
+								: { nativeSymbol: callbackSymbols.get(node.callbackOffset ?? "") }),
 							callable: node.callable,
 							constructable: node.constructable,
 							slots: node.slots,

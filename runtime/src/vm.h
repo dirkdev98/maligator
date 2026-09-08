@@ -9,6 +9,7 @@
 #include "profile.h"
 #include "shape.h"
 #include "value.h"
+#include "generated/known_primordials.inc"
 
 #define MAL_COROUTINE_POOL_CLASS_COUNT 14
 #define MAL_TINY_STRING_CACHE_CAPACITY 256
@@ -630,9 +631,8 @@ typedef struct MalInstruction {
         } math_binary_number;
 
         struct {
-            // this_value and side-data arguments are tagged value operands.
             i32 dst, this_value, data_offset, operation;
-        } call_builtin;
+        } call_known;
 
         struct {
             // callee and side data use the same tagged value operands as call.
@@ -1282,16 +1282,10 @@ typedef struct MalExactScriptCall {
     MalEnv *env;
 } MalExactScriptCall;
 
-enum {
-    MAL_LITERAL_METHOD_COUNT = 0
-#define MAL_LITERAL_METHOD(index, prototype, key) + 1
-#include "generated/literal_prototype_methods.inc"
-#undef MAL_LITERAL_METHOD
-};
-
 typedef struct MalVm {
-    MalValue literal_method_callees[MAL_LITERAL_METHOD_COUNT];
-    MalNativeFunctionCallback literal_method_callbacks[MAL_LITERAL_METHOD_COUNT];
+#if !MAL_REALMS
+    MalValue known_primordial_values[MAL_KNOWN_PRIMORDIAL_COUNT];
+#endif
     const MalRuntimeImage *runtime_image;
 
     /** Initial immutable string table retained for native code's direct constants. */
@@ -2432,6 +2426,7 @@ mal_vm_call_function_call_direct_compiled(
  * parents the new instance), implementing the spec [[Construct]](args, newTarget).
  * Backs Reflect.construct; mal_vm_construct_value forwards with newTarget = callee.
  */
+MalCompletion mal_vm_construct_exact_native(MalVm *vm, MalNativeFunctionCallback callback, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target);
 MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target);
 
 /**

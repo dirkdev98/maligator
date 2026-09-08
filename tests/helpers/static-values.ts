@@ -80,8 +80,10 @@ export function inspectStaticValueFunction(
 		coreReport,
 		structure: {
 			operations: fn.instructions.flatMap((instruction) =>
-				instruction.opcode === "CALL_LITERAL_METHOD"
-					? [literalPrototypeMethods[instruction.methodIndex]]
+				instruction.opcode === "CALL_KNOWN"
+					? literalPrototypeMethods
+							.filter((method) => method.id === instruction.operation)
+							.slice(0, 1)
 					: [],
 			),
 			allocations: count(

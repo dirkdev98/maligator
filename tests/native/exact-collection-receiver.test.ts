@@ -29,7 +29,7 @@ describe("exact collection receiver brands", () => {
 		});
 		const directCollectionCalls = pair.programImage.runtime.functions
 			.flatMap((fn) => fn.instructions)
-			.filter((instruction) => instruction.opcode === "CALL_BUILTIN")
+			.filter((instruction) => instruction.opcode === "CALL_KNOWN")
 			.map((instruction) => instruction.operation);
 		expect(directCollectionCalls).toContain("Map.prototype.get");
 		compiled = pair.compiled;
@@ -46,7 +46,7 @@ describe("exact collection receiver brands", () => {
 		const trustedCollectionSites = trusted.programImage.runtime.functions.flatMap((fn) =>
 			vmSafepointRootMapsAreTrusted(fn)
 				? fn.instructions.flatMap((instruction, instructionIp) =>
-						instruction.opcode === "CALL_BUILTIN" ||
+						instruction.opcode === "CALL_KNOWN" ||
 						(instruction.opcode === "CALL" &&
 							instruction.guardedBuiltinCall !== undefined)
 							? [
@@ -61,7 +61,7 @@ describe("exact collection receiver brands", () => {
 					)
 				: [],
 		);
-		for (const opcode of ["CALL_BUILTIN", "CALL"] as const) {
+		for (const opcode of ["CALL_KNOWN", "CALL"] as const) {
 			expect(
 				trustedCollectionSites.some(
 					({ instruction, safepoint }) =>

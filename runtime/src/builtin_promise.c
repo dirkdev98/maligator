@@ -2009,3 +2009,5 @@ void mal_builtin_promise_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "try", 1, mal_promise_try);
     mal_intrinsic_define_species(vm, (MalObject *) constructor);
 }
+
+#include "generated/known_native_builtin_promise_c.inc"

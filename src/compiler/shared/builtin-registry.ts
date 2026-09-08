@@ -59,15 +59,6 @@ export function literalPrototypeMethodIndex(
 	);
 }
 
-export function generateLiteralPrototypeMethods(): string {
-	return `${literalPrototypeMethods
-		.map(
-			(method, index) =>
-				`MAL_LITERAL_METHOD(${index}, ${method.prototype}, ${JSON.stringify(method.key === Symbol.iterator ? "@@iterator" : method.key)})`,
-		)
-		.join("\n")}\n`;
-}
-
 export type BuiltinFeature =
 	| "always"
 	| "eval"

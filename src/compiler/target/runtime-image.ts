@@ -7,6 +7,7 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import type { KnownArgumentMode } from "../shared/known-operations.ts";
 import {
 	copyLiteralTemplateData,
 	compactLiteralTemplateSegments,
@@ -126,7 +127,7 @@ function validateVmValueOperand(
 
 type VmCallInstruction = Extract<
 	BytecodeInstruction,
-	{ opcode: "CALL" | "CALL_BUILTIN" | "CALL_LITERAL_METHOD" | "CONSTRUCT" }
+	{ opcode: "CALL" | "CALL_KNOWN" | "CONSTRUCT" }
 >;
 
 function isVmCallInstruction(
@@ -134,8 +135,7 @@ function isVmCallInstruction(
 ): instruction is VmCallInstruction {
 	return (
 		instruction.opcode === "CALL" ||
-		instruction.opcode === "CALL_BUILTIN" ||
-		instruction.opcode === "CALL_LITERAL_METHOD" ||
+		instruction.opcode === "CALL_KNOWN" ||
 		instruction.opcode === "CONSTRUCT"
 	);
 }
@@ -144,10 +144,7 @@ function vmValueOperandEntries(
 	instruction: VmCallInstruction,
 ): ReadonlyArray<{ readonly name: string; readonly operand: number }> {
 	const entries: Array<{ name: string; operand: number }> = [];
-	if (
-		instruction.opcode !== "CALL_BUILTIN" &&
-		instruction.opcode !== "CALL_LITERAL_METHOD"
-	) {
+	if (instruction.opcode !== "CALL_KNOWN") {
 		entries.push({ name: "callee", operand: instruction.callee });
 	}
 	if (instruction.opcode !== "CONSTRUCT") {
@@ -336,13 +333,6 @@ function vmMathBinaryNumberOperation(operation: string): VmMathBinaryNumberOpera
 		return operation as VmMathBinaryNumberOperation;
 	}
 	throw new Error(`Unknown binary numeric Math operation ${operation}`);
-}
-
-function vmDirectBuiltinOperation(operation: string): VmDirectBuiltinOperation {
-	if ((VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
-		return operation as VmDirectBuiltinOperation;
-	}
-	throw new Error(`Unknown direct builtin operation ${operation}`);
 }
 
 export interface VmPrecompiledLiteralShape {
@@ -793,20 +783,15 @@ export type BytecodeInstruction =
 			operation: VmMathBinaryNumberOperation;
 	  }
 	| {
-			opcode: "CALL_LITERAL_METHOD";
+			opcode: "CALL_KNOWN";
 			dst: number;
 			thisValue: number;
 			argumentCount: number;
 			arguments: Array<number>;
-			methodIndex: number;
-	  }
-	| {
-			opcode: "CALL_BUILTIN";
-			dst: number;
-			thisValue: number;
-			argumentCount: number;
-			arguments: Array<number>;
-			operation: VmDirectBuiltinOperation;
+			operation: string;
+			construct?: true;
+			argumentMode?: KnownArgumentMode;
+			specialized?: VmDirectBuiltinOperation;
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -854,6 +839,11 @@ export type BytecodeInstruction =
 			awaitedSrc: number;
 			valueDst: number;
 			modeDst: number;
+	  }
+	| {
+			opcode: "LOAD_PRIMORDIAL";
+			dst: number;
+			nodeIndex: number;
 	  }
 	| {
 			opcode: "LOAD_INTRINSIC";
@@ -2099,20 +2089,19 @@ function remapRuntimeInstructionConstants(
 					),
 				),
 			};
-		case "CALL_LITERAL_METHOD":
-		case "CALL_BUILTIN":
+		case "CALL_KNOWN":
 			return {
 				...remapped,
 				thisValue: remapVmValueOperandConstants(
 					remapped.thisValue,
 					stringOldToNew,
-					"CALL_BUILTIN.thisValue",
+					"CALL_KNOWN.thisValue",
 				),
 				arguments: remapped.arguments.map((operand, index) =>
 					remapVmValueOperandConstants(
 						operand,
 						stringOldToNew,
-						`CALL_BUILTIN.arguments[${index}]`,
+						`CALL_KNOWN.arguments[${index}]`,
 					),
 				),
 			};
@@ -3133,9 +3122,9 @@ function lowerInstructionToBytecodeInstruction(
 				right: instruction.registers[2],
 				operation: vmMathBinaryNumberOperation(instruction.operation),
 			};
-		case "callLiteralMethod":
+		case "callKnown":
 			return {
-				opcode: "CALL_LITERAL_METHOD",
+				opcode: "CALL_KNOWN",
 				dst: instruction.registers[0],
 				thisValue: encodeVmValueOperand(
 					instruction.registers[1],
@@ -3147,23 +3136,14 @@ function lowerInstructionToBytecodeInstruction(
 					.map((register, index) =>
 						encodeVmValueOperand(register, instruction.immediateValues?.[index + 2]),
 					),
-				methodIndex: instruction.methodIndex,
-			};
-		case "callBuiltin":
-			return {
-				opcode: "CALL_BUILTIN",
-				dst: instruction.registers[0],
-				thisValue: encodeVmValueOperand(
-					instruction.registers[1],
-					instruction.immediateValues?.[1],
-				),
-				argumentCount: instruction.registers.length - 2,
-				arguments: instruction.registers
-					.slice(2)
-					.map((register, index) =>
-						encodeVmValueOperand(register, instruction.immediateValues?.[index + 2]),
-					),
-				operation: vmDirectBuiltinOperation(instruction.operation),
+				operation: instruction.operation,
+				...(instruction.construct ? { construct: true } : {}),
+				...(instruction.argumentMode === undefined
+					? {}
+					: { argumentMode: instruction.argumentMode }),
+				...(instruction.specialized === undefined
+					? {}
+					: { specialized: instruction.specialized }),
 			};
 		case "construct":
 			return {
@@ -3225,6 +3205,12 @@ function lowerInstructionToBytecodeInstruction(
 				valueDst: instruction.registers[0],
 				modeDst: instruction.registers[1],
 				awaitedSrc: instruction.registers[2],
+			};
+		case "loadPrimordial":
+			return {
+				opcode: "LOAD_PRIMORDIAL",
+				dst: instruction.registers[0],
+				nodeIndex: instruction.nodeIndex,
 			};
 		case "loadIntrinsic":
 			return {

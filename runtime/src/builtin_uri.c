@@ -470,3 +470,5 @@ void mal_builtin_uri_install_legacy_globals(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(
         vm, global_this, "unescape", mal_uri_make_function(vm, "unescape", mal_builtin_unescape), flags);
 }
+
+#include "generated/known_native_builtin_uri_c.inc"

@@ -2609,94 +2609,81 @@ bool mal_op_call_guarded_builtin(
     return true;
 }
 
-void mal_op_call_builtin_exact_collection(
-    MalCallable *callable, const MalInstruction *instruction
-) {
-    MalDirectBuiltinOp operation =
-        (MalDirectBuiltinOp) instruction->as.call_builtin.operation;
-    MalVm *vm = callable->vm;
-    const i32 *data = mal_op_instruction_data(
-        callable, instruction->as.call_builtin.data_offset);
-    i32 argument_count = data[0];
-    MalValue arguments[2] = {
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
+MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags) {
+    static const i32 nodes[] = {
+#define MAL_KNOWN_OPERATION(index, node) node,
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_OPERATION
     };
-    for (i32 i = 0; i < argument_count && i < 2; i++) {
-        arguments[i] = mal_op_value_operand(callable, data[i + 1]);
-    }
-    MalValue receiver = mal_op_value_operand(
-        callable, instruction->as.call_builtin.this_value);
-    MalValue result;
-    switch (operation) {
-        case MAL_DIRECT_BUILTIN_MAP_GET:
-            result = mal_builtin_map_get_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_SET:
-            result = mal_builtin_map_set_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_HAS:
-            result = mal_builtin_map_has_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_DELETE:
-            result = mal_builtin_map_delete_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_ADD:
-            result = mal_builtin_set_add_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_HAS:
-            result = mal_builtin_set_has_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_DELETE:
-            result = mal_builtin_set_delete_known(
-                vm, receiver, arguments, argument_count);
-            break;
-        default:
-            abort();
-    }
-    callable->registers[instruction->as.call_builtin.dst] = result;
-}
-
-MalValue mal_vm_call_literal_method(MalVm *vm, i32 method, MalValue receiver, const MalValue *args, i32 count) {
-    if (method < 0 || method >= MAL_LITERAL_METHOD_COUNT) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal method");
+    i32 mode = flags >> 1;
+    bool construct = (flags & 1) != 0;
+    if (operation < 0 || operation >= MAL_KNOWN_OPERATION_COUNT || flags < 0 || flags > 9 || (mode != 0 && count < 1)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid known operation");
         return MAL_VALUE_UNDEFINED;
     }
-    if (vm->literal_method_callbacks[method] == nullptr) {
-        static const struct { MalIntrinsic prototype; const byte *key; } methods[] = {
-#define MAL_LITERAL_METHOD(index, prototype, key) { prototype, (const byte *) key },
-#include "generated/literal_prototype_methods.inc"
-#undef MAL_LITERAL_METHOD
-        };
-        MalKey key = strcmp((const char *) methods[method].key, "@@iterator") == 0
-            ? mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)
-            : mal_intrinsic_string_key(vm, methods[method].key);
-        MalValue callee;
-        if (!mal_vm_get_property(vm, vm->intrinsics[methods[method].prototype], key, &callee))
-            return MAL_VALUE_UNDEFINED;
-        if (!mal_value_is_native_function_object(callee)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "literal method is not native");
-            return MAL_VALUE_UNDEFINED;
-        }
-        // Locked primordial reachability roots both the callee and its callback for the VM lifetime.
-        vm->literal_method_callees[method] = callee;
-        vm->literal_method_callbacks[method] = mal_native_function_object_callback(mal_value_to_native_function_object(callee));
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(&roots, receiver, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, args, count);
+    i32 base = vm->value_stack_size;
+    MalValue result = MAL_VALUE_UNDEFINED;
+    MalValue callee = mal_vm_load_primordial(vm, nodes[operation]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    roots.receiver_slots[2] = callee;
+    // Reflect checks constructors before reading its array-like argument list.
+    if (construct && mode < 3 && (!mal_vm_is_constructor(vm, callee) || !mal_vm_is_constructor(vm, receiver))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+        goto done;
     }
-    MalCompletion completion = mal_vm_call_exact_native(vm, vm->literal_method_callbacks[method],
-        vm->literal_method_callees[method], receiver, args, count);
+    if (mode != 0) {
+        MalValue list = args[count - 1];
+        i32 prefix = count - 1;
+        if (prefix > vm->value_stack_capacity - base) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+            goto done;
+        }
+        for (i32 i = 0; i < prefix; i++) vm->value_stack[base + i] = args[i];
+        vm->value_stack_size = base + prefix;
+        i32 expanded = 0;
+        if (mode == 1 || mode == 2) {
+            if (!(mode == 2 && (mal_value_is_null(list) || mal_value_is_undefined(list)))) {
+                MalValue inline_items[16];
+                MalValue *items;
+                if (!mal_vm_create_list_from_array_like(vm, list, inline_items, countof(inline_items), &items, &expanded)) goto done;
+                if (expanded > vm->value_stack_capacity - vm->value_stack_size) {
+                    if (items != inline_items) free(items);
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+                    goto done;
+                }
+                memcpy(&vm->value_stack[vm->value_stack_size], items, (usize) expanded * sizeof(MalValue));
+                vm->value_stack_size += expanded;
+                if (items != inline_items) free(items);
+            }
+        } else {
+            expanded = mode == 3 ? mal_vm_marshal_spread(vm, list) : mal_vm_marshal_spread_iterable(vm, list);
+            if (expanded < 0 || vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        }
+        args = &vm->value_stack[base];
+        count = prefix + expanded;
+    }
+    MalCompletion completion = construct
+        ? (callback == nullptr ? mal_vm_construct_value_with_target(vm, callee, args, count, receiver)
+                               : mal_vm_construct_exact_native(vm, callback, callee, args, count, receiver))
+        : (callback == nullptr ? mal_vm_call_value(vm, callee, receiver, args, count)
+                               : mal_vm_call_exact_native(vm, callback, callee, receiver, args, count));
     if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
-    return completion.value;
+    result = completion.value;
+done:
+    vm->value_stack_size = base;
+    mal_gc_callee_roots_end(&roots);
+    return result;
 }
 
-void mal_op_call_literal_method(MalCallable *callable, const MalInstruction *instruction) {
+MalValue mal_vm_call_known(MalVm *vm, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags) {
+    return mal_vm_call_known_native(vm, nullptr, operation, receiver, args, count, flags);
+}
+
+void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
-    const i32 *data = mal_op_instruction_data(callable, instruction->as.call_builtin.data_offset);
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call_known.data_offset);
     i32 count = data[0];
     if (vm->value_stack_size + count > vm->value_stack_capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
@@ -2705,127 +2692,10 @@ void mal_op_call_literal_method(MalCallable *callable, const MalInstruction *ins
     i32 base = vm->value_stack_size;
     for (i32 i = 0; i < count; i++) vm->value_stack[base + i] = mal_op_value_operand(callable, data[i + 1]);
     vm->value_stack_size = base + count;
-    MalValue receiver = mal_op_value_operand(callable, instruction->as.call_builtin.this_value);
-    MalValue result = mal_vm_call_literal_method(vm, instruction->as.call_builtin.operation, receiver, &vm->value_stack[base], count);
+    MalValue receiver = mal_op_value_operand(callable, instruction->as.call_known.this_value);
+    MalValue result = mal_vm_call_known(vm, instruction->as.call_known.operation >> 4, receiver, &vm->value_stack[base], count, instruction->as.call_known.operation & 15);
     vm->value_stack_size = base;
-    callable->registers[instruction->as.call_builtin.dst] = result;
-}
-
-void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    const i32 *data = mal_op_instruction_data(
-        callable, instruction->as.call_builtin.data_offset);
-    i32 argument_count = data[0];
-    if (vm->value_stack_size + argument_count > vm->value_stack_capacity) {
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Maximum call stack size exceeded");
-        return;
-    }
-    i32 base = vm->value_stack_size;
-    for (i32 i = 0; i < argument_count; i++) {
-        vm->value_stack[base + i] = mal_op_value_operand(callable, data[i + 1]);
-    }
-    vm->value_stack_size = base + argument_count;
-    MalValue receiver = mal_op_value_operand(
-        callable, instruction->as.call_builtin.this_value);
-    MalValue result = MAL_VALUE_UNDEFINED;
-    switch ((MalDirectBuiltinOp) instruction->as.call_builtin.operation) {
-        case MAL_DIRECT_BUILTIN_STRING_SPLIT:
-            result = mal_builtin_string_split_direct(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_ARRAY_PUSH:
-            result = mal_builtin_array_push_contained(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_ARRAY_POP:
-            result = mal_builtin_array_pop_contained(vm, receiver);
-            break;
-        case MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN:
-            result = mal_builtin_object_has_own_known(
-                vm, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_OBJECT_IS:
-            result = mal_builtin_object_is_known(
-                &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT:
-            result = mal_builtin_string_char_code_at_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_GET:
-            result = mal_builtin_map_get_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_SET:
-            result = mal_builtin_map_set_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_HAS:
-            result = mal_builtin_map_has_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_MAP_DELETE:
-            result = mal_builtin_map_delete_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_ADD:
-            result = mal_builtin_set_add_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_HAS:
-            result = mal_builtin_set_has_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_SET_DELETE:
-            result = mal_builtin_set_delete_known(
-                vm, receiver, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_OBJECT_KEYS:
-            result = mal_builtin_object_keys_known(
-                vm, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_OBJECT_VALUES:
-            result = mal_builtin_object_values_known(
-                vm, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_NUMBER_IS_NAN:
-            result = mal_builtin_number_is_nan_known(
-                &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_NUMBER_IS_FINITE:
-            result = mal_builtin_number_is_finite_known(
-                &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_NUMBER_IS_INTEGER:
-            result = mal_builtin_number_is_integer_known(
-                &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_NUMBER_IS_SAFE_INTEGER:
-            result = mal_builtin_number_is_safe_integer_known(
-                &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_NUMBER_VALUE_OF:
-            result = mal_builtin_number_value_of_known(receiver);
-            break;
-        case MAL_DIRECT_BUILTIN_BOOLEAN_VALUE_OF:
-            result = mal_builtin_boolean_value_of_known(receiver);
-            break;
-        case MAL_DIRECT_BUILTIN_DATE_NOW:
-            result = mal_builtin_date_now_known();
-            break;
-        case MAL_DIRECT_BUILTIN_DATE_PARSE:
-            result = mal_builtin_date_parse_known(
-                vm, &vm->value_stack[base], argument_count);
-            break;
-        case MAL_DIRECT_BUILTIN_DATE_UTC:
-            result = mal_builtin_date_utc_known(
-                vm, &vm->value_stack[base], argument_count);
-            break;
-    }
-    vm->value_stack_size = base;
-    callable->registers[instruction->as.call_builtin.dst] = result;
+    callable->registers[instruction->as.call_known.dst] = result;
 }
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction) {
@@ -3633,6 +3503,10 @@ void mal_op_store_global(MalCallable *callable, const MalInstruction *instructio
 
 void mal_op_load_global(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
+}
+
+void mal_op_load_primordial(MalCallable *callable, const MalInstruction *instruction) {
+    callable->registers[instruction->as.load_intrinsic.dst] = mal_vm_load_primordial(callable->vm, instruction->as.load_intrinsic.intrinsic);
 }
 
 void mal_op_load_intrinsic(MalCallable *callable, const MalInstruction *instruction) {

@@ -234,7 +234,7 @@ describe("Core memory and escape parity", () => {
 		expect(
 			coreOperations(fn).filter(
 				({ opcode, attributes }) =>
-					opcode === "callBuiltin" && attributes.operation === "Date.now",
+					opcode === "callKnown" && attributes.operation === "Date.now",
 			),
 		).toHaveLength(2);
 	});

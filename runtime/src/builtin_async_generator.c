@@ -613,3 +613,5 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) async_function, "prototype", mal_value_from_object(async_function_prototype), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, async_function_prototype, "constructor", mal_value_from_native_function_object(async_function), MAL_PROPERTY_CONFIGURABLE);
 }
+
+#include "generated/known_native_builtin_async_generator_c.inc"

@@ -1,3 +1,4 @@
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -798,17 +799,17 @@ export interface CoreStringSplitProjectionCandidate extends CoreLocalSpecializat
 }
 
 export interface CoreStringSliceNumberCandidate extends CoreLocalSpecializationCandidateBase<"string-slice-number"> {
-	readonly property: CoreInstructionId;
+	readonly property?: CoreInstructionId;
 	readonly sliceCall: CoreInstructionId;
 	readonly sliceStartInstruction: CoreInstructionId;
-	readonly numberIntrinsic: CoreInstructionId;
+	readonly numberIntrinsic?: CoreInstructionId;
 	readonly numberCall: CoreInstructionId;
 	readonly sliceStart: number;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
 }
 
 export interface CoreRegExpExecProjectionCandidate extends CoreLocalSpecializationCandidateBase<"regexp-exec-projection"> {
-	readonly property: CoreInstructionId;
+	readonly property?: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly resultValues: ReadonlyArray<CoreValueId>;
 	readonly nullChecks: ReadonlyArray<{
@@ -833,7 +834,7 @@ export interface CoreRegExpExecProjectionCandidate extends CoreLocalSpecializati
 			  }
 			| {
 					readonly kind: "number";
-					readonly intrinsic: CoreInstructionId;
+					readonly intrinsic?: CoreInstructionId;
 					readonly call: CoreInstructionId;
 			  }
 			| {
@@ -858,7 +859,7 @@ export interface CoreRegExpIteratorProjectionCandidate extends CoreLocalSpeciali
 		readonly instruction: CoreInstructionId;
 		readonly key: CoreInstructionId;
 		readonly captureIndex: number;
-		readonly numberIntrinsic: CoreInstructionId;
+		readonly numberIntrinsic?: CoreInstructionId;
 		readonly numberCall: CoreInstructionId;
 	}>;
 }
@@ -1742,7 +1743,8 @@ function exactStringSplitCallCandidate(
 	| undefined {
 	if (
 		fn.instructionKind(call) === "operation" &&
-		fn.instructionOpcodeName(call) === "callBuiltin" &&
+		fn.instructionOpcodeName(call) === "callKnown" &&
+		fn.instructionAttributes(call).specialized !== undefined &&
 		fn.instructionAttributes(call).operation === "String.prototype.split" &&
 		instructionResultCount(fn, call) === 1 &&
 		control.reachable.has(fn.instructionBlock(call))
@@ -2018,7 +2020,7 @@ function stringSplitCursorCandidates(
 		if (
 			call === undefined ||
 			(fn.instructionOpcodeName(call) !== "call" &&
-				fn.instructionOpcodeName(call) !== "callBuiltin")
+				fn.instructionOpcodeName(call) !== "callKnown")
 		)
 			continue;
 		const split = exactStringSplitCallCandidate(program, fn, control, roots, index, call);
@@ -2501,6 +2503,35 @@ const NUMERIC_TYPED_ARRAY_INTRINSICS: ReadonlySet<string> = new Set([
 	"Float64Array",
 ]);
 
+function constructedIntrinsicName(
+	fn: CoreFunctionStore,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	definition: CoreInstructionId | undefined,
+): string | undefined {
+	if (definition === undefined) return undefined;
+	const opcode = fn.instructionOpcodeName(definition),
+		attrs = fn.instructionAttributes(definition);
+	if (opcode !== "construct" && !(opcode === "callKnown" && attrs.construct === true))
+		return undefined;
+	const target = instructionOperand(fn, definition, 0);
+	const targetDefinition =
+		target === undefined
+			? undefined
+			: definingInstruction(fn, roots.get(target) ?? target);
+	if (targetDefinition === undefined) return undefined;
+	const targetAttrs = fn.instructionAttributes(targetDefinition);
+	const intrinsic =
+		fn.instructionOpcodeName(targetDefinition) === "loadIntrinsic"
+			? targetAttrs.intrinsic
+			: fn.instructionOpcodeName(targetDefinition) === "loadPrimordial"
+				? getPrimordialCatalog().nodes[targetAttrs.nodeIndex as number]?.[0]
+				: undefined;
+	return typeof intrinsic === "string" &&
+		(opcode === "construct" || attrs.operation === intrinsic)
+		? intrinsic
+		: undefined;
+}
+
 function iteratorCursorKind(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -2522,20 +2553,7 @@ function iteratorCursorKind(
 		sourceInstruction === undefined ? {} : fn.instructionAttributes(sourceInstruction);
 	const exactTypedArray = attributes.exactTypedArrayKind;
 	const exactCollection = attributes.exactCollectionReceiver;
-	const constructor =
-		sourceInstruction !== undefined &&
-		fn.instructionOpcodeName(sourceInstruction) === "construct"
-			? instructionOperand(fn, sourceInstruction, 0)
-			: undefined;
-	const constructorDefinition =
-		constructor === undefined
-			? undefined
-			: definingInstruction(fn, roots.get(constructor) ?? constructor);
-	const intrinsic =
-		constructorDefinition !== undefined &&
-		fn.instructionOpcodeName(constructorDefinition) === "loadIntrinsic"
-			? fn.instructionAttributes(constructorDefinition).intrinsic
-			: undefined;
+	const intrinsic = constructedIntrinsicName(fn, roots, sourceInstruction);
 	if (
 		(typeof exactTypedArray === "string" &&
 			NUMERIC_TYPED_ARRAY_INTRINSICS.has(exactTypedArray)) ||
@@ -2688,20 +2706,7 @@ function iteratorEntryPairVirtualizationCandidates(
 			source === undefined ? undefined : specializationDefinition(fn, roots, source);
 		const sourceAttributes =
 			sourceDefinition === undefined ? {} : fn.instructionAttributes(sourceDefinition);
-		const constructor =
-			sourceDefinition !== undefined &&
-			fn.instructionOpcodeName(sourceDefinition) === "construct"
-				? instructionOperand(fn, sourceDefinition, 0)
-				: undefined;
-		const constructorDefinition =
-			constructor === undefined
-				? undefined
-				: specializationDefinition(fn, roots, constructor);
-		const intrinsic =
-			constructorDefinition !== undefined &&
-			fn.instructionOpcodeName(constructorDefinition) === "loadIntrinsic"
-				? fn.instructionAttributes(constructorDefinition).intrinsic
-				: undefined;
+		const intrinsic = constructedIntrinsicName(fn, roots, sourceDefinition);
 		if (
 			sourceAttributes.exactCollectionReceiver !== "Map" &&
 			sourceAttributes.exactCollectionReceiver !== "Set" &&
@@ -2842,13 +2847,14 @@ function stringSplitProjectionCandidates(
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const call of [
 		...indexedOpcodeInstructions(fn, index, "call"),
-		...indexedOpcodeInstructions(fn, index, "callBuiltin"),
+		...indexedOpcodeInstructions(fn, index, "callKnown"),
 	]) {
 		if (fn.instructionKind(call) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(call);
-		const direct = opcode === "callBuiltin";
+		const direct = opcode === "callKnown";
+		if (direct && fn.instructionAttributes(call).specialized === undefined) continue;
 		if (
-			(opcode !== "call" && opcode !== "callBuiltin") ||
+			(opcode !== "call" && opcode !== "callKnown") ||
 			(direct
 				? fn.instructionAttributes(call).operation !== "String.prototype.split" ||
 					instructionOperandCount(fn, call) !== 2
@@ -3010,30 +3016,40 @@ function stringSliceNumberCandidates(
 ): ReadonlyArray<CoreStringSliceNumberCandidate> {
 	const candidates: Array<CoreStringSliceNumberCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const sliceCall of indexedOpcodeInstructions(fn, index, "call")) {
+	for (const sliceCall of [
+		...indexedOpcodeInstructions(fn, index, "call"),
+		...indexedOpcodeInstructions(fn, index, "callKnown"),
+	]) {
+		const knownSlice = fn.instructionOpcodeName(sliceCall) === "callKnown";
+		const attrs = fn.instructionAttributes(sliceCall);
+		if (
+			knownSlice &&
+			(attrs.operation !== "String.prototype.slice" ||
+				attrs.construct ||
+				attrs.argumentMode !== undefined)
+		)
+			continue;
 		if (
 			fn.instructionKind(sliceCall) !== "operation" ||
-			fn.instructionOpcodeName(sliceCall) !== "call" ||
-			instructionOperandCount(fn, sliceCall) !== 3 ||
+			instructionOperandCount(fn, sliceCall) !== (knownSlice ? 2 : 3) ||
 			instructionResultCount(fn, sliceCall) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(sliceCall))
 		)
 			continue;
-		const property = specializationDefinition(
-			fn,
-			roots,
-			instructionOperand(fn, sliceCall, 0)!,
-		);
+		const property = knownSlice
+			? undefined
+			: specializationDefinition(fn, roots, instructionOperand(fn, sliceCall, 0)!);
 		const start = specializationDefinition(
 			fn,
 			roots,
-			instructionOperand(fn, sliceCall, 2)!,
+			instructionOperand(fn, sliceCall, knownSlice ? 1 : 2)!,
 		);
 		if (
-			!staticPropertyNamed(program, fn, property, "slice") ||
-			root(instructionOperand(fn, property, 0)!) !==
-				root(instructionOperand(fn, sliceCall, 1)!) ||
-			!specializationInstructionDominates(control, index, property, sliceCall) ||
+			(!knownSlice &&
+				(!staticPropertyNamed(program, fn, property, "slice") ||
+					root(instructionOperand(fn, property, 0)!) !==
+						root(instructionOperand(fn, sliceCall, 1)!) ||
+					!specializationInstructionDominates(control, index, property, sliceCall))) ||
 			start === undefined ||
 			(fn.instructionOpcodeName(start) !== "createNumber" &&
 				fn.instructionOpcodeName(start) !== "createF64") ||
@@ -3042,46 +3058,55 @@ function stringSliceNumberCandidates(
 			continue;
 		const sliceStart = fn.instructionAttributes(start).value;
 		if (typeof sliceStart !== "number" || !Number.isFinite(sliceStart)) continue;
-		const propertyUses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
+		const propertyUses =
+			property === undefined
+				? []
+				: (index.uses.get(root(instructionResult(fn, property, 0)!)) ?? []);
 		const result = instructionResult(fn, sliceCall, 0)!;
 		const sliceUses = (index.uses.get(root(result)) ?? []).filter(({ instruction }) => {
 			const opcode = fn.instructionOpcodeName(instruction);
 			return opcode !== "throwIfTdz" && opcode !== "rootUse";
 		});
 		if (
-			propertyUses.length !== 1 ||
-			propertyUses[0]?.instruction !== sliceCall ||
-			propertyUses[0].position !== 0 ||
-			sliceUses.length !== 1 ||
-			sliceUses[0]?.position !== 2
+			(!knownSlice &&
+				(propertyUses.length !== 1 ||
+					propertyUses[0]?.instruction !== sliceCall ||
+					propertyUses[0].position !== 0)) ||
+			sliceUses.length !== 1
 		)
 			continue;
-		const numberCall = sliceUses[0].instruction;
+		const numberCall = sliceUses[0]!.instruction;
+		const knownNumber = fn.instructionOpcodeName(numberCall) === "callKnown";
+		const numberAttrs = fn.instructionAttributes(numberCall);
 		if (
-			fn.instructionOpcodeName(numberCall) !== "call" ||
-			instructionOperandCount(fn, numberCall) !== 3 ||
-			root(instructionOperand(fn, numberCall, 2)!) !== root(result)
+			knownNumber &&
+			(numberAttrs.operation !== "Number" ||
+				numberAttrs.construct ||
+				numberAttrs.argumentMode !== undefined)
 		)
 			continue;
-		const numberIntrinsic = specializationDefinition(
-			fn,
-			roots,
-			instructionOperand(fn, numberCall, 0)!,
+		if (
+			(!knownNumber && fn.instructionOpcodeName(numberCall) !== "call") ||
+			instructionOperandCount(fn, numberCall) !== (knownNumber ? 2 : 3) ||
+			root(instructionOperand(fn, numberCall, knownNumber ? 1 : 2)!) !== root(result)
+		)
+			continue;
+		const numberIntrinsic = knownNumber
+			? undefined
+			: specializationDefinition(fn, roots, instructionOperand(fn, numberCall, 0)!);
+		if (
+			!knownNumber &&
+			(numberIntrinsic === undefined ||
+				fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
+				fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number" ||
+				!specializationInstructionDominates(control, index, numberIntrinsic, numberCall))
+		)
+			continue;
+		const instructions = Object.freeze(
+			[property, sliceCall, start, numberIntrinsic, numberCall].filter(
+				(instruction): instruction is CoreInstructionId => instruction !== undefined,
+			),
 		);
-		if (
-			numberIntrinsic === undefined ||
-			fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
-			fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number" ||
-			!specializationInstructionDominates(control, index, numberIntrinsic, numberCall)
-		)
-			continue;
-		const instructions = Object.freeze([
-			property,
-			sliceCall,
-			start,
-			numberIntrinsic,
-			numberCall,
-		]);
 		if (new Set(instructions).size !== instructions.length) continue;
 		const ordinaryBlocks = new Set(
 			instructions.map((instruction) => fn.instructionBlock(instruction)),
@@ -3143,34 +3168,48 @@ function regexpExecProjectionCandidates(
 						root(instructionResult(fn, instruction, 0)!) === root(value)))
 			);
 		});
-	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
+	for (const call of [
+		...indexedOpcodeInstructions(fn, index, "call"),
+		...indexedOpcodeInstructions(fn, index, "callKnown"),
+	]) {
+		const knownCall = fn.instructionOpcodeName(call) === "callKnown";
+		const attributes = fn.instructionAttributes(call);
+		if (
+			knownCall &&
+			(attributes.operation !== "RegExp.prototype.exec" ||
+				attributes.construct ||
+				attributes.argumentMode !== undefined)
+		)
+			continue;
 		if (
 			fn.instructionKind(call) !== "operation" ||
-			fn.instructionOpcodeName(call) !== "call" ||
-			instructionOperandCount(fn, call) !== 3 ||
+			instructionOperandCount(fn, call) !== (knownCall ? 2 : 3) ||
 			instructionResultCount(fn, call) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
-		const property = specializationDefinition(
-			fn,
-			roots,
-			instructionOperand(fn, call, 0)!,
-		);
+		const property = knownCall
+			? undefined
+			: specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
 		if (
-			!staticPropertyNamed(program, fn, property, "exec") ||
-			instructionOperandCount(fn, property) !== 1 ||
-			instructionResultCount(fn, property) !== 1 ||
-			root(instructionOperand(fn, property, 0)!) !==
-				root(instructionOperand(fn, call, 1)!) ||
-			!specializationInstructionDominates(control, index, property, call)
+			!knownCall &&
+			(!staticPropertyNamed(program, fn, property, "exec") ||
+				instructionOperandCount(fn, property) !== 1 ||
+				instructionResultCount(fn, property) !== 1 ||
+				root(instructionOperand(fn, property, 0)!) !==
+					root(instructionOperand(fn, call, 1)!) ||
+				!specializationInstructionDominates(control, index, property, call))
 		)
 			continue;
-		const propertyUses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
+		const propertyUses =
+			property === undefined
+				? []
+				: (index.uses.get(root(instructionResult(fn, property, 0)!)) ?? []);
 		if (
-			propertyUses.length !== 1 ||
-			propertyUses[0]?.instruction !== call ||
-			propertyUses[0].position !== 0
+			!knownCall &&
+			(propertyUses.length !== 1 ||
+				propertyUses[0]?.instruction !== call ||
+				propertyUses[0].position !== 0)
 		)
 			continue;
 		const result = instructionResult(fn, call, 0)!;
@@ -3257,6 +3296,21 @@ function regexpExecProjectionCandidates(
 					instructionOperandCount(fn, consumer) === 1
 				) {
 					load.consumer = { kind: "length", property: consumer };
+					continue;
+				}
+				const attrs =
+					fn.instructionKind(consumer) === "operation"
+						? fn.instructionAttributes(consumer)
+						: {};
+				if (
+					fn.instructionOpcodeName(consumer) === "callKnown" &&
+					attrs.operation === "Number" &&
+					!attrs.construct &&
+					attrs.argumentMode === undefined &&
+					captureUses[0]!.position === 1 &&
+					instructionOperandCount(fn, consumer) === 2
+				) {
+					load.consumer = { kind: "number", call: consumer };
 					continue;
 				}
 				if (
@@ -3388,11 +3442,15 @@ function regexpExecProjectionCandidates(
 		const construct = specializationDefinition(
 			fn,
 			roots,
-			instructionOperand(fn, call, 1)!,
+			instructionOperand(fn, call, knownCall ? 0 : 1)!,
 		);
 		if (
 			construct !== undefined &&
-			fn.instructionOpcodeName(construct) === "construct" &&
+			(fn.instructionOpcodeName(construct) === "construct" ||
+				(fn.instructionOpcodeName(construct) === "callKnown" &&
+					fn.instructionAttributes(construct).construct === true &&
+					fn.instructionAttributes(construct).operation === "RegExp" &&
+					fn.instructionAttributes(construct).argumentMode === undefined)) &&
 			instructionResultCount(fn, construct) === 1
 		) {
 			const receiverUses =
@@ -3403,13 +3461,17 @@ function regexpExecProjectionCandidates(
 				instructionOperand(fn, construct, 0)!,
 			);
 			if (
-				receiverUses.length === 2 &&
+				receiverUses.length === (knownCall ? 1 : 2) &&
 				receiverUses.every(
 					({ instruction }) => instruction === property || instruction === call,
 				) &&
 				constructorIntrinsic !== undefined &&
-				fn.instructionOpcodeName(constructorIntrinsic) === "loadIntrinsic" &&
-				fn.instructionAttributes(constructorIntrinsic).intrinsic === "RegExp" &&
+				((fn.instructionOpcodeName(constructorIntrinsic) === "loadIntrinsic" &&
+					fn.instructionAttributes(constructorIntrinsic).intrinsic === "RegExp") ||
+					(fn.instructionOpcodeName(constructorIntrinsic) === "loadPrimordial" &&
+						getPrimordialCatalog().nodes[
+							fn.instructionAttributes(constructorIntrinsic).nodeIndex as number
+						]?.[0] === "RegExp")) &&
 				specializationInstructionDominates(
 					control,
 					index,
@@ -3422,7 +3484,9 @@ function regexpExecProjectionCandidates(
 			}
 		}
 
-		const claimed = new Set<CoreInstructionId>([property, call]);
+		const claimed = new Set<CoreInstructionId>(
+			property === undefined ? [call] : [property, call],
+		);
 		for (const { comparison, nullValue } of nullChecks) {
 			claimed.add(comparison);
 			claimed.add(nullValue);
@@ -3433,7 +3497,7 @@ function regexpExecProjectionCandidates(
 			const consumer = load.consumer;
 			if (consumer?.kind === "length") claimed.add(consumer.property);
 			else if (consumer?.kind === "number") {
-				claimed.add(consumer.intrinsic);
+				if (consumer.intrinsic !== undefined) claimed.add(consumer.intrinsic);
 				claimed.add(consumer.call);
 			} else if (consumer?.kind === "charCodeAtZero") {
 				claimed.add(consumer.property);
@@ -3542,8 +3606,14 @@ function regexpIteratorProjectionCandidates(
 			const captureUses = index.uses.get(root(instructionResult(fn, capture, 0)!)) ?? [];
 			const numberUse = captureUses[0];
 			const numberCall = numberUse?.instruction;
+			const knownNumber =
+				numberCall !== undefined &&
+				fn.instructionOpcodeName(numberCall) === "callKnown" &&
+				fn.instructionAttributes(numberCall).operation === "Number" &&
+				!fn.instructionAttributes(numberCall).construct &&
+				fn.instructionAttributes(numberCall).argumentMode === undefined;
 			const numberIntrinsic =
-				numberCall === undefined
+				numberCall === undefined || knownNumber
 					? undefined
 					: specializationDefinition(fn, roots, instructionOperand(fn, numberCall, 0)!);
 			if (
@@ -3555,17 +3625,24 @@ function regexpIteratorProjectionCandidates(
 				captureIndex > 0xffff ||
 				captureIndices.has(captureIndex) ||
 				captureUses.length !== 1 ||
-				numberUse?.position !== 2 ||
+				numberUse?.position !== (knownNumber ? 1 : 2) ||
 				numberCall === undefined ||
-				fn.instructionOpcodeName(numberCall) !== "call" ||
-				instructionOperandCount(fn, numberCall) !== 3 ||
-				root(instructionOperand(fn, numberCall, 2)!) !==
+				(!knownNumber && fn.instructionOpcodeName(numberCall) !== "call") ||
+				instructionOperandCount(fn, numberCall) !== (knownNumber ? 2 : 3) ||
+				root(instructionOperand(fn, numberCall, knownNumber ? 1 : 2)!) !==
 					root(instructionResult(fn, capture, 0)!) ||
-				numberIntrinsic === undefined ||
-				fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
-				fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number" ||
+				(!knownNumber &&
+					(numberIntrinsic === undefined ||
+						fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
+						fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number")) ||
 				!specializationInstructionDominates(control, index, key, capture) ||
-				!specializationInstructionDominates(control, index, numberIntrinsic, numberCall)
+				(numberIntrinsic !== undefined &&
+					!specializationInstructionDominates(
+						control,
+						index,
+						numberIntrinsic,
+						numberCall,
+					))
 			) {
 				safe = false;
 				break;
@@ -3591,7 +3668,7 @@ function regexpIteratorProjectionCandidates(
 		for (const load of loads) {
 			claimed.add(load.key);
 			claimed.add(load.instruction);
-			claimed.add(load.numberIntrinsic);
+			if (load.numberIntrinsic !== undefined) claimed.add(load.numberIntrinsic);
 			claimed.add(load.numberCall);
 		}
 		const claimedInstructions = Object.freeze([...claimed]);

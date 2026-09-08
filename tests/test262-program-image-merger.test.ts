@@ -265,7 +265,7 @@ describe("Test262 VM image merger", () => {
 				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
 			},
 			{
-				opcode: "CALL_BUILTIN",
+				opcode: "CALL_KNOWN",
 				dst: 0,
 				thisValue: encodeVmValueOperand(-1, { kind: "string", index: 0 }),
 				argumentCount: 2,
@@ -335,10 +335,10 @@ describe("Test262 VM image merger", () => {
 			valueRegisters: [1],
 		});
 		const rebasedBuiltin = rebased.find(
-			(instruction) => instruction.opcode === "CALL_BUILTIN",
+			(instruction) => instruction.opcode === "CALL_KNOWN",
 		);
-		expect(rebasedBuiltin?.opcode).toBe("CALL_BUILTIN");
-		if (rebasedBuiltin?.opcode === "CALL_BUILTIN") {
+		expect(rebasedBuiltin?.opcode).toBe("CALL_KNOWN");
+		if (rebasedBuiltin?.opcode === "CALL_KNOWN") {
 			expect(decodeVmValueOperand(rebasedBuiltin.thisValue)).toEqual({
 				kind: "string",
 				index: 2,

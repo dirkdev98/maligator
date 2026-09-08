@@ -509,8 +509,9 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
 
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
-    memset(vm->literal_method_callbacks, 0, sizeof(vm->literal_method_callbacks));
-    memset(vm->literal_method_callees, 0, sizeof(vm->literal_method_callees));
+#if !MAL_REALMS
+    memset(vm->known_primordial_values, 0, sizeof(vm->known_primordial_values));
+#endif
 #if MAL_REALMS
     vm->error_stack_marker = mal_value_new_undefined();
 #endif
@@ -1291,11 +1292,10 @@ static void mal_vm_rebase_instruction(
             }
             break;
         }
-        case MAL_OP_CALL_LITERAL_METHOD:
-        case MAL_OP_CALL_BUILTIN: {
-            in->as.call_builtin.this_value = mal_vm_rebase_value_operand(
-                in->as.call_builtin.this_value, string_base);
-            i32 *data = instruction_data + in->as.call_builtin.data_offset;
+        case MAL_OP_CALL_KNOWN: {
+            in->as.call_known.this_value = mal_vm_rebase_value_operand(
+                in->as.call_known.this_value, string_base);
+            i32 *data = instruction_data + in->as.call_known.data_offset;
             for (i32 i = 0; i < data[0]; i++) {
                 data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
             }
@@ -2448,6 +2448,9 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
+            case MAL_OP_LOAD_PRIMORDIAL:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_load_primordial(frame, instruction));
+                break;
             case MAL_OP_LOAD_INTRINSIC:
                 registers[instruction->as.load_intrinsic.dst] =
                     vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
@@ -3006,37 +3009,9 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
                 break;
             }
-            case MAL_OP_CALL_LITERAL_METHOD:
-                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_literal_method(frame, instruction));
+            case MAL_OP_CALL_KNOWN:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_known(frame, instruction));
                 break;
-            case MAL_OP_CALL_BUILTIN: {
-                MalDirectBuiltinOp operation =
-                    (MalDirectBuiltinOp) instruction->as.call_builtin.operation;
-                if (operation >= MAL_DIRECT_BUILTIN_MAP_GET &&
-                    operation <= MAL_DIRECT_BUILTIN_SET_DELETE) {
-                    mal_op_call_builtin_exact_collection(frame, instruction);
-                    MAL_VM_INTERPRETER_DIRECT_LEAF();
-                    if (!mal_gc_poll) continue;
-                    MalVmInterpreterActivation activation =
-                        mal_vm_interpreter_activation(vm, frame);
-                    mal_vm_prepare_interpreter_safepoint_except(
-                        frame,
-                        instruction_pointer - 1,
-                        instruction->as.call_builtin.dst);
-                    frame->instruction_pointer = instruction_pointer;
-                    frame->gc_safepoint_ip = instruction_pointer - 1;
-                    MAL_PERF_COUNT(interpreter_state_syncs);
-                    MAL_PERF_COUNT(interpreter_boundary_dispatches);
-                    mal_gc_safepoint(vm);
-                    if (mal_vm_interpreter_activation_is_current(vm, activation)) {
-                        MAL_VM_INTERPRETER_RELOAD_AND_CONTINUE(activation);
-                    }
-                    break;
-                }
-                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
-                    mal_op_call_builtin(frame, instruction));
-                break;
-            }
             case MAL_OP_CONSTRUCT: {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct(frame, instruction));
                 break;
@@ -4662,7 +4637,7 @@ MalCompletion mal_vm_construct_direct(
     return completion;
 }
 
-MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target, MalNativeFunctionCallback exact_callback) {
 #if MAL_PROFILE && MAL_PERF_STATS
     i32 saved_profile_site = vm->profile_current_site_id;
 #endif
@@ -4719,8 +4694,8 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         MalNativeFunctionObject *native_function =
             mal_value_to_native_function_object(resolution.callee);
         MAL_PROFILE_NATIVE_CALL(vm, native_function);
-        MalNativeFunctionCallback callback =
-            mal_native_function_object_callback(native_function);
+        MalNativeFunctionCallback callback = exact_callback != nullptr
+            ? exact_callback : mal_native_function_object_callback(native_function);
         MalCalleeRoots ncr;
         mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), effective_new_target,
                                   resolution.callee, resolution.args, resolution.arg_count);
@@ -4907,6 +4882,14 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     vm->profile_current_site_id = saved_profile_site;
 #endif
     return completion;
+}
+
+MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
+    return mal_vm_construct_with_native_target(vm, callee, args, arg_count, new_target, nullptr);
+}
+
+MalCompletion mal_vm_construct_exact_native(MalVm *vm, MalNativeFunctionCallback callback, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
+    return mal_vm_construct_with_native_target(vm, callee, args, arg_count, new_target, callback);
 }
 
 MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {

@@ -773,3 +773,5 @@ void mal_builtin_number_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_IS_NAN] = mal_value_from_native_function_object(global_is_nan);
     vm->intrinsics[MAL_INTRINSIC_IS_FINITE] = mal_value_from_native_function_object(global_is_finite);
 }
+
+#include "generated/known_native_builtin_number_c.inc"

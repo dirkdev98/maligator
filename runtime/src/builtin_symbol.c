@@ -257,3 +257,5 @@ void mal_builtin_symbol_install(MalVm *vm) {
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 }
+
+#include "generated/known_native_builtin_symbol_c.inc"

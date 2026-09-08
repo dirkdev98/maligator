@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 42u
+#define WIRE_VERSION 44u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -133,6 +133,9 @@ static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR,
     MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR,
     MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR,
+    MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR,
+    MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR,
     MAL_INTRINSIC_STRING_CONSTRUCTOR,
     MAL_INTRINSIC_NUMBER_CONSTRUCTOR,
     MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR,
@@ -739,29 +742,22 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             }
             return;
         }
-        case WIRE_CALL_LITERAL_METHOD: {
-            o->opcode = MAL_OP_CALL_LITERAL_METHOD;
-            o->as.call_builtin.dst = rd_i32(r);
-            o->as.call_builtin.this_value = rd_i32(r);
+        case WIRE_CALL_KNOWN: {
+            o->opcode = MAL_OP_CALL_KNOWN;
+            o->as.call_known.dst = rd_i32(r);
+            o->as.call_known.this_value = rd_i32(r);
             i32 count = rd_i32(r);
-            o->as.call_builtin.data_offset = rd_side_single(r, side_data, count);
-            u32 method = rd_u32(r);
-            if (method >= MAL_LITERAL_METHOD_COUNT) r->ok = false;
-            o->as.call_builtin.operation = (i32) method;
-            return;
-        }
-        case WIRE_CALL_BUILTIN: {
-            o->opcode = MAL_OP_CALL_BUILTIN;
-            o->as.call_builtin.dst = rd_i32(r);
-            o->as.call_builtin.this_value = rd_i32(r);
-            i32 count = rd_i32(r);
-            o->as.call_builtin.data_offset = rd_side_single(r, side_data, count);
-            u8 idx = rd_u8(r);
-            if (r->ok && idx < countof(wire_direct_builtin_ops)) {
-                o->as.call_builtin.operation = wire_direct_builtin_ops[idx];
-            } else {
-                r->ok = false;
-            }
+            o->as.call_known.data_offset = rd_side_single(r, side_data, count);
+            u32 operation = rd_u32(r);
+            u8 flags = rd_u8(r), specialization = rd_u8(r);
+            if (operation >= MAL_KNOWN_OPERATION_COUNT || flags > 9 || ((flags >> 1) != 0 && count == 0) || (specialization != 0 && flags != 0) || specialization > countof(wire_direct_builtin_ops)) r->ok = false;
+            static const i32 specialization_operations[] = {
+#define MAL_KNOWN_SPECIALIZATION(index, operation) operation,
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_SPECIALIZATION
+            };
+            if (specialization != 0 && (specialization > countof(specialization_operations) || specialization_operations[specialization - 1] != (i32) operation)) r->ok = false;
+            o->as.call_known.operation = ((i32) operation << 4) | flags;
             return;
         }
         case WIRE_CONSTRUCT: {
@@ -808,6 +804,14 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.await.value_dst = rd_i32(r);
             o->as.await.mode_dst = rd_i32(r);
             return;
+        case WIRE_LOAD_PRIMORDIAL: {
+            o->opcode = MAL_OP_LOAD_PRIMORDIAL;
+            o->as.load_intrinsic.dst = rd_i32(r);
+            u32 node = rd_u32(r);
+            if (node >= MAL_KNOWN_PRIMORDIAL_COUNT) r->ok = false;
+            o->as.load_intrinsic.intrinsic = (i32) node;
+            return;
+        }
         case WIRE_LOAD_INTRINSIC: {
             o->opcode = MAL_OP_LOAD_INTRINSIC;
             o->as.load_intrinsic.dst = rd_i32(r);
@@ -1332,11 +1336,11 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
         MAL_WRITES_DST(MAL_OP_CALL, call);
-        MAL_WRITES_DST(MAL_OP_CALL_BUILTIN, call_builtin);
-        MAL_WRITES_DST(MAL_OP_CALL_LITERAL_METHOD, call_builtin);
+        MAL_WRITES_DST(MAL_OP_CALL_KNOWN, call_known);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
         MAL_WRITES_DST(MAL_OP_CATCH, caught);
         MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
+        MAL_WRITES_DST(MAL_OP_LOAD_PRIMORDIAL, load_intrinsic);
         MAL_WRITES_DST(MAL_OP_LOAD_CAPTURED, load_captured);
         MAL_WRITES_DST(MAL_OP_GUARD_FUNCTION_INDEX, guard_function_index);
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_INDEX, load_global_index);
@@ -2305,11 +2309,11 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
-            } else if ((instruction->opcode == MAL_OP_CALL_BUILTIN || instruction->opcode == MAL_OP_CALL_LITERAL_METHOD)) {
+            } else if ((instruction->opcode == MAL_OP_CALL_KNOWN)) {
                 const i32 *data =
-                    &fn->instruction_data[instruction->as.call_builtin.data_offset];
+                    &fn->instruction_data[instruction->as.call_known.data_offset];
                 if (!mal_loaded_value_operand_valid(
-                        fn, string_count, instruction->as.call_builtin.this_value)) {
+                        fn, string_count, instruction->as.call_known.this_value)) {
                     r.ok = false;
                 }
                 for (i32 argument = 0; r.ok && argument < data[0]; argument++) {

@@ -45,7 +45,7 @@ const MULTI_REGION_SOURCE = `globalThis.run = function run(value, separator) {
 	}
 	const fields = value.split(";");
 	const match = /(\\d+)x/.exec(value);
-	return total + Number(fields[1].slice(2)) + fields.length +
+	return total + Number(fields[3].slice(2)) + fields.length +
 		(match === null ? 0 : Number(match[1]));
 };
 globalThis.iterate = function iterate(values) {
@@ -186,7 +186,7 @@ describe("Core plan admission modes", () => {
 			"iterator-result-virtualization",
 			"numeric-fusion",
 		]) {
-			expect(kinds.has(expected as never)).toBe(true);
+			expect(kinds.has(expected as never), expected).toBe(true);
 		}
 		expect(locked.length).toBeGreaterThan(0);
 		for (const selection of locked) expect(selection.admission.mode).toBe("stable");

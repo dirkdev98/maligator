@@ -1237,3 +1237,5 @@ void mal_builtin_error_install(MalVm *vm) {
     mal_builtin_error_install_kind(vm, "AggregateError", MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE, error_prototype, error_constructor, 2, mal_builtin_aggregate_error_constructor);
     mal_builtin_error_install_kind(vm, "SuppressedError", MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR, MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE, error_prototype, error_constructor, 3, mal_builtin_suppressed_error_constructor);
 }
+
+#include "generated/known_native_builtin_error_c.inc"

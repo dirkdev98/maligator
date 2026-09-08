@@ -22,7 +22,7 @@ describe("static-value baseline witnesses", () => {
 				expect(included.structure.pooledMaterializations).toBe(1);
 				expect(included.structure.allocations).toBe(1);
 				expect(included.c.source).toContain("mal_vm_instantiate_literal_template");
-				expect(included.c.source).toContain("mal_vm_call_literal_method");
+				expect(included.c.source).toContain("mal_vm_call_known");
 				expect(
 					included.core.some(
 						(operation) => operation.opcode === "instantiateLiteralTemplate",

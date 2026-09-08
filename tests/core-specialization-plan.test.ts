@@ -373,7 +373,7 @@ describe("late Core specialization plan", () => {
 		expect(source).toMatch(/coreSpecializationRecipePayloadAt/u);
 	});
 
-	it("plans direct split regions from the canonical callBuiltin producer", () => {
+	it("plans direct split regions from the canonical callKnown producer", () => {
 		for (const [kind, source] of [
 			[
 				"string-split-projection",
@@ -423,7 +423,7 @@ describe("late Core specialization plan", () => {
 				compilation.program
 					.function(selection.function)
 					.instructionOpcodeName(split.call),
-			).toBe("callBuiltin");
+			).toBe("callKnown");
 		}
 	});
 

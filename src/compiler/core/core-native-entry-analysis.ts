@@ -55,7 +55,8 @@ export function analyzeCoreNativeEntry(
 			if (
 				fields !== undefined &&
 				(fields.loads.some((load) => load.instruction === instruction) ||
-					fn.instructionOpcodeName(instruction) === "call")
+					fn.instructionOpcodeName(instruction) === "call" ||
+					fn.instructionOpcodeName(instruction) === "callKnown")
 			)
 				return COMPILER_VALUE_KIND_NUMBER;
 			if (

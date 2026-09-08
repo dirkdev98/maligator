@@ -2366,3 +2366,5 @@ void mal_builtin_object_install(MalVm *vm) {
         "set __proto__", 1, mal_builtin_object_proto_setter,
         MAL_PROPERTY_CONFIGURABLE);
 }
+
+#include "generated/known_native_builtin_object_c.inc"

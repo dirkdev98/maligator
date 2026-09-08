@@ -326,7 +326,7 @@ function immediateOnlyInstructions(
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const embeddable =
 				!protectedInstructions.has(instruction) &&
-				["call", "callBuiltin", "callLiteralMethod", "construct"].includes(
+				["call", "callKnown", "construct"].includes(
 					fn.instructionOpcodeName(instruction),
 				);
 			const inputStart = kernel.instructionOperandStart(instruction);
@@ -445,10 +445,7 @@ function rebuildOperation(
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	if (
 		allowImmediateOperands &&
-		(opcode === "call" ||
-			opcode === "callBuiltin" ||
-			opcode === "callLiteralMethod" ||
-			opcode === "construct")
+		(opcode === "call" || opcode === "callKnown" || opcode === "construct")
 	) {
 		for (let index = 0; index < inputCount; index++) {
 			const input = kernel.operandAt(inputStart + index);
@@ -845,7 +842,7 @@ function lowerCoreSpecializations(
 				cursor.primitiveStringLengths.map(requireInstruction);
 			if (
 				(property !== undefined && property.type !== "loadPropertyStatic") ||
-				(call.type !== "call" && call.type !== "callBuiltin") ||
+				(call.type !== "call" && call.type !== "callKnown") ||
 				length.type !== "loadPropertyStatic" ||
 				compare.type !== "binary" ||
 				branch.type !== "jumpIf" ||
@@ -907,7 +904,7 @@ function lowerCoreSpecializations(
 				split.property === undefined ? undefined : requireInstruction(split.property);
 			const separator = requireInstruction(split.separator);
 			if (
-				(call.type !== "call" && call.type !== "callBuiltin") ||
+				(call.type !== "call" && call.type !== "callKnown") ||
 				(property !== undefined && property.type !== "loadPropertyStatic") ||
 				separator.type !== "createString"
 			) {
@@ -961,8 +958,12 @@ function lowerCoreSpecializations(
 				"regexpExecProjection",
 			);
 			const call = requireInstruction(regexp.call);
-			const property = requireInstruction(regexp.property);
-			if (call.type !== "call" || property.type !== "loadPropertyStatic") {
+			const property =
+				regexp.property === undefined ? undefined : requireInstruction(regexp.property);
+			if (
+				(call.type !== "call" && call.type !== "callKnown") ||
+				(property !== undefined && property.type !== "loadPropertyStatic")
+			) {
 				throw new Error(`Core RegExp.exec plan ${id} lost its call`);
 			}
 			const nullChecks = regexp.nullChecks.map((check) => {
@@ -982,8 +983,9 @@ function lowerCoreSpecializations(
 							);
 							const construct = requireInstruction(regexp.lockedLiteral.construct);
 							if (
-								constructorIntrinsic.type !== "loadIntrinsic" ||
-								construct.type !== "construct"
+								(constructorIntrinsic.type !== "loadIntrinsic" &&
+									constructorIntrinsic.type !== "loadPrimordial") ||
+								(construct.type !== "construct" && construct.type !== "callKnown")
 							) {
 								throw new Error(`Core RegExp.exec plan ${id} lost its literal`);
 							}
@@ -1016,9 +1018,15 @@ function lowerCoreSpecializations(
 					};
 				}
 				if (consumer.kind === "number") {
-					const intrinsic = requireInstruction(consumer.intrinsic);
+					const intrinsic =
+						consumer.intrinsic === undefined
+							? undefined
+							: requireInstruction(consumer.intrinsic);
 					const consumerCall = requireInstruction(consumer.call);
-					if (intrinsic.type !== "loadIntrinsic" || consumerCall.type !== "call") {
+					if (
+						(intrinsic !== undefined && intrinsic.type !== "loadIntrinsic") ||
+						(consumerCall.type !== "call" && consumerCall.type !== "callKnown")
+					) {
 						throw new Error(`Core RegExp.exec plan ${id} lost Number`);
 					}
 					return {
@@ -1130,13 +1138,16 @@ function lowerCoreSpecializations(
 			const loads = regexp.loads.map((load) => {
 				const instruction = requireInstruction(load.instruction);
 				const key = requireInstruction(load.key);
-				const numberIntrinsic = requireInstruction(load.numberIntrinsic);
+				const numberIntrinsic =
+					load.numberIntrinsic === undefined
+						? undefined
+						: requireInstruction(load.numberIntrinsic);
 				const numberCall = requireInstruction(load.numberCall);
 				if (
 					instruction.type !== "loadProperty" ||
 					key.type !== "createNumber" ||
-					numberIntrinsic.type !== "loadIntrinsic" ||
-					numberCall.type !== "call"
+					(numberIntrinsic !== undefined && numberIntrinsic.type !== "loadIntrinsic") ||
+					(numberCall.type !== "call" && numberCall.type !== "callKnown")
 				) {
 					throw new Error(`Core RegExp iterator plan ${id} lost a capture`);
 				}
@@ -1175,17 +1186,21 @@ function lowerCoreSpecializations(
 				"string-slice-number",
 				"stringSliceNumber",
 			);
-			const property = requireInstruction(slice.property);
+			const property =
+				slice.property === undefined ? undefined : requireInstruction(slice.property);
 			const sliceCall = requireInstruction(slice.sliceCall);
 			const start = requireInstruction(slice.sliceStartInstruction);
-			const numberIntrinsic = requireInstruction(slice.numberIntrinsic);
+			const numberIntrinsic =
+				slice.numberIntrinsic === undefined
+					? undefined
+					: requireInstruction(slice.numberIntrinsic);
 			const numberCall = requireInstruction(slice.numberCall);
 			if (
-				property.type !== "loadPropertyStatic" ||
-				sliceCall.type !== "call" ||
+				(property !== undefined && property.type !== "loadPropertyStatic") ||
+				(sliceCall.type !== "call" && sliceCall.type !== "callKnown") ||
 				(start.type !== "createNumber" && start.type !== "createF64") ||
-				numberIntrinsic.type !== "loadIntrinsic" ||
-				numberCall.type !== "call"
+				(numberIntrinsic !== undefined && numberIntrinsic.type !== "loadIntrinsic") ||
+				(numberCall.type !== "call" && numberCall.type !== "callKnown")
 			) {
 				throw new Error(`Core String.slice plan ${id} lost its producers`);
 			}

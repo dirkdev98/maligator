@@ -368,8 +368,7 @@ function cloneInstruction(
 					rebaseVmValueOperand(operand, base.string),
 				),
 			};
-		case "CALL_LITERAL_METHOD":
-		case "CALL_BUILTIN":
+		case "CALL_KNOWN":
 			return {
 				...instruction,
 				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
@@ -428,6 +427,7 @@ function cloneInstruction(
 		case "YIELD":
 		case "TERMINAL_YIELD":
 		case "AWAIT":
+		case "LOAD_PRIMORDIAL":
 		case "LOAD_INTRINSIC":
 		case "ENV_PUSH":
 		case "ENV_COPY":

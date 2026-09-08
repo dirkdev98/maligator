@@ -2818,3 +2818,5 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, u8_prototype, "setFromBase64", 1, mal_ta_set_from_base64);
     mal_intrinsic_define_method_n(vm, u8_prototype, "setFromHex", 1, mal_ta_set_from_hex);
 }
+
+#include "generated/known_native_builtin_typed_array_c.inc"

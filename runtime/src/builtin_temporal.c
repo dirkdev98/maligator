@@ -5930,3 +5930,5 @@ void mal_builtin_temporal_install(MalVm *vm) {
 void mal_builtin_temporal_install(MalVm *vm) { (void) vm; }
 
 #endif
+
+#include "generated/known_native_builtin_temporal_c.inc"

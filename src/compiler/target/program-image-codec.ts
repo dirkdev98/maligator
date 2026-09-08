@@ -1,5 +1,7 @@
 import type { PlatformData } from "../../platform/catalog.ts";
-import { literalPrototypeMethods } from "../shared/builtin-registry.ts";
+import { knownOperationFlags, knownArgumentModes } from "../shared/known-operations.ts";
+import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -25,7 +27,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 42;
+export const WIRE_VERSION = 44;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -204,6 +206,9 @@ export const WIRE_INTRINSICS = [
 	"URIError",
 	"EvalError",
 	"AggregateError",
+	"DisposableStack",
+	"AsyncDisposableStack",
+	"SuppressedError",
 	"String",
 	"Number",
 	"Boolean",
@@ -874,19 +879,14 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.right);
 			w.u8(mathBinaryNumberTag(i.operation));
 			return;
-		case "CALL_LITERAL_METHOD":
+		case "CALL_KNOWN":
 			w.i32(i.dst);
 			w.i32(i.thisValue);
 			w.i32(i.argumentCount);
 			w.i32Array(i.arguments);
-			w.u32(i.methodIndex);
-			return;
-		case "CALL_BUILTIN":
-			w.i32(i.dst);
-			w.i32(i.thisValue);
-			w.i32(i.argumentCount);
-			w.i32Array(i.arguments);
-			w.u8(directBuiltinTag(i.operation));
+			w.u32(knownOperationIndex(i.operation)!);
+			w.u8(knownOperationFlags(i));
+			w.u8(i.specialized === undefined ? 0 : directBuiltinTag(i.specialized) + 1);
 			return;
 		case "CONSTRUCT":
 			w.i32(i.dst);
@@ -918,6 +918,10 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.awaitedSrc);
 			w.i32(i.valueDst);
 			w.i32(i.modeDst);
+			return;
+		case "LOAD_PRIMORDIAL":
+			w.i32(i.dst);
+			w.u32(i.nodeIndex);
 			return;
 		case "LOAD_INTRINSIC": {
 			const tag = INTRINSIC_TAG.get(i.intrinsic);
@@ -1701,36 +1705,26 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				operation,
 			};
 		}
-		case "CALL_LITERAL_METHOD": {
-			const dst = r.i32();
-			const thisValue = r.i32();
-			const argumentCount = r.i32();
-			const arguments_ = r.i32Array();
-			const methodIndex = r.u32();
+		case "CALL_KNOWN": {
+			const dst = r.i32(),
+				thisValue = r.i32(),
+				argumentCount = r.i32(),
+				arguments_ = r.i32Array();
+			const operation = knownOperations()[r.u32()]?.id,
+				flags = r.u8(),
+				specialization = r.u8();
+			const construct = (flags & 1) !== 0,
+				argumentMode = knownArgumentModes[(flags >> 1) - 1];
+			const specialized = VM_DIRECT_BUILTIN_OPERATIONS[specialization - 1];
 			if (
-				literalPrototypeMethods[methodIndex] === undefined ||
-				argumentCount !== arguments_.length
-			) {
-				throw new RangeError("program-image-codec: invalid direct builtin call");
-			}
-			return {
-				opcode,
-				dst,
-				thisValue,
-				argumentCount,
-				arguments: arguments_,
-				methodIndex,
-			};
-		}
-		case "CALL_BUILTIN": {
-			const dst = r.i32();
-			const thisValue = r.i32();
-			const argumentCount = r.i32();
-			const arguments_ = r.i32Array();
-			const operation = VM_DIRECT_BUILTIN_OPERATIONS[r.u8()];
-			if (operation === undefined || argumentCount !== arguments_.length) {
-				throw new RangeError("program-image-codec: invalid direct builtin call");
-			}
+				operation === undefined ||
+				argumentCount !== arguments_.length ||
+				flags > 9 ||
+				(argumentMode !== undefined && argumentCount === 0) ||
+				(specialization !== 0 &&
+					(specialized !== operation || construct || argumentMode !== undefined))
+			)
+				throw new RangeError("Invalid known operation");
 			return {
 				opcode,
 				dst,
@@ -1738,6 +1732,9 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				argumentCount,
 				arguments: arguments_,
 				operation,
+				...(construct ? { construct: true } : {}),
+				...(argumentMode === undefined ? {} : { argumentMode }),
+				...(specialized === undefined ? {} : { specialized }),
 			};
 		}
 		case "CONSTRUCT": {
@@ -1777,6 +1774,13 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, yieldedSrc: r.i32() };
 		case "AWAIT":
 			return { opcode, awaitedSrc: r.i32(), valueDst: r.i32(), modeDst: r.i32() };
+		case "LOAD_PRIMORDIAL": {
+			const dst = r.i32(),
+				nodeIndex = r.u32();
+			if (getPrimordialCatalog().nodes[nodeIndex] === undefined)
+				throw new RangeError("Invalid primordial identity");
+			return { opcode, dst, nodeIndex };
+		}
 		case "LOAD_INTRINSIC": {
 			const dst = r.i32();
 			const intrinsic = WIRE_INTRINSICS[r.u16()];

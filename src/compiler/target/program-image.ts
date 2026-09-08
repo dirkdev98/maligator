@@ -16,6 +16,7 @@ import type {
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -2693,7 +2694,10 @@ function lowerExecutionFunctionToNativePlan(
 			case "regexp-exec-projection": {
 				const callIp = resolvedAnchors[0];
 				const firstLoadIp = resolvedAnchors[1];
-				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
+				const propertyIp =
+					region.property === undefined
+						? -1
+						: instructionIndexByTargetInstruction.get(region.property);
 				const nullChecks = region.nullChecks.map((check) => ({
 					comparisonIp: instructionIndexByTargetInstruction.get(check.comparison),
 					nullIp: instructionIndexByTargetInstruction.get(check.nullValue),
@@ -2745,9 +2749,12 @@ function lowerExecutionFunctionToNativePlan(
 										: consumer.kind === "number"
 											? {
 													kind: consumer.kind,
-													intrinsicIp: instructionIndexByTargetInstruction.get(
-														consumer.intrinsic,
-													),
+													intrinsicIp:
+														consumer.intrinsic === undefined
+															? -1
+															: instructionIndexByTargetInstruction.get(
+																	consumer.intrinsic,
+																),
 													callIp: instructionIndexByTargetInstruction.get(consumer.call),
 												}
 											: {
@@ -2837,13 +2844,18 @@ function lowerExecutionFunctionToNativePlan(
 					? "authority-invariant"
 					: "runtime-guarded";
 				let operationsValid =
-					loweredCall?.opcode === "CALL" &&
+					(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_KNOWN") &&
 					aliases.has(loweredCall.dst) &&
 					loweredCall.arguments.length === 1 &&
-					guardedBuiltinCallOf(loweredCall)?.operation === "RegExp.prototype.exec" &&
-					staticPropertyMatches(loweredProperty, loweredCall.thisValue, "exec") &&
-					loweredProperty.dst === loweredCall.callee &&
-					loweredProperty.object === loweredCall.thisValue;
+					(loweredCall.opcode === "CALL_KNOWN"
+						? loweredCall.operation === "RegExp.prototype.exec" &&
+							!loweredCall.construct &&
+							loweredCall.argumentMode === undefined &&
+							resolvedPropertyIp === -1
+						: guardedBuiltinCallOf(loweredCall)?.operation === "RegExp.prototype.exec" &&
+							staticPropertyMatches(loweredProperty, loweredCall.thisValue, "exec") &&
+							loweredProperty.dst === loweredCall.callee);
+
 				for (const check of resolvedNullChecks) {
 					const comparison = instructions[check.comparisonIp];
 					const nullValue = instructions[check.nullIp];
@@ -2906,14 +2918,20 @@ function lowerExecutionFunctionToNativePlan(
 						const intrinsic = instructions[consumer.intrinsicIp];
 						const call = instructions[consumer.callIp];
 						const argument =
-							call?.opcode === "CALL" && call.arguments[0] !== undefined
+							(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
+							call.arguments[0] !== undefined
 								? decodeVmValueOperand(call.arguments[0])
 								: undefined;
 						operationsValid &&=
-							intrinsic?.opcode === "LOAD_INTRINSIC" &&
-							intrinsic.intrinsic === "Number" &&
-							call?.opcode === "CALL" &&
-							call.callee === intrinsic.dst &&
+							(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
+							(call.opcode === "CALL_KNOWN"
+								? call.operation === "Number" &&
+									!call.construct &&
+									call.argumentMode === undefined &&
+									consumer.intrinsicIp === -1
+								: intrinsic?.opcode === "LOAD_INTRINSIC" &&
+									intrinsic.intrinsic === "Number" &&
+									call.callee === intrinsic.dst) &&
 							call.arguments.length === 1 &&
 							argument?.kind === "register" &&
 							argument.register === load.dst;
@@ -2950,13 +2968,30 @@ function lowerExecutionFunctionToNativePlan(
 					}
 				}
 				if (resolvedLockedLiteral !== undefined) {
+					const intrinsic = instructions[resolvedLockedLiteral.constructorIntrinsicIp];
+					const construct = instructions[resolvedLockedLiteral.constructIp];
 					operationsValid &&=
 						guard.dependencies.every((dependency) => dependency.kind === "world") &&
-						instructions[resolvedLockedLiteral.constructorIntrinsicIp]?.opcode ===
-							"LOAD_INTRINSIC" &&
-						instructions[resolvedLockedLiteral.constructIp]?.opcode === "CONSTRUCT";
+						((intrinsic?.opcode === "LOAD_INTRINSIC" &&
+							intrinsic.intrinsic === "RegExp") ||
+							(intrinsic?.opcode === "LOAD_PRIMORDIAL" &&
+								getPrimordialCatalog().nodes[intrinsic.nodeIndex]?.[0] === "RegExp")) &&
+						(construct?.opcode === "CONSTRUCT"
+							? construct.callee === intrinsic.dst
+							: construct?.opcode === "CALL_KNOWN" &&
+								construct.operation === "RegExp" &&
+								construct.construct === true &&
+								construct.argumentMode === undefined &&
+								construct.thisValue === intrinsic.dst) &&
+						(construct?.opcode === "CONSTRUCT" || construct?.opcode === "CALL_KNOWN") &&
+						construct.dst ===
+							(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_KNOWN"
+								? loweredCall.thisValue
+								: -1);
 				}
-				const payloadIps = new Set<number>([resolvedPropertyIp, callIp!]);
+				const payloadIps = new Set<number>(
+					[resolvedPropertyIp, callIp!].filter((ip) => ip >= 0),
+				);
 				for (const check of resolvedNullChecks) {
 					payloadIps.add(check.comparisonIp);
 					payloadIps.add(check.nullIp);
@@ -2975,7 +3010,7 @@ function lowerExecutionFunctionToNativePlan(
 						payloadIps.add(consumer.callIp);
 						if (consumer.zeroIp !== undefined) payloadIps.add(consumer.zeroIp);
 					} else if (consumer?.kind === "number") {
-						payloadIps.add(consumer.intrinsicIp);
+						if (consumer.intrinsicIp >= 0) payloadIps.add(consumer.intrinsicIp);
 						payloadIps.add(consumer.callIp);
 					} else if (consumer?.kind === "asciiCaseLength") {
 						payloadIps.add(consumer.upperPropertyIp);
@@ -2988,7 +3023,7 @@ function lowerExecutionFunctionToNativePlan(
 				}
 				if (
 					!operationsValid ||
-					loweredCall?.opcode !== "CALL" ||
+					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_KNOWN") ||
 					!vmPropertyPlacementHolds(
 						region.propertyPlacement,
 						resolvedPropertyIp,
@@ -3037,7 +3072,7 @@ function lowerExecutionFunctionToNativePlan(
 					...(resolvedLockedLiteral === undefined
 						? {}
 						: { lockedLiteral: resolvedLockedLiteral }),
-					callee: loweredCall.callee,
+					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
 					input: loweredCall.arguments[0]!,
 					result: loweredCall.dst,
@@ -3058,9 +3093,10 @@ function lowerExecutionFunctionToNativePlan(
 					keyIp: instructionIndexByTargetInstruction.get(load.key),
 					captureIndex: load.captureIndex,
 					dst: load.instruction.registers[0],
-					numberIntrinsicIp: instructionIndexByTargetInstruction.get(
-						load.numberIntrinsic,
-					),
+					numberIntrinsicIp:
+						load.numberIntrinsic === undefined
+							? -1
+							: instructionIndexByTargetInstruction.get(load.numberIntrinsic),
 					numberCallIp: instructionIndexByTargetInstruction.get(load.numberCall),
 				}));
 				if (
@@ -3107,7 +3143,8 @@ function lowerExecutionFunctionToNativePlan(
 					const intrinsic = instructions[load.numberIntrinsicIp];
 					const numberCall = instructions[load.numberCallIp];
 					const argument =
-						numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+						(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+						numberCall.arguments[0] !== undefined
 							? decodeVmValueOperand(numberCall.arguments[0])
 							: undefined;
 					operationsValid &&=
@@ -3120,10 +3157,15 @@ function lowerExecutionFunctionToNativePlan(
 						Number.isInteger(load.captureIndex) &&
 						load.captureIndex > 0 &&
 						load.captureIndex <= 0xffff &&
-						intrinsic?.opcode === "LOAD_INTRINSIC" &&
-						intrinsic.intrinsic === "Number" &&
-						numberCall?.opcode === "CALL" &&
-						numberCall.callee === intrinsic.dst &&
+						(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+						(numberCall.opcode === "CALL_KNOWN"
+							? numberCall.operation === "Number" &&
+								!numberCall.construct &&
+								numberCall.argumentMode === undefined &&
+								load.numberIntrinsicIp === -1
+							: intrinsic?.opcode === "LOAD_INTRINSIC" &&
+								intrinsic.intrinsic === "Number" &&
+								numberCall.callee === intrinsic.dst) &&
 						numberCall.arguments.length === 1 &&
 						argument?.kind === "register" &&
 						argument.register === load.dst;
@@ -3132,7 +3174,7 @@ function lowerExecutionFunctionToNativePlan(
 				for (const load of resolvedLoads) {
 					payloadIps.add(load.ip);
 					payloadIps.add(load.keyIp);
-					payloadIps.add(load.numberIntrinsicIp);
+					if (load.numberIntrinsicIp >= 0) payloadIps.add(load.numberIntrinsicIp);
 					payloadIps.add(load.numberCallIp);
 				}
 				if (
@@ -3187,13 +3229,17 @@ function lowerExecutionFunctionToNativePlan(
 			case "string-slice-number": {
 				const sliceCallIp = resolvedAnchors[0];
 				const numberCallIp = resolvedAnchors[1];
-				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
+				const propertyIp =
+					region.property === undefined
+						? -1
+						: instructionIndexByTargetInstruction.get(region.property);
 				const sliceStartIp = instructionIndexByTargetInstruction.get(
 					region.sliceStartInstruction,
 				);
-				const numberIntrinsicIp = instructionIndexByTargetInstruction.get(
-					region.numberIntrinsic,
-				);
+				const numberIntrinsicIp =
+					region.numberIntrinsic === undefined
+						? -1
+						: instructionIndexByTargetInstruction.get(region.numberIntrinsic);
 				if (
 					region.representation !== "primitive-string-span-number" ||
 					region.license.materialization !== "none" ||
@@ -3212,50 +3258,64 @@ function lowerExecutionFunctionToNativePlan(
 				const numberIntrinsic = instructions[numberIntrinsicIp];
 				const numberCall = instructions[numberCallIp!];
 				const numberArgument =
-					numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+					(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+					numberCall.arguments[0] !== undefined
 						? decodeVmValueOperand(numberCall.arguments[0])
 						: undefined;
 				const expectedBuiltinIdentities =
-					sliceCall?.opcode === "CALL" &&
-					guardedBuiltinCallOf(sliceCall) !== undefined &&
-					vmGuardIsWorldInvariant(guardedBuiltinCallOf(sliceCall)!.guard)
+					sliceCall?.opcode === "CALL_KNOWN" ||
+					(sliceCall?.opcode === "CALL" &&
+						guardedBuiltinCallOf(sliceCall) !== undefined &&
+						vmGuardIsWorldInvariant(guardedBuiltinCallOf(sliceCall)!.guard))
 						? "authority-invariant"
 						: "runtime-guarded";
-				const payloadIps = new Set([
-					propertyIp,
-					sliceCallIp!,
-					sliceStartIp,
-					numberIntrinsicIp,
-					numberCallIp!,
-				]);
+				const payloadIps = new Set(
+					[
+						propertyIp,
+						sliceCallIp!,
+						sliceStartIp,
+						numberIntrinsicIp,
+						numberCallIp!,
+					].filter((ip) => ip >= 0),
+				);
 				if (
-					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
-						"slice" ||
-					sliceCall?.opcode !== "CALL" ||
-					!vmCallProvesBuiltin(
-						(() => {
-							const plan = nativePlanOf(sliceCall);
-							return plan?.kind === "call" ? plan : undefined;
-						})(),
-						"String.prototype.slice",
-						{
-							lowering: "number-consumer-fusion",
-							result: "string",
-							effects: ["coerce", "allocate", "throw", "safepoint"],
-						},
-					) ||
+					(sliceCall?.opcode !== "CALL" && sliceCall?.opcode !== "CALL_KNOWN") ||
+					(sliceCall.opcode === "CALL_KNOWN"
+						? sliceCall.operation !== "String.prototype.slice" ||
+							sliceCall.construct ||
+							sliceCall.argumentMode !== undefined ||
+							propertyIp !== -1
+						: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+							String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+								"slice" ||
+							property.dst !== sliceCall.callee ||
+							property.object !== sliceCall.thisValue ||
+							!vmCallProvesBuiltin(
+								(() => {
+									const plan = nativePlanOf(sliceCall);
+									return plan?.kind === "call" ? plan : undefined;
+								})(),
+								"String.prototype.slice",
+								{
+									lowering: "number-consumer-fusion",
+									result: "string",
+									effects: ["coerce", "allocate", "throw", "safepoint"],
+								},
+							)) ||
 					sliceCall.arguments.length !== 1 ||
-					property.dst !== sliceCall.callee ||
-					property.object !== sliceCall.thisValue ||
 					(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
 						sliceStartInstruction?.opcode !== "CREATE_F64") ||
 					!Object.is(sliceStartInstruction.value, region.sliceStart) ||
 					!Number.isFinite(region.sliceStart) ||
-					numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
-					numberIntrinsic.intrinsic !== "Number" ||
-					numberCall?.opcode !== "CALL" ||
-					numberCall.callee !== numberIntrinsic.dst ||
+					(numberCall?.opcode !== "CALL" && numberCall?.opcode !== "CALL_KNOWN") ||
+					(numberCall.opcode === "CALL_KNOWN"
+						? numberCall.operation !== "Number" ||
+							numberCall.construct ||
+							numberCall.argumentMode !== undefined ||
+							numberIntrinsicIp !== -1
+						: numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
+							numberIntrinsic.intrinsic !== "Number" ||
+							numberCall.callee !== numberIntrinsic.dst) ||
 					numberCall.arguments.length !== 1 ||
 					numberArgument?.kind !== "register" ||
 					numberArgument.register !== sliceCall.dst ||
@@ -3299,7 +3359,7 @@ function lowerExecutionFunctionToNativePlan(
 					sliceStartIp,
 					numberIntrinsicIp,
 					numberCallIp: numberCallIp!,
-					numberCallee: numberCall.callee,
+					numberCallee: numberCall.opcode === "CALL" ? numberCall.callee : -1,
 					receiver: sliceCall.thisValue,
 					sliceStart: region.sliceStart,
 					result: numberCall.dst,
@@ -3539,20 +3599,20 @@ function lowerExecutionFunctionToNativePlan(
 							loweredProperty.object === loweredCall.thisValue &&
 							stringConstantEquals(loweredProperty.stringIndex, "split") &&
 							guardedBuiltinCallOf(loweredCall)?.operation === "String.prototype.split"
-						: loweredCall?.opcode === "CALL_BUILTIN" &&
+						: loweredCall?.opcode === "CALL_KNOWN" &&
 							guard.dependencies.length === 1 &&
 							guard.dependencies[0]?.kind === "world" &&
 							propertyIp === -1 &&
 							loweredCall.operation === "String.prototype.split";
 				const expectedSplitIdentity =
-					loweredCall?.opcode === "CALL_BUILTIN" ||
+					loweredCall?.opcode === "CALL_KNOWN" ||
 					(loweredCall?.opcode === "CALL" &&
 						guardedBuiltinCallOf(loweredCall) !== undefined &&
 						vmGuardIsWorldInvariant(guardedBuiltinCallOf(loweredCall)!.guard))
 						? "authority-invariant"
 						: "runtime-guarded";
 				const separator =
-					(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_BUILTIN") &&
+					(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_KNOWN") &&
 					loweredCall.arguments.length === 1
 						? decodeVmValueOperand(loweredCall.arguments[0]!)
 						: undefined;
@@ -3612,7 +3672,7 @@ function lowerExecutionFunctionToNativePlan(
 				if (
 					!callMatches ||
 					loweredCall === undefined ||
-					(loweredCall.opcode !== "CALL" && loweredCall.opcode !== "CALL_BUILTIN") ||
+					(loweredCall.opcode !== "CALL" && loweredCall.opcode !== "CALL_KNOWN") ||
 					loweredCall.arguments.length !== 1 ||
 					resultRegisters.length === 0 ||
 					!resultRegisters.includes(loweredCall.dst) ||
@@ -3730,7 +3790,7 @@ function lowerExecutionFunctionToNativePlan(
 				const loweredIncrement = instructions[incrementIp];
 				const resultRegisters = [...new Set(region.resultRegisters)];
 				const expectedSplitIdentity =
-					loweredCall?.opcode === "CALL_BUILTIN" ||
+					loweredCall?.opcode === "CALL_KNOWN" ||
 					(loweredCall?.opcode === "CALL" &&
 						guardedBuiltinCallOf(loweredCall) !== undefined &&
 						vmGuardIsWorldInvariant(guardedBuiltinCallOf(loweredCall)!.guard))
@@ -3743,9 +3803,9 @@ function lowerExecutionFunctionToNativePlan(
 						? "authority-invariant"
 						: "runtime-guarded";
 				if (
-					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
+					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_KNOWN") ||
 					loweredCall.arguments.length !== 1 ||
-					(loweredCall.opcode === "CALL_BUILTIN" &&
+					(loweredCall.opcode === "CALL_KNOWN" &&
 						(loweredCall.operation !== "String.prototype.split" ||
 							propertyIp !== -1 ||
 							guard.dependencies.length !== 1 ||

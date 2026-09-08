@@ -42,12 +42,12 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "INSTANTIATE_LITERAL_TEMPLATE", dst: 4, templateOffset: 0 },
 	{ opcode: "INSTANTIATE_LITERAL_TEMPLATE", dst: 4, templateOffset: 0, cacheSlot: 0 },
 	{
-		opcode: "CALL_LITERAL_METHOD",
+		opcode: "CALL_KNOWN",
 		dst: 4,
 		thisValue: 0,
 		arguments: [1, 2],
 		argumentCount: 2,
-		methodIndex: 0,
+		operation: "Object.prototype.__defineGetter__",
 	},
 	{ opcode: "LOAD_INTRINSIC", dst: 5, intrinsic: "Math" },
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
@@ -78,7 +78,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Math.max",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 0,
 		argumentCount: 2,
@@ -86,7 +86,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "String.prototype.split",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 3,
@@ -94,7 +94,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Array.prototype.push",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 2,
@@ -102,7 +102,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Object.hasOwn",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 3,
 		argumentCount: 1,
@@ -110,7 +110,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "String.prototype.charCodeAt",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 1,
@@ -118,7 +118,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Map.prototype.get",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 2,
@@ -126,7 +126,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Map.prototype.set",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 1,
@@ -134,7 +134,7 @@ const instructions: Array<BytecodeInstruction> = [
 		operation: "Object.keys",
 	},
 	{
-		opcode: "CALL_BUILTIN",
+		opcode: "CALL_KNOWN",
 		dst: 9,
 		thisValue: 10,
 		argumentCount: 1,
@@ -623,7 +623,7 @@ describe("program-image-codec", () => {
 
 	it("round-trips and validates tagged direct-builtin operands", () => {
 		const call: BytecodeInstruction = {
-			opcode: "CALL_BUILTIN",
+			opcode: "CALL_KNOWN",
 			dst: 0,
 			thisValue: encodeVmValueOperand(-1, { kind: "undefined" }),
 			argumentCount: 6,
@@ -675,7 +675,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-19)).toEqual([
+		expect(WIRE_OPCODES.slice(-18)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -688,8 +688,7 @@ describe("program-image-codec", () => {
 			"CALL_REST_ARGUMENTS",
 			"MATH_UNARY_NUMBER",
 			"MATH_BINARY_NUMBER",
-			"CALL_BUILTIN",
-			"CALL_LITERAL_METHOD",
+			"CALL_KNOWN",
 			"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"SELECT_SHAPE_CASE",

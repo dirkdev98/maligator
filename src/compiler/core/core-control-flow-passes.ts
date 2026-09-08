@@ -1214,7 +1214,8 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 				if (fn.instructionKind(instruction) !== "operation") continue;
 				const opcode = fn.instructionOpcodeName(instruction);
 				// The target boxes numeric arguments at the ordinary JavaScript call boundary.
-				const callArgument = opcode === "call" && operand >= 2;
+				const callArgument =
+					(opcode === "call" && operand >= 2) || (opcode === "callKnown" && operand >= 1);
 				if (
 					!LOOP_SCALAR_OPERATIONS.has(opcode) &&
 					!LOOP_SCALAR_CONSUMERS.has(opcode) &&

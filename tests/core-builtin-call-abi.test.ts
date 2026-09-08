@@ -28,7 +28,7 @@ it("keeps clock reads distinct and forwards only consumed Date arguments", () =>
 	);
 
 	const calls = coreOperations(coreFunctionNamed(optimized!, "dates")!).filter(
-		({ opcode }) => opcode === "callBuiltin",
+		({ opcode }) => opcode === "callKnown",
 	);
 	expect(calls.map(({ attributes }) => attributes.operation)).toEqual([
 		"Date.now",

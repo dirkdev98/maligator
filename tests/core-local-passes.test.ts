@@ -979,7 +979,8 @@ describe("Core local canonicalization", () => {
 			[...generic!.instructionIds()].some(
 				(instruction) =>
 					generic!.instructionKind(instruction) === "operation" &&
-					generic!.instructionOpcodeName(instruction) === "call",
+					generic!.instructionOpcodeName(instruction) === "callKnown" &&
+					generic!.instructionAttributes(instruction).operation === "Math.floor",
 			),
 		).toBe(true);
 	});

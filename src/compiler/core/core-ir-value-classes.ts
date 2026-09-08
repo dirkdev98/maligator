@@ -1,4 +1,5 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
@@ -65,7 +66,9 @@ export function coreExactCollectionBuiltinEffects(
 ): CoreInstructionEffects | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
-		fn.instructionOpcodeName(instruction) !== "callBuiltin"
+		fn.instructionOpcodeName(instruction) !== "callKnown" ||
+		fn.instructionAttributes(instruction).construct ||
+		fn.instructionAttributes(instruction).argumentMode !== undefined
 	)
 		return undefined;
 	const operation = fn.instructionAttributes(instruction).operation;
@@ -197,11 +200,13 @@ export function analyzeCoreValueClasses(
 		);
 	let seeded = 0;
 	if (context?.facts.world.primordialPolicy === "locked") {
-		const constructs =
-			index?.opcodes[fn.registry.require("construct").id] ??
-			operations.filter(
-				(instruction) => fn.instructionOpcodeName(instruction) === "construct",
-			);
+		const constructs = operations.filter(
+			(instruction) =>
+				fn.instructionOpcodeName(instruction) === "construct" ||
+				(fn.instructionOpcodeName(instruction) === "callKnown" &&
+					fn.instructionAttributes(instruction).construct === true &&
+					fn.instructionAttributes(instruction).argumentMode === undefined),
+		);
 		for (const instruction of constructs) {
 			if (
 				fn.kernel.instructionOperandCount(instruction) === 0 ||
@@ -214,13 +219,24 @@ export function analyzeCoreValueClasses(
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(calleeRoot));
 			if (
 				fn.kernel.valueDefinitionKind(calleeRoot) !== 1 ||
-				fn.instructionKind(definition) !== "operation" ||
-				fn.instructionOpcodeName(definition) !== "loadIntrinsic"
+				fn.instructionKind(definition) !== "operation"
+			)
+				continue;
+			const definitionAttributes = fn.instructionAttributes(definition);
+			const intrinsic =
+				fn.instructionOpcodeName(definition) === "loadIntrinsic"
+					? definitionAttributes.intrinsic
+					: fn.instructionOpcodeName(definition) === "loadPrimordial" &&
+						  typeof definitionAttributes.nodeIndex === "number"
+						? getPrimordialCatalog().nodes[definitionAttributes.nodeIndex]?.[0]
+						: undefined;
+			if (
+				fn.instructionOpcodeName(instruction) === "callKnown" &&
+				fn.instructionAttributes(instruction).operation !== intrinsic
 			)
 				continue;
 			const brand =
-				coreNumericTypedArrayKind(fn.instructionAttributes(definition).intrinsic) ??
-				coreExactCollectionBrand(fn.instructionAttributes(definition).intrinsic);
+				coreNumericTypedArrayKind(intrinsic) ?? coreExactCollectionBrand(intrinsic);
 			if (brand !== undefined) {
 				const outputRoot = roots.get(output) ?? output;
 				brands.set(outputRoot, brand);
@@ -281,7 +297,12 @@ export function analyzeCoreValueClasses(
 					numericPropertyKey(fn, instruction, ranges)))
 		)
 			return;
-		if (opcode === "callBuiltin" && operand === 0) {
+		if (
+			opcode === "callKnown" &&
+			operand === 0 &&
+			!fn.instructionAttributes(instruction).construct &&
+			fn.instructionAttributes(instruction).argumentMode === undefined
+		) {
 			const operation = fn.instructionAttributes(instruction).operation;
 			const expected = coreCollectionReceiverBrandForOperation(operation);
 			if (expected === brand) {

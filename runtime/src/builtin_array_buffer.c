@@ -778,3 +778,5 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
     MalPropertyDesc shared_tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "SharedArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(shared_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &shared_tag);
 }
+
+#include "generated/known_native_builtin_array_buffer_c.inc"

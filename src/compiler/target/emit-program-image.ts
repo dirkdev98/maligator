@@ -1,5 +1,6 @@
 import type { IncludedAsset } from "../../assets.ts";
-import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
+import { knownOperationFlags } from "../shared/known-operations.ts";
+import { knownOperationIndex } from "../shared/known-operations.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
 import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
@@ -11,7 +12,6 @@ import {
 	validateRuntimeImageMetadata,
 	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
-	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./runtime-image.ts";
@@ -365,8 +365,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					),
 				);
 				break;
-			case "CALL_LITERAL_METHOD":
-			case "CALL_BUILTIN":
+			case "CALL_KNOWN":
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
 			case "CONSTRUCT":
@@ -1541,7 +1540,7 @@ export function emitBatch(
 	const shared = new Map<string, string>();
 	let sharedCounter = 0;
 	const intern = (kind: string, type: string, body: string): string => {
-		const key = `${kind} ${body}`;
+		const key = `${kind}\0${body}`;
 		const existing = shared.get(key);
 		if (existing !== undefined) {
 			return existing;
@@ -1792,21 +1791,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
-		case "CALL_LITERAL_METHOD":
-			return `{ .opcode = MAL_OP_CALL_LITERAL_METHOD, .as.call_builtin = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${instruction.methodIndex} } }`;
-		case "CALL_BUILTIN": {
-			const operationIndex = (
-				VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>
-			).indexOf(instruction.operation);
-			if (operationIndex < 0) {
-				throw new Error(`Unknown direct builtin operation ${instruction.operation}`);
-			}
-			const operation = exactBuiltinCallDescriptor(instruction.operation)?.cOperation;
-			if (operation === undefined) {
-				throw new Error(`Missing C direct builtin operation ${instruction.operation}`);
-			}
-			return `{ .opcode = MAL_OP_CALL_BUILTIN, .as.call_builtin = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${operation} } }`;
-		}
+		case "CALL_KNOWN":
+			return `{ .opcode = MAL_OP_CALL_KNOWN, .as.call_known = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${(knownOperationIndex(instruction.operation)! << 4) | knownOperationFlags(instruction)} } }`;
 		case "MATH_UNARY_NUMBER": {
 			if (
 				!(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
@@ -1861,6 +1847,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL_INDEX, .as.load_global_index = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
+		case "LOAD_PRIMORDIAL":
+			return `{ .opcode = MAL_OP_LOAD_PRIMORDIAL, .as.load_intrinsic = { .dst = ${instruction.dst}, .intrinsic = ${instruction.nodeIndex} } }`;
 		case "LOAD_INTRINSIC":
 			return `{ .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = ${instruction.dst}, .intrinsic = ${emitIntrinsic(instruction.intrinsic)} } }`;
 		case "STORE_CAPTURED":
@@ -2072,6 +2060,12 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR";
 		case "FinalizationRegistry":
 			return "MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR";
+		case "DisposableStack":
+			return "MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR";
+		case "AsyncDisposableStack":
+			return "MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR";
+		case "SuppressedError":
+			return "MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR";
 		case "Promise":
 			return "MAL_INTRINSIC_PROMISE_CONSTRUCTOR";
 		case "Date":

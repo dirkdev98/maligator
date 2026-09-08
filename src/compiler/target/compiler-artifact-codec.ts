@@ -6,6 +6,7 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
@@ -38,7 +39,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 64;
+export const COMPILER_ARTIFACT_VERSION = 66;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -1637,22 +1638,26 @@ function validateStringSliceNumberRegion(
 	const numberIntrinsic = fn.instructions[region.numberIntrinsicIp];
 	const numberCall = fn.instructions[region.numberCallIp];
 	const numberArgument =
-		numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+		(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+		numberCall.arguments[0] !== undefined
 			? decodeVmValueOperand(numberCall.arguments[0])
 			: undefined;
 	const expectedBuiltinIdentities =
-		sliceCall?.opcode === "CALL" &&
-		sliceCallPlan?.guardedBuiltinCall !== undefined &&
-		vmGuardIsWorldInvariant(sliceCallPlan.guardedBuiltinCall.guard)
+		sliceCall?.opcode === "CALL_KNOWN" ||
+		(sliceCall?.opcode === "CALL" &&
+			sliceCallPlan?.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(sliceCallPlan.guardedBuiltinCall.guard))
 			? "authority-invariant"
 			: "runtime-guarded";
-	const payload = new Set([
-		region.propertyIp,
-		region.sliceCallIp,
-		region.sliceStartIp,
-		region.numberIntrinsicIp,
-		region.numberCallIp,
-	]);
+	const payload = new Set(
+		[
+			region.propertyIp,
+			region.sliceCallIp,
+			region.sliceStartIp,
+			region.numberIntrinsicIp,
+			region.numberCallIp,
+		].filter((ip) => ip >= 0),
+	);
 	const activeHandlers = new Set<number>();
 	for (const ip of region.claimedIps) {
 		for (const handler of fn.handlers) {
@@ -1666,22 +1671,34 @@ function validateStringSliceNumberRegion(
 		region.anchors.length !== 2 ||
 		region.anchors[0] !== region.sliceCallIp ||
 		region.anchors[1] !== region.numberCallIp ||
-		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !== "slice" ||
-		sliceCall?.opcode !== "CALL" ||
-		sliceCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
+		(sliceCall?.opcode !== "CALL" && sliceCall?.opcode !== "CALL_KNOWN") ||
+		(sliceCall.opcode === "CALL_KNOWN"
+			? sliceCall.operation !== "String.prototype.slice" ||
+				sliceCall.construct ||
+				sliceCall.argumentMode !== undefined ||
+				region.propertyIp !== -1
+			: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+					"slice" ||
+				sliceCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
+				property.dst !== sliceCall.callee ||
+				property.object !== sliceCall.thisValue) ||
 		sliceCall.arguments.length !== 1 ||
-		property.dst !== sliceCall.callee ||
-		property.object !== sliceCall.thisValue ||
 		(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
 			sliceStartInstruction?.opcode !== "CREATE_F64") ||
 		!Object.is(sliceStartInstruction.value, region.sliceStart) ||
 		!Number.isFinite(region.sliceStart) ||
-		numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
-		numberIntrinsic.intrinsic !== "Number" ||
-		numberCall?.opcode !== "CALL" ||
-		numberCall.callee !== numberIntrinsic.dst ||
-		numberCall.callee !== region.numberCallee ||
+		(numberCall?.opcode !== "CALL" && numberCall?.opcode !== "CALL_KNOWN") ||
+		(numberCall.opcode === "CALL_KNOWN"
+			? numberCall.operation !== "Number" ||
+				numberCall.construct ||
+				numberCall.argumentMode !== undefined ||
+				region.numberIntrinsicIp !== -1 ||
+				region.numberCallee !== -1
+			: numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
+				numberIntrinsic.intrinsic !== "Number" ||
+				numberCall.callee !== numberIntrinsic.dst ||
+				numberCall.callee !== region.numberCallee) ||
 		numberCall.arguments.length !== 1 ||
 		numberArgument?.kind !== "register" ||
 		numberArgument.register !== sliceCall.dst ||
@@ -2026,13 +2043,19 @@ function validateRegExpExecProjectionRegion(
 		region.anchors.length === 2 &&
 		region.anchors[0] === region.callIp &&
 		region.anchors[1] === region.loads[0]?.ip &&
-		property?.opcode === "LOAD_PROPERTY_STATIC" &&
-		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) === "exec" &&
-		call?.opcode === "CALL" &&
-		callPlan?.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
+		(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
 		call.arguments.length === 1 &&
-		property.dst === call.callee &&
-		property.object === call.thisValue &&
+		(call.opcode === "CALL_KNOWN"
+			? call.operation === "RegExp.prototype.exec" &&
+				!call.construct &&
+				call.argumentMode === undefined &&
+				region.propertyIp === -1
+			: property?.opcode === "LOAD_PROPERTY_STATIC" &&
+				String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) ===
+					"exec" &&
+				callPlan?.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
+				property.dst === call.callee &&
+				property.object === call.thisValue) &&
 		// Encoding invariant, not a placement decision: reverse-postorder layout emits a
 		// producer's block before its consumer's, so an in-place load precedes its call.
 		// Whether the load runs there at all is `propertyPlacement`, checked next.
@@ -2044,7 +2067,7 @@ function validateRegExpExecProjectionRegion(
 			region.callIp,
 		) &&
 		(region.propertyPlacement !== "call-fallback" || region.lockedFreshLiteral) &&
-		region.callee === call.callee &&
+		region.callee === (call.opcode === "CALL" ? call.callee : -1) &&
 		region.receiver === call.thisValue &&
 		region.input === call.arguments[0] &&
 		region.result === call.dst &&
@@ -2079,16 +2102,27 @@ function validateRegExpExecProjectionRegion(
 			!region.license.guard.dependencies.every(
 				(dependency) => dependency.kind === "world",
 			) ||
-			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
-			intrinsic.intrinsic !== "RegExp" ||
-			construct?.opcode !== "CONSTRUCT" ||
-			construct.callee !== intrinsic.dst ||
+			!(
+				(intrinsic?.opcode === "LOAD_INTRINSIC" && intrinsic.intrinsic === "RegExp") ||
+				(intrinsic?.opcode === "LOAD_PRIMORDIAL" &&
+					getPrimordialCatalog().nodes[intrinsic.nodeIndex]?.[0] === "RegExp")
+			) ||
+			!(construct?.opcode === "CONSTRUCT"
+				? construct.callee === intrinsic.dst
+				: construct?.opcode === "CALL_KNOWN" &&
+					construct.operation === "RegExp" &&
+					construct.construct === true &&
+					construct.argumentMode === undefined &&
+					construct.thisValue === intrinsic.dst) ||
+			(construct?.opcode !== "CONSTRUCT" && construct?.opcode !== "CALL_KNOWN") ||
 			construct.dst !== region.receiver
 		) {
 			valid = false;
 		}
 	}
-	const payload = new Set<number>([region.propertyIp, region.callIp]);
+	const payload = new Set<number>(
+		[region.propertyIp, region.callIp].filter((ip) => ip >= 0),
+	);
 	for (const check of region.nullChecks) {
 		payload.add(check.comparisonIp);
 		payload.add(check.nullIp);
@@ -2164,19 +2198,25 @@ function validateRegExpExecProjectionRegion(
 				callInstruction.arguments.length === 1 &&
 				zeroArgument;
 		} else if (consumer?.kind === "number") {
-			payload.add(consumer.intrinsicIp);
+			if (consumer.intrinsicIp >= 0) payload.add(consumer.intrinsicIp);
 			payload.add(consumer.callIp);
 			const intrinsic = fn.instructions[consumer.intrinsicIp];
 			const numberCall = fn.instructions[consumer.callIp];
 			const argument =
-				numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+				(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+				numberCall.arguments[0] !== undefined
 					? decodeVmValueOperand(numberCall.arguments[0])
 					: undefined;
 			valid &&=
-				intrinsic?.opcode === "LOAD_INTRINSIC" &&
-				intrinsic.intrinsic === "Number" &&
-				numberCall?.opcode === "CALL" &&
-				numberCall.callee === intrinsic.dst &&
+				(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
+				(numberCall.opcode === "CALL_KNOWN"
+					? numberCall.operation === "Number" &&
+						!numberCall.construct &&
+						numberCall.argumentMode === undefined &&
+						consumer.intrinsicIp === -1
+					: intrinsic?.opcode === "LOAD_INTRINSIC" &&
+						intrinsic.intrinsic === "Number" &&
+						numberCall.callee === intrinsic.dst) &&
 				numberCall.arguments.length === 1 &&
 				argument?.kind === "register" &&
 				argument.register === load.dst;
@@ -2278,7 +2318,8 @@ function validateRegExpIteratorProjectionRegion(
 		const intrinsic = fn.instructions[load.numberIntrinsicIp];
 		const call = fn.instructions[load.numberCallIp];
 		const argument =
-			call?.opcode === "CALL" && call.arguments[0] !== undefined
+			(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
+			call.arguments[0] !== undefined
 				? decodeVmValueOperand(call.arguments[0])
 				: undefined;
 		if (
@@ -2292,10 +2333,15 @@ function validateRegExpIteratorProjectionRegion(
 			load.captureIndex <= 0 ||
 			load.captureIndex > 0xffff ||
 			indices.has(load.captureIndex) ||
-			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
-			intrinsic.intrinsic !== "Number" ||
-			call?.opcode !== "CALL" ||
-			call.callee !== intrinsic.dst ||
+			(call?.opcode !== "CALL" && call?.opcode !== "CALL_KNOWN") ||
+			(call.opcode === "CALL_KNOWN"
+				? call.operation !== "Number" ||
+					call.construct ||
+					call.argumentMode !== undefined ||
+					load.numberIntrinsicIp !== -1
+				: intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+					intrinsic.intrinsic !== "Number" ||
+					call.callee !== intrinsic.dst) ||
 			call.arguments.length !== 1 ||
 			argument?.kind !== "register" ||
 			argument.register !== load.dst
@@ -2305,7 +2351,7 @@ function validateRegExpIteratorProjectionRegion(
 		indices.add(load.captureIndex);
 		payload.add(load.ip);
 		payload.add(load.keyIp);
-		payload.add(load.numberIntrinsicIp);
+		if (load.numberIntrinsicIp >= 0) payload.add(load.numberIntrinsicIp);
 		payload.add(load.numberCallIp);
 	}
 	const activeHandlers = new Set<number>();
@@ -2371,21 +2417,21 @@ function validateStringSplitProjectionRegion(
 							"watched-methods") &&
 				callPlan.guardedBuiltinCall.guard.obligations.length === 1 &&
 				callPlan.guardedBuiltinCall.guard.obligations[0] === "fallback"
-			: call?.opcode === "CALL_BUILTIN" &&
+			: call?.opcode === "CALL_KNOWN" &&
 				dependencyMask === 1 &&
 				region.propertyIp === -1 &&
 				region.callee === -1 &&
 				call.operation === "String.prototype.split" &&
 				call.thisValue === region.receiver;
 	const expectedSplitIdentity =
-		call?.opcode === "CALL_BUILTIN" ||
+		call?.opcode === "CALL_KNOWN" ||
 		(call?.opcode === "CALL" &&
 			callPlan?.guardedBuiltinCall !== undefined &&
 			vmGuardIsWorldInvariant(callPlan.guardedBuiltinCall.guard))
 			? "authority-invariant"
 			: "runtime-guarded";
 	const separator =
-		(call?.opcode === "CALL" || call?.opcode === "CALL_BUILTIN") &&
+		(call?.opcode === "CALL" || call?.opcode === "CALL_KNOWN") &&
 		call.arguments.length === 1
 			? decodeVmValueOperand(call.arguments[0]!)
 			: undefined;
@@ -2450,7 +2496,7 @@ function validateStringSplitProjectionRegion(
 		region.callIp !== callIp ||
 		firstLoadIp !== region.loads[0]?.ip ||
 		!callMatches ||
-		(call?.opcode !== "CALL" && call?.opcode !== "CALL_BUILTIN") ||
+		(call?.opcode !== "CALL" && call?.opcode !== "CALL_KNOWN") ||
 		call.arguments.length !== 1 ||
 		!registerValid(region.receiver) ||
 		region.resultRegisters.length === 0 ||
@@ -2568,12 +2614,12 @@ function validateStringSplitCursorRegion(
 				property.object === region.receiver &&
 				call.callee === region.callee &&
 				callPlan?.guardedBuiltinCall?.operation === "String.prototype.split"
-			: call?.opcode === "CALL_BUILTIN" &&
+			: call?.opcode === "CALL_KNOWN" &&
 				region.propertyIp === -1 &&
 				region.callee === -1 &&
 				call.operation === "String.prototype.split";
 	const expectedSplitIdentity =
-		call?.opcode === "CALL_BUILTIN" ||
+		call?.opcode === "CALL_KNOWN" ||
 		(call?.opcode === "CALL" &&
 			callPlan?.guardedBuiltinCall !== undefined &&
 			vmGuardIsWorldInvariant(callPlan.guardedBuiltinCall.guard))
@@ -2615,7 +2661,7 @@ function validateStringSplitCursorRegion(
 		region.splitIdentity !== expectedSplitIdentity ||
 		region.trimIdentity !== expectedTrimIdentity ||
 		call === undefined ||
-		(call.opcode !== "CALL" && call.opcode !== "CALL_BUILTIN") ||
+		(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
 		call.thisValue !== region.receiver ||
 		call.argumentCount !== 1 ||
 		call.arguments[0] !== region.separator ||

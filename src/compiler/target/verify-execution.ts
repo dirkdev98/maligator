@@ -360,8 +360,7 @@ function verifyInstructionOperands(model: FunctionModel): void {
 			const immediates = instructionImmediates(instruction);
 			const embeddable =
 				instruction.type === "call" ||
-				instruction.type === "callBuiltin" ||
-				instruction.type === "callLiteralMethod" ||
+				instruction.type === "callKnown" ||
 				instruction.type === "construct";
 			for (const [position, register] of (registers ?? []).entries()) {
 				const operandContext = { ...context, register };

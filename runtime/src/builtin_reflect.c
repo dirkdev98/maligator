@@ -38,31 +38,6 @@ static bool mal_reflect_require_object(MalVm *vm, MalValue target, const byte *m
     return false;
 }
 
-/**
- * IsConstructor, pragmatically: bound functions defer to their target, script
- * functions must be ordinary (non-generator/async), native functions are
- * assumed constructible (the runtime does not yet flag native non-constructors).
- */
-static bool mal_reflect_is_constructor(MalVm *vm, MalValue value) {
-    // A proxy is a constructor iff its (non-revoked) target chain ends at one.
-    value = mal_proxy_unwrap_target(value);
-    if (mal_value_is_proxy_object(value)) {
-        // A revoked proxy unwraps to itself; it is not a constructor.
-        return false;
-    }
-    while (mal_value_is_bound_function_object(value)) {
-        value = mal_value_to_bound_function_object(value)->target;
-    }
-    if (mal_value_is_native_function_object(value)) {
-        return mal_native_function_object_is_constructor(mal_value_to_native_function_object(value));
-    }
-    if (mal_value_is_function_object(value)) {
-        i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
-        return vm->runtime_image->functions[index].kind == MAL_FUNCTION_KIND_NORMAL;
-    }
-    return false;
-}
-
 static MalValue mal_reflect_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -100,13 +75,13 @@ static MalValue mal_reflect_construct(MalVm *vm, MalValue this_value, const MalV
     (void) new_target;
     (void) callee;
     MalValue target = mal_reflect_arg(args, arg_count, 0);
-    if (!mal_reflect_is_constructor(vm, target)) {
+    if (!mal_vm_is_constructor(vm, target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reflect.construct target is not a constructor");
         return mal_value_new_undefined();
     }
 
     MalValue new_target_arg = arg_count > 2 ? args[2] : target;
-    if (!mal_reflect_is_constructor(vm, new_target_arg)) {
+    if (!mal_vm_is_constructor(vm, new_target_arg)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reflect.construct newTarget is not a constructor");
         return mal_value_new_undefined();
     }
@@ -398,3 +373,5 @@ void mal_builtin_reflect_install(MalVm *vm) {
     );
     mal_object_define_own(reflect, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);
 }
+
+#include "generated/known_native_builtin_reflect_c.inc"

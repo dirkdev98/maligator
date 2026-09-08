@@ -1,6 +1,7 @@
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import type { KnownArgumentMode } from "./known-operations.ts";
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
@@ -392,25 +393,13 @@ export type CompilerInstruction =
 			operation: string;
 	  }
 	| {
-			/**
-			 * Exact locked builtin invocation after property resolution and callback
-			 * identity have both been proved. Argument evaluation remains explicit;
-			 * this operation may still allocate, call user code, or throw according to its
-			 * registry effects, but it has no dynamic property/call fallback edge.
-			 */
-			type: "callLiteralMethod";
+			type: "callKnown";
 			registers: [number, number, ...Array<number>];
-			methodIndex: number;
-			immediateValues?: Array<CompilerImmediateValue | undefined>;
-	  }
-	| {
-			type: "callBuiltin";
-			// [destination, this, ...arguments]
-			registers: [number, number, ...Array<number>];
-			operation: DirectBuiltinOperationId;
-			/** Canonical facts remain attached after dynamic dispatch is erased. */
+			operation: string;
+			construct?: true;
+			argumentMode?: KnownArgumentMode;
+			specialized?: DirectBuiltinOperationId;
 			knownBuiltinCall: KnownBuiltinCall;
-			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }
 	| {
@@ -452,6 +441,11 @@ export type CompilerInstruction =
 	| {
 			// Marks the end of a protected instruction range.
 			type: "tryEnd";
+	  }
+	| {
+			type: "loadPrimordial";
+			registers: [number];
+			nodeIndex: number;
 	  }
 	| {
 			type: "loadIntrinsic";
@@ -1104,6 +1098,9 @@ export type CompilerIntrinsic =
 	| "URIError"
 	| "EvalError"
 	| "AggregateError"
+	| "DisposableStack"
+	| "AsyncDisposableStack"
+	| "SuppressedError"
 	| "String"
 	| "Number"
 	| "Boolean"

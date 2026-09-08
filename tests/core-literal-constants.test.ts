@@ -32,8 +32,6 @@ function constants(image: ReturnType<typeof compile>) {
 describe("Core literal constants", () => {
 	it.each([
 		'return ["foo", "bar"].includes(x, from);',
-		"return [null, false, true, -0, 2.5, 5n].includes(x);",
-		'return [, "bar"].includes(x);',
 		"return ({a: [1, {b: false}]}).hasOwnProperty(x);",
 		"return [1,2,3].slice(x);",
 		'return [{a: [1, {b: "two"}]}, [3, 4]].includes(x);',
@@ -44,12 +42,28 @@ describe("Core literal constants", () => {
 		expect(
 			image.runtime.functions
 				.flatMap((fn) => fn.instructions)
-				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
+				.some((i) => i.opcode === "CALL_KNOWN"),
 		).toBe(true);
 		expect(
 			constants(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
 		).toEqual(constants(image));
 	});
+	it.each([
+		"return [null, false, true, -0, 2.5, 5n].includes(x);",
+		'return [, "bar"].includes(x);',
+	])("consumes bounded primitive search data without materialization: %s", (body) => {
+		const image = compile(body);
+		expect(constants(image)).toHaveLength(0);
+		expect(
+			image.runtime.functions
+				.flatMap((fn) => fn.instructions)
+				.some((instruction) => instruction.opcode === "CALL_KNOWN"),
+		).toBe(false);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(image)).runtime.functions,
+		).toEqual(image.runtime.functions);
+	});
+
 	it.each([
 		'const a = ["foo", "bar"]; globalThis.a = a; return a.includes(x);',
 		'const a = ["foo", "bar"]; a[0] = x; return a.includes(x);',
@@ -73,7 +87,7 @@ describe("Core literal constants", () => {
 		expect(
 			image.runtime.functions
 				.flatMap((fn) => fn.instructions)
-				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
+				.some((i) => i.opcode === "CALL_KNOWN"),
 		).toBe(true);
 	});
 	it.each([
@@ -85,7 +99,7 @@ describe("Core literal constants", () => {
 		expect(
 			image.runtime.functions
 				.flatMap((fn) => fn.instructions)
-				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
+				.some((i) => i.opcode === "CALL_KNOWN"),
 		).toBe(false);
 	});
 	it.each([
@@ -96,7 +110,7 @@ describe("Core literal constants", () => {
 		expect(
 			compile(body)
 				.runtime.functions.flatMap((fn) => fn.instructions)
-				.some((i) => i.opcode === "CALL_LITERAL_METHOD"),
+				.some((i) => i.opcode === "CALL_KNOWN"),
 		).toBe(false);
 	});
 	it("retains ordinary dispatch when Array.prototype can be replaced", () => {

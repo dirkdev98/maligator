@@ -103,7 +103,7 @@ describe("numeric own-field native entry contracts", () => {
 			const leaf = emitted.directEntries[0]!;
 			if (
 				decoded.runtime.functions[selected.functionIndex]!.instructions.every(
-					(op) => op.opcode !== "CALL",
+					(op) => op.opcode !== "CALL" && op.opcode !== "CALL_KNOWN",
 				)
 			) {
 				expect(leaf.leaf).toBe(true);

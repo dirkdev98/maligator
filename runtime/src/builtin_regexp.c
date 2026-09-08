@@ -2913,3 +2913,5 @@ int mal_regexp_try_exact_iterator_step(
 }
 
 #endif // MAL_REGEXP
+
+#include "generated/known_native_builtin_regexp_c.inc"

@@ -173,7 +173,7 @@ describe("Core plan property placement", () => {
 		}
 	});
 
-	it("certifies opposite placements for two equally adjacent property calls", () => {
+	it("erases a proven exec property load and retains the guarded load", () => {
 		const compilation = optimize(OPPOSITE_PLACEMENTS, "placement-opposites.js");
 		const projections = projectCoreSpecializationRecipes(compilation.plan.recipes).filter(
 			(selection) => selection.kind === "regexp-exec-projection",
@@ -186,7 +186,7 @@ describe("Core plan property placement", () => {
 			})),
 		).toEqual(
 			expect.arrayContaining([
-				{ placement: "call-fallback", locked: true },
+				{ placement: "in-place", locked: true },
 				{ placement: "in-place", locked: false },
 			]),
 		);
@@ -195,7 +195,8 @@ describe("Core plan property placement", () => {
 			(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
 				region.kind === "regexp-exec-projection",
 		)) {
-			expect(projection.propertyIp + 1).toBe(projection.callIp);
+			if (projection.lockedFreshLiteral) expect(projection.propertyIp).toBe(-1);
+			else expect(projection.propertyIp + 1).toBe(projection.callIp);
 		}
 	});
 
@@ -531,7 +532,7 @@ describe("late plan migration gates", () => {
 			const fn = compilation.program.function(functionId);
 			return [...fn.instructionIds()].flatMap((instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "callBuiltin"
+				fn.instructionOpcodeName(instruction) === "callKnown"
 					? [fn.instructionAttributes(instruction).operation]
 					: [],
 			);

@@ -557,7 +557,7 @@ describe("wire loader side-data validation", () => {
 					registerCount: 1,
 					instructions: [
 						{
-							opcode: "CALL_BUILTIN",
+							opcode: "CALL_KNOWN",
 							dst: 0,
 							thisValue: encodeVmValueOperand(-1, { kind: "undefined" }),
 							argumentCount: 2,
@@ -568,7 +568,7 @@ describe("wire loader side-data validation", () => {
 							operation: "Object.is",
 						},
 						{
-							opcode: "CALL_BUILTIN",
+							opcode: "CALL_KNOWN",
 							dst: 0,
 							thisValue: encodeVmValueOperand(-1, { kind: "null" }),
 							argumentCount: 2,
@@ -579,7 +579,7 @@ describe("wire loader side-data validation", () => {
 							operation: "Object.is",
 						},
 						{
-							opcode: "CALL_BUILTIN",
+							opcode: "CALL_KNOWN",
 							dst: 0,
 							thisValue: encodeVmValueOperand(-1, { kind: "string", index: 0 }),
 							argumentCount: 1,
@@ -597,7 +597,7 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		const builtinTag = WIRE_OPCODES.indexOf("CALL_BUILTIN");
+		const builtinTag = WIRE_OPCODES.indexOf("CALL_KNOWN");
 		const undefinedReceiverPrefix = [builtinTag, 0, 1, 4, 2, 3, 7];
 		const undefinedReceiverOffset = wire.findIndex((_, index) =>
 			undefinedReceiverPrefix.every((byte, operand) => wire[index + operand] === byte),
@@ -606,6 +606,17 @@ describe("wire loader side-data validation", () => {
 		const invalidRegister = wire.slice();
 		invalidRegister[undefinedReceiverOffset + 2] = 2;
 		rejectsWire("direct-builtin-invalid-register", invalidRegister);
+		let flagsOffset = undefinedReceiverOffset + undefinedReceiverPrefix.length;
+		while ((wire[flagsOffset]! & 128) !== 0) flagsOffset++;
+		flagsOffset++;
+		for (const flags of [10, 255]) {
+			const invalidMode = wire.slice();
+			invalidMode[flagsOffset] = flags;
+			rejectsWire(`known-operation-invalid-mode-${flags}`, invalidMode);
+		}
+		const invalidSpecialization = wire.slice();
+		invalidSpecialization[flagsOffset + 1] = 255;
+		rejectsWire("known-operation-invalid-specialization", invalidSpecialization);
 
 		const splitPrefix = [builtinTag, 0, 9, 2, 1, 11];
 		const splitOffset = wire.findIndex((_, index) =>
@@ -918,7 +929,7 @@ describe("wire loader side-data validation", () => {
 		expect(projectionSites.length).toBeGreaterThan(0);
 		expect(
 			projectionSites.some(
-				({ fn, region }) => fn.instructions[region.callIp]?.opcode === "CALL_BUILTIN",
+				({ fn, region }) => fn.instructions[region.callIp]?.opcode === "CALL_KNOWN",
 			),
 		).toBe(true);
 		const wirePath = path.join(directory, "string-split-projection-region.malw");

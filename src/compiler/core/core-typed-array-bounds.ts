@@ -39,7 +39,10 @@ export function coreContainedTypedArrayIndexInBounds(
 	const allocation = definition(receiver);
 	const extent =
 		allocation !== undefined &&
-		fn.instructionOpcodeName(allocation) === "construct" &&
+		(fn.instructionOpcodeName(allocation) === "construct" ||
+			(fn.instructionOpcodeName(allocation) === "callKnown" &&
+				fn.instructionAttributes(allocation).construct === true &&
+				fn.instructionAttributes(allocation).argumentMode === undefined)) &&
 		fn.kernel.instructionOperandCount(allocation) === 2
 			? number(operand(allocation, 1))
 			: undefined;

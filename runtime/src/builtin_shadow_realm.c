@@ -506,3 +506,5 @@ void mal_builtin_shadow_realm_install(
 }
 
 #endif // MAL_REALMS
+
+#include "generated/known_native_builtin_shadow_realm_c.inc"

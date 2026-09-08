@@ -103,3 +103,5 @@ void mal_builtin_weak_ref_install(MalVm *vm) {
 
     mal_intrinsic_define_method_n(vm, prototype, "deref", 0, mal_builtin_weak_ref_prototype_deref);
 }
+
+#include "generated/known_native_builtin_weak_ref_c.inc"

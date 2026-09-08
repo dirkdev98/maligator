@@ -58,6 +58,8 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { lowerKnownOperationResults } from "./core-known-operation-results.ts";
+import { resolveKnownOperations } from "./core-known-operations.ts";
 import { reuseLiteralConstants } from "./core-literal-constants.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -302,7 +304,7 @@ function hasContainedFreshArrayBuiltinOpportunity(fn: CoreFunctionStore): boolea
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "call"
+			!["call", "callKnown"].includes(fn.instructionOpcodeName(instruction))
 		)
 			continue;
 		const known = fn.instructionAttributes(instruction).knownBuiltinCall as unknown as
@@ -313,7 +315,8 @@ function hasContainedFreshArrayBuiltinOpportunity(fn: CoreFunctionStore): boolea
 			known !== undefined &&
 			typeof operation === "string" &&
 			CONTAINED_FRESH_ARRAY_OPERATIONS.has(operation) &&
-			knownBuiltinCallProves(known, operation) &&
+			(fn.instructionOpcodeName(instruction) === "callKnown" ||
+				knownBuiltinCallProves(known, operation)) &&
 			compilerFactIsWorldInvariant(known.identity)
 		)
 			return true;
@@ -365,7 +368,9 @@ function hasExactCollectionEffectConsumer(fn: CoreFunctionStore): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "callBuiltin" ||
+			fn.instructionOpcodeName(instruction) !== "callKnown" ||
+			fn.instructionAttributes(instruction).construct ||
+			fn.instructionAttributes(instruction).argumentMode !== undefined ||
 			fn.instructionEffectRefinement(instruction) !== undefined
 		)
 			continue;
@@ -946,7 +951,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 const refineExactCollectionAccesses: CoreFunctionPass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["callBuiltin"],
+	requiredFunctionOpcodesAny: ["callKnown"],
 	admission: {
 		predicate: "unrefined builtin call with a supported collection receiver brand",
 		hasOpportunity({ program, function: functionId }) {
@@ -966,11 +971,14 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
 				fn.instructionEffectRefinement(instruction) !== undefined ||
-				fn.instructionOpcodeName(instruction) !== "callBuiltin"
+				fn.instructionOpcodeName(instruction) !== "callKnown" ||
+				fn.instructionAttributes(instruction).construct ||
+				fn.instructionAttributes(instruction).argumentMode !== undefined
 			)
 				continue;
 			const operation = fn.instructionAttributes(instruction).operation;
 			if (typeof operation !== "string") continue;
+			if (exactBuiltinCallDescriptor(operation) === undefined) continue;
 			const expected = coreCollectionReceiverBrandForOperation(operation);
 			const receiver = instructionOperandAt(fn, instruction, 0);
 			const exact =
@@ -994,11 +1002,12 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			});
 			editor.replaceInstruction(
 				instruction,
-				"callBuiltin",
+				"callKnown",
 				materializeInstructionOperands(fn, instruction),
 				{
 					attributes: {
 						...fn.instructionAttributes(instruction),
+						specialized: operation,
 						[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]: exact,
 					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
@@ -1129,7 +1138,8 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		interface Candidate {
 			readonly call: CoreInstructionId;
-			readonly property: CoreInstructionId;
+			readonly property?: CoreInstructionId;
+			readonly receiverPosition: number;
 			readonly allocation: CoreInstructionId;
 			readonly receiver: CoreValueId;
 			readonly forwarded: ReadonlyArray<CoreValueId>;
@@ -1140,11 +1150,15 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		for (const call of fn.instructionIds()) {
 			if (
 				fn.instructionKind(call) !== "operation" ||
-				fn.instructionOpcodeName(call) !== "call"
+				!["call", "callKnown"].includes(fn.instructionOpcodeName(call))
 			)
 				continue;
+			const knownCall = fn.instructionOpcodeName(call) === "callKnown";
+			const attrs = fn.instructionAttributes(call);
+			if (attrs.construct || attrs.argumentMode !== undefined) continue;
+			const receiverPosition = knownCall ? 0 : 1;
 			const callee = instructionOperandAt(fn, call, 0);
-			const receiver = instructionOperandAt(fn, call, 1);
+			const receiver = instructionOperandAt(fn, call, receiverPosition);
 			if (callee === undefined || receiver === undefined) continue;
 			const known = fn.instructionAttributes(call).knownBuiltinCall as unknown as
 				| KnownBuiltinCall
@@ -1154,22 +1168,26 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 				known === undefined ||
 				typeof operation !== "string" ||
 				!CONTAINED_FRESH_ARRAY_OPERATIONS.has(operation) ||
-				!knownBuiltinCallProves(known, operation) ||
+				(!knownCall && !knownBuiltinCallProves(known, operation)) ||
 				!compilerFactIsWorldInvariant(known.identity)
 			)
 				continue;
 			const exact = exactBuiltinCallDescriptor(operation);
 			if (exact?.receiverProof !== "fresh-array") continue;
-			if (fn.kernel.valueDefinitionKind(callee) !== 1) continue;
-			const property = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
+			if (!knownCall && fn.kernel.valueDefinitionKind(callee) !== 1) continue;
+			const property = knownCall
+				? undefined
+				: coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
 			if (
-				fn.instructionKind(property) !== "operation" ||
-				fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
-				fn.valueUseCount(callee) + fn.kernel.valueHandlerUseCount(callee) !== 1
+				property !== undefined &&
+				(fn.instructionKind(property) !== "operation" ||
+					fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
+					fn.valueUseCount(callee) + fn.kernel.valueHandlerUseCount(callee) !== 1)
 			)
 				continue;
 			const layout = provenance.allocationOf(receiver);
-			const propertyBase = instructionOperandAt(fn, property, 0);
+			const propertyBase =
+				property === undefined ? receiver : instructionOperandAt(fn, property, 0);
 			if (
 				layout?.kind !== "indexed" ||
 				propertyBase === undefined ||
@@ -1181,13 +1199,14 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			const forwarded: Array<CoreValueId> = [];
 			const forwardedCount =
 				exact.forwardedArgumentLimit === undefined
-					? operandCount - 2
-					: Math.min(operandCount - 2, exact.forwardedArgumentLimit);
+					? operandCount - receiverPosition - 1
+					: Math.min(operandCount - receiverPosition - 1, exact.forwardedArgumentLimit);
 			for (let index = 0; index < forwardedCount; index++)
-				forwarded.push(fn.kernel.operandAt(operandStart + 2 + index));
+				forwarded.push(fn.kernel.operandAt(operandStart + receiverPosition + 1 + index));
 			candidates.push({
 				call,
 				property,
+				receiverPosition,
 				allocation: layout.instruction,
 				receiver,
 				forwarded,
@@ -1198,7 +1217,11 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		if (candidates.length === 0) return undefined;
 		const byCall = new Map(candidates.map((candidate) => [candidate.call, candidate]));
 		const byProperty = new Map(
-			candidates.map((candidate) => [candidate.property, candidate]),
+			candidates.flatMap((candidate) =>
+				candidate.property === undefined
+					? []
+					: [[candidate.property, candidate] as const],
+			),
 		);
 		const contained = new Set<CoreInstructionId>();
 		for (const allocation of new Set(
@@ -1219,7 +1242,8 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 					const candidateProperty = byProperty.get(instruction);
 					const allowed =
 						(candidateProperty?.allocation === allocation && operandIndex === 0) ||
-						(candidateCall?.allocation === allocation && operandIndex === 1) ||
+						(candidateCall?.allocation === allocation &&
+							operandIndex === candidateCall.receiverPosition) ||
 						((opcode === "loadProperty" || opcode === "storeProperty") &&
 							operandIndex === 0 &&
 							(() => {
@@ -1246,13 +1270,16 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		if (retained.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
 		for (const candidate of retained) {
+			if (fn.instructionAttributes(candidate.call).specialized === candidate.operation)
+				continue;
 			editor.replaceInstruction(
 				candidate.call,
-				"callBuiltin",
+				"callKnown",
 				[candidate.receiver, ...candidate.forwarded],
 				{
 					attributes: {
 						operation: candidate.operation,
+						specialized: candidate.operation,
 						worldAssumptions: {
 							...builtinWorldAssumptions(candidate.operation, "exact-builtin-proof"),
 						},
@@ -1261,7 +1288,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 					sourcePosition: fn.instructionSourcePosition(candidate.call),
 				},
 			);
-			editor.removeInstruction(candidate.property);
+			if (candidate.property !== undefined) editor.removeInstruction(candidate.property);
 		}
 		return editor.commit();
 	},
@@ -2280,6 +2307,8 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	reuseLiteralConstants,
+	resolveKnownOperations,
+	lowerKnownOperationResults,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,
@@ -2302,6 +2331,8 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	reuseLiteralConstants,
+	resolveKnownOperations,
+	lowerKnownOperationResults,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
 	annotateKnownOwnSlots,

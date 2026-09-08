@@ -59,10 +59,18 @@ export type StaticDescription =
 			readonly length: number | null;
 			readonly properties: ReadonlyArray<StaticPropertyDescription>;
 			readonly ownKeysComplete?: boolean;
+			readonly unknownOwnKeys?: {
+				readonly numeric: boolean;
+				readonly named: ReadonlyArray<string>;
+			};
 	  }
 	| {
 			readonly kind: "object";
 			readonly ownKeysComplete?: boolean;
+			readonly unknownOwnKeys?: {
+				readonly numeric: boolean;
+				readonly named: ReadonlyArray<string>;
+			};
 			readonly prototype: StaticPrototype;
 			readonly properties: ReadonlyArray<StaticPropertyDescription>;
 	  }

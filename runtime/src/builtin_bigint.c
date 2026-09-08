@@ -259,3 +259,5 @@ void mal_builtin_bigint_install(MalVm *vm) {
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 }
+
+#include "generated/known_native_builtin_bigint_c.inc"
