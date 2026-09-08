@@ -1,3 +1,154 @@
+export type BuiltinPrimitiveResult =
+	| "number"
+	| "string"
+	| "boolean"
+	| "bigint"
+	| "symbol"
+	| "number-or-undefined"
+	| "string-or-undefined";
+
+const primitiveResults = new Map<string, BuiltinPrimitiveResult>();
+for (const [owner, result, methods] of [
+	["", "number", ["Number", "parseInt", "parseFloat"]],
+	["", "boolean", ["Boolean", "isNaN", "isFinite"]],
+	[
+		"",
+		"string",
+		[
+			"String",
+			"Date",
+			"encodeURI",
+			"encodeURIComponent",
+			"decodeURI",
+			"decodeURIComponent",
+			"escape",
+			"unescape",
+		],
+	],
+	["", "bigint", ["BigInt"]],
+	["", "symbol", ["Symbol"]],
+	["Number", "number", ["parseInt", "parseFloat"]],
+	["Number", "boolean", ["isNaN", "isFinite", "isInteger", "isSafeInteger"]],
+	["Number.prototype", "number", ["valueOf"]],
+	[
+		"Number.prototype",
+		"string",
+		["toString", "toFixed", "toExponential", "toPrecision", "toLocaleString"],
+	],
+	["Boolean.prototype", "boolean", ["valueOf"]],
+	["Boolean.prototype", "string", ["toString"]],
+	["BigInt", "bigint", ["asIntN", "asUintN"]],
+	["BigInt.prototype", "bigint", ["valueOf"]],
+	["BigInt.prototype", "string", ["toString", "toLocaleString"]],
+	["Symbol", "symbol", ["for"]],
+	["Symbol", "string-or-undefined", ["keyFor"]],
+	["Symbol.prototype", "symbol", ["valueOf", "Symbol.toPrimitive"]],
+	["Symbol.prototype", "string", ["toString"]],
+	["Symbol.prototype", "string-or-undefined", ["description<get>"]],
+	[
+		"Math",
+		"number",
+		[
+			"abs",
+			"acos",
+			"acosh",
+			"asin",
+			"asinh",
+			"atan",
+			"atanh",
+			"atan2",
+			"cbrt",
+			"ceil",
+			"clz32",
+			"cos",
+			"cosh",
+			"exp",
+			"expm1",
+			"floor",
+			"fround",
+			"f16round",
+			"hypot",
+			"imul",
+			"log",
+			"log1p",
+			"log2",
+			"log10",
+			"max",
+			"min",
+			"pow",
+			"random",
+			"round",
+			"sign",
+			"sin",
+			"sinh",
+			"sqrt",
+			"sumPrecise",
+			"tan",
+			"tanh",
+			"trunc",
+		],
+	],
+	["String", "string", ["fromCharCode", "fromCodePoint", "raw"]],
+	[
+		"String.prototype",
+		"string",
+		[
+			"valueOf",
+			"toString",
+			"charAt",
+			"concat",
+			"slice",
+			"substring",
+			"substr",
+			"repeat",
+			"padStart",
+			"padEnd",
+			"trim",
+			"trimStart",
+			"trimEnd",
+			"trimLeft",
+			"trimRight",
+			"toLowerCase",
+			"toUpperCase",
+			"toLocaleLowerCase",
+			"toLocaleUpperCase",
+			"normalize",
+			"toWellFormed",
+			"anchor",
+			"big",
+			"blink",
+			"bold",
+			"fixed",
+			"fontcolor",
+			"fontsize",
+			"italics",
+			"link",
+			"small",
+			"strike",
+			"sub",
+			"sup",
+		],
+	],
+	[
+		"String.prototype",
+		"number",
+		["charCodeAt", "indexOf", "lastIndexOf", "localeCompare"],
+	],
+	["String.prototype", "boolean", ["includes", "startsWith", "endsWith", "isWellFormed"]],
+	["String.prototype", "string-or-undefined", ["at"]],
+	["String.prototype", "number-or-undefined", ["codePointAt"]],
+] as const) {
+	for (const method of methods)
+		primitiveResults.set(owner === "" ? method : `${owner}.${method}`, result);
+}
+
+// Normal-completion facts do not license removing coercion, protocol calls, or throws.
+export function builtinPrimitiveResult(
+	operation: string,
+): BuiltinPrimitiveResult | undefined {
+	return primitiveResults.get(operation);
+}
+
 export type SemanticCondition =
 	| "always"
 	| "object-receiver"

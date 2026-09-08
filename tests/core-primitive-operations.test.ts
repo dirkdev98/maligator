@@ -11,6 +11,63 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each(["at", "charAt", "codePointAt"])(
+		"reads static UTF-16 text at dynamic numeric positions with %s",
+		(method) => {
+			for (const expression of [
+				`'a😀z'.${method}(+x)`,
+				`String.prototype.${method}.call(x, 1)`,
+			])
+				expect(inspect(expression).c.source).toContain(
+					"mal_builtin_string_character_direct(",
+				);
+			expect(inspect(`'a😀z'.${method}(x)`).c.source).not.toContain(
+				"mal_builtin_string_character_direct(",
+			);
+		},
+	);
+
+	it.each(["indexOf", "lastIndexOf", "includes", "startsWith", "endsWith"])(
+		"selects guarded direct String %s for independent static inputs",
+		(method) => {
+			for (const expression of [
+				`'abc'.${method}(x, +x)`,
+				`String(x).${method}('b', +x)`,
+				`String.prototype.${method}.call(x, x, 1)`,
+			]) {
+				const output = inspect(expression);
+				expect(output.c.source).toContain("mal_builtin_string_search_direct(");
+			}
+			const coercive = inspect(`'abc'.${method}('a', x)`);
+			expect(coercive.c.source).not.toContain("mal_builtin_string_search_direct(");
+		},
+	);
+
+	it.each([
+		"String(x).slice(1)",
+		"String(x).trim()",
+		"String(x).repeat(2)",
+		"String(x) + x",
+		"x + String(x)",
+	])("preserves the String result of %s for chained consumers", (expression) => {
+		const output = inspect(`(${expression}).charCodeAt(+x)`);
+		expect(output.c.source).toContain("mal_builtin_string_char_code_at_number(");
+		expect(
+			output.core.some(
+				(operation) => operation.attributes.operation === "String.prototype.charCodeAt",
+			),
+		).toBe(true);
+	});
+
+	it.each(["replace", "replaceAll", "search", "split", "match", "matchAll"])(
+		"keeps custom String %s protocol results untyped",
+		(method) => {
+			const output = inspect(`String(x).${method}(x).charCodeAt(0)`);
+			expect(output.c.source).not.toContain("mal_builtin_string_char_code_at_number(");
+			expect(output.structure.genericCalls).toBeGreaterThan(0);
+		},
+	);
+
 	it.each(["isFinite", "isInteger", "isSafeInteger"])(
 		"specializes Number.%s without coercing unknown inputs",
 		(method) => {

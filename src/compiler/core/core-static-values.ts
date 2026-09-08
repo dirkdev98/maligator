@@ -1,3 +1,4 @@
+import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
@@ -1125,6 +1126,25 @@ export class CoreStaticValueAnalysis {
 			}
 		}
 		if (
+			opcode === "binary" &&
+			attributes.operator === "+" &&
+			operands.some((operand) => {
+				const fact = this.query(operand);
+				return fact.kind === "known" && fact.brand === "string";
+			})
+		) {
+			return primitive(
+				intern.intern({
+					kind: "engine-payload",
+					format: "dynamic-result",
+					targetContract: "string-concatenation",
+					words: [],
+					contentsComplete: false,
+				}),
+				"string",
+			);
+		}
+		if (
 			opcode === "unary" &&
 			["+", "!", "tostring"].includes(attributes.operator as string)
 		) {
@@ -1310,17 +1330,12 @@ export class CoreStaticValueAnalysis {
 			const canonical = callee.kind === "known" ? callee.canonical : undefined;
 
 			if (opcode === "call" && canonical !== undefined) {
-				const primitiveBrand =
-					canonical === "Number"
-						? "number"
-						: canonical === "BigInt"
-							? "bigint"
-							: canonical === "Boolean"
-								? "boolean"
-								: canonical === "String" || canonical === "Date"
-									? "string"
-									: undefined;
-				if (primitiveBrand !== undefined)
+				const primitiveBrand = builtinPrimitiveResult(canonical);
+				if (
+					primitiveBrand !== undefined &&
+					primitiveBrand !== "number-or-undefined" &&
+					primitiveBrand !== "string-or-undefined"
+				)
 					return primitive(
 						intern.intern({
 							kind: "engine-payload",

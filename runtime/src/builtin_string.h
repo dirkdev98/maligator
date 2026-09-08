@@ -80,6 +80,32 @@ MalValue mal_builtin_string_char_code_at_known(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
 );
 
+typedef enum MalStringSearchOp {
+    MAL_STRING_SEARCH_INDEX_OF,
+    MAL_STRING_SEARCH_LAST_INDEX_OF,
+    MAL_STRING_SEARCH_INCLUDES,
+    MAL_STRING_SEARCH_STARTS_WITH,
+    MAL_STRING_SEARCH_ENDS_WITH,
+} MalStringSearchOp;
+
+typedef enum MalStringCharacterOp {
+    MAL_STRING_CHARACTER_AT,
+    MAL_STRING_CHARACTER_CHAR_AT,
+    MAL_STRING_CHARACTER_CODE_POINT_AT,
+} MalStringCharacterOp;
+
+// Flat-string guard misses leave receiver coercion and position conversion to the caller.
+bool mal_builtin_string_character_direct(
+    MalVm *vm, MalValue receiver, f64 position,
+    MalStringCharacterOp operation, MalValue *result
+);
+
+// A false result is side-effect-free; flat primitive strings take the allocation-free path.
+bool mal_builtin_string_search_direct(
+    MalValue receiver, MalValue needle, f64 position,
+    MalStringSearchOp operation, MalValue *result
+);
+
 /** Allocation-free summary of a closed ASCII upper/lower-case capture chain. */
 bool mal_builtin_string_ascii_case_chain_length_span(
     MalVm *vm,

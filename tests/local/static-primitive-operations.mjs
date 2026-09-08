@@ -404,3 +404,145 @@ function extra() {
 }
 show("abc".slice(1, 2, extra()));
 show(events);
+
+function stringChain(value, index) {
+	return String(value).slice(1).trim().charCodeAt(+index);
+}
+function stringConcatLeft(value, index) {
+	return (String(value) + value).charCodeAt(+index);
+}
+function stringConcatRight(value, index) {
+	return (value + String(value)).charCodeAt(+index);
+}
+for (const value of ["a😀z", "  a  ", "\ud800z", "", 1234]) {
+	for (const index of [-Infinity, -1, -0, NaN, 0.9, 1, 2, Infinity]) {
+		show(stringChain(value, index));
+		show(stringConcatLeft(value, index));
+		show(stringConcatRight(value, index));
+	}
+}
+events = "";
+const chainValue = {
+	toString() {
+		events += "s";
+		return " abc ";
+	},
+	valueOf() {
+		events += "v";
+		return 9;
+	},
+};
+const chainIndex = {
+	valueOf() {
+		events += "i";
+		return 1;
+	},
+};
+show(stringChain(chainValue, chainIndex));
+show(events);
+events = "";
+show(stringConcatLeft(chainValue, chainIndex));
+show(events);
+events = "";
+show(stringConcatRight(chainValue, chainIndex));
+show(events);
+try {
+	stringChain("a", Symbol());
+} catch (error) {
+	show(error.name);
+}
+try {
+	stringConcatLeft(Symbol(), 0);
+} catch (error) {
+	show(error.name);
+}
+for (const method of ["replace", "replaceAll", "search", "split", "match", "matchAll"]) {
+	const symbol = method === "replaceAll" ? Symbol.replace : Symbol[method];
+	const custom = {
+		[symbol]() {
+			return {
+				charCodeAt() {
+					return method + ":custom";
+				},
+			};
+		},
+	};
+	show(String("abc")[method](custom).charCodeAt(0));
+}
+
+function stringSearchAll(text, needle, from) {
+	show(text.indexOf(needle, +from));
+	show(text.lastIndexOf(needle, +from));
+	show(text.includes(needle, +from));
+	show(text.startsWith(needle, +from));
+	show(text.endsWith(needle, +from));
+}
+function stringSearchDefaults(text, needle) {
+	show(text.indexOf(needle));
+	show(text.lastIndexOf(needle));
+	show(text.includes(needle));
+	show(text.startsWith(needle));
+	show(text.endsWith(needle));
+	show(text.endsWith(needle, undefined));
+	show(text.lastIndexOf(needle, undefined));
+}
+for (const text of ["", "ababa", "a😀\ud800z", "abcd".repeat(40) + "efgh".repeat(40)]) {
+	for (const needle of ["", "a", "aba", "😀", "\ud800", "de", "h", "missing"]) {
+		stringSearchDefaults(text, needle);
+		for (const from of [-Infinity, -1, -0, NaN, 0.9, 1, 3, 10, Infinity]) {
+			stringSearchAll(text, needle, from);
+		}
+	}
+}
+events = "";
+const searchReceiver = {
+	toString() {
+		events += "r";
+		return "abc";
+	},
+};
+const searchNeedle = {
+	get [Symbol.match]() {
+		events += "m";
+		return false;
+	},
+	toString() {
+		events += "n";
+		return "b";
+	},
+};
+show(String.prototype.includes.call(searchReceiver, searchNeedle, 1));
+show(events);
+events = "";
+show(String.prototype.indexOf.call(searchReceiver, searchNeedle, 1));
+show(events);
+try {
+	show("abc".includes(/b/, 0));
+} catch (error) {
+	show(error.name);
+}
+try {
+	show("abc".indexOf(Symbol(), 0));
+} catch (error) {
+	show(error.name);
+}
+
+function stringCharacters(text, index) {
+	show(text.at(+index));
+	show(text.charAt(+index));
+	show(text.charCodeAt(+index));
+	show(text.codePointAt(+index));
+}
+for (const text of ["", "ab", "a😀\ud800z", "abcd".repeat(40) + "efgh".repeat(40)]) {
+	for (const index of [-Infinity, -5, -1.9, -0, NaN, 0.9, 1, 2, 3, 1000, Infinity]) {
+		stringCharacters(text, index);
+	}
+}
+show(String.prototype.at.call(searchReceiver, -1));
+show(String.prototype.charAt.call(searchReceiver, 1));
+show(String.prototype.codePointAt.call(searchReceiver, 1));
+try {
+	show("abc".at(Symbol()));
+} catch (error) {
+	show(error.name);
+}

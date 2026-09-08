@@ -3,6 +3,7 @@ import {
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
 } from "../shared/builtin-registry.ts";
+import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import {
 	compilerFactIsWorldInvariant,
 	knownFact,
@@ -29,6 +30,7 @@ import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreValueControlFlowUseMask,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
@@ -766,10 +768,12 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 		);
 		if (calls.length === 0) return undefined;
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
+		const edgeUses = coreValueControlFlowUseMask(fn);
 		let kinds: CoreValueKindAnalysis | undefined;
 		let editor: CoreEditor | undefined;
 		const canScalarizeNumber = (value: CoreValueId) => {
 			if (fn.valueRepresentation(value) === "f64") return true;
+			if (edgeUses[value] !== 0) return false;
 			const scalar = (kinds ??= context.analysis(
 				CORE_LOCAL_VALUE_KIND_ANALYSIS,
 			)).exactScalar(value);
@@ -789,6 +793,58 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				if (attributes.construct || attributes.argumentMode !== undefined) continue;
 				const operation = attributes.operation;
 				if (typeof operation !== "string") continue;
+				if (builtinPrimitiveResult(operation) === "string") {
+					const result = fn.kernel.resultAt(
+						fn.kernel.instructionResultStart(instruction),
+					);
+					if (fn.valueRepresentation(result) === "boxed" && edgeUses[result] === 0) {
+						editor ??= CoreEditor.open(program, item.function);
+						editor.setValueRepresentation(result, "string");
+					}
+				}
+				const stringSearch = [
+					"String.prototype.indexOf",
+					"String.prototype.lastIndexOf",
+					"String.prototype.includes",
+					"String.prototype.startsWith",
+					"String.prototype.endsWith",
+				].includes(operation);
+				if (
+					[
+						"String.prototype.charCodeAt",
+						"String.prototype.charAt",
+						"String.prototype.at",
+						"String.prototype.codePointAt",
+					].includes(operation) ||
+					stringSearch
+				) {
+					const receiver = instructionOperand(fn, instruction, 0);
+					const definition =
+						receiver === undefined ? undefined : definingInstruction(fn, receiver);
+					if (
+						receiver !== undefined &&
+						edgeUses[receiver] === 0 &&
+						fn.valueRepresentation(receiver) === "boxed" &&
+						definition !== undefined &&
+						fn.instructionOpcodeName(definition) === "binary" &&
+						fn.instructionAttributes(definition).operator === "+" &&
+						(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
+							receiver,
+						) === "string"
+					) {
+						editor ??= CoreEditor.open(program, item.function);
+						editor.setValueRepresentation(receiver, "string");
+					}
+					const position = instructionOperand(fn, instruction, stringSearch ? 2 : 1);
+					if (
+						position !== undefined &&
+						fn.valueRepresentation(position) !== "f64" &&
+						canScalarizeNumber(position)
+					) {
+						editor ??= CoreEditor.open(program, item.function);
+						editor.setValueRepresentation(position, "f64");
+					}
+				}
 				const numberPredicate = [
 					"Number.isNaN",
 					"Number.isFinite",

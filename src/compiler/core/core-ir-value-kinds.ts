@@ -1,3 +1,4 @@
+import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -39,6 +40,16 @@ import type {
 	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+
+const BUILTIN_RESULT_KIND_MASKS = {
+	number: COMPILER_VALUE_KIND_NUMBER,
+	string: COMPILER_VALUE_KIND_STRING,
+	boolean: COMPILER_VALUE_KIND_BOOLEAN,
+	bigint: COMPILER_VALUE_KIND_BIGINT,
+	symbol: COMPILER_VALUE_KIND_SYMBOL,
+	"number-or-undefined": COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+	"string-or-undefined": COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED,
+};
 
 export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
 
@@ -248,6 +259,18 @@ function addOperationTransfer(
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, supplied);
 		return;
 	}
+	if (opcode === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		const result =
+			!attributes.construct && typeof attributes.operation === "string"
+				? builtinPrimitiveResult(attributes.operation)
+				: undefined;
+		const mask = result === undefined ? undefined : BUILTIN_RESULT_KIND_MASKS[result];
+		if (mask !== undefined) {
+			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, mask);
+			return;
+		}
+	}
 	const forwarded = inputs?.operationResultValue?.(instruction, output);
 	if (forwarded !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_COPY, output, 0, [forwarded]);
@@ -441,8 +464,8 @@ export function analyzeCoreValueKinds(
 			if (left === 0 || right === 0) incoming = 0;
 			else if (
 				kind === KIND_TRANSFER_ADD &&
-				compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) &&
-				compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
+				(compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
+					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING))
 			) {
 				incoming = COMPILER_VALUE_KIND_STRING;
 			} else {

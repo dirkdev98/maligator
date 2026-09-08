@@ -172,6 +172,20 @@ const NUMBER_PREDICATES = new Set([
 	"Number.isSafeInteger",
 ]);
 
+const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>> = {
+	"String.prototype.indexOf": ["INDEX_OF", "0.0"],
+	"String.prototype.lastIndexOf": ["LAST_INDEX_OF", "NAN"],
+	"String.prototype.includes": ["INCLUDES", "0.0"],
+	"String.prototype.startsWith": ["STARTS_WITH", "0.0"],
+	"String.prototype.endsWith": ["ENDS_WITH", "INFINITY"],
+};
+
+const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
+	"String.prototype.at": "AT",
+	"String.prototype.charAt": "CHAR_AT",
+	"String.prototype.codePointAt": "CODE_POINT_AT",
+};
+
 const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
 function nativeMathBinaryExpr(
@@ -5227,6 +5241,17 @@ function emitInstruction(
 		}
 		case "CALL_KNOWN": {
 			if (!instruction.construct && instruction.argumentMode === undefined) {
+				if (instruction.operation === "String.prototype.charCodeAt") {
+					const positionOperand = instruction.arguments[0];
+					const position =
+						positionOperand === undefined ? "0.0" : nativeNumberOperand(positionOperand);
+					if (operandRep(instruction.thisValue) === "string" && position !== null) {
+						return [
+							`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_number(${boxedOperand(instruction.thisValue)}, ${position})`)};`,
+							poll,
+						];
+					}
+				}
 				if (
 					NUMBER_PREDICATES.has(instruction.operation) &&
 					instruction.arguments[0] !== undefined
@@ -5297,6 +5322,57 @@ function emitInstruction(
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					poll,
 				];
+				const search = STRING_SEARCH_KERNELS[instruction.operation];
+				const character = STRING_CHARACTER_KERNELS[instruction.operation];
+				if (
+					character !== undefined &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined
+				) {
+					const positionOperand = instruction.arguments[0];
+					const position =
+						positionOperand === undefined ||
+						decodeVmValueOperand(positionOperand).kind === "undefined"
+							? "0.0"
+							: nativeNumberOperand(positionOperand);
+					if (position !== null) {
+						const result = `character_result_${ip}`;
+						return [
+							`MalValue ${result};`,
+							`if (mal_builtin_string_character_direct(vm, ${boxedOperand(instruction.thisValue)}, ${position}, MAL_STRING_CHARACTER_${character}, &${result})) {`,
+							`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							`  ${poll}`,
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
+				if (
+					search !== undefined &&
+					!instruction.construct &&
+					instruction.argumentMode === undefined &&
+					instruction.arguments[0] !== undefined
+				) {
+					const positionOperand = instruction.arguments[1];
+					const position =
+						positionOperand === undefined ||
+						decodeVmValueOperand(positionOperand).kind === "undefined"
+							? search[1]
+							: nativeNumberOperand(positionOperand);
+					if (position !== null) {
+						const result = `search_result_${ip}`;
+						return [
+							`MalValue ${result};`,
+							`if (mal_builtin_string_search_direct(${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0])}, ${position}, MAL_STRING_SEARCH_${search[0]}, &${result})) {`,
+							`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							`  ${poll}`,
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
 				if (nativeStringSliceNumberFusionAction !== undefined) {
 					const { fusion } = nativeStringSliceNumberFusionAction;
 					const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
@@ -5451,15 +5527,6 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
-				const positionOperand = instruction.arguments[0];
-				const position =
-					positionOperand === undefined ? "0.0" : nativeNumberOperand(positionOperand);
-				if (operandRep(instruction.thisValue) === "string" && position !== null) {
-					return [
-						`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_number(${boxedOperand(instruction.thisValue)}, ${position})`)};`,
-						poll,
-					];
-				}
 				return [
 					`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
 					throwCheck(),
