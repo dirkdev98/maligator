@@ -21,6 +21,7 @@ import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimiz
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockParameters,
@@ -40,6 +41,14 @@ const context: CoreCompilationContext = {
 		singleAssignmentGlobalSlots: [],
 		singleAssignmentCapturedSlots: [],
 		retainedHostInstallers: [],
+	},
+};
+
+const lockedMathContext: CoreCompilationContext = {
+	...context,
+	facts: {
+		...context.facts,
+		world: { ...context.facts.world, primordialPolicy: "locked" },
 	},
 };
 
@@ -671,6 +680,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("hoists pure loop invariants while retaining observable identity creation", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
@@ -693,7 +703,12 @@ describe("Core control-flow analyses and passes", () => {
 			outputRepresentations: ["f64"],
 		});
 		const [sine] = builder.appendInstruction(body, "mathUnaryNumber", [constant!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.appendInstruction(body, "storeGlobal", [sine!], {
@@ -841,6 +856,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("hoists only exact load partitions unchanged by the loop", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
@@ -864,7 +880,15 @@ describe("Core control-flow analyses and passes", () => {
 			header,
 			"mathBinaryNumber",
 			[changing!, stable!],
-			{ attributes: { operation: "Math.max" }, outputRepresentations: ["f64"] },
+			{
+				attributes: {
+					operation: "Math.max",
+					worldAssumptions: {
+						...builtinWorldAssumptions("Math.max", "exact-builtin-proof"),
+					},
+				},
+				outputRepresentations: ["f64"],
+			},
 		);
 		builder.setTerminator(header, {
 			kind: "branch",
@@ -1060,6 +1084,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("removes a merge expression already available on every incoming path", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
@@ -1083,7 +1108,12 @@ describe("Core control-flow analyses and passes", () => {
 				"mathUnaryNumber",
 				[operand!],
 				{
-					attributes: { operation: "Math.sin" },
+					attributes: {
+						operation: "Math.sin",
+						worldAssumptions: {
+							...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+						},
+					},
 					outputRepresentations: ["f64"],
 				},
 			);
@@ -1096,7 +1126,12 @@ describe("Core control-flow analyses and passes", () => {
 			});
 		}
 		const [redundant] = builder.appendInstruction(merge, "mathUnaryNumber", [operand!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(merge, { kind: "return", value: redundant! });
@@ -1115,6 +1150,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("does not resurrect a dead predecessor expression for PRE", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
@@ -1133,7 +1169,12 @@ describe("Core control-flow analyses and passes", () => {
 			alternate: { block: right, arguments: [] },
 		});
 		builder.appendInstruction(left, "mathUnaryNumber", [operand!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(left, {
@@ -1148,7 +1189,12 @@ describe("Core control-flow analyses and passes", () => {
 			edge: { block: merge, arguments: [] },
 		});
 		const [result] = builder.appendInstruction(merge, "mathUnaryNumber", [operand!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(merge, { kind: "return", value: result! });
@@ -1167,6 +1213,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("numbers pure values through the dominator tree", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
 		const entry = builder.createBlock([
@@ -1182,7 +1229,12 @@ describe("Core control-flow analyses and passes", () => {
 			outputRepresentations: ["f64"],
 		});
 		const [dominating] = builder.appendInstruction(entry, "mathUnaryNumber", [numeric!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.appendInstruction(entry, "storeGlobal", [dominating!], {
@@ -1195,7 +1247,12 @@ describe("Core control-flow analyses and passes", () => {
 			alternate: { block: exit, arguments: [] },
 		});
 		const [redundant] = builder.appendInstruction(body, "mathUnaryNumber", [numeric!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(body, { kind: "return", value: redundant! });
@@ -1221,6 +1278,7 @@ describe("Core control-flow analyses and passes", () => {
 	});
 
 	it("hoists invariants after canonicalizing multiple latches", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
 		const entry = builder.createBlock([
@@ -1250,7 +1308,12 @@ describe("Core control-flow analyses and passes", () => {
 			outputRepresentations: ["f64"],
 		});
 		const [sine] = builder.appendInstruction(body, "mathUnaryNumber", [constant!], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.appendInstruction(body, "storeGlobal", [sine!], {

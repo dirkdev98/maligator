@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 40u
+#define WIRE_VERSION 41u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {

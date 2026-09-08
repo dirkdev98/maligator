@@ -1,3 +1,4 @@
+import { StaticDescriptionInterner } from "../shared/static-values.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CoreFunctionKernel } from "./core-function-kernel.ts";
 import {
@@ -2503,6 +2504,11 @@ export class CoreFunctionStore {
 
 export class CoreProgram {
 	readonly registry: CoreOpcodeRegistry;
+	#staticDescriptions: StaticDescriptionInterner | undefined;
+
+	get staticDescriptions(): StaticDescriptionInterner {
+		return (this.#staticDescriptions ??= new StaticDescriptionInterner());
+	}
 	readonly #functions: Array<CoreFunctionStore | undefined> = [];
 	#generation = 0;
 	readonly #versions: Record<CoreProgramChangeDomain, number> = {

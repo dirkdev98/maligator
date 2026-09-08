@@ -1,7 +1,7 @@
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { MaligatorIntlFeature } from "../../src/public-api.d.ts";
 import {
 	assertResultPass,
@@ -16,6 +16,7 @@ import {
 // Segmenter (LSTM, ~12 MB) and the experimental trio. Asserts the selected services
 // localize, the dropped ones are absent, and the subset binary is much smaller.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-intl-feat-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const CORE = [
 	"collator",
 	"number-format",
@@ -67,4 +68,18 @@ describe("engine.intl.features (service subset)", () => {
 		});
 		assertResultPass(runToStdout(segmenterBin));
 	});
+	it.each(["relative-time-format", "duration-format"] as const)(
+		"formats parts with only %s enabled",
+		(feature) => {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/intl_isolated_parts.mjs",
+				name: `intl-isolated-${feature}`,
+				mainFile: HOST_MAIN,
+				outDir,
+				intlFeatures: [feature],
+			});
+			assertResultPass(runToStdout(binary));
+			assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
+		},
+	);
 });

@@ -1248,6 +1248,9 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 				{
 					attributes: {
 						operation: candidate.operation,
+						worldAssumptions: {
+							...builtinWorldAssumptions(candidate.operation, "exact-builtin-proof"),
+						},
 						knownBuiltinCall: candidate.known as unknown as CoreAttributeValue,
 					},
 					sourcePosition: fn.instructionSourcePosition(candidate.call),
@@ -2301,6 +2304,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	scalarReplaceContainedAggregates,
 	sinkConditionalObjectAllocations,
 ];
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
 	compilerFactIsWorldInvariant,

@@ -14,6 +14,7 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import {
 	compilerProgramFactsFromConfig,
 	conservativeCompilerProgramFacts,
@@ -41,6 +42,14 @@ const context: CoreCompilationContext = {
 		singleAssignmentGlobalSlots: [],
 		singleAssignmentCapturedSlots: [],
 		retainedHostInstallers: [],
+	},
+};
+
+const lockedMathContext: CoreCompilationContext = {
+	...context,
+	facts: {
+		...context.facts,
+		world: { ...context.facts.world, primordialPolicy: "locked" },
 	},
 };
 
@@ -976,6 +985,7 @@ describe("Core local canonicalization", () => {
 	});
 
 	it("eliminates a deep pure graph while retaining unused observable effects", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
@@ -986,7 +996,15 @@ describe("Core local canonicalization", () => {
 		})[0]!;
 		for (let index = 0; index < 32; index++) {
 			dead = builder.appendInstruction(entry, "mathUnaryNumber", [dead], {
-				attributes: { operation: index % 2 === 0 ? "Math.sin" : "Math.cos" },
+				attributes: {
+					operation: index % 2 === 0 ? "Math.sin" : "Math.cos",
+					worldAssumptions: {
+						...builtinWorldAssumptions(
+							index % 2 === 0 ? "Math.sin" : "Math.cos",
+							"exact-builtin-proof",
+						),
+					},
+				},
 				outputRepresentations: ["f64"],
 			})[0]!;
 		}
@@ -1006,6 +1024,7 @@ describe("Core local canonicalization", () => {
 	});
 
 	it("removes dead phi inputs and their pure producers in one liveness update", () => {
+		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -1038,7 +1057,12 @@ describe("Core local canonicalization", () => {
 		});
 		const joined = inspectCoreBlockParameters(builder, join)[0]!.value;
 		builder.appendInstruction(join, "mathUnaryNumber", [joined], {
-			attributes: { operation: "Math.sin" },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(join, { kind: "return", value: returned! });

@@ -278,6 +278,7 @@ export interface WorldFacts {
 		readonly regexp: boolean;
 		readonly temporal: boolean;
 		readonly intl: boolean;
+		readonly intlServices?: ReadonlyArray<string>;
 	};
 	/** Host objects are deliberately outside the Phase 1 primordial graph. */
 	readonly protectedSurface: "ecmascript";
@@ -299,6 +300,7 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
 			regexp: config.engine.regexp,
 			temporal: config.engine.temporal,
 			intl: config.engine.intl.enabled,
+			intlServices: config.engine.intl.features,
 		},
 		protectedSurface: "ecmascript",
 	};

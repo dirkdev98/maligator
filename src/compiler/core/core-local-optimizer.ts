@@ -1,3 +1,4 @@
+import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_FUNCTION_HAS_BRANCHES,
@@ -1054,6 +1055,7 @@ export class CoreLocalOptimizer {
 				const equal = loose
 					? this.#abstractPrimitiveEquality(left, right)
 					: this.#strictPrimitiveEquality(left, right);
+				if (equal === undefined) return undefined;
 				return {
 					kind: "boolean",
 					value:
@@ -1128,69 +1130,26 @@ export class CoreLocalOptimizer {
 		left: number,
 		right: number,
 	): LocalConstant | undefined {
-		switch (operator) {
-			case "+":
-				return { kind: "number", value: left + right };
-			case "-":
-				return { kind: "number", value: left - right };
-			case "*":
-				return { kind: "number", value: left * right };
-			case "/":
-				return { kind: "number", value: left / right };
-			case "%":
-				return { kind: "number", value: left % right };
-			case "**":
-				return { kind: "number", value: left ** right };
-			case "&":
-				return { kind: "number", value: left & right };
-			case "|":
-				return { kind: "number", value: left | right };
-			case "^":
-				return { kind: "number", value: left ^ right };
-			case "<<":
-				return { kind: "number", value: left << right };
-			case ">>":
-				return { kind: "number", value: left >> right };
-			case ">>>":
-				return { kind: "number", value: left >>> right };
-			case "<":
-				return { kind: "boolean", value: left < right };
-			case "<=":
-				return { kind: "boolean", value: left <= right };
-			case ">":
-				return { kind: "boolean", value: left > right };
-			case ">=":
-				return { kind: "boolean", value: left >= right };
-			case "==":
-			case "===":
-				return { kind: "boolean", value: left === right };
-			case "!=":
-			case "!==":
-				return { kind: "boolean", value: left !== right };
-			default:
-				return undefined;
-		}
+		if (typeof operator !== "string") return undefined;
+		const result = evaluateConstantOperation(`number.binary:${operator}`, [
+			{ kind: "number", value: left },
+			{ kind: "number", value: right },
+		]);
+		return result.kind === "value" &&
+			(result.value.kind === "number" || result.value.kind === "boolean")
+			? result.value
+			: undefined;
 	}
 
 	#numberUnary(operator: CoreAttributeValue, value: number): LocalConstant | undefined {
-		switch (operator) {
-			case "!":
-				return { kind: "boolean", value: !value };
-			case "-":
-				return { kind: "number", value: -value };
-			case "+":
-				return { kind: "number", value };
-			case "~":
-				return { kind: "number", value: ~value };
-			case "tonumeric":
-				return { kind: "number", value };
-			case "increment":
-				return { kind: "number", value: value + 1 };
-			case "decrement":
-				return { kind: "number", value: value - 1 };
-			default:
-				return undefined;
-		}
+		if (typeof operator !== "string") return undefined;
+		const result = evaluateConstantOperation(`number.unary:${operator}`, [
+			{ kind: "number", value },
+		]);
+		return result.kind === "value" &&
+			(result.value.kind === "number" || result.value.kind === "boolean")
+			? result.value
+			: undefined;
 	}
 
 	#strictPrimitiveEquality(left: LocalConstant, right: LocalConstant): boolean {
@@ -1210,7 +1169,10 @@ export class CoreLocalOptimizer {
 		}
 	}
 
-	#abstractPrimitiveEquality(left: LocalConstant, right: LocalConstant): boolean {
+	#abstractPrimitiveEquality(
+		left: LocalConstant,
+		right: LocalConstant,
+	): boolean | undefined {
 		if (left.kind === right.kind) return this.#strictPrimitiveEquality(left, right);
 		if (
 			(left.kind === "null" && right.kind === "undefined") ||
@@ -1232,11 +1194,19 @@ export class CoreLocalOptimizer {
 		}
 		if (left.kind === "number" && right.kind === "string") {
 			const value = this.#decodeString(right.index);
-			return value !== undefined && left.value === Number(value);
+			if (value === undefined) return undefined;
+			const result = evaluateConstantOperation("string.integer-number", [
+				{ kind: "string", value },
+			]);
+			return result.kind === "value" && result.value.kind === "number"
+				? left.value === result.value.value
+				: undefined;
 		}
 		if (left.kind === "string" && right.kind === "number") {
 			const value = this.#decodeString(left.index);
-			return value !== undefined && Number(value) === right.value;
+			return value === undefined
+				? undefined
+				: this.#abstractPrimitiveEquality(right, left);
 		}
 		return false;
 	}

@@ -1,5 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
-import { literalPrototypeMethods } from "../shared/literal-prototype-methods.ts";
+import { literalPrototypeMethods } from "../shared/builtin-registry.ts";
 import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -25,7 +25,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 40;
+export const WIRE_VERSION = 41;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 

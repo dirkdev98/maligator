@@ -4,7 +4,7 @@ import {
 	generatePrimordialRegistryInclude,
 	validateBuiltinRegistry,
 } from "../src/compiler/shared/builtin-registry.ts";
-import { generateLiteralPrototypeMethods } from "../src/compiler/shared/literal-prototype-methods.ts";
+import { generateLiteralPrototypeMethods } from "../src/compiler/shared/builtin-registry.ts";
 
 validateBuiltinRegistry();
 writeFileSync(

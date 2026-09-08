@@ -876,6 +876,14 @@ exit 7
 			"#define MAL_ABI 2\n",
 		);
 		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(initial);
+		const afterHeader = runtimeHeaderHash(runtimeDirectory, false);
+		const include = path.join(runtimeDirectory, "src/generated/entries.inc");
+		mkdirSync(path.dirname(include), { recursive: true });
+		writeFileSync(include, "ENTRY(first)\n");
+		const afterInclude = runtimeHeaderHash(runtimeDirectory, false);
+		expect(afterInclude).not.toBe(afterHeader);
+		writeFileSync(include, "ENTRY(other)\n");
+		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(afterInclude);
 	});
 
 	it("isolates the SQLite amalgamation from runtime header names", () => {
@@ -1195,6 +1203,15 @@ exit 7
 		ensureNativeArtifacts(context);
 		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst + 1);
 		expect(events).toEqual([false, true, false, false]);
+
+		const include = path.join(runtimeDirectory, "src/generated/entries.inc");
+		mkdirSync(path.dirname(include), { recursive: true });
+		writeFileSync(include, "ENTRY(first)\n");
+		ensureNativeArtifacts(context);
+		ensureNativeArtifacts(context);
+		writeFileSync(include, "ENTRY(other)\n");
+		ensureNativeArtifacts(context);
+		expect(events.slice(-3)).toEqual([false, true, false]);
 	});
 
 	it("reuses runtime objects whose preprocessed inputs survive a feature flip", () => {

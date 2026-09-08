@@ -1,4 +1,72 @@
+import { builtinInvocationSummary } from "./builtin-semantics.ts";
 import type { EffectKind } from "./compiler-facts.ts";
+import { literalPrimordialBindings } from "./primordial-catalog-data.ts";
+
+export { builtinInvocationSummary } from "./builtin-semantics.ts";
+export {
+	primordialNode,
+	resolvePrimordialProperty,
+	provePrimordialAccess,
+} from "./primordial-catalog.ts";
+
+export type LiteralPrototypeKey = string | typeof Symbol.iterator;
+export type LiteralReceiverKind =
+	| "object"
+	| "array"
+	| "string"
+	| "number"
+	| "boolean"
+	| "bigint";
+
+export interface LiteralPrototypeMethod {
+	readonly receiver: LiteralReceiverKind;
+	readonly key: LiteralPrototypeKey;
+	readonly prototype: string;
+	readonly id: string;
+	readonly semantics: ReturnType<typeof builtinInvocationSummary>;
+}
+
+export const literalPrototypeMethods: ReadonlyArray<LiteralPrototypeMethod> =
+	literalPrimordialBindings.map(([receiver, key, prototype, id, owner]) => ({
+		receiver: receiver as LiteralReceiverKind,
+		key: key === null ? Symbol.iterator : key,
+		prototype,
+		id,
+		semantics: builtinInvocationSummary(owner, key ?? "Symbol.iterator"),
+	}));
+
+const literalMethodIndices = new Map<
+	LiteralReceiverKind,
+	Map<LiteralPrototypeKey, number>
+>();
+for (let index = 0; index < literalPrototypeMethods.length; index++) {
+	const method = literalPrototypeMethods[index]!;
+	let indices = literalMethodIndices.get(method.receiver);
+	if (indices === undefined) {
+		indices = new Map();
+		literalMethodIndices.set(method.receiver, indices);
+	}
+	indices.set(method.key, index);
+}
+
+export function literalPrototypeMethodIndex(
+	receiver: LiteralReceiverKind,
+	key: LiteralPrototypeKey,
+): number | undefined {
+	return (
+		literalMethodIndices.get(receiver)?.get(key) ??
+		literalMethodIndices.get("object")?.get(key)
+	);
+}
+
+export function generateLiteralPrototypeMethods(): string {
+	return `${literalPrototypeMethods
+		.map(
+			(method, index) =>
+				`MAL_LITERAL_METHOD(${index}, ${method.prototype}, ${JSON.stringify(method.key === Symbol.iterator ? "@@iterator" : method.key)})`,
+		)
+		.join("\n")}\n`;
+}
 
 export type BuiltinFeature =
 	| "always"

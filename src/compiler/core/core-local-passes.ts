@@ -944,7 +944,12 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			editor ??= CoreEditor.open(program, item.function);
 			if (numericRewrite !== undefined) {
 				editor.replaceInstruction(instruction, numericRewrite, arguments_, {
-					attributes: { operation: descriptor.id },
+					attributes: {
+						operation: descriptor.id,
+						worldAssumptions: {
+							...builtinWorldAssumptions(descriptor.id, "exact-builtin-proof"),
+						},
+					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 				});
 				for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");
@@ -967,6 +972,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				editor.replaceInstruction(instruction, "callBuiltin", [receiver, ...forwarded], {
 					attributes: {
 						operation: exactRewrite.id,
+						worldAssumptions: {
+							...builtinWorldAssumptions(exactRewrite.id, "exact-builtin-proof"),
+						},
 						knownBuiltinCall: knownBuiltinCall as unknown as CoreAttributeValue,
 					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
@@ -2197,3 +2205,4 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	foldRedundantTdzChecks,
 	removeUnreachableBlocks,
 ];
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";

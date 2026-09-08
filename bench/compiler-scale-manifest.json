@@ -166,6 +166,7 @@
 				"src/compiler/core/core-program-flow.ts",
 				"src/compiler/core/core-proof-passes.ts",
 				"src/compiler/core/core-specialization-recipes.ts",
+				"src/compiler/core/core-static-values.ts",
 				"src/compiler/core/core-store.ts",
 				"src/compiler/core/core-transform-candidates.ts",
 				"src/compiler/core/core-typed-array-bounds.ts",

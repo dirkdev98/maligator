@@ -55,7 +55,7 @@ function runtimeSourceHash(
 					: []),
 				...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
 			],
-			include: (entry) => /\.[ch]$/.test(entry.name),
+			include: (entry) => /\.(?:c|h|inc)$/.test(entry.name),
 			compareNames: legacyLocaleNameComparator,
 		},
 		path.join(
@@ -63,7 +63,7 @@ function runtimeSourceHash(
 			"source-digests",
 			`runtime-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
 		),
-		"runtime-source-v1",
+		"runtime-source-v2",
 	).digest;
 }
 
@@ -84,7 +84,7 @@ export function runtimeHeaderHash(
 			...(existsSync(llhttp) ? [llhttp] : []),
 			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
 		],
-		include: (entry: { name: string }) => entry.name.endsWith(".h"),
+		include: (entry: { name: string }) => /\.(?:h|inc)$/.test(entry.name),
 		compareNames: legacyLocaleNameComparator,
 	};
 	if (cacheDirectory === undefined) return hashDirectoryTrees(options);
@@ -95,7 +95,7 @@ export function runtimeHeaderHash(
 			"source-digests",
 			`runtime-headers-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
 		),
-		"runtime-headers-v1",
+		"runtime-headers-v2",
 	).digest;
 }
 

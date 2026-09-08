@@ -2160,6 +2160,46 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
 // Intl.ListFormat — icu::list (conjunction/disjunction/unit; long/short/narrow).
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
+static i64 intl_string_index_of(const MalString *hay, const MalString *needle, usize from) {
+    usize hn = mal_string_length(hay);
+    usize nn = mal_string_length(needle);
+    const c16 *h = mal_string_code_units(hay);
+    const c16 *p = mal_string_code_units(needle);
+    if (nn == 0) {
+        return (i64) from;
+    }
+    if (nn > hn) {
+        return -1;
+    }
+    for (usize i = from; i + nn <= hn; i++) {
+        bool eq = true;
+        for (usize j = 0; j < nn; j++) {
+            if (h[i + j] != p[j]) {
+                eq = false;
+                break;
+            }
+        }
+        if (eq) {
+            return (i64) i;
+        }
+    }
+    return -1;
+}
+
+static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
+    MalObject *part = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) type)));
+    intl_resolved_set(vm, part, "value", value);
+    intl_array_push(vm, parts, (*index)++, mal_value_from_object(part));
+}
+
+static MalValue intl_substring(MalVm *vm, MalString *s, usize start, usize end) {
+    return mal_value_from_string(mal_string_new_slice(&vm->heap, s, start, end - start));
+}
+
+#endif
+
 #if MAL_INTL_HAS_LIST_FORMAT
 static i32 intl_list_type_code(const MalString *type) {
     if (type != nullptr && intl_string_eq_ascii(type, "disjunction")) {
@@ -2322,44 +2362,6 @@ static MalValue intl_list_format_format(MalVm *vm, MalValue this_value, const Ma
         return mal_value_new_undefined();
     }
     return intl_list_format_do(vm, lf, list, count);
-}
-
-/** Find `needle` in `hay` at/after `from` (UTF-16). Returns index, or -1. */
-static i64 intl_string_index_of(const MalString *hay, const MalString *needle, usize from) {
-    usize hn = mal_string_length(hay);
-    usize nn = mal_string_length(needle);
-    const c16 *h = mal_string_code_units(hay);
-    const c16 *p = mal_string_code_units(needle);
-    if (nn == 0) {
-        return (i64) from;
-    }
-    if (nn > hn) {
-        return -1;
-    }
-    for (usize i = from; i + nn <= hn; i++) {
-        bool eq = true;
-        for (usize j = 0; j < nn; j++) {
-            if (h[i + j] != p[j]) {
-                eq = false;
-                break;
-            }
-        }
-        if (eq) {
-            return (i64) i;
-        }
-    }
-    return -1;
-}
-
-static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
-    MalObject *part = mal_intrinsic_new_object(vm);
-    intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) type)));
-    intl_resolved_set(vm, part, "value", value);
-    intl_array_push(vm, parts, (*index)++, mal_value_from_object(part));
-}
-
-static MalValue intl_substring(MalVm *vm, MalString *s, usize start, usize end) {
-    return mal_value_from_string(mal_string_new_slice(&vm->heap, s, start, end - start));
 }
 
 static MalValue intl_list_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -3172,15 +3174,9 @@ static void intl_install_segmenter(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "Segmenter", vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-// ---------------------------------------------------------------------------
-// Intl.DurationFormat — icu_experimental::duration. The constructor implements
-// the (correct) GetDurationUnitOptions defaults in C so resolvedOptions matches
-// the spec; ICU formats the output string.
-// ---------------------------------------------------------------------------
+#endif
 
-// The 10 duration units, their resolvedOptions "<unit>" / "<unit>Display" keys,
-// allowed-style group (0 date {long,short,narrow}; 1 time adds numeric,2-digit;
-// 2 sub-second adds numeric), and the "digital" base default style.
+#if MAL_INTL_HAS_DURATION_FORMAT
 static const struct {
     const char *unit;
     const char *display;
@@ -3230,9 +3226,6 @@ static bool dur_str_eq(const char *a, const char *b) {
     return a != nullptr && strcmp(a, b) == 0;
 }
 
-#endif // MAL_INTL_HAS_SEGMENTER
-
-#if MAL_INTL_HAS_DURATION_FORMAT
 static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;

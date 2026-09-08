@@ -1,3 +1,6 @@
+import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
+import { literalPrototypeMethods } from "../shared/builtin-registry.ts";
+import type { WorldFacts } from "../shared/compiler-facts.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
@@ -315,6 +318,7 @@ interface OperandUseIndex {
 function verifyInstructionRows(
 	fn: CoreFunctionStore,
 	program: CoreProgram,
+	world?: WorldFacts,
 ): OperandUseIndex {
 	const currentOperands = new Uint8Array(fn.operandCapacity);
 	const valueCounts = new Uint32Array(fn.valueCapacity);
@@ -379,6 +383,24 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			if (descriptor.opcode === "callLiteralMethod") {
+				const method =
+					typeof attributes.methodIndex === "number"
+						? literalPrototypeMethods[attributes.methodIndex]
+						: undefined;
+				if (method === undefined) fail("Invalid literal operation identity");
+				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, method.id, world);
+			} else if (
+				["callBuiltin", "mathUnaryNumber", "mathBinaryNumber"].includes(descriptor.opcode)
+			) {
+				if (typeof attributes.operation !== "string")
+					fail("Missing exact operation identity");
+				verifyBuiltinWorldAssumptions(
+					attributes.worldAssumptions,
+					attributes.operation,
+					world,
+				);
+			}
 			verifyAttributeValue(attributes, `instruction @${instruction} attributes`);
 			verifyAttributeRelocations(
 				fn,
@@ -1044,12 +1066,16 @@ function verifyFunctionParameters(fn: CoreFunctionStore): void {
 	}
 }
 
-function verifyFunction(program: CoreProgram, functionId: CoreFunctionId): void {
+function verifyFunction(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+	world?: WorldFacts,
+): void {
 	const fn = program.function(functionId);
 	if (fn.id !== functionId) fail(`function row ${functionId} carries id ${fn.id}`);
 	verifyMetadata(fn, program);
 	verifyBlockRows(fn);
-	const liveUses = verifyInstructionRows(fn, program);
+	const liveUses = verifyInstructionRows(fn, program, world);
 	verifyValueRows(fn, liveUses);
 	verifyBlockParameters(fn);
 	verifyFunctionParameters(fn);
@@ -1241,7 +1267,7 @@ export function verifyCoreProgram(
 		for (const functionId of program.functionIds()) {
 			withContext(
 				context === undefined ? undefined : { ...context, functionIndex: functionId },
-				() => verifyFunction(program, functionId),
+				() => verifyFunction(program, functionId, compilationContext?.facts.world),
 			);
 		}
 		verifyCrossFunctionReferences(program);

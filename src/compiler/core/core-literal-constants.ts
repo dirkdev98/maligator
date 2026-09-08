@@ -1,17 +1,21 @@
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import {
 	literalPrototypeMethods,
 	literalPrototypeMethodIndex,
-} from "../shared/literal-prototype-methods.ts";
+	provePrimordialAccess,
+} from "../shared/builtin-registry.ts";
 import type {
 	LiteralPrototypeKey,
 	LiteralReceiverKind,
-} from "../shared/literal-prototype-methods.ts";
+} from "../shared/builtin-registry.ts";
+import { invocationPreservesPrivateReceiver } from "../shared/builtin-semantics.ts";
 import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 interface Use {
@@ -283,11 +287,12 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			);
 		},
 	},
-	requiredAnalyses: [],
+	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
-	run({ program, compilationContext, item }) {
+	run(context) {
+		const { program, compilationContext, item } = context;
 		if (
 			compilationContext.facts.world.primordialPolicy !== "locked" ||
 			compilationContext.facts.world.realms
@@ -317,6 +322,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			propertyNames.set(instruction, name);
 		}
 		if (roots.size === 0) return undefined;
+		const staticValues = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const useIndex = new Map<CoreValueId, ReadonlyArray<Use>>();
 		const uses = (value: CoreValueId): ReadonlyArray<Use> => {
 			const cached = useIndex.get(value);
@@ -358,6 +364,9 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			const kind = receiverKind(fn, root, literal);
 			if (kind === undefined) continue;
 			const receiver = result(fn, root);
+			const staticValue = staticValues.query(receiver);
+			if (staticValue.kind !== "known" || staticValue.brand !== kind) continue;
+			staticValues.verify(staticValue);
 			const properties = new Set<CoreInstructionId>();
 			const calls = new Map<CoreInstructionId, number>();
 			const block = fn.instructionBlock(root);
@@ -374,6 +383,21 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 								| undefined)
 						: templateOwnKeys(literal.words);
 				if (ownKeys?.some((index) => string(program, index) === name)) continue;
+				const proof = provePrimordialAccess(
+					compilationContext.facts.world,
+					{
+						kind:
+							kind === "array" || kind === "object" ? "fresh-allocation" : "primitive",
+						prototype: `MAL_INTRINSIC_${kind.toUpperCase()}_PROTOTYPE`,
+						realm: "current",
+						ownKeys: ownKeys?.map((index) => string(program, index)) ?? [],
+						ownKeysComplete: true,
+						stableUntilRead: true,
+					},
+					name === Symbol.iterator ? { symbol: "%Symbol.iterator%" } : name,
+				);
+				if (proof?.resolution?.value?.[0] !== literalPrototypeMethods[methodIndex]!.id)
+					continue;
 				const callee = result(fn, use.instruction);
 				const callUses = uses(callee);
 				if (
@@ -399,8 +423,9 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 						(properties.has(use.instruction) && use.operand === 0) ||
 						(calls.has(use.instruction) &&
 							use.operand === 1 &&
-							["readonly", "elements"].includes(
-								literalPrototypeMethods[calls.get(use.instruction)!]!.observation,
+							invocationPreservesPrivateReceiver(
+								literalPrototypeMethods[calls.get(use.instruction)!]!.semantics,
+								true,
 							)),
 				);
 			if ((kind === "array" || kind === "object") && !stableMethods) {
@@ -427,10 +452,11 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 			let reusable = literal !== undefined && literal.allocations.size > 0;
 			if (literal !== undefined) {
 				for (const methodIndex of calls.values()) {
-					const observation = literalPrototypeMethods[methodIndex]!.observation;
 					if (
-						observation !== "readonly" &&
-						!(observation === "elements" && shallowTemplate(literal.words))
+						!invocationPreservesPrivateReceiver(
+							literalPrototypeMethods[methodIndex]!.semantics,
+							shallowTemplate(literal.words),
+						)
 					)
 						reusable = false;
 				}
@@ -461,16 +487,28 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 						reusable = false;
 			}
 			editor ??= CoreEditor.open(program, item.function);
-			for (const [call, methodIndex] of calls)
+			for (const [call, methodIndex] of calls) {
 				editor.replaceInstruction(
 					call,
 					"callLiteralMethod",
 					operands(fn, call).slice(1),
 					{
-						attributes: { methodIndex },
+						attributes: {
+							methodIndex,
+							worldAssumptions: {
+								...builtinWorldAssumptions(
+									literalPrototypeMethods[methodIndex]!.id,
+									kind === "array" || kind === "object"
+										? "literal-allocation"
+										: "primitive",
+									true,
+								),
+							},
+						},
 						sourcePosition: fn.instructionSourcePosition(call),
 					},
 				);
+			}
 			for (const property of properties) editor.removeInstruction(property);
 			if (reusable && literal !== undefined) {
 				const constant = editor.appendLiteralConstant(literal.words);

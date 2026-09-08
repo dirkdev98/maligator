@@ -5,6 +5,7 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { CoreLocalOptimizer } from "../src/compiler/core/core-local-optimizer.ts";
 import type { CoreLocalInstructionRule } from "../src/compiler/core/core-local-optimizer.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreTerminatorPayload,
@@ -174,11 +175,23 @@ describe("CoreLocalOptimizer", () => {
 		const entry = builder.createBlock([{ representation: "f64" }]);
 		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [first] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
-			attributes: { operation: "Math.sin", metadata: { left: 1, right: 2 } },
+			attributes: {
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+				metadata: { left: 1, right: 2 },
+			},
 			outputRepresentations: ["f64"],
 		});
 		const [second] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
-			attributes: { metadata: { right: 2, left: 1 }, operation: "Math.sin" },
+			attributes: {
+				metadata: { right: 2, left: 1 },
+				operation: "Math.sin",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Math.sin", "exact-builtin-proof"),
+				},
+			},
 			outputRepresentations: ["f64"],
 		});
 		const [combined] = builder.appendInstruction(
@@ -186,7 +199,12 @@ describe("CoreLocalOptimizer", () => {
 			"mathBinaryNumber",
 			[first!, second!],
 			{
-				attributes: { operation: "Math.max" },
+				attributes: {
+					operation: "Math.max",
+					worldAssumptions: {
+						...builtinWorldAssumptions("Math.max", "exact-builtin-proof"),
+					},
+				},
 				outputRepresentations: ["f64"],
 			},
 		);

@@ -28,6 +28,7 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockParameters,
@@ -657,7 +658,12 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			attributes: { stringIndex: 0 },
 		});
 		const [has] = builder.appendInstruction(entry, "callBuiltin", [map!, key!], {
-			attributes: { operation: "Map.prototype.has" },
+			attributes: {
+				operation: "Map.prototype.has",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Map.prototype.has", "exact-builtin-proof"),
+				},
+			},
 		});
 		builder.setTerminator(entry, { kind: "return", value: has! });
 		const finished = builder.finish(entry);
@@ -816,10 +822,20 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			attributes: { value: 42 },
 		});
 		builder.appendInstruction(entry, "callBuiltin", [map!, key!, value!], {
-			attributes: { operation: "Map.prototype.set" },
+			attributes: {
+				operation: "Map.prototype.set",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Map.prototype.set", "exact-builtin-proof"),
+				},
+			},
 		});
 		const [loaded] = builder.appendInstruction(entry, "callBuiltin", [map!, key!], {
-			attributes: { operation: "Map.prototype.get" },
+			attributes: {
+				operation: "Map.prototype.get",
+				worldAssumptions: {
+					...builtinWorldAssumptions("Map.prototype.get", "exact-builtin-proof"),
+				},
+			},
 		});
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
