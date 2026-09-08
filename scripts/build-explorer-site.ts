@@ -66,7 +66,8 @@ export async function buildExplorerSite(): Promise<void> {
 	const wasmName = `compiler.${digest(wasm)}.wasm`;
 	writeFileSync(path.join(staging, `${wasmName}.br`), compressed);
 	const wasmUrl = record(`${wasmName}.br`, "application/wasm", "br", wasmName);
-	const css = readFileSync("website/explorer.css");
+	// Explorer's CSP permits external styles only, including the shared site layout.
+	const css = `${readFileSync("website/explorer.css", "utf8")}\n${readFileSync("website/templates/shared.css", "utf8")}`;
 	const cssName = `explorer.${digest(css)}.css`;
 	writeFileSync(path.join(staging, cssName), css);
 	const cssUrl = record(cssName, "text/css; charset=utf-8");

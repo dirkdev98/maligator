@@ -1,31 +1,8 @@
 :root {
-	color-scheme: light;
-	--paper: #fff9ed;
-	--panel: #fffcf5;
-	--ink: #0b2c35;
-	--muted: #52666a;
-	--line: #dbcdb4;
-	--accent: #007e99;
-	--accent-wash: #d7f0ed;
 	--tan: #efc37f;
 	--danger: #a33221;
-	--mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	font:
-		15px/1.55 Inter,
-		ui-sans-serif,
-		system-ui,
-		-apple-system,
-		"Segoe UI",
-		sans-serif;
-	background: var(--paper);
-	color: var(--ink);
-}
-
-* {
-	box-sizing: border-box;
 }
 body {
-	margin: 0;
 	min-width: 320px;
 }
 button,

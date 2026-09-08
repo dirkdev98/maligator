@@ -28,7 +28,10 @@ export function renderSiteTemplate(template: string, page: SitePage): string {
 		})
 		.join("\n");
 	const regions = {
-		__SITE_STYLES__: `<style>${readFileSync(new URL("shared.css", import.meta.url), "utf8")}</style>`,
+		__SITE_STYLES__:
+			page === "explorer"
+				? ""
+				: `<style>${readFileSync(new URL("shared.css", import.meta.url), "utf8")}</style>`,
 		__SITE_NAVIGATION__: `<div class="site-navigation"><header class="site-header">
 <a class="wordmark" href="/" aria-label="Maligator home"><img class="nav-mascot" src="data:image/webp;base64,${mascot}" alt="" width="768" height="768">maligator</a>
 <nav aria-label="Primary navigation">${links}</nav>

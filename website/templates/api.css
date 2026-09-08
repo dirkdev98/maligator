@@ -1,11 +1,3 @@
-body {
-	font:
-		17px/1.65 system-ui,
-		sans-serif;
-	margin: 0;
-	color: #20252b;
-	background: #fafafa;
-}
 main,
 .api-navigation {
 	max-width: 960px;
@@ -25,11 +17,11 @@ h3 {
 	margin: 1.75rem 0 0.75rem;
 }
 a {
-	color: #175fa6;
+	color: var(--accent);
 	text-underline-offset: 0.2em;
 }
 code {
-	font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+	font-family: var(--mono);
 	font-size: 0.9em;
 }
 p {
@@ -38,9 +30,9 @@ p {
 pre {
 	overflow: auto;
 	padding: 1.25rem;
-	border: 1px solid #ddd;
+	border: 1px solid var(--line);
 	border-radius: 8px;
-	background: white;
+	background: var(--panel);
 	font-size: 14px;
 	line-height: 1.6;
 }
@@ -55,15 +47,15 @@ pre {
 }
 .properties {
 	margin: 1.5rem 0;
-	border: 1px solid #dce2e6;
+	border: 1px solid var(--line);
 	border-radius: 10px;
-	background: white;
+	background: var(--panel);
 }
 .property {
 	padding: 1.1rem 1.35rem;
 }
 .property + .property {
-	border-top: 1px solid #e5e9ec;
+	border-top: 1px solid var(--line);
 }
 .property dt {
 	display: flex;
@@ -80,12 +72,12 @@ pre {
 	text-decoration: underline;
 }
 .qualifier {
-	color: #52616c;
+	color: var(--muted);
 	font-size: 0.75rem;
 }
 .property-type {
 	flex-basis: 100%;
-	color: #42576a;
+	color: var(--muted);
 	overflow-wrap: anywhere;
 }
 .property dd {
@@ -97,18 +89,18 @@ pre {
 }
 .property .properties {
 	margin: 1rem 0 0;
-	border-left: 3px solid #c5dce8;
-	background: #fbfcfd;
+	border-left: 3px solid var(--line);
+	background: var(--paper);
 }
 .member-signature {
-	color: #175fa6;
+	color: var(--accent);
 	text-decoration: none;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
 .type-note {
 	padding: 0.75rem 1rem;
-	background: #edf3f7;
+	background: var(--accent-wash);
 	border-radius: 6px;
 }
 .declaration {
@@ -116,11 +108,11 @@ pre {
 }
 .declaration summary {
 	cursor: pointer;
-	color: #52616c;
+	color: var(--muted);
 	font-size: 0.9rem;
 }
 .declaration summary:hover {
-	color: #175fa6;
+	color: var(--accent);
 }
 @media (max-width: 600px) {
 	main,

@@ -10,7 +10,9 @@ and `src/platform/generate.ts`.
 API typography and property layouts live in `templates/api.css`.
 
 `templates/layout.ts` owns the primary navigation and site footer;
-`templates/shared.css` owns their styling. Each page selects its active navigation
+`templates/shared.css` owns the site palette, base typography, and their styling.
+Explorer bundles it into its external CSS asset to satisfy its content security policy.
+Each page selects its active navigation
 entry during generation. API pages also render their active module link statically.
 The HTML files directly under `website/` are generated outputs.
 
