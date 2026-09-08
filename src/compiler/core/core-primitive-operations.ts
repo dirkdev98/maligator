@@ -3,6 +3,7 @@ import {
 	evaluateConstantStringSplit,
 } from "../shared/constant-builtins.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
+import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -24,12 +25,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const opcode = fn.instructionOpcodeName(instruction);
 				const attributes = fn.instructionAttributes(instruction);
 				if (opcode === "mathUnaryNumber" || opcode === "mathBinaryNumber") return true;
-				if (
-					opcode === "callKnown" &&
-					!attributes.construct &&
-					attributes.argumentMode === undefined
-				)
-					return true;
+				if (opcode === "callKnown" && attributes.argumentMode === undefined) return true;
 				if (
 					opcode === "binary" &&
 					["===", "!==", "==", "!="].includes(attributes.operator as string)
@@ -169,7 +165,6 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
 			if (
-				attributes.construct ||
 				attributes.argumentMode !== undefined ||
 				attributes.knownBuiltinError !== undefined
 			)
@@ -200,6 +195,38 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index),
 			);
 			const numericOperation = fn.instructionOpcodeName(instruction) !== "callKnown";
+			if (attributes.construct) {
+				const target = analysis.query(inputs[0]!);
+				if (
+					knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable === false
+				)
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "callKnown",
+							inputs,
+							attributes: { ...attributes, knownBuiltinError: "notConstructor" },
+						},
+					});
+				else if (
+					(operation === "BigInt" || operation === "Symbol") &&
+					target.kind === "known" &&
+					target.canonical === operation
+				)
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "callKnown",
+							inputs,
+							attributes: {
+								...attributes,
+								knownBuiltinError:
+									operation === "BigInt" ? "bigintConstructor" : "symbolConstructor",
+							},
+						},
+					});
+				continue;
+			}
 			if (
 				[
 					"Number.isNaN",

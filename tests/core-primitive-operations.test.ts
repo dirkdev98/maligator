@@ -16,6 +16,27 @@ function inspect(expression: string, locked = true) {
 
 describe("primitive operation results", () => {
 	it.each([
+		"new BigInt(x)",
+		"new Symbol(x)",
+		"new Math.abs(x)",
+		"new String.prototype.trim(x)",
+		"new parseInt(x)",
+	])("residualizes nonconstructable primitive identity at %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.c.source).toContain("mal_vm_throw_error(");
+		expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
+		expect(restored.native.functions.flatMap((fn) => fn.instructions)).toContainEqual({
+			kind: "known-builtin-error",
+			error: expression.startsWith("new BigInt")
+				? "bigintConstructor"
+				: expression.startsWith("new Symbol")
+					? "symbolConstructor"
+					: "notConstructor",
+		});
+		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
+	});
+	it.each([
 		["Number.prototype.toString.call(true,x)", "numberReceiver"],
 		["Boolean.prototype.valueOf.call(1)", "booleanReceiver"],
 		["String.prototype.valueOf.call(1)", "stringReceiver"],

@@ -123,7 +123,7 @@ Certified builtin failures retain the original known call and exception edge in 
 and the runtime image. Native metadata selects a target error kind and fixed message;
 execution allocates a fresh error at that call site. Earlier unknown coercions prevent
 selection, and all argument expressions still execute before the failure. The compiler
-never throws the JavaScript error during compilation. Compiler artifact version 69
+never throws the JavaScript error during compilation. Compiler artifact version 70
 encodes the failure identity separately from the runtime call.
 
 ## Known operations

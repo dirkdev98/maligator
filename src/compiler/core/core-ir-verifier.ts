@@ -421,7 +421,10 @@ function verifyInstructionRows(
 					fail("Invalid known-operation argument list");
 				if (
 					attributes.knownBuiltinError !== undefined &&
-					(attributes.construct ||
+					((attributes.construct &&
+						!["notConstructor", "bigintConstructor", "symbolConstructor"].includes(
+							attributes.knownBuiltinError as string,
+						)) ||
 						attributes.argumentMode !== undefined ||
 						attributes.stringCollationPlan !== undefined ||
 						!isKnownBuiltinError(attributes.knownBuiltinError))

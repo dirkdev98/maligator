@@ -46,9 +46,41 @@ const seedKey = (owner: string, key: string) =>
 const exact = new Map(
 	plan.surface_seed.map((seed) => [seedKey(seed.owner, seed.key), seed.task]),
 );
+
+const invocationTasks = new Map<string, { task: string; canonical: boolean }>();
+for (const node of primordialCatalog.nodes) {
+	for (const property of node[4]) {
+		const key = catalogPropertyKey(primordialCatalog, property);
+		const task = exact.get(seedKey(node[0], key));
+		if (task === undefined || task === "H-10") continue;
+		for (const index of [
+			typeof property[2] === "number" ? property[2] : -1,
+			property[3],
+			property[4],
+		]) {
+			const target = primordialCatalog.nodes[index];
+			if (target === undefined || (target[2] & 2) === 0) continue;
+			const path = key.startsWith("symbol:")
+				? `${node[0]}[${key.slice(7)}]`
+				: `${node[0]}.${key}`;
+			const canonical =
+				target[0] === path ||
+				target[0] === `${path}<get>` ||
+				target[0] === `${path}<set>` ||
+				(node[0] === "globalThis" && target[0] === key);
+			const previous = invocationTasks.get(target[0]);
+			if (previous === undefined || (!previous.canonical && canonical))
+				invocationTasks.set(target[0], { task, canonical });
+		}
+	}
+}
 function ownerTask(owner: string, key: string): string {
 	const exactTask = exact.get(seedKey(owner, key));
 	if (exactTask !== undefined) return exactTask;
+	if (key === "<call>" || key === "<construct>") {
+		const task = exact.get(seedKey(owner, "<call>")) ?? invocationTasks.get(owner)?.task;
+		if (task !== undefined) return task;
+	}
 	if (
 		[
 			"name",

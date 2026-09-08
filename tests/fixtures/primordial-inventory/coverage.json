@@ -62949,7 +62949,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -62959,7 +62959,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -63023,7 +63023,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63033,7 +63033,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63043,7 +63043,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63053,7 +63053,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63063,7 +63063,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.throw"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63073,7 +63073,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.throw"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63345,7 +63345,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63355,7 +63355,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63365,7 +63365,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63375,7 +63375,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63385,7 +63385,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.throw"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63395,7 +63395,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.throw"],
-			"task": "N-06",
+			"task": "M-02",
 			"decisions": []
 		},
 		{
@@ -63425,7 +63425,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE%.containing"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63435,7 +63435,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE%.containing"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63445,7 +63445,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE%[%Symbol.iterator%]"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63455,7 +63455,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE%[%Symbol.iterator%]"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63465,7 +63465,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63475,7 +63475,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "L-10",
 			"decisions": []
 		},
 		{
@@ -63485,7 +63485,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -63495,7 +63495,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -63505,7 +63505,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -63515,7 +63515,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE%.return"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -63525,7 +63525,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -63535,7 +63535,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -69713,7 +69713,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -69723,7 +69723,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -69733,7 +69733,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -69743,7 +69743,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -69753,7 +69753,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -69763,7 +69763,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE%.next"],
-			"task": "N-06",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -72719,7 +72719,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.from"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72729,7 +72729,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.from"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72739,7 +72739,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.fromAsync"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72749,7 +72749,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.fromAsync"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72779,7 +72779,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.of"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72789,7 +72789,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.of"],
-			"task": "G-03",
+			"task": "G-13",
 			"decisions": []
 		},
 		{
@@ -72799,7 +72799,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.at"],
-			"task": "G-01",
+			"task": "G-03",
 			"decisions": []
 		},
 		{
@@ -72809,7 +72809,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.at"],
-			"task": "G-01",
+			"task": "G-03",
 			"decisions": []
 		},
 		{
@@ -72819,7 +72819,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.concat"],
-			"task": "G-01",
+			"task": "G-05",
 			"decisions": []
 		},
 		{
@@ -72829,7 +72829,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.concat"],
-			"task": "G-01",
+			"task": "G-05",
 			"decisions": []
 		},
 		{
@@ -72839,7 +72839,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.copyWithin"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -72849,7 +72849,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.copyWithin"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -72859,7 +72859,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.entries"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -72869,7 +72869,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.entries"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -72879,7 +72879,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.every"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72889,7 +72889,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.every"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72899,7 +72899,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.fill"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -72909,7 +72909,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.fill"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -72919,7 +72919,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.filter"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -72929,7 +72929,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.filter"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -72939,7 +72939,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.find"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72949,7 +72949,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.find"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72959,7 +72959,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.findIndex"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72969,7 +72969,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.findIndex"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72979,7 +72979,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.findLast"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72989,7 +72989,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.findLast"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -72999,7 +72999,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.findLastIndex"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73009,7 +73009,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.findLastIndex"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73019,7 +73019,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.flat"],
-			"task": "G-01",
+			"task": "G-05",
 			"decisions": []
 		},
 		{
@@ -73029,7 +73029,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.flat"],
-			"task": "G-01",
+			"task": "G-05",
 			"decisions": []
 		},
 		{
@@ -73039,7 +73039,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.flatMap"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -73049,7 +73049,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.flatMap"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -73059,7 +73059,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.forEach"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73069,7 +73069,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.forEach"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73099,7 +73099,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.indexOf"],
-			"task": "G-01",
+			"task": "G-02",
 			"decisions": []
 		},
 		{
@@ -73109,7 +73109,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.indexOf"],
-			"task": "G-01",
+			"task": "G-02",
 			"decisions": []
 		},
 		{
@@ -73119,7 +73119,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.join"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73129,7 +73129,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.join"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73139,7 +73139,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.keys"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -73149,7 +73149,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.keys"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -73159,7 +73159,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.lastIndexOf"],
-			"task": "G-01",
+			"task": "G-02",
 			"decisions": []
 		},
 		{
@@ -73169,7 +73169,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.lastIndexOf"],
-			"task": "G-01",
+			"task": "G-02",
 			"decisions": []
 		},
 		{
@@ -73179,7 +73179,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.map"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -73189,7 +73189,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.map"],
-			"task": "G-01",
+			"task": "G-08",
 			"decisions": []
 		},
 		{
@@ -73199,7 +73199,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.pop"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73209,7 +73209,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.pop"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73219,7 +73219,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.push"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73229,7 +73229,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.push"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73239,7 +73239,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.reduce"],
-			"task": "G-01",
+			"task": "G-09",
 			"decisions": []
 		},
 		{
@@ -73249,7 +73249,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.reduce"],
-			"task": "G-01",
+			"task": "G-09",
 			"decisions": []
 		},
 		{
@@ -73259,7 +73259,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.reduceRight"],
-			"task": "G-01",
+			"task": "G-09",
 			"decisions": []
 		},
 		{
@@ -73269,7 +73269,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.reduceRight"],
-			"task": "G-01",
+			"task": "G-09",
 			"decisions": []
 		},
 		{
@@ -73279,7 +73279,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.reverse"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73289,7 +73289,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.reverse"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73299,7 +73299,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.shift"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73309,7 +73309,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.shift"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73319,7 +73319,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.slice"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73329,7 +73329,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.slice"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73339,7 +73339,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.some"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73349,7 +73349,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.some"],
-			"task": "G-01",
+			"task": "G-07",
 			"decisions": []
 		},
 		{
@@ -73359,7 +73359,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.sort"],
-			"task": "G-01",
+			"task": "G-11",
 			"decisions": []
 		},
 		{
@@ -73369,7 +73369,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.sort"],
-			"task": "G-01",
+			"task": "G-11",
 			"decisions": []
 		},
 		{
@@ -73379,7 +73379,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.splice"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73389,7 +73389,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.splice"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73399,7 +73399,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.toLocaleString"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73409,7 +73409,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.toLocaleString"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73419,7 +73419,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.toReversed"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73429,7 +73429,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.toReversed"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73439,7 +73439,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.toSorted"],
-			"task": "G-01",
+			"task": "G-11",
 			"decisions": []
 		},
 		{
@@ -73449,7 +73449,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.toSorted"],
-			"task": "G-01",
+			"task": "G-11",
 			"decisions": []
 		},
 		{
@@ -73459,7 +73459,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.toSpliced"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73469,7 +73469,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.toSpliced"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73482,7 +73482,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.toString"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73495,7 +73495,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.toString"],
-			"task": "G-01",
+			"task": "G-06",
 			"decisions": []
 		},
 		{
@@ -73505,7 +73505,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.unshift"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73515,7 +73515,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.unshift"],
-			"task": "G-01",
+			"task": "G-10",
 			"decisions": []
 		},
 		{
@@ -73525,7 +73525,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.values"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -73535,7 +73535,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.values"],
-			"task": "G-01",
+			"task": "G-12",
 			"decisions": []
 		},
 		{
@@ -73545,7 +73545,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.with"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -73555,7 +73555,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.with"],
-			"task": "G-01",
+			"task": "G-04",
 			"decisions": []
 		},
 		{
@@ -74451,7 +74451,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["BigInt.prototype.toLocaleString"],
-			"task": "F-04",
+			"task": "L-04",
 			"decisions": []
 		},
 		{
@@ -74461,7 +74461,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["BigInt.prototype.toLocaleString"],
-			"task": "F-04",
+			"task": "L-04",
 			"decisions": []
 		},
 		{
@@ -75221,7 +75221,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.now"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75231,7 +75231,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.now"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75241,7 +75241,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.parse"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75251,7 +75251,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.parse"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75261,7 +75261,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getDate"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75271,7 +75271,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getDate"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75281,7 +75281,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getDay"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75291,7 +75291,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getDay"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75301,7 +75301,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getFullYear"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75311,7 +75311,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getFullYear"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75321,7 +75321,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getHours"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75331,7 +75331,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getHours"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75341,7 +75341,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getMilliseconds"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75351,7 +75351,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getMilliseconds"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75361,7 +75361,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getMinutes"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75371,7 +75371,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getMinutes"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75381,7 +75381,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getMonth"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75391,7 +75391,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getMonth"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75401,7 +75401,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getSeconds"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75411,7 +75411,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getSeconds"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75441,7 +75441,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getTimezoneOffset"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75451,7 +75451,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getTimezoneOffset"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75621,7 +75621,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.getYear"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75631,7 +75631,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.getYear"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75641,7 +75641,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setDate"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75651,7 +75651,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setDate"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75661,7 +75661,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setFullYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75671,7 +75671,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setFullYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75681,7 +75681,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setHours"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75691,7 +75691,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setHours"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75701,7 +75701,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setMilliseconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75711,7 +75711,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setMilliseconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75721,7 +75721,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setMinutes"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75731,7 +75731,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setMinutes"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75741,7 +75741,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setMonth"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75751,7 +75751,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setMonth"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75761,7 +75761,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setSeconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75771,7 +75771,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setSeconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75781,7 +75781,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setTime"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75791,7 +75791,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setTime"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75801,7 +75801,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCDate"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75811,7 +75811,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCDate"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75821,7 +75821,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCFullYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75831,7 +75831,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCFullYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75841,7 +75841,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCHours"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75851,7 +75851,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCHours"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75861,7 +75861,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCMilliseconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75871,7 +75871,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCMilliseconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75881,7 +75881,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCMinutes"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75891,7 +75891,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCMinutes"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75901,7 +75901,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCMonth"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75911,7 +75911,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCMonth"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75921,7 +75921,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setUTCSeconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75931,7 +75931,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setUTCSeconds"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75941,7 +75941,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.setYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75951,7 +75951,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.setYear"],
-			"task": "K-05",
+			"task": "K-06",
 			"decisions": []
 		},
 		{
@@ -75961,7 +75961,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toDateString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75971,7 +75971,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toDateString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75981,7 +75981,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toGMTString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -75991,7 +75991,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toGMTString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76001,7 +76001,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toISOString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76011,7 +76011,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toISOString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76021,7 +76021,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toJSON"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76031,7 +76031,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toJSON"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76041,7 +76041,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toLocaleDateString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76051,7 +76051,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toLocaleDateString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76061,7 +76061,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toLocaleString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76071,7 +76071,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toLocaleString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76081,7 +76081,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toLocaleTimeString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76091,7 +76091,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toLocaleTimeString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76101,7 +76101,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76111,7 +76111,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76121,7 +76121,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toTemporalInstant"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76131,7 +76131,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toTemporalInstant"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76141,7 +76141,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype.toTimeString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76151,7 +76151,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype.toTimeString"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76181,7 +76181,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Date.prototype[%Symbol.toPrimitive%]"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76191,7 +76191,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Date.prototype[%Symbol.toPrimitive%]"],
-			"task": "K-05",
+			"task": "K-07",
 			"decisions": []
 		},
 		{
@@ -76829,7 +76829,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Function.prototype.bind"],
-			"task": "H-07",
+			"task": "H-08",
 			"decisions": []
 		},
 		{
@@ -76839,7 +76839,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Function.prototype.bind"],
-			"task": "H-07",
+			"task": "H-08",
 			"decisions": []
 		},
 		{
@@ -76889,7 +76889,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Function.prototype[%Symbol.hasInstance%]"],
-			"task": "H-09",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -76899,7 +76899,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Function.prototype[%Symbol.hasInstance%]"],
-			"task": "H-09",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -79653,7 +79653,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.groupBy"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79663,7 +79663,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.groupBy"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79673,7 +79673,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.clear"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79683,7 +79683,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.clear"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79693,7 +79693,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.delete"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79703,7 +79703,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.delete"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79713,7 +79713,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.entries"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79723,7 +79723,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.entries"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79733,7 +79733,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.forEach"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79743,7 +79743,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.forEach"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79753,7 +79753,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.get"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79763,7 +79763,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.get"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79773,7 +79773,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.getOrInsert"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79783,7 +79783,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.getOrInsert"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79793,7 +79793,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.getOrInsertComputed"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79803,7 +79803,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.getOrInsertComputed"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79813,7 +79813,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.has"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79823,7 +79823,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.has"],
-			"task": "I-01",
+			"task": "I-02",
 			"decisions": []
 		},
 		{
@@ -79833,7 +79833,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.keys"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79843,7 +79843,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.keys"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79853,7 +79853,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.set"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79863,7 +79863,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.set"],
-			"task": "I-01",
+			"task": "I-03",
 			"decisions": []
 		},
 		{
@@ -79893,7 +79893,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Map.prototype.values"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79903,7 +79903,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Map.prototype.values"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -79953,7 +79953,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.acos"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -79963,7 +79963,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.acos"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -79973,7 +79973,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.acosh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -79983,7 +79983,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.acosh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -79993,7 +79993,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.asin"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80003,7 +80003,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.asin"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80013,7 +80013,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.asinh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80023,7 +80023,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.asinh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80033,7 +80033,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.atan"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80043,7 +80043,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.atan"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80053,7 +80053,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.atan2"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80063,7 +80063,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.atan2"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80073,7 +80073,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.atanh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80083,7 +80083,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.atanh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80093,7 +80093,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.cbrt"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80103,7 +80103,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.cbrt"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80153,7 +80153,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.cos"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80163,7 +80163,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.cos"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80173,7 +80173,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.cosh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80183,7 +80183,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.cosh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80193,7 +80193,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.exp"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80203,7 +80203,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.exp"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80213,7 +80213,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.expm1"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80223,7 +80223,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.expm1"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80233,7 +80233,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.f16round"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80243,7 +80243,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.f16round"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80293,7 +80293,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.hypot"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80303,7 +80303,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.hypot"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80333,7 +80333,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.log"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80343,7 +80343,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.log"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80353,7 +80353,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.log10"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80363,7 +80363,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.log10"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80373,7 +80373,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.log1p"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80383,7 +80383,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.log1p"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80393,7 +80393,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.log2"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80403,7 +80403,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.log2"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80453,7 +80453,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.pow"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80463,7 +80463,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.pow"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80473,7 +80473,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.random"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80483,7 +80483,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.random"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80533,7 +80533,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.sin"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80543,7 +80543,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.sin"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80553,7 +80553,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.sinh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80563,7 +80563,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.sinh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80573,7 +80573,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.sqrt"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80583,7 +80583,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.sqrt"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80593,7 +80593,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.sumPrecise"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80603,7 +80603,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.sumPrecise"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80613,7 +80613,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.tan"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80623,7 +80623,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.tan"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80633,7 +80633,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Math.tanh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80643,7 +80643,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Math.tanh"],
-			"task": "F-06",
+			"task": "F-07",
 			"decisions": []
 		},
 		{
@@ -80783,7 +80783,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Number.prototype.toExponential"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80793,7 +80793,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Number.prototype.toExponential"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80803,7 +80803,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Number.prototype.toFixed"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80813,7 +80813,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Number.prototype.toFixed"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80823,7 +80823,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Number.prototype.toLocaleString"],
-			"task": "F-02",
+			"task": "L-04",
 			"decisions": []
 		},
 		{
@@ -80833,7 +80833,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Number.prototype.toLocaleString"],
-			"task": "F-02",
+			"task": "L-04",
 			"decisions": []
 		},
 		{
@@ -80843,7 +80843,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Number.prototype.toPrecision"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80853,7 +80853,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Number.prototype.toPrecision"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80863,7 +80863,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Number.prototype.toString"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80873,7 +80873,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Number.prototype.toString"],
-			"task": "F-02",
+			"task": "F-03",
 			"decisions": []
 		},
 		{
@@ -80933,7 +80933,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.assign"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -80943,7 +80943,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.assign"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -80953,7 +80953,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.create"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -80963,7 +80963,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.create"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -80973,7 +80973,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.defineProperties"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -80983,7 +80983,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.defineProperties"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -80993,7 +80993,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.defineProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -81003,7 +81003,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.defineProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -81013,7 +81013,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.entries"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81023,7 +81023,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.entries"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81033,7 +81033,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.freeze"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81043,7 +81043,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.freeze"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81053,7 +81053,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.fromEntries"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -81063,7 +81063,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.fromEntries"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -81073,7 +81073,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.getOwnPropertyDescriptor"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81083,7 +81083,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.getOwnPropertyDescriptor"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81093,7 +81093,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.getOwnPropertyDescriptors"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81103,7 +81103,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.getOwnPropertyDescriptors"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81113,7 +81113,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.getOwnPropertyNames"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81123,7 +81123,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.getOwnPropertyNames"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81133,7 +81133,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.getOwnPropertySymbols"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81143,7 +81143,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.getOwnPropertySymbols"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81153,7 +81153,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.getPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81163,7 +81163,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.getPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81173,7 +81173,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.groupBy"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -81183,7 +81183,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.groupBy"],
-			"task": "H-01",
+			"task": "H-03",
 			"decisions": []
 		},
 		{
@@ -81213,7 +81213,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.is"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81223,7 +81223,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.is"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81233,7 +81233,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.isExtensible"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81243,7 +81243,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.isExtensible"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81253,7 +81253,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.isFrozen"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81263,7 +81263,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.isFrozen"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81273,7 +81273,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.isSealed"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81283,7 +81283,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.isSealed"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81293,7 +81293,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.keys"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81303,7 +81303,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.keys"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81313,7 +81313,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.preventExtensions"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81323,7 +81323,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.preventExtensions"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81333,7 +81333,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__defineGetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81343,7 +81343,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__defineGetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81353,7 +81353,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__defineSetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81363,7 +81363,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__defineSetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81373,7 +81373,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__lookupGetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81383,7 +81383,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__lookupGetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81393,7 +81393,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__lookupSetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81403,7 +81403,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__lookupSetter__"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81413,7 +81413,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__proto__<get>"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81423,7 +81423,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__proto__<get>"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81433,7 +81433,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.__proto__<set>"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81443,7 +81443,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.__proto__<set>"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81473,7 +81473,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.isPrototypeOf"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81483,7 +81483,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.isPrototypeOf"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81513,7 +81513,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.toLocaleString"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81523,7 +81523,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.toLocaleString"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81533,7 +81533,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.toString"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81543,7 +81543,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.toString"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81553,7 +81553,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.prototype.valueOf"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81563,7 +81563,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.prototype.valueOf"],
-			"task": "H-01",
+			"task": "H-06",
 			"decisions": []
 		},
 		{
@@ -81573,7 +81573,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.seal"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81583,7 +81583,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.seal"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81593,7 +81593,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.setPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81603,7 +81603,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.setPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -81613,7 +81613,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Object.values"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -81623,7 +81623,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Object.values"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -82043,7 +82043,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.apply"],
-			"task": "H-01",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -82053,7 +82053,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.apply"],
-			"task": "H-01",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -82063,7 +82063,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.construct"],
-			"task": "H-01",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -82073,7 +82073,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.construct"],
-			"task": "H-01",
+			"task": "H-07",
 			"decisions": []
 		},
 		{
@@ -82083,7 +82083,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.defineProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82093,7 +82093,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.defineProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82103,7 +82103,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.deleteProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82113,7 +82113,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.deleteProperty"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82123,7 +82123,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.get"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82133,7 +82133,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.get"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82143,7 +82143,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.getOwnPropertyDescriptor"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -82153,7 +82153,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.getOwnPropertyDescriptor"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -82163,7 +82163,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.getPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82173,7 +82173,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.getPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82203,7 +82203,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.isExtensible"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82213,7 +82213,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.isExtensible"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82223,7 +82223,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.ownKeys"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -82233,7 +82233,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.ownKeys"],
-			"task": "H-01",
+			"task": "H-02",
 			"decisions": []
 		},
 		{
@@ -82243,7 +82243,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.preventExtensions"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82253,7 +82253,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.preventExtensions"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82263,7 +82263,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.set"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82273,7 +82273,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.set"],
-			"task": "H-01",
+			"task": "H-04",
 			"decisions": []
 		},
 		{
@@ -82283,7 +82283,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Reflect.setPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82293,7 +82293,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Reflect.setPrototypeOf"],
-			"task": "H-01",
+			"task": "H-05",
 			"decisions": []
 		},
 		{
@@ -82333,7 +82333,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82343,7 +82343,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82353,7 +82353,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82363,7 +82363,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82373,7 +82373,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82383,7 +82383,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82393,7 +82393,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82403,7 +82403,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82413,7 +82413,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82423,7 +82423,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82433,7 +82433,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82443,7 +82443,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82453,7 +82453,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82463,7 +82463,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82473,7 +82473,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82483,7 +82483,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82493,7 +82493,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82503,7 +82503,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82513,7 +82513,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82523,7 +82523,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82533,7 +82533,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$_<set>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82543,7 +82543,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$_<set>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82553,7 +82553,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.escape"],
-			"task": "K-01",
+			"task": "K-02",
 			"decisions": []
 		},
 		{
@@ -82563,7 +82563,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.escape"],
-			"task": "K-01",
+			"task": "K-02",
 			"decisions": []
 		},
 		{
@@ -82573,7 +82573,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82583,7 +82583,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82593,7 +82593,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$_<set>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82603,7 +82603,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$_<set>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82613,7 +82613,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82623,7 +82623,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82633,7 +82633,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82643,7 +82643,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82653,7 +82653,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82663,7 +82663,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82693,7 +82693,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype.exec"],
-			"task": "K-02",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82703,7 +82703,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype.exec"],
-			"task": "K-02",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82853,7 +82853,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype.test"],
-			"task": "K-02",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82863,7 +82863,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype.test"],
-			"task": "K-02",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -82933,7 +82933,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype[%Symbol.match%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82943,7 +82943,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype[%Symbol.match%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82953,7 +82953,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype[%Symbol.matchAll%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82963,7 +82963,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype[%Symbol.matchAll%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82973,7 +82973,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype[%Symbol.replace%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82983,7 +82983,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype[%Symbol.replace%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -82993,7 +82993,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype[%Symbol.search%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -83003,7 +83003,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype[%Symbol.search%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -83013,7 +83013,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.prototype[%Symbol.split%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -83023,7 +83023,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.prototype[%Symbol.split%]"],
-			"task": "K-01",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -83033,7 +83033,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83043,7 +83043,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "K-01",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83053,7 +83053,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83063,7 +83063,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83073,7 +83073,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83083,7 +83083,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83093,7 +83093,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83103,7 +83103,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83113,7 +83113,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83123,7 +83123,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
-			"task": "N-06",
+			"task": "K-03",
 			"decisions": []
 		},
 		{
@@ -83183,7 +83183,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.add"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83193,7 +83193,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.add"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83203,7 +83203,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.clear"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83213,7 +83213,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.clear"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83223,7 +83223,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.delete"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83233,7 +83233,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.delete"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83243,7 +83243,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.difference"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83253,7 +83253,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.difference"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83263,7 +83263,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.entries"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83273,7 +83273,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.entries"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83283,7 +83283,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.forEach"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83293,7 +83293,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.forEach"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83303,7 +83303,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.has"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83313,7 +83313,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.has"],
-			"task": "I-01",
+			"task": "I-04",
 			"decisions": []
 		},
 		{
@@ -83323,7 +83323,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.intersection"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83333,7 +83333,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.intersection"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83343,7 +83343,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.isDisjointFrom"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83353,7 +83353,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.isDisjointFrom"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83363,7 +83363,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.isSubsetOf"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83373,7 +83373,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.isSubsetOf"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83383,7 +83383,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.isSupersetOf"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83393,7 +83393,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.isSupersetOf"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83408,7 +83408,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.keys"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83423,7 +83423,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.keys"],
-			"task": "I-01",
+			"task": "I-05",
 			"decisions": []
 		},
 		{
@@ -83453,7 +83453,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.symmetricDifference"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83463,7 +83463,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.symmetricDifference"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83473,7 +83473,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Set.prototype.union"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83483,7 +83483,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Set.prototype.union"],
-			"task": "I-01",
+			"task": "I-06",
 			"decisions": []
 		},
 		{
@@ -83803,7 +83803,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.anchor"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83813,7 +83813,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.anchor"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83843,7 +83843,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.big"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83853,7 +83853,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.big"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83863,7 +83863,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.blink"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83873,7 +83873,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.blink"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83883,7 +83883,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.bold"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83893,7 +83893,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.bold"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -83963,7 +83963,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.concat"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -83973,7 +83973,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.concat"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -83983,7 +83983,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.endsWith"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -83993,7 +83993,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.endsWith"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84003,7 +84003,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.fixed"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84013,7 +84013,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.fixed"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84023,7 +84023,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.fontcolor"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84033,7 +84033,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.fontcolor"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84043,7 +84043,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.fontsize"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84053,7 +84053,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.fontsize"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84063,7 +84063,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.includes"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84073,7 +84073,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.includes"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84083,7 +84083,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.indexOf"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84093,7 +84093,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.indexOf"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84103,7 +84103,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.isWellFormed"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84113,7 +84113,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.isWellFormed"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84123,7 +84123,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.italics"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84133,7 +84133,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.italics"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84143,7 +84143,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.lastIndexOf"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84153,7 +84153,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.lastIndexOf"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84163,7 +84163,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.link"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84173,7 +84173,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.link"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84183,7 +84183,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.localeCompare"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84193,7 +84193,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.localeCompare"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84203,7 +84203,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.match"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84213,7 +84213,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.match"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84223,7 +84223,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.matchAll"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84233,7 +84233,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.matchAll"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84243,7 +84243,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.normalize"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84253,7 +84253,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.normalize"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84263,7 +84263,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.padEnd"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84273,7 +84273,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.padEnd"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84283,7 +84283,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.padStart"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84293,7 +84293,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.padStart"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84303,7 +84303,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.repeat"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84313,7 +84313,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.repeat"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84323,7 +84323,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.replace"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84333,7 +84333,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.replace"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84343,7 +84343,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.replaceAll"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84353,7 +84353,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.replaceAll"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84363,7 +84363,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.search"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84373,7 +84373,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.search"],
-			"task": "F-08",
+			"task": "K-04",
 			"decisions": []
 		},
 		{
@@ -84383,7 +84383,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.slice"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84393,7 +84393,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.slice"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84403,7 +84403,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.small"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84413,7 +84413,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.small"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84423,7 +84423,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.split"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84433,7 +84433,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.split"],
-			"task": "F-08",
+			"task": "F-12",
 			"decisions": []
 		},
 		{
@@ -84443,7 +84443,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.startsWith"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84453,7 +84453,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.startsWith"],
-			"task": "F-08",
+			"task": "F-09",
 			"decisions": []
 		},
 		{
@@ -84463,7 +84463,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.strike"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84473,7 +84473,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.strike"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84483,7 +84483,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.sub"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84493,7 +84493,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.sub"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84503,7 +84503,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.substr"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84513,7 +84513,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.substr"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84523,7 +84523,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.substring"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84533,7 +84533,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.substring"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84543,7 +84543,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.sup"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84553,7 +84553,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.sup"],
-			"task": "F-08",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -84563,7 +84563,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.toLocaleLowerCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84573,7 +84573,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.toLocaleLowerCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84583,7 +84583,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.toLocaleUpperCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84593,7 +84593,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.toLocaleUpperCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84603,7 +84603,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.toLowerCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84613,7 +84613,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.toLowerCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84643,7 +84643,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.toUpperCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84653,7 +84653,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.toUpperCase"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84663,7 +84663,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.toWellFormed"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84673,7 +84673,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.toWellFormed"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84683,7 +84683,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.trim"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84693,7 +84693,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.trim"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84703,7 +84703,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.trimEnd"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84713,7 +84713,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.trimEnd"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84723,7 +84723,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype.trimStart"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84733,7 +84733,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype.trimStart"],
-			"task": "F-08",
+			"task": "F-11",
 			"decisions": []
 		},
 		{
@@ -84763,7 +84763,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.prototype[%Symbol.iterator%]"],
-			"task": "F-08",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -84773,7 +84773,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.prototype[%Symbol.iterator%]"],
-			"task": "F-08",
+			"task": "M-01",
 			"decisions": []
 		},
 		{
@@ -84783,7 +84783,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["String.raw"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -84793,7 +84793,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["String.raw"],
-			"task": "F-08",
+			"task": "F-10",
 			"decisions": []
 		},
 		{
@@ -89867,7 +89867,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.fromBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89877,7 +89877,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.fromBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89887,7 +89887,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.fromHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89897,7 +89897,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.fromHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89907,7 +89907,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.prototype.setFromBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89917,7 +89917,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.prototype.setFromBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89927,7 +89927,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.prototype.setFromHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89937,7 +89937,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.prototype.setFromHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89947,7 +89947,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.prototype.toBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89957,7 +89957,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.prototype.toBase64"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89967,7 +89967,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Uint8Array.prototype.toHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -89977,7 +89977,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Uint8Array.prototype.toHex"],
-			"task": "J-03",
+			"task": "J-05",
 			"decisions": []
 		},
 		{
@@ -90307,7 +90307,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["decodeURI"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90317,7 +90317,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["decodeURI"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90331,7 +90331,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["decodeURIComponent"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90345,7 +90345,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["decodeURIComponent"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90355,7 +90355,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["encodeURI"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90365,7 +90365,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["encodeURI"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90379,7 +90379,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["encodeURIComponent"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90393,7 +90393,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["encodeURIComponent"],
-			"task": "N-06",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -90403,7 +90403,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["eval"],
-			"task": "N-06",
+			"task": "H-09",
 			"decisions": []
 		},
 		{
@@ -90413,7 +90413,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["eval"],
-			"task": "N-06",
+			"task": "H-09",
 			"decisions": []
 		},
 		{
@@ -90451,7 +90451,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortController.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90461,7 +90461,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortController.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90499,7 +90499,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90509,7 +90509,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90519,7 +90519,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.any"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90529,7 +90529,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.any"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90539,7 +90539,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.prototype.aborted<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90549,7 +90549,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.prototype.aborted<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90559,7 +90559,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.prototype.reason<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90569,7 +90569,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.prototype.reason<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90579,7 +90579,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.prototype.throwIfAborted"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90589,7 +90589,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.prototype.throwIfAborted"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90599,7 +90599,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.AbortSignal.timeout"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90609,7 +90609,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.AbortSignal.timeout"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -90647,7 +90647,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90657,7 +90657,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90667,7 +90667,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90677,7 +90677,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90687,7 +90687,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90697,7 +90697,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90707,7 +90707,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.stream"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90717,7 +90717,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.stream"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90727,7 +90727,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90737,7 +90737,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90747,7 +90747,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Blob.prototype.type<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90757,7 +90757,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Blob.prototype.type<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -90799,7 +90799,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.alloc"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90809,7 +90809,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.alloc"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90819,7 +90819,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.allocUnsafe"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90829,7 +90829,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.allocUnsafe"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90839,7 +90839,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.byteLength"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90849,7 +90849,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.byteLength"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90859,7 +90859,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.compare"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90869,7 +90869,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.compare"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90879,7 +90879,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.concat"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90889,7 +90889,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.concat"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90899,7 +90899,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.from"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90909,7 +90909,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.from"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90919,7 +90919,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.isBuffer"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90929,7 +90929,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.isBuffer"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90939,7 +90939,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.compare"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90949,7 +90949,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.compare"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90959,7 +90959,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.copy"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90969,7 +90969,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.copy"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90979,7 +90979,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.equals"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90989,7 +90989,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.equals"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -90999,7 +90999,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.readBigInt64BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91009,7 +91009,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.readBigInt64BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91019,7 +91019,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.readInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91029,7 +91029,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.readInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91039,7 +91039,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.readUInt16BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91049,7 +91049,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.readUInt16BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91059,7 +91059,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.readUInt16LE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91069,7 +91069,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.readUInt16LE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91079,7 +91079,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.readUInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91089,7 +91089,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.readUInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91099,7 +91099,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.slice"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91109,7 +91109,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.slice"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91119,7 +91119,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.subarray"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91129,7 +91129,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.subarray"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91139,7 +91139,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.toString"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91149,7 +91149,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.toString"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91159,7 +91159,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.write"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91169,7 +91169,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.write"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91179,7 +91179,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.writeBigInt64BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91189,7 +91189,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.writeBigInt64BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91199,7 +91199,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.writeUInt16BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91209,7 +91209,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.writeUInt16BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91219,7 +91219,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.writeUInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91229,7 +91229,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.writeUInt32BE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91239,7 +91239,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Buffer.prototype.writeUInt32LE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91249,7 +91249,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Buffer.prototype.writeUInt32LE"],
-			"task": "C-01",
+			"task": "N-04",
 			"decisions": []
 		},
 		{
@@ -91287,7 +91287,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ByteLengthQueuingStrategy.prototype.highWaterMark<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91297,7 +91297,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ByteLengthQueuingStrategy.prototype.highWaterMark<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91307,7 +91307,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ByteLengthQueuingStrategy.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91317,7 +91317,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ByteLengthQueuingStrategy.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91355,7 +91355,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.CountQueuingStrategy.prototype.highWaterMark<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91365,7 +91365,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.CountQueuingStrategy.prototype.highWaterMark<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91375,7 +91375,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.CountQueuingStrategy.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91385,7 +91385,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.CountQueuingStrategy.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91451,7 +91451,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.DOMException.prototype.code<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91461,7 +91461,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.DOMException.prototype.code<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91471,7 +91471,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.DOMException.prototype.message<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91481,7 +91481,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.DOMException.prototype.message<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91491,7 +91491,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.DOMException.prototype.name<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91501,7 +91501,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.DOMException.prototype.name<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91539,7 +91539,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Event.prototype.initEvent"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91549,7 +91549,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Event.prototype.initEvent"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91559,7 +91559,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Event.prototype.preventDefault"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91569,7 +91569,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Event.prototype.preventDefault"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91579,7 +91579,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Event.prototype.stopImmediatePropagation"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91589,7 +91589,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Event.prototype.stopImmediatePropagation"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91599,7 +91599,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Event.prototype.stopPropagation"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91609,7 +91609,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Event.prototype.stopPropagation"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91647,7 +91647,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.EventTarget.prototype.addEventListener"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91657,7 +91657,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.EventTarget.prototype.addEventListener"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91667,7 +91667,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.EventTarget.prototype.dispatchEvent"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91677,7 +91677,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.EventTarget.prototype.dispatchEvent"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91687,7 +91687,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.EventTarget.prototype.removeEventListener"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91697,7 +91697,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.EventTarget.prototype.removeEventListener"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -91735,7 +91735,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91745,7 +91745,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91755,7 +91755,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91765,7 +91765,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91778,7 +91778,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91791,7 +91791,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91801,7 +91801,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91811,7 +91811,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91821,7 +91821,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91831,7 +91831,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91841,7 +91841,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.getAll"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91851,7 +91851,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.getAll"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91861,7 +91861,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91871,7 +91871,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91881,7 +91881,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91891,7 +91891,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91901,7 +91901,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91911,7 +91911,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91921,7 +91921,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.FormData.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91931,7 +91931,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.FormData.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91969,7 +91969,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91979,7 +91979,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91989,7 +91989,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -91999,7 +91999,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92012,7 +92012,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92025,7 +92025,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92035,7 +92035,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92045,7 +92045,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92055,7 +92055,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92065,7 +92065,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92075,7 +92075,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.getSetCookie"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92085,7 +92085,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.getSetCookie"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92095,7 +92095,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92105,7 +92105,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92115,7 +92115,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92125,7 +92125,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92135,7 +92135,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92145,7 +92145,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92155,7 +92155,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Headers.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92165,7 +92165,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92227,7 +92227,7 @@
 			"operations": [
 				"globalThis.ReadableByteStreamController.prototype.byobRequest<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92241,7 +92241,7 @@
 			"operations": [
 				"globalThis.ReadableByteStreamController.prototype.byobRequest<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92251,7 +92251,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92261,7 +92261,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92275,7 +92275,7 @@
 			"operations": [
 				"globalThis.ReadableByteStreamController.prototype.desiredSize<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92289,7 +92289,7 @@
 			"operations": [
 				"globalThis.ReadableByteStreamController.prototype.desiredSize<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92299,7 +92299,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.enqueue"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92309,7 +92309,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.enqueue"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92319,7 +92319,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92329,7 +92329,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableByteStreamController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92367,7 +92367,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.from"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92377,7 +92377,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.from"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92387,7 +92387,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92397,7 +92397,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92407,7 +92407,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.getReader"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92417,7 +92417,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.getReader"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92427,7 +92427,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.locked<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92437,7 +92437,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.locked<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92447,7 +92447,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.pipeThrough"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92457,7 +92457,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.pipeThrough"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92467,7 +92467,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.pipeTo"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92477,7 +92477,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.pipeTo"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92487,7 +92487,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.tee"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92497,7 +92497,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.tee"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92510,7 +92510,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStream.prototype.values"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92523,7 +92523,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStream.prototype.values"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92561,7 +92561,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92571,7 +92571,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92581,7 +92581,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92591,7 +92591,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92601,7 +92601,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.read"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92611,7 +92611,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.read"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92621,7 +92621,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92631,7 +92631,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92669,7 +92669,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.respond"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92679,7 +92679,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.respond"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92689,7 +92689,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.respondWithNewView"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92699,7 +92699,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.respondWithNewView"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92709,7 +92709,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.view<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92719,7 +92719,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBRequest.prototype.view<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92757,7 +92757,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92767,7 +92767,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92781,7 +92781,7 @@
 			"operations": [
 				"globalThis.ReadableStreamDefaultController.prototype.desiredSize<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92795,7 +92795,7 @@
 			"operations": [
 				"globalThis.ReadableStreamDefaultController.prototype.desiredSize<get>"
 			],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92805,7 +92805,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.enqueue"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92815,7 +92815,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.enqueue"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92825,7 +92825,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92835,7 +92835,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamDefaultController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92873,7 +92873,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92883,7 +92883,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.cancel"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92893,7 +92893,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92903,7 +92903,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92913,7 +92913,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.read"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92923,7 +92923,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.read"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92933,7 +92933,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92943,7 +92943,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.ReadableStreamBYOBReader.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -92973,7 +92973,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92983,7 +92983,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -92993,7 +92993,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.blob"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93003,7 +93003,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.blob"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93013,7 +93013,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93023,7 +93023,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93033,7 +93033,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93043,7 +93043,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93053,7 +93053,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.bodyUsed<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93063,7 +93063,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.bodyUsed<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93073,7 +93073,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93083,7 +93083,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93093,7 +93093,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93103,7 +93103,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93113,7 +93113,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.cache<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93123,7 +93123,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.cache<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93133,7 +93133,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93143,7 +93143,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93153,7 +93153,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.clone"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93163,7 +93163,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.clone"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93173,7 +93173,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.credentials<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93183,7 +93183,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.credentials<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93193,7 +93193,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93203,7 +93203,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93213,7 +93213,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.destination<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93223,7 +93223,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.destination<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93233,7 +93233,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93243,7 +93243,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93253,7 +93253,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.duplex<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93263,7 +93263,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.duplex<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93273,7 +93273,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93283,7 +93283,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93293,7 +93293,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.formData"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93303,7 +93303,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.formData"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93313,7 +93313,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.headers<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93323,7 +93323,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.headers<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93333,7 +93333,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93343,7 +93343,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93353,7 +93353,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.integrity<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93363,7 +93363,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.integrity<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93373,7 +93373,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93383,7 +93383,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93393,7 +93393,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.isHistoryNavigation<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93403,7 +93403,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.isHistoryNavigation<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93413,7 +93413,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93423,7 +93423,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93433,7 +93433,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.isHistoryNavigation<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93443,7 +93443,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.isHistoryNavigation<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93453,7 +93453,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93463,7 +93463,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93473,7 +93473,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93483,7 +93483,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93493,7 +93493,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.method<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93503,7 +93503,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.method<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93513,7 +93513,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93523,7 +93523,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93533,7 +93533,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.mode<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93543,7 +93543,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.mode<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93553,7 +93553,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93563,7 +93563,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93573,7 +93573,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.redirect<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93583,7 +93583,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.redirect<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93593,7 +93593,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93603,7 +93603,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93613,7 +93613,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.referrer<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93623,7 +93623,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.referrer<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93633,7 +93633,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93643,7 +93643,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93653,7 +93653,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.referrerPolicy<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93663,7 +93663,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.referrerPolicy<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93673,7 +93673,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93683,7 +93683,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93693,7 +93693,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93703,7 +93703,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93713,7 +93713,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.url<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93723,7 +93723,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.url<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93733,7 +93733,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93743,7 +93743,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request.prototype.body<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93781,7 +93781,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.error"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93791,7 +93791,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.error"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93801,7 +93801,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93811,7 +93811,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93821,7 +93821,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93831,7 +93831,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.arrayBuffer"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93841,7 +93841,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.blob"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93851,7 +93851,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.blob"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93861,7 +93861,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.body<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93871,7 +93871,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.body<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93881,7 +93881,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.bodyUsed<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93891,7 +93891,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.bodyUsed<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93901,7 +93901,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93911,7 +93911,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.bytes"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93921,7 +93921,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.formData"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93931,7 +93931,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.formData"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93941,7 +93941,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.headers<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93951,7 +93951,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.headers<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93961,7 +93961,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93971,7 +93971,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.json"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93981,7 +93981,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.ok<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -93991,7 +93991,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.ok<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94001,7 +94001,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.redirected<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94011,7 +94011,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.redirected<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94021,7 +94021,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.status<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94031,7 +94031,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.status<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94041,7 +94041,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.statusText<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94051,7 +94051,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.statusText<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94061,7 +94061,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94071,7 +94071,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.text"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94081,7 +94081,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.type<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94091,7 +94091,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.type<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94101,7 +94101,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.prototype.url<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94111,7 +94111,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.prototype.url<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94121,7 +94121,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Response.redirect"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94131,7 +94131,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Response.redirect"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94167,7 +94167,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextDecoder.prototype.decode"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94177,7 +94177,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextDecoder.prototype.decode"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94187,7 +94187,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextDecoder.prototype.encoding<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94197,7 +94197,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextDecoder.prototype.encoding<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94207,7 +94207,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextDecoder.prototype.fatal<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94217,7 +94217,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextDecoder.prototype.fatal<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94227,7 +94227,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextDecoder.prototype.ignoreBOM<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94237,7 +94237,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextDecoder.prototype.ignoreBOM<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94273,7 +94273,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextEncoder.prototype.encode"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94283,7 +94283,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextEncoder.prototype.encode"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94293,7 +94293,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.TextEncoder.prototype.encodeInto"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94303,7 +94303,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.TextEncoder.prototype.encodeInto"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94345,7 +94345,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.canParse"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94355,7 +94355,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.canParse"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94365,7 +94365,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.parse"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94375,7 +94375,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.parse"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94385,7 +94385,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.hash<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94395,7 +94395,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.hash<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94405,7 +94405,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.hash<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94415,7 +94415,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.hash<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94425,7 +94425,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.host<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94435,7 +94435,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.host<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94445,7 +94445,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.host<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94455,7 +94455,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.host<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94465,7 +94465,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.hostname<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94475,7 +94475,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.hostname<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94485,7 +94485,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.hostname<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94495,7 +94495,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.hostname<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94505,7 +94505,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.href<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94515,7 +94515,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.href<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94525,7 +94525,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.href<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94535,7 +94535,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.href<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94545,7 +94545,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.origin<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94555,7 +94555,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.origin<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94565,7 +94565,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.password<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94575,7 +94575,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.password<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94585,7 +94585,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.password<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94595,7 +94595,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.password<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94605,7 +94605,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.pathname<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94615,7 +94615,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.pathname<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94625,7 +94625,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.pathname<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94635,7 +94635,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.pathname<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94645,7 +94645,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.port<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94655,7 +94655,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.port<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94665,7 +94665,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.port<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94675,7 +94675,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.port<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94685,7 +94685,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.protocol<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94695,7 +94695,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.protocol<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94705,7 +94705,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.protocol<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94715,7 +94715,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.protocol<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94725,7 +94725,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.search<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94735,7 +94735,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.search<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94745,7 +94745,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.search<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94755,7 +94755,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.search<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94765,7 +94765,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.searchParams<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94775,7 +94775,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.searchParams<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94785,7 +94785,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.toJSON"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94795,7 +94795,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.toJSON"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94805,7 +94805,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.toJSON"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94815,7 +94815,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.toJSON"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94825,7 +94825,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.username<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94835,7 +94835,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.username<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94845,7 +94845,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URL.prototype.username<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94855,7 +94855,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URL.prototype.username<set>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94893,7 +94893,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94903,7 +94903,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.append"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94913,7 +94913,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94923,7 +94923,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.delete"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94936,7 +94936,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94949,7 +94949,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.entries"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94959,7 +94959,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94969,7 +94969,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.forEach"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94979,7 +94979,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94989,7 +94989,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.get"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -94999,7 +94999,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.getAll"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95009,7 +95009,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.getAll"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95019,7 +95019,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95029,7 +95029,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.has"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95039,7 +95039,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95049,7 +95049,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.keys"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95059,7 +95059,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95069,7 +95069,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.set"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95079,7 +95079,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95089,7 +95089,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.size<get>"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95099,7 +95099,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.sort"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95109,7 +95109,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.sort"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95119,7 +95119,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.toString"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95129,7 +95129,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.toString"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95139,7 +95139,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.URLSearchParams.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95149,7 +95149,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.values"],
-			"task": "C-01",
+			"task": "N-02",
 			"decisions": []
 		},
 		{
@@ -95187,7 +95187,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStream.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95197,7 +95197,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStream.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95207,7 +95207,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStream.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95217,7 +95217,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStream.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95227,7 +95227,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStream.prototype.getWriter"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95237,7 +95237,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStream.prototype.getWriter"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95247,7 +95247,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStream.prototype.locked<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95257,7 +95257,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStream.prototype.locked<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95295,7 +95295,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95305,7 +95305,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultController.prototype.error"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95315,7 +95315,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultController.prototype.signal<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95325,7 +95325,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultController.prototype.signal<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95363,7 +95363,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95373,7 +95373,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.abort"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95383,7 +95383,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95393,7 +95393,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.close"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95403,7 +95403,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95413,7 +95413,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.closed<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95423,7 +95423,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.desiredSize<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95433,7 +95433,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.desiredSize<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95443,7 +95443,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.ready<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95453,7 +95453,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.ready<get>"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95463,7 +95463,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95473,7 +95473,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.releaseLock"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95483,7 +95483,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.write"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95493,7 +95493,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.WritableStreamDefaultWriter.prototype.write"],
-			"task": "C-01",
+			"task": "N-03",
 			"decisions": []
 		},
 		{
@@ -95863,7 +95863,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.escape"],
-			"task": "C-01",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -95873,7 +95873,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.escape"],
-			"task": "C-01",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -96647,7 +96647,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.unescape"],
-			"task": "C-01",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -96657,7 +96657,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.unescape"],
-			"task": "C-01",
+			"task": "F-13",
 			"decisions": []
 		},
 		{
@@ -96667,7 +96667,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["isFinite"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96677,7 +96677,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["isFinite"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96687,7 +96687,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["isNaN"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96697,7 +96697,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["isNaN"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96712,7 +96712,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["parseFloat"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96727,7 +96727,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["parseFloat"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96742,7 +96742,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["parseInt"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{
@@ -96757,7 +96757,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["parseInt"],
-			"task": "N-06",
+			"task": "F-14",
 			"decisions": []
 		},
 		{

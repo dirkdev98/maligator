@@ -1,4 +1,7 @@
 export const knownBuiltinErrors = {
+	bigintConstructor: { error: "TypeError", message: "BigInt is not a constructor" },
+	symbolConstructor: { error: "TypeError", message: "Symbol is not a constructor" },
+	notConstructor: { error: "TypeError", message: "Value is not a constructor" },
 	numberReceiver: {
 		error: "TypeError",
 		message: "Number.prototype method called on incompatible receiver",

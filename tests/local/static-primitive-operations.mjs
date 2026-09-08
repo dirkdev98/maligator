@@ -1355,3 +1355,60 @@ show(NaN.toPrecision(0));
 show(BigInt.asIntN(8, "255"));
 show(BigInt.asUintN(0, true));
 show(BigInt.asIntN(1000, -1n));
+
+for (const [constant, constructor] of [
+	[() => new BigInt(1), BigInt],
+	[() => new Symbol("x"), Symbol],
+	[() => new Math.abs(1), Math.abs],
+	[() => new String.prototype.trim("x"), String.prototype.trim],
+	[() => new parseInt("1"), parseInt],
+]) {
+	const direct = capturedFailure(constant);
+	const dynamic = capturedFailure(() => new constructor(1));
+	if (
+		direct.name !== dynamic.name ||
+		!direct.message.includes("not a constructor") ||
+		!dynamic.message.includes("not a constructor")
+	)
+		throw new Error("Constructor diagnostic mismatch");
+	show(direct.name);
+}
+failureTrace = "";
+show(capturedFailure(() => new Math.abs(effectArgument())).name);
+show(failureTrace);
+failureTrace = "";
+show(
+	capturedFailure(
+		() =>
+			new Math.abs(
+				...{
+					*[Symbol.iterator]() {
+						failureTrace += "i";
+						yield 1;
+						failureTrace += "d";
+					},
+				},
+			),
+	).name,
+);
+show(failureTrace);
+function observeNewTarget(target) {
+	return Reflect.construct(BigInt, [], target);
+}
+show(capturedFailure(() => observeNewTarget({})).name);
+const exoticString = new String("A😀");
+for (const key of ["0", "1", "2", "length"]) {
+	const descriptor = Object.getOwnPropertyDescriptor(exoticString, key);
+	if (
+		descriptor.writable ||
+		descriptor.configurable ||
+		descriptor.enumerable !== (key !== "length")
+	)
+		throw new Error("String exotic descriptor changed");
+}
+show(Object.getOwnPropertyNames(exoticString).join("|"));
+const exoticAlias = exoticString;
+exoticString.extra = 1;
+exoticAlias.extra++;
+show(exoticString.extra);
+show(exoticString !== new String("A😀"));

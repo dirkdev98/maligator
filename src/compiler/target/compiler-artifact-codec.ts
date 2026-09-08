@@ -41,7 +41,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 69;
+export const COMPILER_ARTIFACT_VERSION = 70;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -925,7 +925,10 @@ function writeCompilerArtifact(
 			} else if (
 				plan.kind === "known-builtin-error" &&
 				instruction.opcode === "CALL_KNOWN" &&
-				!instruction.construct &&
+				(!instruction.construct ||
+					["notConstructor", "bigintConstructor", "symbolConstructor"].includes(
+						plan.error,
+					)) &&
 				instruction.argumentMode === undefined &&
 				isKnownBuiltinError(plan.error)
 			) {
@@ -3197,7 +3200,6 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			} else if (
 				tag === 20 &&
 				instruction.opcode === "CALL_KNOWN" &&
-				!instruction.construct &&
 				instruction.argumentMode === undefined
 			) {
 				const length = r.count(1);
@@ -3205,7 +3207,11 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					throw new RangeError("program-image-codec: invalid builtin error");
 				let error = "";
 				for (let index = 0; index < length; index++) error += String.fromCharCode(r.u8());
-				if (!isKnownBuiltinError(error))
+				if (
+					!isKnownBuiltinError(error) ||
+					(instruction.construct &&
+						!["notConstructor", "bigintConstructor", "symbolConstructor"].includes(error))
+				)
 					throw new RangeError("program-image-codec: invalid builtin error");
 				nativeInstructions[instructionIndex] = {
 					kind: "known-builtin-error",

@@ -20,6 +20,24 @@ const coverage = JSON.parse(
 ) as StaticValueCoverage;
 
 describe("shared primordial catalog and coverage obligations", () => {
+	it.each([
+		["String.prototype.trim", "F-11"],
+		["String.prototype.repeat", "F-10"],
+		["String.prototype.replace", "F-12"],
+		["Math.sin", "F-07"],
+		["Math.round", "F-06"],
+		["Number.prototype.toFixed", "F-03"],
+		["Number.prototype.toLocaleString", "L-04"],
+		["BigInt.prototype.toLocaleString", "L-04"],
+		["parseInt", "F-14"],
+		["parseFloat", "F-14"],
+		["globalThis.escape", "F-13"],
+	])("assigns invocation modes of %s to the owning descriptor task", (owner, task) => {
+		for (const key of ["<call>", "<construct>"])
+			expect(
+				coverage.rows.find((row) => row.owner === owner && row.key === key)?.task,
+			).toBe(task);
+	});
 	it("does not infer installed globals or services from the full catalog in smaller builds", () => {
 		const disabled = worldFactsFromConfig(
 			resolveBuildConfig({
