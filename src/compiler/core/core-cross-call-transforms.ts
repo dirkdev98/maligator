@@ -6,6 +6,7 @@ import {
 	coreCalleeTargetsAreOpen,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
+import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
@@ -19,11 +20,11 @@ import type {
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreRepresentation,
-	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
+import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
 	CoreTransformCandidateService,
@@ -95,74 +96,6 @@ function materializeInstructionResults(
 	for (let index = 0; index < count; index++)
 		values.push(fn.kernel.resultAt(start + index));
 	return values;
-}
-
-function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
-	const start = fn.kernel.terminatorEdgeArgumentStart(edge);
-	const count = fn.kernel.terminatorEdgeArgumentCount(edge);
-	const arguments_: Array<CoreValueId> = [];
-	for (let index = 0; index < count; index++)
-		arguments_.push(fn.kernel.operandAt(start + index));
-	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
-}
-
-function materializeTerminatorInput(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): CoreTerminatorInput {
-	const kind = fn.instructionKind(instruction);
-	const operandStart = fn.kernel.instructionOperandStart(instruction);
-	const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
-	switch (kind) {
-		case "jump":
-			return { kind, edge: materializeTerminatorEdge(fn, edgeStart) };
-		case "branch":
-			return {
-				kind,
-				condition: fn.kernel.operandAt(operandStart),
-				consequent: materializeTerminatorEdge(fn, edgeStart),
-				alternate: materializeTerminatorEdge(fn, edgeStart + 1),
-			};
-		case "guard": {
-			const fact = fn.kernel.terminatorFact(instruction);
-			if (fact === undefined) throw new Error(`Core guard ${instruction} has no fact`);
-			return {
-				kind,
-				condition: fn.kernel.operandAt(operandStart),
-				fact,
-				success: materializeTerminatorEdge(fn, edgeStart),
-				fallback: materializeTerminatorEdge(fn, edgeStart + 1),
-			};
-		}
-		case "switch": {
-			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
-			const cases: Array<
-				Extract<CoreTerminatorInput, { kind: "switch" }>["cases"][number]
-			> = [];
-			for (let index = 0; index < edgeCount - 1; index++) {
-				const value = fn.kernel.terminatorEdgeCaseValue(edgeStart + index);
-				if (value === undefined)
-					throw new Error(`Core switch ${instruction} has no case`);
-				cases.push({
-					value,
-					edge: materializeTerminatorEdge(fn, edgeStart + index),
-				});
-			}
-			return {
-				kind,
-				discriminant: fn.kernel.operandAt(operandStart),
-				cases,
-				default: materializeTerminatorEdge(fn, edgeStart + edgeCount - 1),
-			};
-		}
-		case "return":
-		case "throw":
-			return { kind, value: fn.kernel.operandAt(operandStart) };
-		case "unreachable":
-			return { kind };
-		case "operation":
-			throw new Error(`Core instruction ${instruction} is not a terminator`);
-	}
 }
 
 function inlineSourcePositions(
@@ -658,7 +591,7 @@ function applyGuardedInline(
 	for (const instruction of tail) editor.moveInstruction(instruction, join);
 	editor.replaceValueUses(callResult, joinedResult);
 	const joinedTerminator = {
-		...materializeTerminatorInput(caller, originalTerminator),
+		...coreTerminatorInput(caller, originalTerminator),
 		...(terminatorPosition === undefined ? {} : { sourcePosition: terminatorPosition }),
 	};
 	editor.setTerminator(join, joinedTerminator);
@@ -789,7 +722,7 @@ function applyGuardedInline(
 				values.set(output, inserted.outputs[index]!);
 		}
 		if (!inline.linear) {
-			const terminator = materializeTerminatorInput(
+			const terminator = coreTerminatorInput(
 				inline.function,
 				inline.function.blockTerminator(inlineBlock.id),
 			);
@@ -961,13 +894,33 @@ export function runCoreCrossCallTransforms(
 	let programFlowResolves = 1;
 	let valueKindFolds = 0;
 	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
+	const specialized = specializeCoreStaticArguments(
+		program,
+		analyses,
+		summaries,
+		service,
+		phaseLimits,
+	);
+
+	if (specialized.length !== 0) {
+		flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		summaries = flow.summaries;
+		programFlowResolves++;
+	}
+
 	for (let wave = 0; wave < 2; wave++) {
-		if (service.programBudgetExhaustionReason(phaseLimits) !== undefined) break;
+		if (
+			service.programBudgetExhaustionReason(phaseLimits) !== undefined &&
+			!(wave === 0 && specialized.length > 0)
+		)
+			break;
 		discoverCoreCrossCallCandidates(program, summaries, service);
 		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
-		const appliedCallers = new Set<CoreFunctionId>();
-		let published = false;
+		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);
+		for (const functionId of appliedCallers)
+			editors.set(functionId, CoreEditor.open(program, functionId));
+		let published = appliedCallers.size !== 0;
 		for (
 			let candidate = service.next();
 			candidate !== undefined;

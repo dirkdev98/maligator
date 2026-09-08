@@ -1324,6 +1324,7 @@ static bool mal_vm_rebase_literal_templates(
     while (pos < count) {
         u32 tag = data[pos++];
         switch ((MalLiteralTemplateTag) tag) {
+            case MAL_LITERAL_UNDEFINED:
             case MAL_LITERAL_NULL:
             case MAL_LITERAL_FALSE:
             case MAL_LITERAL_TRUE:

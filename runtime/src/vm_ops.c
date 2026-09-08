@@ -893,6 +893,9 @@ static bool mal_literal_decode_value(
     *is_object = false;
     *child_count = 0;
     switch ((MalLiteralTemplateTag) tag) {
+        case MAL_LITERAL_UNDEFINED:
+            *out = MAL_VALUE_UNDEFINED;
+            return true;
         case MAL_LITERAL_NULL:
             *out = mal_value_new_null();
             return true;

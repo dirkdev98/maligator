@@ -7,6 +7,7 @@ import type {
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreTerminatorPayload,
+	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
@@ -983,4 +984,72 @@ export function corePredecessorEdges(
 	options: BuildCoreControlFlowOptions = {},
 ): ReadonlyArray<ReadonlyArray<CoreControlEdge>> {
 	return buildCoreControlFlow(program, functionId, options).predecessors;
+}
+
+function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
+	const start = fn.kernel.terminatorEdgeArgumentStart(edge);
+	const count = fn.kernel.terminatorEdgeArgumentCount(edge);
+	const arguments_: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		arguments_.push(fn.kernel.operandAt(start + index));
+	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
+}
+
+export function coreTerminatorInput(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreTerminatorInput {
+	const kind = fn.instructionKind(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+	switch (kind) {
+		case "jump":
+			return { kind, edge: materializeTerminatorEdge(fn, edgeStart) };
+		case "branch":
+			return {
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				consequent: materializeTerminatorEdge(fn, edgeStart),
+				alternate: materializeTerminatorEdge(fn, edgeStart + 1),
+			};
+		case "guard": {
+			const fact = fn.kernel.terminatorFact(instruction);
+			if (fact === undefined) throw new Error(`Core guard ${instruction} has no fact`);
+			return {
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				fact,
+				success: materializeTerminatorEdge(fn, edgeStart),
+				fallback: materializeTerminatorEdge(fn, edgeStart + 1),
+			};
+		}
+		case "switch": {
+			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+			const cases: Array<
+				Extract<CoreTerminatorInput, { kind: "switch" }>["cases"][number]
+			> = [];
+			for (let index = 0; index < edgeCount - 1; index++) {
+				const value = fn.kernel.terminatorEdgeCaseValue(edgeStart + index);
+				if (value === undefined)
+					throw new Error(`Core switch ${instruction} has no case`);
+				cases.push({
+					value,
+					edge: materializeTerminatorEdge(fn, edgeStart + index),
+				});
+			}
+			return {
+				kind,
+				discriminant: fn.kernel.operandAt(operandStart),
+				cases,
+				default: materializeTerminatorEdge(fn, edgeStart + edgeCount - 1),
+			};
+		}
+		case "return":
+		case "throw":
+			return { kind, value: fn.kernel.operandAt(operandStart) };
+		case "unreachable":
+			return { kind };
+		case "operation":
+			throw new Error(`Core instruction ${instruction} is not a terminator`);
+	}
 }

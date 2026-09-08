@@ -57,6 +57,7 @@ typedef enum MalLiteralTemplateTag {
     MAL_LITERAL_ARRAY,
     MAL_LITERAL_OBJECT,
     MAL_LITERAL_KEY,
+    MAL_LITERAL_UNDEFINED,
 } MalLiteralTemplateTag;
 
 typedef enum MalBinaryOp {

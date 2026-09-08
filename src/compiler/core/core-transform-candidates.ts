@@ -1,6 +1,7 @@
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 
 export type CoreTransformKind =
+	| "static-argument-specialization"
 	| "finite-dispatch"
 	| "inline"
 	| "guarded-inline"
@@ -100,6 +101,7 @@ interface CallerConsumption {
 
 function transformKindCounts(): Record<CoreTransformKind, number> {
 	return {
+		"static-argument-specialization": 0,
 		"finite-dispatch": 0,
 		inline: 0,
 		"guarded-inline": 0,

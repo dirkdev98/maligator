@@ -7436,11 +7436,7 @@ function compileTryCatch(
 	};
 	block.emitter.emit(tryBegin);
 
-	const tryBlock = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.block),
-	);
+	const tryBlock = compileStatementsToBlock(program, fn, [statement.block]);
 	block.emitter.emit({
 		type: "jump",
 		blocks: [tryBlock],
@@ -7483,11 +7479,7 @@ function compileTryCatch(
 			);
 		}
 
-		const catchBlock = compileStatementsToBlock(
-			program,
-			fn,
-			normalizeStatementOrBlock(statement.handler.body),
-		);
+		const catchBlock = compileStatementsToBlock(program, fn, [statement.handler.body]);
 		handlerCursor.block.emitter.emit({
 			type: "jump",
 			blocks: [catchBlock],
@@ -7556,11 +7548,7 @@ function compileTryFinally(
 
 	fn.loops ??= [];
 	fn.loops.push(finallyCtx);
-	const tryBlock = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.block),
-	);
+	const tryBlock = compileStatementsToBlock(program, fn, [statement.block]);
 	block.emitter.emit({ type: "jump", blocks: [tryBlock] });
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
 	fn.loops.pop();
@@ -7601,11 +7589,7 @@ function compileTryFinally(
 		handlerCursor.block.emitter.emit(catchTryBegin);
 
 		fn.loops.push(finallyCtx);
-		const catchBlock = compileStatementsToBlock(
-			program,
-			fn,
-			normalizeStatementOrBlock(statement.handler.body),
-		);
+		const catchBlock = compileStatementsToBlock(program, fn, [statement.handler.body]);
 		handlerCursor.block.emitter.emit({ type: "jump", blocks: [catchBlock] });
 		const catchBodyLastBlock = fn.blocks.at(-1)!;
 		fn.loops.pop();
@@ -7631,11 +7615,7 @@ function compileTryFinally(
 	// --- finalizer body, compiled once with the finally context popped so its
 	// own abrupt completions route to *enclosing* finalizers and override the
 	// pending one. ---
-	const finalizerEntryIdx = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.finalizer!),
-	);
+	const finalizerEntryIdx = compileStatementsToBlock(program, fn, [statement.finalizer!]);
 	const finalizerLastBlock = fn.blocks.at(-1)!;
 	for (const jump of entryJumps) {
 		jump.blocks[0] = finalizerEntryIdx;

@@ -1,5 +1,6 @@
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { CoreOptimizationReport } from "../../src/compiler/core/core-optimization-report.ts";
+import { parseScript } from "../../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipeline/compile-core.ts";
 import { literalPrototypeMethods } from "../../src/compiler/shared/builtin-registry.ts";
@@ -12,7 +13,12 @@ import type { CoreOperationInspection } from "./core-inspection.ts";
 export function inspectStaticValueFunction(
 	source: string,
 	name: string,
-	options: { locked?: boolean; profile?: boolean; counters?: boolean } = {},
+	options: {
+		locked?: boolean;
+		profile?: boolean;
+		counters?: boolean;
+		script?: boolean;
+	} = {},
 ) {
 	let core: ReadonlyArray<CoreOperationInspection> = [];
 	let execution: ExecutionProgram | undefined;
@@ -20,7 +26,11 @@ export function inspectStaticValueFunction(
 	const phases: Record<string, number> = {};
 	const started = performance.now();
 	const image = compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(source, "static-values.mjs"),
+		analyzeSourceAndRunSemanticAnalysis(
+			source,
+			options.script ? "static-values.js" : "static-values.mjs",
+			options.script ? parseScript(source, { strict: false }) : undefined,
+		),
 		{
 			facts: compilerProgramFactsFromConfig(
 				resolveBuildConfig({

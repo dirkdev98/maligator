@@ -84,7 +84,8 @@ function literalGraph(
 		const attributes = fn.instructionAttributes(instruction);
 		switch (opcode) {
 			case "createUndefined":
-				return undefined;
+				words.push(11);
+				break;
 			case "createNull":
 				words.push(0);
 				break;

@@ -327,10 +327,11 @@ describe("Core local memory, provenance, and escape optimization", () => {
 
 	it("retains the boxing move when forwarding an unboxed slot value", () => {
 		const core = program();
-		const builder = new CoreFunctionBuilder(core);
-		const entry = builder.createBlock();
-		const [one] = builder.appendInstruction(entry, "createNumber", [], {
-			attributes: { value: 1 },
+		const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const input = builder.blockParameterValue(entry, 0);
+		const [one] = builder.appendInstruction(entry, "unary", [input], {
+			attributes: { operator: "+" },
 			outputRepresentations: ["f64"],
 		});
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [one!], {

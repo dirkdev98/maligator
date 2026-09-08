@@ -716,7 +716,7 @@ describe("Core memory and escape parity", () => {
 		const loads = coreOperations(fn).filter(
 			({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
 		);
-		expect(loads).toHaveLength(1);
+		expect(loads).toHaveLength(0);
 	});
 
 	it("retains repeated hole and deleted-element reads that can reach inherited accessors", () => {

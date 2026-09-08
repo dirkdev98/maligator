@@ -1,4 +1,7 @@
-import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
+import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
+import type { ConstantValue } from "../shared/constant-evaluator.ts";
+import type { PrimordialKey } from "../shared/primordial-catalog.ts";
+import { primordialNode, provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
 import type {
 	StaticDescriptionId,
@@ -7,10 +10,22 @@ import type {
 	StaticPrototype,
 } from "../shared/static-values.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+	analyzeCoreMemoryVersions,
+} from "./core-ir-memory.ts";
+import type { CoreMemoryVersions, CoreExactMemoryLocation } from "./core-ir-memory.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreValueId,
+} from "./core-ir.ts";
+import { CORE_STATIC_CELL_INDEX } from "./core-static-value-cells.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
 	CoreFunctionStore,
@@ -18,13 +33,128 @@ import type {
 	CoreProgram,
 } from "./core-store.ts";
 
+const STATIC_CONSTRUCTORS = new Set([
+	"Array",
+	"Object",
+	"Boolean",
+	"Number",
+	"String",
+	"Map",
+	"Set",
+	"WeakMap",
+	"WeakSet",
+	"Date",
+	"RegExp",
+	"ArrayBuffer",
+	"SharedArrayBuffer",
+	"DataView",
+	"Int8Array",
+	"Uint8Array",
+	"Uint8ClampedArray",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"Float16Array",
+	"Float32Array",
+	"Float64Array",
+	"BigInt64Array",
+	"BigUint64Array",
+	"Temporal.Instant",
+	"Temporal.Duration",
+	"Temporal.PlainDate",
+	"Temporal.PlainTime",
+	"Temporal.PlainDateTime",
+	"Temporal.PlainYearMonth",
+	"Temporal.PlainMonthDay",
+	"Temporal.ZonedDateTime",
+	"Intl.Collator",
+	"Intl.DateTimeFormat",
+	"Intl.NumberFormat",
+	"Intl.PluralRules",
+	"Intl.RelativeTimeFormat",
+	"Intl.ListFormat",
+	"Intl.DisplayNames",
+	"Intl.Segmenter",
+	"Intl.Locale",
+	"Intl.DurationFormat",
+]);
+
 export type StaticAllocationIdentity =
 	| {
 			readonly kind: "fresh-per-evaluation";
 			readonly function: CoreFunctionId;
 			readonly value: CoreValueId;
 	  }
-	| { readonly kind: "realm-pool"; readonly slot: number };
+	| {
+			readonly kind: "template-child";
+			readonly function: CoreFunctionId;
+			readonly value: CoreValueId;
+			readonly offset: number;
+	  }
+	| { readonly kind: "realm-pool"; readonly slot: number }
+	| { readonly kind: "intrinsic" | "symbol-registry"; readonly key: string }
+	| {
+			readonly kind: "private-cell";
+			readonly function: CoreFunctionId;
+			readonly key: string;
+	  };
+
+function sameStaticIdentity(
+	left: StaticAllocationIdentity | undefined,
+	right: StaticAllocationIdentity | undefined,
+): boolean {
+	if (left === right) return true;
+	if (left === undefined || right === undefined) return false;
+	switch (left.kind) {
+		case "fresh-per-evaluation":
+			return (
+				right.kind === left.kind &&
+				left.function === right.function &&
+				left.value === right.value
+			);
+		case "template-child":
+			return (
+				right.kind === left.kind &&
+				left.function === right.function &&
+				left.value === right.value &&
+				left.offset === right.offset
+			);
+		case "realm-pool":
+			return right.kind === left.kind && left.slot === right.slot;
+		case "intrinsic":
+		case "symbol-registry":
+			return right.kind === left.kind && left.key === right.key;
+		case "private-cell":
+			return (
+				right.kind === left.kind &&
+				left.function === right.function &&
+				left.key === right.key
+			);
+	}
+}
+
+function staticPropertyKey(key: StaticPropertyDescription["key"]): string {
+	return typeof key === "string"
+		? `string:${key}`
+		: "symbolOperand" in key
+			? `operand:${key.symbolOperand}`
+			: `identity:${key.symbolIdentitySlot}`;
+}
+
+function sameStaticList<T>(
+	left: ReadonlyArray<T> | undefined,
+	right: ReadonlyArray<T> | undefined,
+	equal: (a: T, b: T) => boolean,
+): boolean {
+	return (
+		left === right ||
+		(left !== undefined &&
+			right !== undefined &&
+			left.length === right.length &&
+			left.every((value, index) => equal(value, right[index]!)))
+	);
+}
 
 export interface CoreStaticValue {
 	readonly kind: "known";
@@ -43,12 +173,24 @@ export interface CoreStaticValue {
 		| "object";
 	readonly prototype: StaticPrototype;
 	readonly identity?: StaticAllocationIdentity;
+	readonly canonical?: string;
+	readonly discriminator?: CoreValueId;
+	readonly exactBrand?: string;
+	readonly privateUntilObservation?: boolean;
+	readonly construction?: {
+		readonly kind: "call" | "construct";
+		readonly callee: string;
+		readonly instruction: CoreInstructionId;
+		readonly arguments: ReadonlyArray<CoreValueId>;
+	};
 	readonly state:
 		| "immutable-value"
 		| "initial-allocation"
 		| "joined-allocation"
-		| "pooled-instance";
+		| "pooled-instance"
+		| "stored-instance";
 	readonly operands: ReadonlyArray<CoreValueId>;
+	readonly allocationIdentities?: ReadonlyArray<StaticAllocationIdentity>;
 	readonly environmentDependencies: ReadonlyArray<string>;
 }
 
@@ -78,8 +220,21 @@ export class CoreStaticValueAnalysis {
 	readonly #dataVersion: number;
 	readonly #cfg: () => CoreControlFlow;
 	readonly #limit: number;
+	readonly #context: CoreCompilationContext | undefined;
+	readonly #memory: () => CoreMemoryVersions;
+	readonly #cells:
+		| ((
+				fn: CoreFunctionStore,
+				load: CoreInstructionId,
+				value: CoreValueId,
+				consumer: CoreInstructionId,
+		  ) => CoreStaticValue | undefined)
+		| undefined;
+	#cellRevision: number | undefined;
 	readonly #cache = new Map<CoreValueId, CoreStaticValueResult>();
 	readonly #visiting = new Set<CoreValueId>();
+	readonly #observations = new Map<string, CoreStaticValueResult>();
+	readonly #proofs = new WeakSet<CoreStaticValue>();
 	readonly statistics: CoreStaticValueStatistics = {
 		queries: 0,
 		visits: 0,
@@ -93,6 +248,14 @@ export class CoreStaticValueAnalysis {
 		fn: CoreFunctionStore,
 		cfg: () => CoreControlFlow,
 		limit = 65536,
+		context?: CoreCompilationContext,
+		memory?: () => CoreMemoryVersions,
+		cells?: (
+			fn: CoreFunctionStore,
+			load: CoreInstructionId,
+			value: CoreValueId,
+			consumer: CoreInstructionId,
+		) => CoreStaticValue | undefined,
 	) {
 		this.#program = program;
 		this.#fn = fn;
@@ -100,6 +263,11 @@ export class CoreStaticValueAnalysis {
 		this.#dataVersion = program.programVersion("data");
 		this.#cfg = cfg;
 		this.#limit = limit;
+		this.#context = context;
+		this.#cells = cells;
+		let cachedMemory: CoreMemoryVersions | undefined;
+		this.#memory =
+			memory ?? (() => (cachedMemory ??= analyzeCoreMemoryVersions(program, fn.id)));
 	}
 
 	assertCurrent(): void {
@@ -138,20 +306,417 @@ export class CoreStaticValueAnalysis {
 			this.#visiting.delete(value);
 		}
 		this.#cache.set(value, result);
+		if (result.kind === "known") this.#proofs.add(result);
 		return result;
+	}
+
+	queryAt(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
+		this.assertCurrent();
+		if (
+			this.#cellRevision !== undefined &&
+			this.#cellRevision !== this.#program.programFlowRevision
+		) {
+			this.#observations.clear();
+			this.#cache.clear();
+			this.#cellRevision = this.#program.programFlowRevision;
+		}
+		const key = `${value}:${consumer}`;
+		const cached = this.#observations.get(key);
+		if (cached !== undefined) return cached;
+		// Recursive control flow widens before following backedges.
+		this.#observations.set(key, { kind: "unknown", reason: "cycle-widening" });
+		const result = this.#observe(value, consumer);
+		this.#observations.set(key, result);
+		if (result.kind === "known") this.#proofs.add(result);
+		return result;
+	}
+
+	#arguments(instruction: CoreInstructionId): Array<CoreValueId> {
+		const kernel = this.#fn.kernel,
+			start = kernel.instructionOperandStart(instruction);
+		return Array.from(
+			{ length: kernel.instructionOperandCount(instruction) },
+			(_, index) => kernel.operandAt(start + index),
+		);
+	}
+
+	#observe(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
+		const initial = this.query(value);
+		if (
+			initial.kind === "unknown" &&
+			this.#cells !== undefined &&
+			this.#fn.kernel.valueDefinitionKind(value) === 1
+		) {
+			const definition = coreInstructionId(this.#fn.kernel.valueDefinitionOwner(value));
+			if (
+				["loadGlobal", "loadCaptured"].includes(
+					this.#fn.instructionOpcodeName(definition),
+				)
+			) {
+				this.#cellRevision = this.#program.programFlowRevision;
+				return this.#cells(this.#fn, definition, value, consumer) ?? initial;
+			}
+		}
+		if (initial.kind === "unknown" || initial.state === "immutable-value") return initial;
+		const intern = this.#program.staticDescriptions;
+		const description = intern.description(initial.description);
+		if (description.kind !== "array" && description.kind !== "object") return initial;
+		const unknownContents = (): CoreStaticValue => ({
+			...initial,
+			description: intern.intern({
+				...description,
+				properties: [],
+				ownKeysComplete: false,
+				prototype: { kind: "unknown" },
+				...(description.kind === "array" ? { length: null } : {}),
+			}),
+			prototype: { kind: "unknown" },
+			operands: [],
+			privateUntilObservation: false,
+		});
+		const discriminator = initial.discriminator ?? value;
+		const isJoined = this.#fn.kernel.valueDefinitionKind(discriminator) === 0;
+		if (initial.identity?.kind !== "fresh-per-evaluation" && !isJoined)
+			return unknownContents();
+		const root = isJoined
+			? discriminator
+			: initial.identity!.kind === "fresh-per-evaluation"
+				? initial.identity!.value
+				: value;
+		const definition = coreInstructionId(this.#fn.kernel.valueDefinitionOwner(root));
+		const startBlock = isJoined
+			? coreBlockId(this.#fn.kernel.valueDefinitionOwner(root))
+			: this.#fn.instructionBlock(definition);
+		const endBlock = this.#fn.instructionBlock(consumer);
+		const path: Array<CoreBlockId> = [endBlock];
+		while (path[path.length - 1] !== startBlock) {
+			if (++this.statistics.visits > this.#limit)
+				return { kind: "unknown", reason: "work-limit" };
+			const predecessors = this.#cfg().predecessors[path[path.length - 1]!] ?? [];
+			const edge = predecessors[0];
+			if (
+				predecessors.length !== 1 ||
+				edge?.kind !== "ordinary" ||
+				path.includes(edge.from)
+			)
+				return unknownContents();
+			path.push(edge.from);
+		}
+		path.reverse();
+		this.statistics.visits += description.properties.length;
+		if (this.statistics.visits > this.#limit)
+			return { kind: "unknown", reason: "work-limit" };
+		const propertyMap = new Map(
+			description.properties.map((property) => [
+				staticPropertyKey(property.key),
+				property,
+			]),
+		);
+		let prototype = description.prototype;
+		let length = description.kind === "array" ? description.length : null;
+		let complete = description.ownKeysComplete !== false;
+		let escaped = isJoined,
+			started = isJoined;
+		const bindings = [...initial.operands];
+		const aliases = new Set<CoreValueId>([root]);
+		const bindingIndices = new Map(bindings.map((input, index) => [input, index]));
+		const symbolKeys: Array<{ identity: StaticAllocationIdentity; index: number }> = [];
+		const bind = (input: CoreValueId): StaticMember => {
+			const fact = this.query(input);
+			if (
+				fact.kind === "known" &&
+				fact.state === "immutable-value" &&
+				!["object", "array", "function", "symbol"].includes(fact.brand)
+			)
+				return { kind: "constant", description: fact.description };
+			let index = bindingIndices.get(input);
+			if (index === undefined) {
+				index = bindings.length;
+				bindings.push(input);
+				bindingIndices.set(input, index);
+			}
+			return { kind: "operand", index };
+		};
+		const propertyKey = (
+			input: CoreValueId,
+		): StaticPropertyDescription["key"] | undefined => {
+			const constant = this.constant(input);
+			if (constant !== undefined)
+				return constant.kind === "undefined" ? "undefined" : String(constant.value);
+			const fact = this.query(input);
+			if (fact.kind === "known" && fact.brand === "null") return "null";
+			if (fact.kind !== "known" || fact.brand !== "symbol") return undefined;
+			const identity = fact.identity;
+			this.statistics.visits += symbolKeys.length;
+			if (this.statistics.visits > this.#limit) return undefined;
+			const prior =
+				identity === undefined
+					? undefined
+					: symbolKeys.find((entry) => sameStaticIdentity(entry.identity, identity));
+			if (prior !== undefined) return { symbolOperand: prior.index };
+			const member = bind(input);
+			if (member.kind !== "operand") return undefined;
+			if (identity !== undefined) symbolKeys.push({ identity, index: member.index });
+			return { symbolOperand: member.index };
+		};
+		const invalidate = () => {
+			propertyMap.clear();
+			complete = false;
+			length = null;
+			prototype = { kind: "unknown" };
+		};
+		for (const block of path)
+			for (const instruction of this.#fn.instructionIds(block)) {
+				if (!isJoined && instruction === definition) {
+					started = true;
+					continue;
+				}
+				if (!started) continue;
+				if (instruction === consumer) {
+					// Integer indices precede strings; stable sorting retains insertion order for strings
+					// and symbols.
+					const index = (key: StaticPropertyDescription["key"]) =>
+						typeof key === "string" &&
+						String(Number(key)) === key &&
+						Number.isInteger(Number(key)) &&
+						Number(key) >= 0 &&
+						Number(key) < 4294967295
+							? Number(key)
+							: Infinity;
+					this.statistics.visits += propertyMap.size;
+					if (this.statistics.visits > this.#limit)
+						return { kind: "unknown", reason: "work-limit" };
+					const properties = [...propertyMap.values()];
+					properties.sort(
+						(a, b) =>
+							index(a.key) - index(b.key) ||
+							(typeof a.key === "string" ? 0 : 1) - (typeof b.key === "string" ? 0 : 1),
+					);
+					return {
+						...initial,
+						prototype,
+						operands: bindings,
+						privateUntilObservation: !escaped,
+						description: intern.intern({
+							...description,
+							prototype,
+							properties,
+							ownKeysComplete: complete,
+							...(description.kind === "array" ? { length } : {}),
+						}),
+					};
+				}
+				if (++this.statistics.visits > this.#limit)
+					return { kind: "unknown", reason: "work-limit" };
+				if (this.#fn.instructionKind(instruction) !== "operation") continue;
+				const opcode = this.#fn.instructionOpcodeName(instruction),
+					args = this.#arguments(instruction);
+				const attributes = this.#fn.instructionAttributes(instruction);
+				const touches = args.some((input) => aliases.has(input));
+				if (opcode === "move" && aliases.has(args[0]!)) {
+					const result = this.#fn.kernel.instructionResultStart(instruction);
+					aliases.add(this.#fn.kernel.resultAt(result));
+					continue;
+				}
+				if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
+					const output = this.#fn.kernel.resultAt(
+						this.#fn.kernel.instructionResultStart(instruction),
+					);
+					const fact = this.query(output);
+					if (
+						fact.kind === "known" &&
+						fact.identity !== undefined &&
+						sameStaticIdentity(fact.identity, initial.identity)
+					)
+						aliases.add(output);
+				}
+				if (opcode === "storeLocal" && touches) continue;
+				const receiver = aliases.has(args[0]!);
+				if (receiver && opcode === "setPrototype") {
+					const fact = this.query(args[1]!);
+					if (fact.kind === "known" && fact.brand === "null")
+						prototype = { kind: "null" };
+					else if (fact.kind === "known" && fact.canonical !== undefined)
+						prototype = { kind: "intrinsic", id: fact.canonical };
+					else {
+						const member = bind(args[1]!);
+						prototype =
+							member.kind === "operand"
+								? { kind: "operand", index: member.index }
+								: { kind: "unknown" };
+					}
+					continue;
+				}
+				if (
+					receiver &&
+					[
+						"defineProperty",
+						"defineAccessor",
+						"storeProperty",
+						"storePropertyStatic",
+						"deleteProperty",
+						"loadProperty",
+						"loadPropertyStatic",
+					].includes(opcode)
+				) {
+					const key = opcode.endsWith("Static")
+						? this.string(attributes.stringIndex as number)
+						: propertyKey(args[1]!);
+					if (key === undefined) {
+						invalidate();
+						continue;
+					}
+					const keyId = staticPropertyKey(key);
+					const previous = propertyMap.get(keyId);
+					if (opcode.startsWith("load")) {
+						if (
+							previous?.descriptor.kind !== "data" &&
+							!(key === "length" && description.kind === "array")
+						)
+							invalidate();
+						continue;
+					}
+					if (opcode === "deleteProperty") {
+						if (previous?.configurable !== false) propertyMap.delete(keyId);
+						continue;
+					}
+					const input = args[opcode === "storePropertyStatic" ? 1 : 2]!;
+					if (key === "length" && description.kind === "array") {
+						if (
+							length === null ||
+							attributes.writable === false ||
+							opcode === "defineAccessor"
+						) {
+							invalidate();
+							continue;
+						}
+						const constant = this.constant(input);
+						if (
+							constant?.kind !== "number" ||
+							!Number.isInteger(constant.value) ||
+							constant.value < 0 ||
+							constant.value > 4294967295
+						) {
+							invalidate();
+							continue;
+						}
+						length = constant.value;
+						this.statistics.visits += propertyMap.size;
+						if (this.statistics.visits > this.#limit)
+							return { kind: "unknown", reason: "work-limit" };
+						for (const [id, property] of propertyMap) {
+							if (
+								typeof property.key === "string" &&
+								/^(0|[1-9][0-9]*)$/.test(property.key) &&
+								Number(property.key) < 4294967295 &&
+								Number(property.key) >= length
+							) {
+								if (!property.configurable) {
+									invalidate();
+									break;
+								}
+								propertyMap.delete(id);
+							}
+						}
+						continue;
+					}
+					if (opcode.startsWith("store") && previous?.descriptor.kind !== "data") {
+						invalidate();
+						continue;
+					}
+					if (
+						opcode.startsWith("store") &&
+						previous?.descriptor.kind === "data" &&
+						!previous.descriptor.writable
+					)
+						continue;
+					const property: StaticPropertyDescription =
+						opcode === "defineAccessor"
+							? {
+									key,
+									enumerable: attributes.enumerable === true,
+									configurable: true,
+									descriptor: {
+										kind: "accessor",
+										get:
+											attributes.kind === "get"
+												? bind(input)
+												: previous?.descriptor.kind === "accessor"
+													? previous.descriptor.get
+													: {
+															kind: "constant",
+															description: intern.intern({ kind: "undefined" }),
+														},
+										set:
+											attributes.kind === "set"
+												? bind(input)
+												: previous?.descriptor.kind === "accessor"
+													? previous.descriptor.set
+													: {
+															kind: "constant",
+															description: intern.intern({ kind: "undefined" }),
+														},
+									},
+								}
+							: {
+									key,
+									enumerable: opcode.startsWith("store")
+										? previous!.enumerable
+										: attributes.enumerable === true,
+									configurable: opcode.startsWith("store")
+										? previous!.configurable
+										: attributes.configurable !== false,
+									descriptor: {
+										kind: "data",
+										writable:
+											opcode.startsWith("store") && previous?.descriptor.kind === "data"
+												? previous.descriptor.writable
+												: attributes.writable !== false,
+										value: bind(input),
+									},
+								};
+					propertyMap.set(keyId, property);
+					if (
+						description.kind === "array" &&
+						length !== null &&
+						typeof key === "string" &&
+						/^(0|[1-9][0-9]*)$/.test(key) &&
+						Number(key) < 4294967295
+					)
+						length = Math.max(length, Number(key) + 1);
+					continue;
+				}
+				const descriptor = this.#fn.registry.byId(
+					this.#fn.instructionOpcode(instruction),
+				);
+				const effects =
+					this.#fn.instructionEffectRefinement(instruction)?.effects ??
+					descriptor.effects;
+				if (touches && !descriptor.observesOperands) escaped = true;
+				if (
+					(escaped || touches) &&
+					(effects.callsUserCode ||
+						effects.maySuspend ||
+						effects.writes.includes("object-property") ||
+						effects.writes.includes("array-element"))
+				)
+					invalidate();
+			}
+		return unknownContents();
 	}
 
 	verify(value: CoreStaticValue, consumer?: CoreInstructionId): void {
 		this.assertCurrent();
-		if (this.#cache.get(value.value) !== value)
+		if (!this.#proofs.has(value))
 			throw new Error("Static-value proof is not owned by this analysis");
 		const summary = this.#program.staticDescriptions.summary(value.description);
-		if (summary.identitySlots.length !== 0)
-			throw new Error("Static recipe has unbound allocation identities");
+		for (const index of summary.identitySlots)
+			if (value.allocationIdentities?.[index] === undefined)
+				throw new Error("Static recipe has unbound allocation identities");
 		for (const index of summary.operandSlots)
 			if (value.operands[index] === undefined)
 				throw new Error("Static recipe has an unbound SSA operand");
-		for (const operand of value.operands) {
+		for (const operand of [...value.operands, ...(value.construction?.arguments ?? [])]) {
 			if (!this.#fn.isValueLive(operand))
 				throw new Error("Static recipe hides a dead SSA operand");
 			if (consumer === undefined) continue;
@@ -190,6 +755,185 @@ export class CoreStaticValueAnalysis {
 			throw new Error("Static recipe lost its per-evaluation identity");
 	}
 
+	#join(value: CoreValueId, facts: Array<CoreStaticValue>): CoreStaticValueResult {
+		const first = facts[0];
+		if (first === undefined || facts.some((fact) => fact.brand !== first.brand))
+			return { kind: "unknown", reason: "conflicting-join" };
+		const construction = facts.every(
+			({ construction: other }) =>
+				other === first.construction ||
+				(other !== undefined &&
+					first.construction !== undefined &&
+					other.kind === first.construction.kind &&
+					other.callee === first.construction.callee &&
+					other.instruction === first.construction.instruction &&
+					sameStaticList(
+						other.arguments,
+						first.construction.arguments,
+						(a, b) => a === b,
+					)),
+		)
+			? first.construction
+			: undefined;
+		const identity = facts.every((fact) =>
+			sameStaticIdentity(fact.identity, first.identity),
+		)
+			? first.identity
+			: undefined;
+		if (
+			facts.every(
+				(fact) =>
+					fact.description === first.description &&
+					sameStaticList(fact.operands, first.operands, (a, b) => a === b) &&
+					sameStaticList(
+						fact.allocationIdentities,
+						first.allocationIdentities,
+						sameStaticIdentity,
+					),
+			)
+		)
+			return {
+				...first,
+				value,
+				discriminator: value,
+				identity,
+				construction,
+				state: first.state === "immutable-value" ? first.state : "joined-allocation",
+			};
+		const descriptions = facts.map((fact) =>
+			this.#program.staticDescriptions.description(fact.description),
+		);
+		this.statistics.visits += descriptions.reduce(
+			(sum, description) =>
+				sum +
+				(description.kind === "array" || description.kind === "object"
+					? description.properties.length
+					: 1),
+			0,
+		);
+		if (this.statistics.visits > this.#limit)
+			return { kind: "unknown", reason: "work-limit" };
+		const propertyMaps = descriptions.map(
+			(description) =>
+				new Map(
+					description.kind === "array" || description.kind === "object"
+						? description.properties.map((property) => [property.key, property])
+						: [],
+				),
+		);
+		const description = descriptions[0]!;
+		if (description.kind !== "array" && description.kind !== "object")
+			return { kind: "unknown", reason: "conflicting-join" };
+		if (descriptions.some((other) => other.kind !== description.kind))
+			return { kind: "unknown", reason: "conflicting-join" };
+		const bindings: Array<CoreValueId> = [];
+		const member = (values: Array<StaticMember>): StaticMember => {
+			const initial = values[0]!;
+			if (
+				initial.kind === "constant" &&
+				values.every(
+					(other) =>
+						other.kind === "constant" && other.description === initial.description,
+				)
+			)
+				return initial;
+			if (initial.kind === "operand") {
+				const input = first.operands[initial.index]!;
+				if (
+					values.every(
+						(other, index) =>
+							other.kind === "operand" && facts[index]!.operands[other.index] === input,
+					)
+				) {
+					let index = bindings.indexOf(input);
+					if (index < 0) {
+						index = bindings.length;
+						bindings.push(input);
+					}
+					return { kind: "operand", index };
+				}
+			}
+			return { kind: "unknown" };
+		};
+		const properties: Array<StaticPropertyDescription> = [];
+		for (const property of description.properties) {
+			if (typeof property.key !== "string") continue;
+			const others = propertyMaps.map((properties) => properties.get(property.key));
+			if (
+				!others.every(
+					(other): other is StaticPropertyDescription =>
+						other !== undefined &&
+						other.enumerable === property.enumerable &&
+						other.configurable === property.configurable &&
+						other.descriptor.kind === property.descriptor.kind,
+				)
+			)
+				continue;
+			const descriptor = property.descriptor;
+			if (
+				descriptor.kind === "data" &&
+				others.every(
+					(other) =>
+						other.descriptor.kind === "data" &&
+						other.descriptor.writable === descriptor.writable,
+				)
+			)
+				properties.push({
+					...property,
+					descriptor: {
+						...descriptor,
+						value: member(
+							others.map((other) =>
+								other.descriptor.kind === "data"
+									? other.descriptor.value
+									: { kind: "unknown" },
+							),
+						),
+					},
+				});
+		}
+		const prototype =
+			facts.every(
+				({ prototype }) =>
+					prototype.kind === first.prototype.kind &&
+					(prototype.kind !== "intrinsic" ||
+						(first.prototype.kind === "intrinsic" &&
+							prototype.id === first.prototype.id)),
+			) && first.prototype.kind !== "operand"
+				? first.prototype
+				: ({ kind: "unknown" } as const);
+		return {
+			...first,
+			value,
+			discriminator: value,
+			identity,
+			construction,
+			prototype,
+			state: "joined-allocation",
+			operands: bindings,
+			description: this.#program.staticDescriptions.intern({
+				...description,
+				prototype,
+				properties,
+				ownKeysComplete: descriptions.every(
+					(other) =>
+						(other.kind === "array" || other.kind === "object") &&
+						other.ownKeysComplete !== false &&
+						other.properties.length === properties.length,
+				),
+				...(description.kind === "array"
+					? {
+							length: descriptions.every(
+								(other) => other.kind === "array" && other.length === description.length,
+							)
+								? description.length
+								: null,
+						}
+					: {}),
+			}),
+		};
+	}
+
 	#describe(value: CoreValueId): CoreStaticValueResult {
 		const fn = this.#fn;
 		const program = this.#program;
@@ -198,28 +942,16 @@ export class CoreStaticValueAnalysis {
 			if (block === fn.entry) return { kind: "unknown", reason: "unsupported-producer" };
 			const index = fn.kernel.valueDefinitionIndex(value);
 			const incoming = this.#cfg().predecessors[block] ?? [];
-			let joined: CoreStaticValue | undefined;
+			const facts: Array<CoreStaticValue> = [];
 			for (const edge of incoming) {
 				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-				if (input === undefined) return { kind: "unknown", reason: "conflicting-join" };
-				const fact = this.query(input);
-				if (fact.kind === "unknown") return fact;
-				if (
-					fact.operands.length !== 0 ||
-					(joined !== undefined &&
-						(joined.description !== fact.description || joined.brand !== fact.brand))
-				)
+				if (input === undefined || edge.kind === "exceptional")
 					return { kind: "unknown", reason: "conflicting-join" };
-				joined = fact;
+				const fact = this.queryAt(input, fn.blockTerminator(edge.from));
+				if (fact.kind === "unknown") return fact;
+				facts.push(fact);
 			}
-			if (joined === undefined) return { kind: "unknown", reason: "conflicting-join" };
-			return {
-				...joined,
-				value,
-				identity: undefined,
-				state:
-					joined.state === "immutable-value" ? "immutable-value" : "joined-allocation",
-			};
+			return this.#join(value, facts);
 		}
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (fn.instructionKind(instruction) !== "operation")
@@ -249,6 +981,370 @@ export class CoreStaticValueAnalysis {
 		if (opcode === "move") {
 			const input = this.query(operands[0]!);
 			return input.kind === "known" ? { ...input, value } : input;
+		}
+		if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
+			const location: CoreExactMemoryLocation =
+				opcode === "loadLocal"
+					? { kind: "local-slot", slot: attributes.index as number }
+					: opcode === "loadGlobal"
+						? { kind: "global-slot", slot: attributes.index as number }
+						: {
+								kind: "captured-slot",
+								owner: attributes.functionIndex as number,
+								index: attributes.index as number,
+							};
+			const input = this.#memory().valueForRead(instruction, location);
+			if (input !== undefined && input !== value) {
+				const fact = this.query(input);
+				return fact.kind === "known" ? { ...fact, value } : fact;
+			}
+		}
+
+		if (opcode === "binary" || opcode === "unary") {
+			const inputs = operands.map((input) => this.constant(input));
+			if (inputs.every((input): input is ConstantValue => input !== undefined)) {
+				const kind = inputs[0]?.kind;
+				if (kind === "number" || kind === "bigint") {
+					const evaluated = evaluateConstantOperation(
+						`${kind}.${opcode}:${attributes.operator as string}`,
+						inputs,
+					);
+					if (evaluated.kind === "value") {
+						const constant = evaluated.value;
+						if (constant.kind === "number")
+							return primitive(
+								intern.intern(staticNumberDescription(constant.value)),
+								"number",
+							);
+						if (constant.kind === "bigint")
+							return primitive(
+								intern.intern({ kind: "bigint", decimal: String(constant.value) }),
+								"bigint",
+							);
+						if (constant.kind === "boolean")
+							return primitive(intern.intern(constant), "boolean");
+					}
+				}
+			}
+		}
+		if (this.#context?.facts.world.primordialPolicy === "locked") {
+			let canonical: string | undefined;
+			if (opcode === "loadIntrinsic") canonical = attributes.intrinsic as string;
+			if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
+				let key: PrimordialKey | undefined;
+				if (opcode === "loadPropertyStatic")
+					key = this.string(attributes.stringIndex as number);
+				else {
+					const constant = this.constant(operands[1]!);
+					if (constant !== undefined)
+						key = constant.kind === "undefined" ? "undefined" : String(constant.value);
+					else {
+						const symbol = this.query(operands[1]!);
+						if (
+							symbol.kind === "known" &&
+							symbol.brand === "symbol" &&
+							symbol.canonical !== undefined
+						)
+							key = { symbol: symbol.canonical };
+					}
+				}
+				if (key !== undefined) {
+					const base = this.queryAt(operands[0]!, instruction);
+					if (base.kind === "known")
+						canonical = (
+							base.canonical !== undefined
+								? provePrimordialAccess(
+										this.#context.facts.world,
+										{ kind: "intrinsic", id: base.canonical, realm: "current" },
+										key,
+									)
+								: this.inherited(base, key)
+						)?.resolution?.value?.[0];
+				}
+			}
+			const node = canonical === undefined ? undefined : primordialNode(canonical);
+			if (node !== undefined) {
+				const symbol = (node[2] & 8) !== 0;
+				return {
+					...primitive(
+						intern.intern(
+							symbol
+								? { kind: "symbol", reference: { kind: "well-known", key: node[0] } }
+								: {
+										kind: "engine-payload",
+										format: "primordial-reference",
+										targetContract: node[0],
+										words: [],
+									},
+						),
+						symbol
+							? "symbol"
+							: node[0] === "Array.prototype"
+								? "array"
+								: (node[2] & 2) !== 0
+									? "function"
+									: "object",
+					),
+					canonical: node[0],
+					identity: { kind: "intrinsic", key: node[0] },
+					environmentDependencies: ["primordials.locked", "realm.current"],
+				};
+			}
+			if (opcode === "call" && operands.length >= 2) {
+				const callee = this.query(operands[0]!);
+				if (
+					callee.kind === "known" &&
+					(callee.canonical === "Symbol" || callee.canonical === "Symbol.for")
+				) {
+					const input =
+						operands[2] === undefined ? undefined : this.constant(operands[2]);
+					const key = input?.kind === "string" ? input.value : undefined;
+					const registered = callee.canonical === "Symbol.for";
+					return {
+						...primitive(
+							intern.intern({
+								kind: "symbol",
+								...(key === undefined ? {} : { description: key }),
+								...(registered && key !== undefined
+									? { reference: { kind: "registry", key } as const }
+									: {}),
+							}),
+							"symbol",
+						),
+						state: "initial-allocation",
+						identity: registered
+							? key === undefined
+								? undefined
+								: { kind: "symbol-registry", key }
+							: { kind: "fresh-per-evaluation", function: fn.id, value },
+						environmentDependencies: registered ? ["symbol-registry"] : [],
+					};
+				}
+			}
+		}
+		if (
+			this.#context?.facts.world.primordialPolicy === "locked" &&
+			(opcode === "construct" || opcode === "call")
+		) {
+			const callee = this.query(operands[0]!);
+			const canonical = callee.kind === "known" ? callee.canonical : undefined;
+
+			if (opcode === "call" && canonical !== undefined) {
+				const primitiveBrand =
+					canonical === "Number"
+						? "number"
+						: canonical === "BigInt"
+							? "bigint"
+							: canonical === "Boolean"
+								? "boolean"
+								: canonical === "String" || canonical === "Date"
+									? "string"
+									: undefined;
+				if (primitiveBrand !== undefined)
+					return primitive(
+						intern.intern({
+							kind: "engine-payload",
+							format: "dynamic-result",
+							targetContract: canonical,
+							contentsComplete: false,
+							words: [],
+						}),
+						primitiveBrand,
+					);
+				const factory = canonical.match(
+					/^(Temporal\.(?:Instant|Duration|PlainDate|PlainTime|PlainDateTime|PlainYearMonth|PlainMonthDay|ZonedDateTime))\.(?:from|fromEpochMilliseconds|fromEpochNanoseconds)$/,
+				)?.[1];
+				const receiver = operands[1] === undefined ? undefined : this.query(operands[1]);
+				const arrayFactory =
+					(canonical === "Array.from" || canonical === "Array.of") &&
+					receiver?.kind === "known" &&
+					receiver.canonical === "Array";
+				if (
+					factory !== undefined ||
+					arrayFactory ||
+					canonical === "Intl.getCanonicalLocales" ||
+					canonical === "Object.create"
+				) {
+					let prototype: StaticPrototype = {
+						kind: "intrinsic",
+						id: `${factory ?? (arrayFactory || canonical === "Intl.getCanonicalLocales" ? "Array" : "Object")}.prototype`,
+					};
+					let complete = factory !== undefined || canonical === "Array.of";
+					if (canonical === "Object.create") {
+						const input = operands[2] === undefined ? undefined : this.query(operands[2]);
+						if (input?.kind === "known" && input.brand === "null")
+							prototype = { kind: "null" };
+						else if (input?.kind === "known" && input.canonical !== undefined)
+							prototype = { kind: "intrinsic", id: input.canonical };
+						else prototype = { kind: "unknown" };
+						complete =
+							operands[3] === undefined ||
+							this.constant(operands[3])?.kind === "undefined";
+					}
+					const array = arrayFactory || canonical === "Intl.getCanonicalLocales";
+					const elements = canonical === "Array.of" ? operands.slice(2) : [];
+					const description = intern.intern(
+						array
+							? {
+									kind: "array",
+									prototype,
+									length: canonical === "Array.of" ? elements.length : null,
+									ownKeysComplete: complete,
+									properties: elements.map((input, index) => ({
+										key: String(index),
+										enumerable: true,
+										configurable: true,
+										descriptor: {
+											kind: "data",
+											writable: true,
+											value: { kind: "operand", index },
+										},
+									})),
+								}
+							: { kind: "object", prototype, ownKeysComplete: complete, properties: [] },
+					);
+					return {
+						kind: "known",
+						value,
+						description,
+						brand: array ? "array" : "object",
+						exactBrand: factory ?? (array ? "Array" : "Object"),
+						construction: {
+							kind: "call",
+							callee: canonical,
+							instruction,
+							arguments: operands.slice(2),
+						},
+						prototype,
+						identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+						state: "initial-allocation",
+						operands: elements,
+						environmentDependencies: ["primordials.locked", "realm.current"],
+					};
+				}
+			}
+
+			if (
+				canonical !== undefined &&
+				STATIC_CONSTRUCTORS.has(canonical) &&
+				(opcode === "construct" || canonical === "Array" || canonical === "Object")
+			) {
+				const args = operands.slice(opcode === "construct" ? 1 : 2);
+				// Object returns an existing object argument; its identity is never a new allocation.
+				if (canonical === "Object" && args.length !== 0) {
+					const argument = this.query(args[0]!);
+					if (
+						argument.kind === "known" &&
+						["object", "array", "function"].includes(argument.brand)
+					)
+						return { ...argument, value };
+					if (
+						argument.kind === "unknown" ||
+						!["undefined", "null"].includes(argument.brand)
+					)
+						return { kind: "unknown", reason: "unsupported-producer" };
+				}
+				const prototype: StaticPrototype = {
+					kind: "intrinsic",
+					id: `${canonical}.prototype`,
+				};
+				if (
+					provePrimordialAccess(
+						this.#context.facts.world,
+						{ kind: "intrinsic", id: canonical, realm: "current" },
+						"prototype",
+					)?.resolution?.value?.[0] !== primordialNode(`${canonical}.prototype`)?.[0]
+				)
+					return { kind: "unknown", reason: "unsupported-producer" };
+				let description: StaticDescriptionId;
+				const bindings: Array<CoreValueId> = [];
+				if (canonical === "Array") {
+					let length: number | null = args.length;
+					let elements = args;
+					if (args.length === 1) {
+						const constant = this.constant(args[0]!);
+						const input = this.query(args[0]!);
+						if (constant?.kind === "number") {
+							length =
+								Number.isInteger(constant.value) &&
+								constant.value >= 0 &&
+								constant.value <= 4294967295
+									? constant.value
+									: null;
+							elements = [];
+						} else if (input.kind === "unknown" || input.brand === "number") {
+							length = null;
+							elements = [];
+						}
+					}
+					description = intern.intern({
+						kind: "array",
+						prototype,
+						length,
+						ownKeysComplete: length !== null,
+						properties: elements.map((input, index) => {
+							bindings.push(input);
+							return {
+								key: String(index),
+								enumerable: true,
+								configurable: true,
+								descriptor: {
+									kind: "data",
+									writable: true,
+									value: { kind: "operand", index },
+								},
+							};
+						}),
+					});
+				} else
+					description = intern.intern({
+						kind: "object",
+						prototype,
+						properties: [],
+						ownKeysComplete: [
+							"Object",
+							"Map",
+							"Set",
+							"WeakMap",
+							"WeakSet",
+							"Date",
+							"Boolean",
+							"Number",
+						].includes(canonical),
+					});
+				return {
+					kind: "known",
+					value,
+					description,
+					brand: canonical === "Array" ? "array" : "object",
+					exactBrand: canonical,
+					construction: { kind: opcode, callee: canonical, instruction, arguments: args },
+					prototype,
+					identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+					state: "initial-allocation",
+					operands: bindings,
+					environmentDependencies: ["primordials.locked", "realm.current"],
+				};
+			}
+		}
+
+		if (opcode === "createFunction") {
+			const functionIndex = attributes.functionIndex;
+			if (typeof functionIndex !== "number")
+				return { kind: "unknown", reason: "unsupported-producer" };
+			return {
+				...primitive(
+					intern.intern({
+						kind: "function",
+						codeIdentity: String(functionIndex),
+						captures: [],
+						capturesComplete: false,
+					}),
+					"function",
+				),
+				state: "initial-allocation",
+				identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+			};
 		}
 		switch (opcode) {
 			case "createUndefined":
@@ -290,6 +1386,7 @@ export class CoreStaticValueAnalysis {
 			if (
 				fact.kind === "known" &&
 				fact.state === "immutable-value" &&
+				!["symbol", "function", "array", "object"].includes(fact.brand) &&
 				fact.operands.length === 0
 			)
 				return { kind: "constant", description: fact.description };
@@ -298,14 +1395,18 @@ export class CoreStaticValueAnalysis {
 			return { kind: "operand", index };
 		};
 		let description: StaticDescriptionId;
+		const allocationIdentities: Array<StaticAllocationIdentity> = [];
 		let brand: "array" | "object";
 		if (opcode === "createObject" || opcode === "createObjectShaped") {
 			brand = "object";
 			const keys = (attributes.keyStringIndices ?? []) as ReadonlyArray<number>;
 			if (keys.length !== operands.length)
 				return { kind: "unknown", reason: "unsupported-producer" };
+			this.statistics.visits += keys.length;
+			if (this.statistics.visits > this.#limit)
+				return { kind: "unknown", reason: "work-limit" };
 			const properties: Array<StaticPropertyDescription> = keys.map((key, index) => ({
-				key: String.fromCharCode(...program.stringConstants[key]!),
+				key: this.string(key),
 				enumerable: true,
 				configurable: true,
 				descriptor: { kind: "data", writable: true, value: member(operands[index]!) },
@@ -318,27 +1419,99 @@ export class CoreStaticValueAnalysis {
 		} else if (opcode === "createArray") {
 			brand = "array";
 			const length = attributes.length as number;
-			if (!Number.isSafeInteger(length) || length < 0 || length > 4096)
+			if (!Number.isSafeInteger(length) || length < 0 || length > 4294967295)
 				return { kind: "unknown", reason: "work-limit" };
 			description = intern.intern({
 				kind: "array",
 				prototype: { kind: "intrinsic", id: "Array.prototype" },
-				elements: Array.from({ length }, (): StaticMember => ({ kind: "hole" })),
+				length,
+				properties: [],
 			});
 		} else if (opcode === "instantiateLiteralTemplate") {
 			const offset = attributes.templateOffset as number;
-			const segment = scanLiteralTemplateSegment(
-				program.literalTemplateData,
-				offset,
-				"static description",
-			);
+			let position = offset;
+			const read = (depth = 0): StaticMember | undefined => {
+				if (++this.statistics.visits > this.#limit || depth > 128) return undefined;
+				const start = position,
+					tag = program.literalTemplateData[position++]!;
+				let child: StaticDescriptionId;
+				if (tag === 7) return { kind: "hole" };
+				if (tag === 0 || tag === 11)
+					child = intern.intern({ kind: tag === 0 ? "null" : "undefined" });
+				else if (tag === 1 || tag === 2)
+					child = intern.intern({ kind: "boolean", value: tag === 2 });
+				else if (tag === 3)
+					child = intern.intern(
+						staticNumberDescription(program.literalTemplateData[position++]! | 0),
+					);
+				else if (tag === 4)
+					child = intern.intern({
+						kind: "number",
+						low: program.literalTemplateData[position++]!,
+						high: program.literalTemplateData[position++]!,
+					});
+				else if (tag === 5)
+					child = intern.intern({
+						kind: "string",
+						codeUnits: program.stringConstants[program.literalTemplateData[position++]!]!,
+					});
+				else if (tag === 6)
+					child = intern.intern({
+						kind: "bigint",
+						decimal: String(
+							program.bigintConstants[program.literalTemplateData[position++]!]!,
+						),
+					});
+				else if (tag === 8 || tag === 9) {
+					const count = program.literalTemplateData[position++]!;
+					const properties: Array<StaticPropertyDescription> = [];
+					for (let index = 0; index < count; index++) {
+						let key = String(index);
+						if (tag === 9) {
+							if (program.literalTemplateData[position++] !== 10) return undefined;
+							key = this.string(program.literalTemplateData[position++]!);
+						}
+						const member = read(depth + 1);
+						if (member === undefined) return undefined;
+						if (member.kind !== "hole")
+							properties.push({
+								key,
+								enumerable: true,
+								configurable: true,
+								descriptor: { kind: "data", writable: true, value: member },
+							});
+					}
+					child = intern.intern(
+						tag === 8
+							? {
+									kind: "array",
+									length: count,
+									prototype: { kind: "intrinsic", id: "Array.prototype" },
+									properties,
+								}
+							: {
+									kind: "object",
+									prototype: { kind: "intrinsic", id: "Object.prototype" },
+									properties,
+								},
+					);
+					if (depth !== 0) {
+						const identitySlot = allocationIdentities.length;
+						allocationIdentities.push({
+							kind: "template-child",
+							function: fn.id,
+							value,
+							offset: start - offset,
+						});
+						return { kind: "allocation", description: child, identitySlot };
+					}
+				} else return undefined;
+				return { kind: "constant", description: child };
+			};
+			const root = read();
+			if (root?.kind !== "constant") return { kind: "unknown", reason: "work-limit" };
 			brand = program.literalTemplateData[offset] === 8 ? "array" : "object";
-			description = intern.intern({
-				kind: "engine-payload",
-				format: "literal-template",
-				targetContract: "program-data-tables",
-				words: program.literalTemplateData.slice(offset, segment.endOffset),
-			});
+			description = root.description;
 		} else return { kind: "unknown", reason: "unsupported-producer" };
 		return {
 			kind: "known",
@@ -359,8 +1532,73 @@ export class CoreStaticValueAnalysis {
 					? "pooled-instance"
 					: "initial-allocation",
 			operands: bindings,
+			allocationIdentities,
 			environmentDependencies: ["current-realm"],
 		};
+	}
+
+	inherited(value: CoreStaticValue, key: PrimordialKey) {
+		if (this.#context === undefined || value.prototype.kind !== "intrinsic")
+			return undefined;
+		const description = this.#program.staticDescriptions.description(value.description);
+		if (
+			(description.kind !== "array" && description.kind !== "object") ||
+			description.ownKeysComplete === false ||
+			description.properties.some((property) =>
+				typeof key === "string" ? property.key === key : typeof property.key !== "string",
+			)
+		)
+			return undefined;
+		return provePrimordialAccess(
+			this.#context.facts.world,
+			{
+				kind: "fresh-allocation",
+				prototype: value.prototype.id,
+				realm: "current",
+				ownKeys: [],
+				ownKeysComplete: true,
+				stableUntilRead: true,
+			},
+			key,
+		);
+	}
+
+	string(index: number): string {
+		const units = this.#program.stringConstants[index]!;
+		let result = "";
+		for (let offset = 0; offset < units.length; offset += 1024)
+			result += String.fromCharCode(...units.slice(offset, offset + 1024));
+		return result;
+	}
+
+	constant(value: CoreValueId): ConstantValue | undefined {
+		const fact = this.query(value);
+		if (fact.kind === "unknown") return undefined;
+		const description = this.#program.staticDescriptions.description(fact.description);
+		switch (description.kind) {
+			case "undefined":
+				return { kind: "undefined" };
+			case "boolean":
+				return description;
+			case "bigint":
+				return { kind: "bigint", value: BigInt(description.decimal) };
+			case "number": {
+				const bits = new DataView(new ArrayBuffer(8));
+				bits.setUint32(0, description.low, true);
+				bits.setUint32(4, description.high, true);
+				return { kind: "number", value: bits.getFloat64(0, true) };
+			}
+			case "string": {
+				let result = "";
+				for (let offset = 0; offset < description.codeUnits.length; offset += 1024)
+					result += String.fromCharCode(
+						...description.codeUnits.slice(offset, offset + 1024),
+					);
+				return { kind: "string", value: result };
+			}
+			default:
+				return undefined;
+		}
 	}
 }
 
@@ -370,13 +1608,28 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 		scope: "function",
 		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects", "facts"],
 		programDependencies: ["data"],
-		compute({ program, request, get }) {
+		compute({ program, context, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function static-value analysis");
 			return new CoreStaticValueAnalysis(
 				program,
 				program.function(request.function),
 				() => get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
+				65536,
+				context,
+				() => get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request),
+				(fn, load, value, consumer) =>
+					get(CORE_STATIC_CELL_INDEX, { scope: "program" }).query(
+						fn,
+						load,
+						value,
+						consumer,
+						(functionId) =>
+							get(CORE_STATIC_VALUE_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							}),
+					),
 			);
 		},
 	};

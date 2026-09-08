@@ -31,7 +31,7 @@ describe("static-value baseline witnesses", () => {
 				const absent = inspect("includex", observable, true, profile);
 				expect(absent.structure.operations).toHaveLength(0);
 				expect(absent.structure.genericCalls).toBeGreaterThan(0);
-				expect(absent.structure.genericLookups).toBeGreaterThan(0);
+				expect(absent.structure.genericLookups).toBe(0);
 			}
 		},
 	);

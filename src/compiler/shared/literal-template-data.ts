@@ -58,6 +58,7 @@ export function scanLiteralTemplateSegment(
 			case 1:
 			case 2:
 			case 7:
+			case 11:
 				break;
 			case 3:
 				take("integer");

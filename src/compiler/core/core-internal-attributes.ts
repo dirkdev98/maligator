@@ -13,3 +13,4 @@ export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
 	"exactCallArgumentRepresentations";
 export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
 export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
+export const CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE = "staticSelectionFallback";

@@ -1517,28 +1517,36 @@ describe("native update-expression representation", () => {
 		},
 	);
 
-	it("carries exact fresh-array length reads into portable bytecode", () => {
+	it("folds exact fresh-array lengths into returned portable constants", () => {
 		const definition = lower(`
-			function readLength() {
-				const values = [1, 2, 3];
-				return values.length;
-			}
-			globalThis.result = readLength();
-		`);
-		const specialized = definition.runtime.functions.flatMap((fn, functionIndex) =>
-			fn.instructions.flatMap((instruction, instructionIndex) =>
-				instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
-					? [{ functionIndex, instructionIndex }]
-					: [],
-			),
+            function readLength() {
+                const values = [1, 2, 3];
+                return values.length;
+            }
+            globalThis.readLength = readLength;
+        `);
+		const fn = definition.runtime.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(definition.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "readLength",
 		);
-		expect(specialized).toHaveLength(1);
-		const site = specialized[0]!;
+		expect(fn).toBeDefined();
+		const returned = fn!.instructions.find(
+			(instruction) => instruction.opcode === "RETURN",
+		);
+		expect(returned?.opcode).toBe("RETURN");
+		if (returned?.opcode !== "RETURN") throw new Error("missing return");
+		expect(fn!.instructions).toContainEqual({
+			opcode: "CREATE_NUMBER",
+			dst: returned.value,
+			value: 3,
+		});
 		expect(
-			definition.native.functions[site.functionIndex]!.instructions[
-				site.instructionIndex
-			],
-		).toEqual({ kind: "exact-array-length" });
+			fn!.instructions.some((instruction) =>
+				instruction.opcode.startsWith("LOAD_PROPERTY"),
+			),
+		).toBe(false);
 	});
 
 	it("carries exact local TypedArray accesses into native code with boxed-key fallbacks", () => {

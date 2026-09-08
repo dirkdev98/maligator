@@ -1,4 +1,5 @@
 import { StaticDescriptionInterner } from "../shared/static-values.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CoreFunctionKernel } from "./core-function-kernel.ts";
 import {
@@ -32,6 +33,7 @@ import type {
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreStaticCellIndex } from "./core-static-value-cells.ts";
 
 export interface CoreStoreMutation {
 	readonly __coreStoreMutation: never;
@@ -2505,6 +2507,21 @@ export class CoreFunctionStore {
 export class CoreProgram {
 	readonly registry: CoreOpcodeRegistry;
 	#staticDescriptions: StaticDescriptionInterner | undefined;
+	readonly #staticCellIndexes = new WeakMap<
+		CoreCompilationContext,
+		{ generation: number; index: CoreStaticCellIndex }
+	>();
+
+	staticCellIndex(
+		context: CoreCompilationContext,
+		create: () => CoreStaticCellIndex,
+	): CoreStaticCellIndex {
+		const cached = this.#staticCellIndexes.get(context);
+		if (cached?.generation === this.#generation) return cached.index;
+		const index = create();
+		this.#staticCellIndexes.set(context, { generation: this.#generation, index });
+		return index;
+	}
 
 	get staticDescriptions(): StaticDescriptionInterner {
 		return (this.#staticDescriptions ??= new StaticDescriptionInterner());
@@ -2729,6 +2746,20 @@ export class CoreProgram {
 		const templateOffset = this.#literalTemplateData.length;
 		this.#literalTemplateData = Object.freeze([...this.#literalTemplateData, ...data]);
 		return { templateOffset, cacheSlot: this.#globalCount++ };
+	}
+
+	_appendStringConstants(
+		mutation: CoreStoreMutation,
+		values: ReadonlyArray<ReadonlyArray<number>>,
+	): number {
+		this.#requireMutation(mutation);
+		if (this.#sealed) throw new Error("Core program is sealed");
+		const start = this.#stringConstants.length;
+		this.#stringConstants = Object.freeze([
+			...this.#stringConstants,
+			...values.map((units) => Object.freeze([...units])),
+		]);
+		return start;
 	}
 
 	_appendSourcePositions(

@@ -10,10 +10,47 @@ literal materialization. Equal descriptions cannot establish object equality.
 The analysis is queried from existing transform candidates and uses existing Core
 use/definition and CFG data. Dynamic leaves remain ordinary SSA operands. Results
 record the function and program data versions; verification rejects stale facts,
-dead bindings and bindings that do not dominate a consumer. Cycles widen to unknown.
+dead bindings and bindings that do not dominate a consumer. Recursive queries widen
+to unknown; local cyclic object edges retain their original SSA identity bindings.
 The default work/depth bounds are 65,536 visits and 128 recursive queries. Initial
 allocation facts describe construction, not contents after subsequent writes. The
 literal pass still proves containment and instruction ordering before reuse.
+
+## Discovery and propagation
+
+Array descriptions store sparse own descriptors separately from length. A missing
+index differs from an own `undefined` value; the literal wire format gives each its
+own tag. Unknown members and incomplete contents remain explicit. Object keys retain
+ECMAScript enumeration order, descriptor flags, symbol identities and prototype
+edges. Nested data shares descriptions while retaining separate allocation bindings.
+
+`queryAt` replays relevant private initialization and writes up to an observation.
+Unknown writes, escapes, exceptional edges and loops widen contents conservatively.
+SSA joins keep common fields, with a phi discriminator for alternative allocations.
+Private global and captured cells use the existing single-assignment and memory
+analyses. Cross-function forwarding requires a dominating TDZ check, one initializer,
+and an audit of every read for mutations or escapes. The program owns the cell index across function sessions. It refreshes changed
+functions and shares a bounded proof budget, borrowing analysis access from the
+current session without retaining that session's caches. Lexical blocks in try/catch/finally retain their TDZ initialization.
+
+Certified constructors and factories retain brand, prototype and construction
+arguments without claiming dynamic contents are constant. Ordinary calls, construction
+and alias-returning `Object` calls have separate contracts. Mutable constructors and
+unproved subclass/new-target behavior keep their runtime operations.
+
+Ordinary property consumers fold own data, lengths, presence, descriptors and brand
+queries. Bounded dynamic keys use one `ToPropertyKey` followed by known-key selection
+and the original fallback lookup. Prototype-dependent results require the shared
+primordial proof; missing methods still evaluate arguments before throwing.
+
+Known-call specialization reuses existing target/effect summaries and candidate
+budgets. A non-inlined helper can consume a complete private array/object description
+through constant own reads or certified `includes`, while its original callable body
+remains available. Signatures share variants, capped at four per target. Recursive,
+escaping, identity-sensitive and unsupported signatures retain normal calls and
+materialization. Sloppy helpers that can expose their function identity through a
+callback's `caller` are excluded. General virtual returns and demand-driven allocation
+remain later work; a resolved property or call does not by itself eliminate an object.
 
 `builtin-registry.ts` exports the shared primordial graph, literal entries and
 invocation summaries. The native descriptor audit supplies canonical object and

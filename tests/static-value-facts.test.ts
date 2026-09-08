@@ -72,12 +72,25 @@ describe("static descriptions and allocation identities", () => {
 		const hole = descriptions.intern({
 			kind: "array",
 			prototype,
-			elements: [{ kind: "hole" }],
+			length: 1,
+			properties: [],
 		});
 		const value = descriptions.intern({
 			kind: "array",
 			prototype,
-			elements: [{ kind: "constant", description: undef }],
+			length: 1,
+			properties: [
+				{
+					key: "0",
+					enumerable: true,
+					configurable: true,
+					descriptor: {
+						kind: "data",
+						writable: true,
+						value: { kind: "constant", description: undef },
+					},
+				},
+			],
 		});
 		expect(hole).not.toBe(value);
 		expect(descriptions.intern(staticNumberDescription(-0))).not.toBe(
@@ -89,7 +102,19 @@ describe("static descriptions and allocation identities", () => {
 		const dynamic = descriptions.intern({
 			kind: "array",
 			prototype,
-			elements: [{ kind: "operand", index: 0 }],
+			length: 1,
+			properties: [
+				{
+					key: "0",
+					enumerable: true,
+					configurable: true,
+					descriptor: {
+						kind: "data",
+						writable: true,
+						value: { kind: "operand", index: 0 },
+					},
+				},
+			],
 		});
 		expect(descriptions.summary(dynamic)).toMatchObject({
 			constantContents: false,
@@ -105,16 +130,35 @@ describe("static descriptions and allocation identities", () => {
 			descriptions.intern({
 				kind: "array",
 				prototype,
-				elements: [{ kind: "constant", description: symbol }],
+				length: 1,
+				properties: [
+					{
+						key: "0",
+						enumerable: true,
+						configurable: true,
+						descriptor: {
+							kind: "data",
+							writable: true,
+							value: { kind: "constant", description: symbol },
+						},
+					},
+				],
 			}),
 		).toThrow("require allocation bindings");
 		const pair = descriptions.intern({
 			kind: "array",
 			prototype,
-			elements: [
-				{ kind: "allocation", description: symbol, identitySlot: 0 },
-				{ kind: "allocation", description: symbol, identitySlot: 1 },
-			],
+			length: 2,
+			properties: [0, 1].map((index) => ({
+				key: String(index),
+				enumerable: true,
+				configurable: true,
+				descriptor: {
+					kind: "data",
+					writable: true,
+					value: { kind: "allocation", description: symbol, identitySlot: index },
+				},
+			})),
 		});
 		expect(descriptions.summary(pair)).toMatchObject({
 			constantContents: true,

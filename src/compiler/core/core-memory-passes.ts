@@ -61,6 +61,11 @@ import { coreInstructionId } from "./core-ir.ts";
 import { reuseLiteralConstants } from "./core-literal-constants.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import {
+	selectStaticPropertyReads,
+	foldStaticReflections,
+	foldStaticPropertyReads,
+} from "./core-static-value-selection.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreContainedTypedArrayIndexInBounds } from "./core-typed-array-bounds.ts";
 
@@ -2271,6 +2276,9 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 };
 
 export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	foldStaticPropertyReads,
+	selectStaticPropertyReads,
+	foldStaticReflections,
 	reuseLiteralConstants,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,
@@ -2290,6 +2298,9 @@ export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
 ];
 
 export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	foldStaticPropertyReads,
+	selectStaticPropertyReads,
+	foldStaticReflections,
 	reuseLiteralConstants,
 	foldExactAllocationObservations,
 	forwardFreshOwnSlotPrefix,

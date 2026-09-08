@@ -15,10 +15,13 @@ export type StaticMember =
 			readonly identitySlot: number;
 	  }
 	| { readonly kind: "operand"; readonly index: number }
-	| { readonly kind: "hole" };
+	| { readonly kind: "hole" | "unknown" };
 
 export interface StaticPropertyDescription {
-	readonly key: string | { readonly symbolIdentitySlot: number };
+	readonly key:
+		| string
+		| { readonly symbolIdentitySlot: number }
+		| { readonly symbolOperand: number };
 	readonly enumerable: boolean;
 	readonly configurable: boolean;
 	readonly descriptor:
@@ -36,25 +39,37 @@ export type StaticDescription =
 	| { readonly kind: "number"; readonly low: number; readonly high: number }
 	| { readonly kind: "string"; readonly codeUnits: ReadonlyArray<number> }
 	| { readonly kind: "bigint"; readonly decimal: string }
-	| { readonly kind: "symbol"; readonly description?: string }
+	| {
+			readonly kind: "symbol";
+			readonly description?: string;
+			readonly reference?: {
+				readonly kind: "well-known" | "registry";
+				readonly key: string;
+			};
+	  }
 	| {
 			readonly kind: "function";
 			readonly codeIdentity: string;
 			readonly captures: ReadonlyArray<StaticMember>;
+			readonly capturesComplete?: boolean;
 	  }
 	| {
 			readonly kind: "array";
 			readonly prototype: StaticPrototype;
-			readonly elements: ReadonlyArray<StaticMember>;
+			readonly length: number | null;
+			readonly properties: ReadonlyArray<StaticPropertyDescription>;
+			readonly ownKeysComplete?: boolean;
 	  }
 	| {
 			readonly kind: "object";
+			readonly ownKeysComplete?: boolean;
 			readonly prototype: StaticPrototype;
 			readonly properties: ReadonlyArray<StaticPropertyDescription>;
 	  }
 	| {
 			readonly kind: "engine-payload";
 			readonly format: string;
+			readonly contentsComplete?: boolean;
 			readonly targetContract: string;
 			readonly words: ReadonlyArray<number>;
 	  };
@@ -80,7 +95,13 @@ export class StaticDescriptionInterner {
 		if (prior !== undefined) return prior;
 		const operands = new Set<number>();
 		const identities = new Set<number>();
+		let complete =
+			!("ownKeysComplete" in description && description.ownKeysComplete === false) &&
+			!(description.kind === "function" && description.capturesComplete === false);
+		if (description.kind === "engine-payload" && description.contentsComplete === false)
+			complete = false;
 		const member = (value: StaticMember) => {
+			if (value.kind === "unknown") complete = false;
 			if (value.kind === "operand") operands.add(value.index);
 			if (value.kind === "allocation") identities.add(value.identitySlot);
 			if (value.kind === "constant" || value.kind === "allocation") {
@@ -91,16 +112,18 @@ export class StaticDescriptionInterner {
 				if (value.kind === "allocation" && !identityBearing && kind !== "engine-payload")
 					throw new Error("Primitive members do not have allocation identities");
 				const child = this.summary(value.description);
+				complete &&= child.constantContents;
 				for (const slot of child.operandSlots) operands.add(slot);
 				for (const slot of child.identitySlots) identities.add(slot);
 			}
 		};
-		if (description.kind === "array") description.elements.forEach(member);
+
 		if (description.kind === "function") description.captures.forEach(member);
-		if (description.kind === "object")
+		if (description.kind === "object" || description.kind === "array")
 			for (const property of description.properties) {
 				if (typeof property.key !== "string")
-					identities.add(property.key.symbolIdentitySlot);
+					if ("symbolOperand" in property.key) operands.add(property.key.symbolOperand);
+					else identities.add(property.key.symbolIdentitySlot);
 				if (property.descriptor.kind === "data") member(property.descriptor.value);
 				else {
 					member(property.descriptor.get);
@@ -128,7 +151,7 @@ export class StaticDescriptionInterner {
 		this.#descriptions.push(copy);
 		this.#summaries.push(
 			Object.freeze({
-				constantContents: operands.size === 0,
+				constantContents: complete && operands.size === 0,
 				operandSlots: Object.freeze([...operands].sort((a, b) => a - b)),
 				identitySlots: Object.freeze([...identities].sort((a, b) => a - b)),
 			}),

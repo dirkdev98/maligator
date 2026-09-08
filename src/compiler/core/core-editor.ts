@@ -350,6 +350,15 @@ export class CoreEditor {
 		return result;
 	}
 
+	appendStringConstants(values: ReadonlyArray<ReadonlyArray<number>>): number {
+		this.#assertActive();
+		if (values.length === 0) return this.program.stringConstants.length;
+		const start = this.program._appendStringConstants(this.#mutation, values);
+		this.#programDomains.add("data");
+		this.#edits++;
+		return start;
+	}
+
 	appendSourcePositions(positions: ReadonlyArray<CoreSourcePosition>): number {
 		this.#assertActive();
 		if (positions.length === 0) return this.program.sourcePositions.length;

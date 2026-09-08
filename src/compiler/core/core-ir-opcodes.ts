@@ -285,6 +285,8 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"createNumber",
 	"createString",
 	"createUndefined",
+	// Validated templates allocate private data; unused results cannot expose the cache slot.
+	"instantiateLiteralTemplate",
 	"guardFunctionIndex",
 	"selectShapeCase",
 	"isEmpty",
