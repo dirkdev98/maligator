@@ -1961,6 +1961,7 @@ function findTypeEnd(
 		else if (char === ">" && angles > 0) angles--;
 		if (
 			isIdentifierStart(char) ||
+			(char >= "0" && char <= "9") ||
 			char === '"' ||
 			char === "'" ||
 			char === "[" ||

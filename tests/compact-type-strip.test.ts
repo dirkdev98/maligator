@@ -42,6 +42,12 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test("erases numeric literal annotations while preserving signed runtime values", () => {
+		const source = `function pick(unit: -1 | 1): 42 { return 42; } const input: -1 = -1; globalThis.stripResult = pick(input) + input;`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toBe(41);
+	});
 	test("preserves loop comparisons before a later generic constructor", () => {
 		const source = `let sum = 0; for (let index = 0; index < 4; index++) { sum += index; } const cache = new Map<string, number>(); globalThis.stripResult = sum;`;
 		const stripped = strip(source);
