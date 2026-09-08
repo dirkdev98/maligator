@@ -1,5 +1,7 @@
 #pragma once
 
+#include "unicode.h"
+
 #include "./defaults.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -268,3 +270,10 @@ MalValue mal_builtin_string_from_codes_numbers(MalVm *vm, const f64 *numbers, i3
 MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 target, MalValue fill, bool pad_start);
 // A guard miss has no effects; a hit may allocate or leave a pending throw.
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue receiver, const MalValue *arguments, i32 argument_count, MalValue *result);
+
+MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale);
+MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose);
+
+MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool start, bool end);
+MalValue mal_builtin_string_is_well_formed_known(MalString *string);
+MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string);

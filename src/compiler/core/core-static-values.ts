@@ -4,7 +4,11 @@ import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { PrimordialKey } from "../shared/primordial-catalog.ts";
-import { primordialNode, provePrimordialAccess } from "../shared/primordial-catalog.ts";
+import {
+	primordialNode,
+	primordialNodeAvailable,
+	provePrimordialAccess,
+} from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
 import type {
 	StaticDescriptionId,
@@ -1211,7 +1215,10 @@ export class CoreStaticValueAnalysis {
 				}
 			}
 			const node = canonical === undefined ? undefined : primordialNode(canonical);
-			if (node !== undefined) {
+			if (
+				node !== undefined &&
+				primordialNodeAvailable(this.#context.facts.world, node[0])
+			) {
 				const symbol = (node[2] & 8) !== 0;
 				const symbolDescription = symbol
 					? node[5].find((alias) => /^Symbol\.[A-Za-z]+$/.test(alias))

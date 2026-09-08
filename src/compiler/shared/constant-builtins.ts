@@ -11,6 +11,8 @@ import {
 	formatConstantNumber,
 	formatConstantNumberRadix,
 } from "./constant-number-format.ts";
+import { UNICODE_VERSION } from "./unicode-data.ts";
+import { normalizeUnicode, transformUnicodeCase } from "./unicode-transform.ts";
 
 const absent: ConstantValue = { kind: "undefined" };
 
@@ -692,12 +694,44 @@ export function evaluateConstantBuiltin(
 		if (size <= source.length) return string(source);
 		const padding = argument(1)?.kind === "undefined" ? " " : text(argument(1));
 		if (padding === undefined) return unsupported();
+		if (padding === "") return string(source);
 		if (size + work > workLimit) return unsupported("work-limit");
 		return string(
 			method === "padStart"
 				? source.padStart(size, padding)
 				: source.padEnd(size, padding),
 		);
+	}
+	if (
+		method === "normalize" ||
+		["toUpperCase", "toLowerCase", "toLocaleUpperCase", "toLocaleLowerCase"].includes(
+			method,
+		)
+	) {
+		if (target.unicode !== UNICODE_VERSION)
+			return { kind: "unsupported", reason: "target-contract", work };
+		let transformed;
+		if (method === "normalize") {
+			const form = first?.kind === "undefined" ? "NFC" : text(first);
+			if (form !== "NFC" && form !== "NFD" && form !== "NFKC" && form !== "NFKD")
+				return unsupported();
+			transformed = normalizeUnicode(source, form, workLimit - work);
+		} else {
+			if (
+				method.includes("Locale") &&
+				(first?.kind !== "undefined" || target.locale !== "en-US")
+			)
+				return unsupported();
+			transformed = transformUnicodeCase(
+				source,
+				method.includes("Upper"),
+				"und",
+				workLimit - work,
+			);
+		}
+		if (transformed === undefined) return unsupported("work-limit");
+		work += transformed.work;
+		return result({ kind: "string", value: transformed.value });
 	}
 	if (["trim", "trimStart", "trimLeft", "trimEnd", "trimRight"].includes(method)) {
 		let start = 0,

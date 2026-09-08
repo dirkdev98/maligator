@@ -937,3 +937,61 @@ show(
 	),
 );
 show(String.raw({ raw: ["a", , "c"] }, "x", "y"));
+
+function unicodeTransforms(value) {
+	return [
+		value.toUpperCase(),
+		value.toLowerCase(),
+		value.normalize(),
+		value.normalize("NFD"),
+		value.normalize("NFKC"),
+		value.normalize("NFKD"),
+		value.trim(),
+		value.trimStart(),
+		value.trimEnd(),
+		value.isWellFormed(),
+		value.toWellFormed(),
+	]
+		.map((result) => JSON.stringify(result))
+		.join("|");
+}
+globalThis.unicodeTransforms = unicodeTransforms;
+for (const text of [
+	"Straße ﬃ",
+	"ΟΣ ΟΣΑ AΣ'A AΣ'",
+	"İı",
+	"\u1e0a\u0323",
+	"\u212b",
+	"\u0958",
+	"\u1100\u1161\u11a8",
+	"\u{10400}\u{10428}",
+	"\ud800A\u030a\udfff",
+	"\ufeff \u2000 x \u2029\u3000",
+	"a" + "\u0301".repeat(40) + "\u0323".repeat(40),
+])
+	show(unicodeTransforms(text));
+events = "";
+show(
+	String.prototype.normalize.call(
+		{
+			toString() {
+				events += "s";
+				return "e\u0301";
+			},
+		},
+		{
+			toString() {
+				events += "f";
+				return "NFC";
+			},
+		},
+	),
+);
+show(events);
+for (const form of [null, Symbol(), "nfc", "NFKC"]) {
+	try {
+		show("\ufb03".normalize(form));
+	} catch (error) {
+		show(error.name);
+	}
+}

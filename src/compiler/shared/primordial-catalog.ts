@@ -141,6 +141,31 @@ export interface PrimordialAccessProof {
 	readonly dependencies: ReadonlyArray<string>;
 }
 
+export function primordialNodeAvailable(world: WorldFacts, id: string): boolean {
+	const resolved = primordialNode(id)?.[0];
+	if (resolved === undefined) return false;
+	if (resolved.startsWith("Temporal")) return world.ecmaFeatures.temporal;
+	if (resolved.startsWith("RegExp")) return world.ecmaFeatures.regexp;
+	if (resolved.startsWith("Realm")) return world.realms;
+	if (!resolved.startsWith("Intl")) return true;
+	if (!world.ecmaFeatures.intl) return false;
+	const name = resolved.split(".")[1];
+	if (
+		name === undefined ||
+		name === "Locale" ||
+		name === "getCanonicalLocales" ||
+		name === "supportedValuesOf"
+	)
+		return true;
+	const services = world.ecmaFeatures.intlServices;
+	if (services === undefined) return false;
+	const service = name.replace(
+		/[A-Z]/g,
+		(letter, offset: number) => `${offset === 0 ? "" : "-"}${letter.toLowerCase()}`,
+	);
+	return services.length === 0 || services.includes(service);
+}
+
 export function provePrimordialAccess(
 	world: WorldFacts,
 	receiver: PrimordialReceiverEvidence,
@@ -164,21 +189,13 @@ export function provePrimordialAccess(
 	)
 		return undefined;
 	const id = receiver.kind === "intrinsic" ? receiver.id : receiver.prototype;
-	const resolvedId = primordialNode(id)?.[0];
-	if (resolvedId?.startsWith("Intl")) {
-		if (!world.ecmaFeatures.intl) return undefined;
-		const services = world.ecmaFeatures.intlServices;
-		if (services === undefined) return undefined;
-		const service = resolvedId
-			.split(".")[1]
-			?.replace(
-				/[A-Z]/g,
-				(letter, offset: number) => (offset === 0 ? "" : "-") + letter.toLowerCase(),
-			);
-		if (services.length > 0 && (service === undefined || !services.includes(service)))
-			return undefined;
-	}
+	if (!primordialNodeAvailable(world, id)) return undefined;
 	const resolution = resolvePrimordialProperty(id, key);
+	if (
+		resolution?.value !== undefined &&
+		!primordialNodeAvailable(world, resolution.value[0])
+	)
+		return undefined;
 	let node = primordialNode(id);
 	if (node === undefined) return undefined;
 	const dependencies = [
@@ -207,13 +224,7 @@ export function provePrimordialAccess(
 	while (node !== undefined) {
 		if ((node[2] & 1) === 0 || seen.has(node[0])) return undefined;
 		seen.add(node[0]);
-		if (
-			(node[0].startsWith("Intl") && !world.ecmaFeatures.intl) ||
-			(node[0].startsWith("Temporal") && !world.ecmaFeatures.temporal) ||
-			(node[0].startsWith("RegExp") && !world.ecmaFeatures.regexp) ||
-			(node[0].startsWith("Realm") && !world.realms)
-		)
-			return undefined;
+		if (!primordialNodeAvailable(world, node[0])) return undefined;
 		dependencies.push(`prototype:${node[0]}`);
 		if (resolution?.owner === node)
 			return {

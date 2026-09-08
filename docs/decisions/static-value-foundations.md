@@ -71,13 +71,35 @@ Runtime archive and generated-object cache identities include generated `.inc`
 tables alongside source/header inputs, so a registry edit cannot reuse stale
 dispatch or intrinsic definitions.
 
-Constant evaluation uses the `mal-binary64-utf16-i128-v1` target contract. Portable
-folds cover certified binary64 arithmetic and UTF-16 code units. BigInt arithmetic
-checks signed-128 bounds before evaluation, including when the compiler itself runs
-on Maligator. Unsupported operations and exhausted work budgets retain runtime work.
-The evaluator can describe a required runtime exception; it does not report it as a
-compile error. Locale, timezone, Unicode-data-dependent transforms and general
-transcendental functions require separate target certification.
+Constant evaluation uses the `mal-binary64-utf16-i128-unicode17-v3` target contract.
+Portable folds cover certified binary64 arithmetic, exact number formatting, UTF-16
+code units, and the runtime's bounded 128-bit BigInt semantics. Work and output bounds
+leave expensive operations at runtime. A required runtime exception is never reported
+as a compiler error. General transcendental functions, time zones, and locale services
+require their own target certificates.
+
+Case conversion and normalization use Unicode 17.0.0 tables generated for both
+TypeScript and C from the same checksum-verified Unicode Character Database files.
+Run `node scripts/generate-unicode-data.ts <ucd-directory> <output-directory>` with
+`UnicodeData.txt`, `SpecialCasing.txt`, `DerivedCoreProperties.txt`,
+`CompositionExclusions.txt`, and `PropList.txt` from the official 17.0.0 distribution.
+The generated `unicode-data.ts` belongs in `src/compiler/shared`; `unicode_data.h`
+belongs in `runtime/src`. The data license is retained in `runtime/vendor/unicode`.
+Updating Unicode requires reviewing the contextual rules and bumping the evaluator
+contract; the generator rejects unrecognized special-casing conditions.
+
+Both implementations preserve lone surrogates, canonical composition exclusions,
+Hangul composition/decomposition, stable combining-class order, and full case
+expansions. Final sigma and Lithuanian/Turkic contexts inspect the original input.
+The runtime bounds long combining runs with stable class buckets; the compiler
+abandons work exceeding its evaluation budget.
+
+The current runtime default locale is `en-US`, recorded in the constant-evaluation
+target. Nonlocale transforms and default-locale case conversions can fold under that
+certificate. Prepared `tr`, `az`, and `lt` case calls select the corresponding mapping
+only when the target enables Intl. Generic locale calls retain full locale-list
+validation and receiver coercion order. Catalog proofs separately check the target's
+feature availability, including the value reached through a protected global binding.
 
 ## Known operations
 

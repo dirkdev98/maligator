@@ -1,4 +1,6 @@
-export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-v2";
+import { UNICODE_VERSION } from "./unicode-data.ts";
+
+export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-unicode17-v3";
 
 export interface ConstantEvaluationTarget {
 	readonly contract: string;
@@ -16,6 +18,8 @@ export const PORTABLE_CONSTANT_TARGET: ConstantEvaluationTarget = Object.freeze(
 	contract: CONSTANT_EVALUATOR_CONTRACT,
 	endianness: "unobserved",
 	numbers: "binary64-gradual-underflow",
+	unicode: UNICODE_VERSION,
+	locale: "en-US",
 });
 
 export type ConstantValue =

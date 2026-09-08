@@ -8300,7 +8300,7 @@
 			"String.prototype.toLowerCase",
 			272,
 			3,
-			"String.prototype.toLocaleLowerCase",
+			"String.prototype.toLowerCase",
 			[
 				["length", 0, ["bits", "7ff9000000000000"], -1, -1],
 				["name", 0, ["string", "toLowerCase"], -1, -1]
@@ -8322,7 +8322,7 @@
 			"String.prototype.toUpperCase",
 			272,
 			3,
-			"String.prototype.toLocaleUpperCase",
+			"String.prototype.toUpperCase",
 			[
 				["length", 0, ["bits", "7ff9000000000000"], -1, -1],
 				["name", 0, ["string", "toUpperCase"], -1, -1]

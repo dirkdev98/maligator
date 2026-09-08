@@ -65,7 +65,7 @@
 	},
 	{
 		"file": "builtin_intl.c",
-		"sha256": "200ca9624a1937faacdca4c853931cb84c8948bffe84be828bf5f3c4877efe33"
+		"sha256": "61433963085a13c555b2958b53b3b5ec71a11c0e731143b23153a215a49b8fe8"
 	},
 	{
 		"file": "builtin_iterator.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "38aab6079c41f03b35729d234f602b68d3dc765b8c4d96bc21dbd59470420289"
+		"sha256": "858488d4d56fa11800e5d5278f7dec727325014cbca08fba54c41cb112d80fa7"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -269,7 +269,7 @@
 	},
 	{
 		"file": "generated/known_native_builtin_string_c.inc",
-		"sha256": "7b987bcb1bfdc63d90758fb390219eb1f4c2f7d44182b7b91cfc037db13a9927"
+		"sha256": "25c0bfe6c10ceefbdbee717f5f03d4caeaecd1f338cd907a720670bac1d92f2e"
 	},
 	{
 		"file": "generated/known_native_builtin_symbol_c.inc",
@@ -293,7 +293,7 @@
 	},
 	{
 		"file": "generated/known_native_entries.inc",
-		"sha256": "6b2a3cee5676d00b3740a25acfb02ff27d9253d38f4c3514b6fccfd5c0e60512"
+		"sha256": "0b77010afc08feed5818d225ff9328b62b0d275ef144ff8d8a66acd0fb6be12a"
 	},
 	{
 		"file": "generated/known_native_intrinsics_c.inc",

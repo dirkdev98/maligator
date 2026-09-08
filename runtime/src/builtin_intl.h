@@ -1,6 +1,7 @@
 #pragma once
 
 #include "value.h"
+#include "unicode.h"
 
 typedef struct MalVm MalVm;
 
@@ -30,3 +31,6 @@ MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locale
  * time, 1 date only, 2 time only (the default styles when options omit them).
  */
 MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which);
+
+// Canonicalize the entire locale list before selecting the first requested case mapping.
+bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale);

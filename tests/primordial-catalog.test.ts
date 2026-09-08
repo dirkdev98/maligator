@@ -20,6 +20,50 @@ const coverage = JSON.parse(
 ) as StaticValueCoverage;
 
 describe("shared primordial catalog and coverage obligations", () => {
+	it("does not infer installed globals or services from the full catalog in smaller builds", () => {
+		const disabled = worldFactsFromConfig(
+			resolveBuildConfig({
+				engine: {
+					primordials: "locked",
+					intl: { enabled: false },
+					regexp: false,
+					temporal: false,
+				},
+			}),
+		);
+		for (const key of ["Intl", "RegExp", "Temporal"])
+			expect(
+				provePrimordialAccess(
+					disabled,
+					{ kind: "intrinsic", id: "globalThis", realm: "current" },
+					key,
+				),
+			).toBeUndefined();
+		const collator = worldFactsFromConfig(
+			resolveBuildConfig({
+				engine: {
+					primordials: "locked",
+					intl: { enabled: true, features: ["collator"] },
+				},
+			}),
+		);
+		for (const key of ["Collator", "Locale", "getCanonicalLocales"])
+			expect(
+				provePrimordialAccess(
+					collator,
+					{ kind: "intrinsic", id: "Intl", realm: "current" },
+					key,
+				)?.resolution?.value,
+			).toBeDefined();
+		expect(
+			provePrimordialAccess(
+				collator,
+				{ kind: "intrinsic", id: "Intl", realm: "current" },
+				"NumberFormat",
+			),
+		).toBeUndefined();
+	});
+
 	it("requires an audited source inventory whenever an installer changes", () => {
 		expect(primordialInstallerSourceInventory()).toEqual(
 			JSON.parse(

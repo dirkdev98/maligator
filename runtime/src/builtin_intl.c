@@ -300,83 +300,63 @@ static bool intl_array_contains(MalVm *vm, MalArrayObject *array, u32 count, con
     return false;
 }
 
-/**
- * CanonicalizeLocaleList(locales) -> a fresh Array of canonical tag Strings.
- * Returns null with a pending throw on error.
- */
 static MalArrayObject *intl_canonicalize_locale_list(MalVm *vm, MalValue locales) {
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    if (mal_value_is_null(locales)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "locale list cannot be null");
+        return nullptr;
+    }
+    MalValue roots[4] = {locales, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
     u32 count = 0;
-
-    if (mal_value_is_undefined(locales)) {
-        return result;
-    }
-
-    // A String or a Locale instance is treated as a single-element list.
-    if (mal_value_is_string(locales) ||
-        (mal_value_is_intl_object(locales) && mal_value_to_intl_object(locales)->kind == MAL_INTL_LOCALE)) {
-        MalString *tag = mal_value_is_string(locales)
-            ? mal_value_to_string(locales)
-            : mal_value_to_string(mal_value_to_intl_object(locales)->data);
+    if (mal_value_is_undefined(roots[0])) goto done;
+    if (mal_value_is_string(roots[0]) ||
+        (mal_value_is_intl_object(roots[0]) && mal_value_to_intl_object(roots[0])->kind == MAL_INTL_LOCALE)) {
+        MalString *tag = mal_value_is_string(roots[0]) ? mal_value_to_string(roots[0]) : mal_value_to_string(mal_value_to_intl_object(roots[0])->data);
         MalString *canonical = intl_canonicalize(vm, tag);
-        if (canonical == nullptr) {
-            return nullptr;
-        }
-        intl_array_push(vm, result, count++, mal_value_from_string(canonical));
-        return result;
+        if (canonical == nullptr) goto failed;
+        roots[2] = mal_value_from_string(canonical);
+        intl_array_push(vm, mal_value_to_array_object(roots[1]), 0, roots[2]);
+        goto done;
     }
-
-    // Otherwise iterate as an array-like (a non-object primitive yields nothing).
-    if (!mal_value_is_object(locales)) {
-        return result;
-    }
-
+    if (!mal_value_is_object(roots[0])) goto done;
     MalValue length_value;
-    if (!mal_vm_get_property(vm, locales, mal_intrinsic_string_key(vm, "length"), &length_value)) {
-        return nullptr;
-    }
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "length"), &length_value)) goto failed;
     f64 length_number;
-    if (!mal_vm_to_number(vm, length_value, &length_number)) {
-        return nullptr;
-    }
-    length_number = mal_ops_number_to_length(length_number);
-    if (length_number == 0.0) {
-        return result;
-    }
-    u64 length = (u64) length_number;
-
+    if (!mal_vm_to_number(vm, length_value, &length_number)) goto failed;
+    u64 length = (u64) mal_ops_number_to_length(length_number);
     for (u64 i = 0; i < length; i++) {
-        // Array index elements are stored under MAL_KEY_INDEX; beyond the index
-        // range they would be string keys, but a locale list is never that long.
-        MalKey property_key = i <= 0xFFFFFFFEULL
-            ? mal_key_index(i)
-            : mal_intrinsic_string_key(vm, "");
-        if (!mal_vm_has_property(vm, locales, property_key)) {
-            continue;
-        }
-        MalValue element;
-        if (!mal_vm_get_property(vm, locales, property_key, &element)) {
-            return nullptr;
-        }
+        MalKey property_key = i < UINT32_MAX ? mal_key_index(i) : mal_key_from_value(mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value((f64) i))));
+        roots[3] = property_key.value;
+        bool present = mal_vm_has_property(vm, roots[0], property_key);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+        if (!present) continue;
+        property_key.value = roots[3];
+        if (!mal_vm_get_property(vm, roots[0], property_key, &roots[2])) goto failed;
+        MalValue element = roots[2];
         if (!mal_value_is_string(element) && !mal_value_is_object(element)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "locale list element must be a String or Object");
-            return nullptr;
+            goto failed;
         }
         MalString *tag;
-        if (mal_value_is_intl_object(element) && mal_value_to_intl_object(element)->kind == MAL_INTL_LOCALE) {
+        if (mal_value_is_intl_object(element) && mal_value_to_intl_object(element)->kind == MAL_INTL_LOCALE)
             tag = mal_value_to_string(mal_value_to_intl_object(element)->data);
-        } else if (!mal_vm_to_string(vm, element, &tag)) {
-            return nullptr;
-        }
-        MalString *canonical = intl_canonicalize(vm, tag);
-        if (canonical == nullptr) {
-            return nullptr;
-        }
-        if (!intl_array_contains(vm, result, count, canonical)) {
-            intl_array_push(vm, result, count++, mal_value_from_string(canonical));
-        }
+        else if (!mal_vm_to_string(vm, element, &tag)) goto failed;
+        roots[2] = mal_value_from_string(tag);
+        MalString *canonical = intl_canonicalize(vm, mal_value_to_string(roots[2]));
+        if (canonical == nullptr) goto failed;
+        roots[2] = mal_value_from_string(canonical);
+        if (!intl_array_contains(vm, mal_value_to_array_object(roots[1]), count, canonical))
+            intl_array_push(vm, mal_value_to_array_object(roots[1]), count++, roots[2]);
     }
+ done:
+    MalArrayObject *result = mal_value_to_array_object(roots[1]);
+    mal_gc_unroot(&root_span);
     return result;
+ failed:
+    mal_gc_unroot(&root_span);
+    return nullptr;
 }
 
 static MalValue intl_get_canonical_locales(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -869,6 +849,19 @@ static MalString *intl_resolve_locale(MalVm *vm, MalValue locales) {
         return mal_value_to_string(first);
     }
     return mal_intrinsic_ascii(vm, "en-US");
+}
+
+bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale) {
+    MalString *tag = intl_resolve_locale(vm, locales);
+    if (tag == nullptr) return false;
+    const c16 *units = mal_string_code_units(tag);
+    usize length = mal_string_length(tag);
+    *locale = MAL_UNICODE_LOCALE_ROOT;
+    if (length >= 2 && (length == 2 || units[2] == '-')) {
+        if ((units[0] == 't' && units[1] == 'r') || (units[0] == 'a' && units[1] == 'z')) *locale = MAL_UNICODE_LOCALE_TURKIC;
+        else if (units[0] == 'l' && units[1] == 't') *locale = MAL_UNICODE_LOCALE_LITHUANIAN;
+    }
+    return true;
 }
 
 static void intl_resolved_set(MalVm *vm, MalObject *object, const char *name, MalValue value) {
@@ -3581,6 +3574,13 @@ void mal_builtin_intl_install(MalVm *vm) {
 // "undefined"). The locale-sensitive non-namespace methods delegate to the
 // locale-insensitive fallbacks above (all services are off here, so the
 // #if !MAL_INTL_<SERVICE> helpers are all defined).
+
+bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale) {
+    (void) vm;
+    (void) locales;
+    *locale = MAL_UNICODE_LOCALE_ROOT;
+    return true;
+}
 
 void mal_builtin_intl_install(MalVm *vm) {
     (void) vm; // no Intl namespace in this build

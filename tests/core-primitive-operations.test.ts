@@ -11,6 +11,62 @@ function inspect(expression: string, locked = true) {
 }
 
 describe("primitive operation results", () => {
+	it.each([
+		"trim",
+		"trimStart",
+		"trimEnd",
+		"trimLeft",
+		"trimRight",
+		"isWellFormed",
+		"toWellFormed",
+		"normalize",
+		"toLowerCase",
+		"toUpperCase",
+		"toLocaleLowerCase",
+		"toLocaleUpperCase",
+	])(
+		"folds certified String %s constants and specializes dynamic receivers",
+		(method) => {
+			const constant = inspect(
+				`${JSON.stringify("  Straße ΟΣ e\u0301 😀\ud800  ")}.${method}()`,
+			);
+			expect(constant.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+			const dynamic = inspect(`String(x).${method}()`);
+			const helper = method.startsWith("trim")
+				? "trim"
+				: method === "normalize"
+					? "normalize"
+					: method === "isWellFormed"
+						? "is_well_formed"
+						: method === "toWellFormed"
+							? "to_well_formed"
+							: "case";
+			expect(dynamic.c.source).toContain(`mal_builtin_string_${helper}_known(`);
+			expect(inspect(`String(x).${method}()`, false).c.source).not.toContain(
+				"mal_builtin_string_case_known(",
+			);
+		},
+	);
+	it("prepares normalization forms and locale case parameters for dynamic strings", () => {
+		expect(inspect("String(x).normalize('NFKD')").c.source).toContain(
+			"mal_builtin_string_normalize_known(",
+		);
+		for (const method of ["toLocaleUpperCase", "toLocaleLowerCase"])
+			for (const locale of ["tr", "az", "lt", "en-US"])
+				expect(inspect(`String(x).${method}('${locale}')`).c.source).toContain(
+					"mal_builtin_string_case_known(",
+				);
+		expect(inspect("'I'.toLocaleLowerCase(x)").c.source).toContain(
+			"mal_vm_call_known_native(",
+		);
+		expect(inspect("'e'.normalize(x)").c.source).toContain("mal_vm_call_known_native(");
+		expect(inspect("'e'.normalize('bad')").c.source).toContain(
+			"mal_vm_call_known_native(",
+		);
+	});
+
 	it("folds private raw segments and emits ordered substitution conversions", () => {
 		for (const expression of [
 			"String.raw({raw:['a','b','c']},x,2)",
@@ -433,8 +489,6 @@ describe("primitive operation results", () => {
 		"'abc'.includes(x)",
 		"'abc'.repeat(-1)",
 		"String.fromCodePoint(1114112)",
-		"'abc'.normalize()",
-		"'I'.toLocaleLowerCase()",
 		"Math.random()",
 		"Math.sin(1)",
 	])("keeps uncertified or effectful work at its call site for %s", (expression) => {

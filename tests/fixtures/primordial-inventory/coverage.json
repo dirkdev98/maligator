@@ -38762,7 +38762,7 @@
 			"ownerPaths": ["MAL_INTRINSIC_STRING_PROTOTYPE", "String.prototype"],
 			"key": "toUpperCase",
 			"kind": "data",
-			"operations": ["String.prototype.toLocaleUpperCase"],
+			"operations": ["String.prototype.toUpperCase"],
 			"task": "F-11",
 			"decisions": []
 		},
@@ -38772,7 +38772,7 @@
 			"ownerPaths": ["MAL_INTRINSIC_STRING_PROTOTYPE", "String.prototype"],
 			"key": "toLowerCase",
 			"kind": "data",
-			"operations": ["String.prototype.toLocaleLowerCase"],
+			"operations": ["String.prototype.toLowerCase"],
 			"task": "F-11",
 			"decisions": []
 		},
@@ -84602,7 +84602,7 @@
 			"ownerPaths": ["String.prototype.toLowerCase"],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["String.prototype.toLocaleLowerCase"],
+			"operations": ["String.prototype.toLowerCase"],
 			"task": "F-08",
 			"decisions": []
 		},
@@ -84612,7 +84612,7 @@
 			"ownerPaths": ["String.prototype.toLowerCase"],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["String.prototype.toLocaleLowerCase"],
+			"operations": ["String.prototype.toLowerCase"],
 			"task": "F-08",
 			"decisions": []
 		},
@@ -84642,7 +84642,7 @@
 			"ownerPaths": ["String.prototype.toUpperCase"],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["String.prototype.toLocaleUpperCase"],
+			"operations": ["String.prototype.toUpperCase"],
 			"task": "F-08",
 			"decisions": []
 		},
@@ -84652,7 +84652,7 @@
 			"ownerPaths": ["String.prototype.toUpperCase"],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["String.prototype.toLocaleUpperCase"],
+			"operations": ["String.prototype.toUpperCase"],
 			"task": "F-08",
 			"decisions": []
 		},
@@ -105981,15 +105981,23 @@
 		{ "id": "String.prototype.sup", "identities": ["String.prototype.sup"] },
 		{
 			"id": "String.prototype.toLocaleLowerCase",
-			"identities": ["String.prototype.toLocaleLowerCase", "String.prototype.toLowerCase"]
+			"identities": ["String.prototype.toLocaleLowerCase"]
 		},
 		{
 			"id": "String.prototype.toLocaleUpperCase",
-			"identities": ["String.prototype.toLocaleUpperCase", "String.prototype.toUpperCase"]
+			"identities": ["String.prototype.toLocaleUpperCase"]
+		},
+		{
+			"id": "String.prototype.toLowerCase",
+			"identities": ["String.prototype.toLowerCase"]
 		},
 		{
 			"id": "String.prototype.toString",
 			"identities": ["String.prototype.toString", "String.prototype.valueOf"]
+		},
+		{
+			"id": "String.prototype.toUpperCase",
+			"identities": ["String.prototype.toUpperCase"]
 		},
 		{
 			"id": "String.prototype.toWellFormed",

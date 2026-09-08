@@ -122,14 +122,20 @@ MalValue mal_known_native_mal_builtin_string_prototype_substring(MalVm *vm, MalV
 MalValue mal_known_native_mal_builtin_string_prototype_sup(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return mal_builtin_string_prototype_sup(vm, receiver, args, count, target, callee);
 }
+MalValue mal_known_native_mal_builtin_string_prototype_to_locale_lower_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+    return mal_builtin_string_prototype_to_locale_lower_case(vm, receiver, args, count, target, callee);
+}
+MalValue mal_known_native_mal_builtin_string_prototype_to_locale_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+    return mal_builtin_string_prototype_to_locale_upper_case(vm, receiver, args, count, target, callee);
+}
 MalValue mal_known_native_mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return mal_builtin_string_prototype_to_lower_case(vm, receiver, args, count, target, callee);
 }
-MalValue mal_known_native_mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-    return mal_builtin_string_prototype_to_upper_case(vm, receiver, args, count, target, callee);
-}
 MalValue mal_known_native_mal_builtin_string_prototype_to_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return mal_builtin_string_prototype_to_string(vm, receiver, args, count, target, callee);
+}
+MalValue mal_known_native_mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+    return mal_builtin_string_prototype_to_upper_case(vm, receiver, args, count, target, callee);
 }
 MalValue mal_known_native_mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return mal_builtin_string_prototype_to_well_formed(vm, receiver, args, count, target, callee);

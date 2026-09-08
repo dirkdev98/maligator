@@ -11,6 +11,28 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it.each([false, true])(
+		"preserves locale case effects and prepared parameters with Intl=%s",
+		(enabled) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-locale-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/static-string-locale.mjs",
+					name: "locale",
+					config: resolveBuildConfig({
+						engine: { primordials: "locked", intl: { enabled, features: ["collator"] } },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted])
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe("locale cases passed\n");
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+
 	it("preserves exact sum and iterator closing through direct dispatch", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-sum-"));
 		try {

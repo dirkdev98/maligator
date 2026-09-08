@@ -571,9 +571,11 @@ MalValue mal_known_native_mal_builtin_string_prototype_sub(MalVm *vm, MalValue r
 MalValue mal_known_native_mal_builtin_string_prototype_substr(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_substring(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_sup(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_mal_builtin_string_prototype_to_locale_lower_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_mal_builtin_string_prototype_to_locale_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
-MalValue mal_known_native_mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_to_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_trim(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);

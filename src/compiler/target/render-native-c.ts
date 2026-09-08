@@ -1970,7 +1970,10 @@ function emitStringSwitch(
 	relocation: NativeRelocationExpressions,
 	branch: (target: number, branchIp: number) => string,
 ):
-	| { lines: Array<string>; strategy: "direct" | "length" | "hash" | "non-string" }
+	| {
+			lines: Array<string>;
+			strategy: "direct" | "length" | "hash" | "non-string";
+	  }
 	| undefined {
 	const fallback = branch(site.defaultIp, site.endIp);
 	if (representation !== "boxed" && representation !== "string")
@@ -1994,7 +1997,11 @@ function emitStringSwitch(
 		seen.add(label.stringIndex);
 		minLength = Math.min(minLength, codeUnits.length);
 		maxLength = Math.max(maxLength, codeUnits.length);
-		labels.push({ ...label, codeUnits, branchIp: site.instructionIp + index * 3 + 2 });
+		labels.push({
+			...label,
+			codeUnits,
+			branchIp: site.instructionIp + index * 3 + 2,
+		});
 	}
 	const lengths = new Map<number, Array<(typeof labels)[number]>>();
 	let largestLengthGroup = 0;
@@ -2674,7 +2681,10 @@ function emitBody(
 						operation: "switch",
 						code: "native-string-switch",
 						outcome: "applied",
-						details: { strategy: emitted.strategy, cases: literalSwitch.cases.length },
+						details: {
+							strategy: emitted.strategy,
+							cases: literalSwitch.cases.length,
+						},
 					});
 					ip = literalSwitch.endIp;
 					continue;
@@ -2788,6 +2798,7 @@ function emitBody(
 			coro,
 			{
 				nativePlan: nativeInstructions[ip],
+				stringConstants,
 				resources,
 				directEntryCalls,
 				profileSiteId: fn.profileSiteIds?.[ip],
@@ -2894,7 +2905,13 @@ function emitBody(
 		}
 	}
 
-	return { lines, resources, invocationPreamble, emittedInstructions, directEntryCalls };
+	return {
+		lines,
+		resources,
+		invocationPreamble,
+		emittedInstructions,
+		directEntryCalls,
+	};
 }
 
 function profileOperationInstruction(instruction: BytecodeInstruction): boolean {
@@ -3158,6 +3175,7 @@ interface NativeInstructionContext {
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly relocation: NativeRelocationExpressions;
+	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 }
 
 type NativeTypedArrayElementKind = Extract<
@@ -3255,6 +3273,7 @@ function emitInstruction(
 			? expression
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const genericContext: NativeInstructionContext = {
+		stringConstants: context.stringConstants,
 		directEntryCalls: context.directEntryCalls,
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
@@ -5403,6 +5422,79 @@ function emitInstruction(
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					poll,
 				];
+				if (
+					!instruction.construct &&
+					instruction.argumentMode === undefined &&
+					instruction.operation.startsWith("String.prototype.")
+				) {
+					const method = instruction.operation.slice("String.prototype.".length);
+					const receiver = boxedOperand(instruction.thisValue);
+					const string = `mal_value_to_string(${receiver})`;
+					const first = instruction.arguments[0];
+					const decoded = first === undefined ? undefined : decodeVmValueOperand(first);
+					const units =
+						decoded?.kind === "string"
+							? context.stringConstants[decoded.index]
+							: undefined;
+					const parameter =
+						units === undefined || units.length > 16
+							? undefined
+							: String.fromCharCode(...units);
+					const absent = decoded === undefined || decoded.kind === "undefined";
+					let expression: string | undefined;
+					if (
+						["trim", "trimStart", "trimLeft", "trimEnd", "trimRight"].includes(method)
+					) {
+						expression = `mal_builtin_string_trim_known(vm, ${string}, ${method !== "trimEnd" && method !== "trimRight"}, ${method !== "trimStart" && method !== "trimLeft"})`;
+					} else if (method === "isWellFormed")
+						expression = `mal_builtin_string_is_well_formed_known(${string})`;
+					else if (method === "toWellFormed")
+						expression = `mal_builtin_string_to_well_formed_known(vm, ${string})`;
+					else if (method === "normalize") {
+						const form = absent ? "NFC" : parameter;
+						if (form === "NFC" || form === "NFD" || form === "NFKC" || form === "NFKD")
+							expression = `mal_builtin_string_normalize_known(vm, ${string}, ${form.includes("K")}, ${form.endsWith("C")})`;
+					} else if (
+						[
+							"toUpperCase",
+							"toLowerCase",
+							"toLocaleUpperCase",
+							"toLocaleLowerCase",
+						].includes(method)
+					) {
+						const localized = method.includes("Locale");
+						let locale: string | undefined = "MAL_UNICODE_LOCALE_ROOT";
+						if (localized && !absent) {
+							if (parameter === "tr" || parameter === "az")
+								locale =
+									"(MAL_INTL ? MAL_UNICODE_LOCALE_TURKIC : MAL_UNICODE_LOCALE_ROOT)";
+							else if (parameter === "lt")
+								locale =
+									"(MAL_INTL ? MAL_UNICODE_LOCALE_LITHUANIAN : MAL_UNICODE_LOCALE_ROOT)";
+							else if (parameter !== "en" && parameter !== "en-US" && parameter !== "und")
+								locale = undefined;
+						}
+						if (locale !== undefined)
+							expression = `mal_builtin_string_case_known(vm, ${string}, ${method.includes("Upper")}, ${locale})`;
+					}
+					if (expression !== undefined) {
+						const result = `string_transform_${ip}`;
+						const direct = [
+							`MalValue ${result} = ${expression};`,
+							throwCheck(),
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+						if (operandRep(instruction.thisValue) === "string") return direct;
+						return [
+							`if (mal_value_is_string(${receiver})) {`,
+							...direct.map((line) => `  ${line}`),
+							`} else {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
 				if (
 					instruction.operation === "String.prototype.concat" &&
 					!instruction.construct &&

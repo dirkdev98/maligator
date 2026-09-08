@@ -19,6 +19,7 @@
 #include "rooted_collection.h"
 #include "u16_buffer.h"
 #include "utf16.h"
+#include "unicode.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -1493,47 +1494,76 @@ static MalValue mal_builtin_string_prototype_locale_compare(MalVm *vm, MalValue 
         vm, string_value, that, locales, options);
 }
 
-/**
- * Basic String.prototype.normalize: validates the form argument and returns the
- * receiver unchanged (no actual Unicode normalization is performed yet).
- */
-static MalValue mal_builtin_string_prototype_normalize(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+static bool mal_builtin_string_ascii_units(const c16 *source, usize length) {
+    usize index = 0;
+    while (length - index >= 4) {
+        u64 word;
+        memcpy(&word, source + index, sizeof(word));
+        if ((word & 0xff80ff80ff80ff80ULL) != 0) return false;
+        index += 4;
+    }
+    while (index < length) if (source[index++] > 0x7f) return false;
+    return true;
+}
+
+static MalValue mal_builtin_string_unicode_result(MalVm *vm, MalString *source, MalUnicodeStatus status, c16 *units, usize length, bool case_transform) {
+    if (status != MAL_UNICODE_OK) {
+        free(units);
+        if (status == MAL_UNICODE_LENGTH_OVERFLOW) mal_builtin_string_throw_length(vm);
+        else mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
+    bool unchanged = length == mal_string_length(source) && (length == 0 || memcmp(units, mal_string_code_units(source), length * sizeof(c16)) == 0);
+    if (case_transform) {
+        if (unchanged) MAL_PERF_COUNT(string_case_reuses);
+        else {
+            MAL_PERF_COUNT(string_case_changed_allocations);
+            MAL_PERF_ADD(string_case_changed_code_units, length);
+        }
+    }
+    MalValue result = unchanged ? mal_value_from_string(source) : mal_builtin_string_from_units(vm, units, length);
+    free(units);
+    return result;
+}
 
+MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose) {
+    const c16 *source;
+    string = mal_builtin_string_flatten_for_scan(string, &source);
+    if (mal_builtin_string_ascii_units(source, mal_string_length(string))) return mal_value_from_string(string);
+    c16 *output = nullptr;
+    usize length = 0;
+    MalUnicodeStatus status = mal_unicode_normalize(source, mal_string_length(string), compatibility, compose, &output, &length);
+    return mal_builtin_string_unicode_result(vm, string, status, output, length, false);
+}
+
+static MalValue mal_builtin_string_prototype_normalize(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    bool compatibility = false, compose = true;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        MalValue roots[2] = {
-            mal_value_from_string(string),
-            mal_value_new_undefined(),
-        };
-        MalRootSpan root_span;
-        mal_gc_root(&root_span, roots, 2);
-        // ToString(form) precedes the form validation: a Symbol throws TypeError
-        // before any RangeError. VM ToString also runs a user toString/valueOf.
         MalString *form;
         if (!mal_vm_to_string(vm, args[0], &form)) {
-            mal_gc_unroot(&root_span);
+            mal_builtin_string_root_dispose(&root);
             return mal_value_new_undefined();
         }
-        roots[1] = mal_value_from_string(form);
-        form = mal_value_to_string(roots[1]);
-        const c16 *units = mal_string_code_units(form);
+        const c16 *units;
+        form = mal_builtin_string_flatten_for_scan(form, &units);
         usize length = mal_string_length(form);
-        bool valid =
-            (length == 3 && units[0] == 'N' && units[1] == 'F' && (units[2] == 'C' || units[2] == 'D')) ||
+        bool valid = (length == 3 && units[0] == 'N' && units[1] == 'F' && (units[2] == 'C' || units[2] == 'D')) ||
             (length == 4 && units[0] == 'N' && units[1] == 'F' && units[2] == 'K' && (units[3] == 'C' || units[3] == 'D'));
         if (!valid) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The normalization form should be one of NFC, NFD, NFKC, NFKD");
-            mal_gc_unroot(&root_span);
+            mal_builtin_string_root_dispose(&root);
             return mal_value_new_undefined();
         }
-        string = mal_value_to_string(roots[0]);
-        mal_gc_unroot(&root_span);
+        compatibility = length == 4;
+        compose = units[length - 1] == 'C';
     }
-
-    return mal_value_from_string(string);
+    MalValue result = mal_builtin_string_normalize_known(vm, mal_builtin_string_root_get(&root), compatibility, compose);
+    mal_builtin_string_root_dispose(&root);
+    return result;
 }
 
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *result) {
@@ -1931,11 +1961,7 @@ done:
     return result_value;
 }
 
-static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, bool trim_start, bool trim_end) {
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
+MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool trim_start, bool trim_end) {
     const c16 *code_units;
     string = mal_builtin_string_flatten_for_scan(string, &code_units);
     usize start = 0;
@@ -1969,6 +1995,12 @@ static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, boo
     return result;
 }
 
+static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue receiver, bool start, bool end) {
+    MalString *string = mal_builtin_string_this_to_string(vm, receiver);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return mal_builtin_string_trim_known(vm, string, start, end);
+}
+
 static MalValue mal_builtin_string_prototype_trim(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
@@ -1987,17 +2019,18 @@ static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_v
     return mal_builtin_string_trim_impl(vm, this_value, false, true);
 }
 
-static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, bool to_upper) {
-    // Case mapping is currently ASCII-only.
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
+MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool to_upper, MalUnicodeLocale locale) {
     usize length = mal_string_length(string);
     const c16 *source;
     string = mal_builtin_string_flatten_for_scan(string, &source);
     MAL_PERF_COUNT(string_case_calls);
     MAL_PERF_ADD(string_case_input_code_units, length);
+    if (locale != MAL_UNICODE_LOCALE_ROOT || !mal_builtin_string_ascii_units(source, length)) {
+        c16 *output = nullptr;
+        usize output_length = 0;
+        MalUnicodeStatus status = mal_unicode_case(source, length, to_upper, locale, &output, &output_length);
+        return mal_builtin_string_unicode_result(vm, string, status, output, output_length, true);
+    }
 
     usize changed_at = 0;
     while (length - changed_at >= 4) {
@@ -2081,16 +2114,39 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     return result;
 }
 
+static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue receiver, bool upper, bool localized, MalValue locales) {
+    MalString *string = mal_builtin_string_this_to_string(vm, receiver);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    MalUnicodeLocale locale = MAL_UNICODE_LOCALE_ROOT;
+    if (localized && !mal_intl_case_locale(vm, locales, &locale)) {
+        mal_builtin_string_root_dispose(&root);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_builtin_string_case_known(vm, mal_builtin_string_root_get(&root), upper, locale);
+    mal_builtin_string_root_dispose(&root);
+    return result;
+}
+
+static MalValue mal_builtin_string_prototype_to_locale_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    return mal_builtin_string_case_impl(vm, this_value, true, true, arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED);
+}
+
+static MalValue mal_builtin_string_prototype_to_locale_lower_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    return mal_builtin_string_case_impl(vm, this_value, false, true, arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED);
+}
+
 static MalValue mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-    return mal_builtin_string_case_impl(vm, this_value, true);
+    return mal_builtin_string_case_impl(vm, this_value, true, false, MAL_VALUE_UNDEFINED);
 }
 
 static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-    return mal_builtin_string_case_impl(vm, this_value, false);
+    return mal_builtin_string_case_impl(vm, this_value, false, false, MAL_VALUE_UNDEFINED);
 }
 
 static bool mal_builtin_string_ascii_case_chain_length_span_impl(
@@ -2199,17 +2255,7 @@ static usize mal_builtin_string_find_invalid_utf16(
     return length;
 }
 
-// A code unit is a surrogate paired with its neighbour, a lone surrogate, or an
-// ordinary unit. isWellFormed is false when any lone surrogate is present.
-static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
+MalValue mal_builtin_string_is_well_formed_known(MalString *string) {
     usize length = mal_string_length(string);
     const c16 *units;
     string = mal_builtin_string_flatten_for_scan(string, &units);
@@ -2217,17 +2263,7 @@ static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue 
         mal_builtin_string_find_invalid_utf16(units, length) == length);
 }
 
-// Replace each lone surrogate with U+FFFD (the replacement character), leaving
-// valid surrogate pairs and ordinary units intact.
-static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
-    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
+MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string) {
     usize length = mal_string_length(string);
     const c16 *source;
     string = mal_builtin_string_flatten_for_scan(string, &source);
@@ -2265,6 +2301,18 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
         mal_string_new_owned(&vm->heap, code_units, length));
     mal_gc_unroot(&root_span);
     return result;
+}
+
+static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return mal_builtin_string_is_well_formed_known(string);
+}
+
+static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return mal_builtin_string_to_well_formed_known(vm, string);
 }
 
 // For an Object argument, GetMethod(arg, @@symbol) and, when present,
@@ -3643,8 +3691,8 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
     // Without ICU the locale-aware case methods behave as the default-locale ones
     // (extra locale arguments are ignored); each gets its own name.
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleUpperCase", 0, mal_builtin_string_prototype_to_locale_upper_case);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_locale_lower_case);
     mal_intrinsic_define_method_n(vm, prototype, "isWellFormed", 0, mal_builtin_string_prototype_is_well_formed);
     mal_intrinsic_define_method_n(vm, prototype, "toWellFormed", 0, mal_builtin_string_prototype_to_well_formed);
     mal_intrinsic_define_method_n(vm, prototype, "match", 1, mal_builtin_string_prototype_match);
