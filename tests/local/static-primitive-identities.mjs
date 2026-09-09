@@ -413,6 +413,67 @@ for (const construct of rejectedConstructors) {
 	}
 	check(effects === 5, "no replay after argument failure");
 }
+function* suspendedConstructor(construct, effect) {
+	yield effect();
+	construct(effect);
+	return 17;
+}
+function discardConstructorResult(construct, effect) {
+	construct(effect);
+	return 17;
+}
+globalThis.suspendedConstructor = suspendedConstructor;
+globalThis.discardConstructorResult = discardConstructorResult;
+for (const construct of rejectedConstructors) {
+	const events = [];
+	const argument = {
+		[Symbol.toPrimitive]() {
+			events.push("coerce");
+			return "field";
+		},
+	};
+	const escaped = [];
+	const effect = () => {
+		events.push("argument");
+		escaped.push(argument);
+		return argument;
+	};
+	const iterator = globalThis.suspendedConstructor(construct, effect);
+	const first = iterator.next();
+	check(first.value === argument && !first.done, "construction stays beyond the yield");
+	if (typeof globalThis.gc === "function") globalThis.gc();
+	let previous;
+	try {
+		iterator.next();
+		throw new Error("resumed construction must reject");
+	} catch (error) {
+		check(error instanceof TypeError, "resumed construction error");
+		previous = error;
+	}
+	check(iterator.next().done, "abrupt construction closes the generator");
+	check(
+		events.join(",") === "argument,argument,argument",
+		"rejected construction does not coerce its arguments",
+	);
+	check(
+		escaped.length === 3 && escaped.every((value) => value === argument),
+		"argument escape retains identity",
+	);
+	events.length = 0;
+	try {
+		globalThis.discardConstructorResult(construct, effect);
+		throw new Error("unused construction must reject");
+	} catch (error) {
+		check(
+			error instanceof TypeError && error !== previous,
+			"unused construction has its own error identity",
+		);
+	}
+	check(
+		events.join(",") === "argument,argument",
+		"unused construction retains argument producers",
+	);
+}
 globalThis.rejectedArrayLikeConstructors = [
 	(list, target, effect) =>
 		Reflect.construct(BigInt.asIntN, effect(list), effect(target)),

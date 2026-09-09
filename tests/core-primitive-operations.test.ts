@@ -740,6 +740,62 @@ describe("Reflect.get primitive descriptors", () => {
 	});
 });
 
+describe("rejected primitive construction profiles", () => {
+	const profiles = [
+		["dynamic-new-target", (value: string) => `return Reflect.construct(${value},[],x);`],
+		["unknown-string", (value: string) => `return new (${value})(String(x));`],
+		["unused", (value: string) => `new (${value})(x());return 17;`],
+		[
+			"separate-errors",
+			(value: string) =>
+				`let first,second;try{new (${value})(x);}catch(error){first=error;}try{new (${value})(x);}catch(error){second=error;}return first===second;`,
+		],
+		[
+			"escaped-argument",
+			(value: string) =>
+				`const value={x};globalThis.sink(value);return new (${value})(value);`,
+		],
+		["suspension", (value: string) => `yield x();return new (${value})(x());`],
+	] as const;
+	for (const [profile, body] of profiles) {
+		it.each(rejectedPrimitiveConstructors)(
+			`preserves abrupt construction through ${profile} for %s`,
+			(expression, error) => {
+				const source = `function${profile === "suspension" ? "*" : ""} probe(x){${body(expression)}}globalThis.probe=probe;`;
+				const output = inspectStaticValueFunction(source, "probe");
+				const errors = output.core
+					.filter((operation) => operation.opcode === "builtinError")
+					.map((operation) => operation.attributes.error);
+				const runtimeTargetValidation =
+					profile === "dynamic-new-target" && error !== "notConstructor";
+				expect(errors).toEqual(
+					runtimeTargetValidation
+						? []
+						: profile === "separate-errors"
+							? [error, error]
+							: [error],
+				);
+				expect(
+					output.core.filter(
+						(operation) =>
+							operation.opcode === "construct" || operation.attributes.construct === true,
+					),
+				).toHaveLength(runtimeTargetValidation ? 1 : 0);
+				if (profile === "unused") {
+					expect(output.structure.genericCalls).toBe(1);
+					expect(output.structure.allocations).toBe(0);
+				}
+				if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
+				if (profile === "escaped-argument") expect(output.structure.allocations).toBe(1);
+				const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
+				expect(
+					mutable.core.some((operation) => operation.opcode === "builtinError"),
+				).toBe(false);
+			},
+		);
+	}
+});
+
 describe("primitive operation results", () => {
 	it.each([3, 8, 16, 32, 64])(
 		"consumes %i dynamic Numbers through the exact sum kernel",

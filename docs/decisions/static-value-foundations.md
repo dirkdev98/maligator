@@ -353,6 +353,15 @@ only when it is absent. Primitive targets, proxies and effectful keys keep runti
 validation and conversion. The adapted and dynamic-argument data-read profiles have
 the same non-invoking, non-allocating slot semantics as ordinary own reads.
 
+Proved rejected primitive construction retains argument effects, receiver/list
+validation and fresh runtime errors through unknown argument brands, dynamic
+`newTarget`, unused results, escaping arguments and suspension. It has no normal
+constant result, target-owned state update or payload preparation; construction-body
+callbacks and iteration are absent. Caller argument production and reflective list
+access remain separate obligations. `BigInt` and `Symbol` have throwing constructor
+bodies, so an unknown `newTarget` still requires validation before entry. Mutable
+callables keep their distinct construction paths.
+
 Contained String wrappers also disappear for fixed numeric index reads, including
 negative zero and absent indexes. Conversion remains at construction, and index
 reads use the primitive string. A key coercion that exposes the wrapper, or an
