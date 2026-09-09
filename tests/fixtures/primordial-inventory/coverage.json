@@ -84529,6 +84529,26 @@
 						"case": "BigInt(x).toString(new Number(10))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -84635,6 +84655,26 @@
 						"case": "Object(1n).valueOf()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -84890,6 +84930,26 @@
 						"case": "true.toString()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -96807,6 +96867,26 @@
 						"case": "Number(x).toExponential(new Number(2))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -96995,6 +97075,26 @@
 						"case": "Number(x).toFixed(new Number(2))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97203,6 +97303,26 @@
 						"case": "Number(x).toPrecision(new Number(2))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97407,6 +97527,26 @@
 						"case": "Number(x).toString(new Number(10))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101008,6 +101148,26 @@
 						"case": "'body'.anchor(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.anchor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.anchor"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101154,6 +101314,26 @@
 						"case": "'abcdef'.at(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.at"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.at"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101278,6 +101458,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "big"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.big"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.big"
 					},
 					"lowering": "specialized"
 				}
@@ -101406,6 +101606,26 @@
 						"case": "blink"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.blink"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.blink"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101530,6 +101750,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "bold"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.bold"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.bold"
 					},
 					"lowering": "specialized"
 				}
@@ -101678,6 +101918,26 @@
 						"case": "'abcdef'.charAt(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.charAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.charAt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101804,6 +102064,26 @@
 						"case": "'abcdef'.charCodeAt(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101950,6 +102230,26 @@
 						"case": "'a😀b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102094,6 +102394,26 @@
 						"case": "'abcdef'.concat(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.concat"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.concat"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102244,6 +102564,26 @@
 						"case": "'abcdef'.endsWith(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.endsWith"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.endsWith"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102368,6 +102708,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "fixed"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.fixed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.fixed"
 					},
 					"lowering": "specialized"
 				}
@@ -102516,6 +102876,26 @@
 						"case": "'body'.fontcolor(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102662,6 +103042,26 @@
 						"case": "'body'.fontsize(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.fontsize"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.fontsize"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102812,6 +103212,26 @@
 						"case": "'abcdef'.includes(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.includes"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.includes"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102962,6 +103382,26 @@
 						"case": "'abcdef'.indexOf(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.indexOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.indexOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103091,6 +103531,26 @@
 						"case": "isWellFormed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103215,6 +103675,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "italics"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.italics"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.italics"
 					},
 					"lowering": "specialized"
 				}
@@ -103367,6 +103847,26 @@
 						"case": "'abcdef'.lastIndexOf(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103513,6 +104013,26 @@
 						"case": "'body'.link(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.link"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.link"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103844,6 +104364,26 @@
 						"case": "'é'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.normalize"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.normalize"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103990,6 +104530,26 @@
 						"case": "'ab'.padEnd(8,new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104136,6 +104696,26 @@
 						"case": "'ab'.padStart(8,new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.padStart"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.padStart"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104321,6 +104901,26 @@
 						"case": "'ab'.repeat(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.repeat"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.repeat"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104490,6 +105090,26 @@
 						"case": "'aba'.replace(new String(x),'z')"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.replace"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.replace"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104659,6 +105279,26 @@
 						"case": "'aba'.replaceAll(new String(x),'z')"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104829,6 +105469,26 @@
 						"case": "'abcdef'.slice(new Number(x),5)"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.slice"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.slice"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104953,6 +105613,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "small"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.small"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.small"
 					},
 					"lowering": "specialized"
 				}
@@ -105247,6 +105927,26 @@
 						"case": "'abcdef'.startsWith(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.startsWith"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.startsWith"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105373,6 +106073,26 @@
 						"case": "strike"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.strike"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.strike"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105497,6 +106217,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds legacy %s constants and directly builds dynamic strings",
 						"case": "sub"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.sub"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.sub"
 					},
 					"lowering": "specialized"
 				}
@@ -105649,6 +106389,26 @@
 						"case": "'abcdef'.substr(new Number(x),3)"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.substr"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.substr"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105799,6 +106559,26 @@
 						"case": "'abcdef'.substring(new Number(x),5)"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.substring"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.substring"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105925,6 +106705,26 @@
 						"case": "sup"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.sup"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.sup"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106034,6 +106834,26 @@
 						"case": "toLocaleLowerCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toLocaleLowerCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toLocaleLowerCase"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106141,6 +106961,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds certified String %s constants and specializes dynamic receivers",
 						"case": "toLocaleUpperCase"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toLocaleUpperCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toLocaleUpperCase"
 					},
 					"lowering": "specialized"
 				}
@@ -106272,6 +107112,26 @@
 						"case": "toLowerCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106378,6 +107238,26 @@
 						"case": "String.prototype.toString.call('x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106507,6 +107387,26 @@
 						"case": "toUpperCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106634,6 +107534,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds certified String %s constants and specializes dynamic receivers",
 						"case": "toWellFormed"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.toWellFormed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.toWellFormed"
 					},
 					"lowering": "specialized"
 				}
@@ -106785,6 +107705,26 @@
 						"case": "String.prototype.trim.call(null)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.trim"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.trim"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106934,6 +107874,26 @@
 						"case": "trimEnd"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107061,6 +108021,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds certified String %s constants and specializes dynamic receivers",
 						"case": "trimStart"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.trimStart"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.trimStart"
 					},
 					"lowering": "specialized"
 				}
@@ -108195,6 +109175,26 @@
 						"case": "Symbol.prototype.valueOf.call(Symbol.iterator)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

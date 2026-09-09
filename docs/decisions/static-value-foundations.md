@@ -406,6 +406,14 @@ replacement argument, so those positions require a primitive pattern. Receiver
 identity remains subject to the separate protocol proof. Locale arguments and raw
 template objects retain their object semantics.
 
+Single-assignment primitive cells retain their payload facts through arbitrary uses:
+passing a primitive to a callback cannot mutate it. The shared cell index still
+requires a unique Core writer. A dominating initializer in the same activation
+licenses facts at a load; otherwise, a retained TDZ check licenses them only at a
+later consumer. A read never uses its own future TDZ check as proof. Cross-function
+writer changes invalidate both ordinary and observation-specific query caches.
+Object and array cells retain their separate read-only-content proof.
+
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and
 non-configurable; compiler-private operations remain intrinsic. Mutable constructor

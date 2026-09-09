@@ -14,6 +14,7 @@ import {
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { scanLiteralTemplateSegment } from "../src/compiler/shared/literal-template-data.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const context: CoreCompilationContext = {
@@ -474,4 +475,182 @@ it("invalidates a shared cell proof when a later function session exposes its va
 	editor.replaceTerminator(otherEntry, { kind: "return", value: exposed! });
 	editor.commit();
 	expect(query().kind).toBe("unknown");
+});
+
+const primitiveCellConsumers = [
+	["String.prototype.charAt", "' abcdefé '", "value.charAt(x)"],
+	["String.prototype.charCodeAt", "' abcdefé '", "value.charCodeAt(x)"],
+	["String.prototype.codePointAt", "' abcdefé '", "value.codePointAt(x)"],
+	["String.prototype.at", "' abcdefé '", "value.at(x)"],
+	["String.prototype.indexOf", "' abcdefé '", "value.indexOf(x)"],
+	["String.prototype.lastIndexOf", "' abcdefé '", "value.lastIndexOf(x)"],
+	["String.prototype.includes", "' abcdefé '", "value.includes(x)"],
+	["String.prototype.startsWith", "' abcdefé '", "value.startsWith(x)"],
+	["String.prototype.endsWith", "' abcdefé '", "value.endsWith(x)"],
+	["String.prototype.slice", "' abcdefé '", "value.slice(x,4)"],
+	["String.prototype.substring", "' abcdefé '", "value.substring(x,4)"],
+	["String.prototype.substr", "' abcdefé '", "value.substr(x,4)"],
+	["String.prototype.anchor", "' abcdefé '", "value.anchor(x)"],
+	["String.prototype.big", "' abcdefé '", "value.big(x)"],
+	["String.prototype.blink", "' abcdefé '", "value.blink(x)"],
+	["String.prototype.bold", "' abcdefé '", "value.bold(x)"],
+	["String.prototype.fixed", "' abcdefé '", "value.fixed(x)"],
+	["String.prototype.fontcolor", "' abcdefé '", "value.fontcolor(x)"],
+	["String.prototype.fontsize", "' abcdefé '", "value.fontsize(x)"],
+	["String.prototype.italics", "' abcdefé '", "value.italics(x)"],
+	["String.prototype.link", "' abcdefé '", "value.link(x)"],
+	["String.prototype.small", "' abcdefé '", "value.small(x)"],
+	["String.prototype.strike", "' abcdefé '", "value.strike(x)"],
+	["String.prototype.sub", "' abcdefé '", "value.sub(x)"],
+	["String.prototype.sup", "' abcdefé '", "value.sup(x)"],
+	["String.prototype.concat", "' abcdefé '", "value.concat(x)"],
+	["String.prototype.localeCompare", "' abcdefé '", "value.localeCompare(x)"],
+	["String.prototype.normalize", "' abcdefé '", "value.normalize(x)"],
+	["String.prototype.repeat", "' abcdefé '", "value.repeat(x)"],
+	["String.prototype.trim", "' abcdefé '", "value.trim(x)"],
+	["String.prototype.trimStart", "' abcdefé '", "value.trimStart(x)"],
+	["String.prototype.trimEnd", "' abcdefé '", "value.trimEnd(x)"],
+	["String.prototype.trimLeft", "' abcdefé '", "value.trimLeft(x)"],
+	["String.prototype.trimRight", "' abcdefé '", "value.trimRight(x)"],
+	["String.prototype.toUpperCase", "' abcdefé '", "value.toUpperCase(x)"],
+	["String.prototype.toLowerCase", "' abcdefé '", "value.toLowerCase(x)"],
+	["String.prototype.toLocaleUpperCase", "' abcdefé '", "value.toLocaleUpperCase(x)"],
+	["String.prototype.toLocaleLowerCase", "' abcdefé '", "value.toLocaleLowerCase(x)"],
+	["String.prototype.isWellFormed", "' abcdefé '", "value.isWellFormed(x)"],
+	["String.prototype.toWellFormed", "' abcdefé '", "value.toWellFormed(x)"],
+	["String.prototype.split", "' abcdefé '", "value.split(x)"],
+	["String.prototype.replace", "' abcdefé '", "value.replace(x,'z')"],
+	["String.prototype.replaceAll", "' abcdefé '", "value.replaceAll(x,'z')"],
+	["String.prototype.padStart", "' abcdefé '", "value.padStart(8,x)"],
+	["String.prototype.padEnd", "' abcdefé '", "value.padEnd(8,x)"],
+	["String.prototype.toString", "' abcdefé '", "value.toString(x)"],
+	["String.prototype.valueOf", "' abcdefé '", "value.valueOf(x)"],
+	["Boolean.prototype.toString", "false", "value.toString(x)"],
+	["Boolean.prototype.valueOf", "false", "value.valueOf(x)"],
+	["Number.prototype.toString", "12.5", "value.toString(x)"],
+	["Number.prototype.valueOf", "12.5", "value.valueOf(x)"],
+	["Number.prototype.toFixed", "12.5", "value.toFixed(x)"],
+	["Number.prototype.toExponential", "12.5", "value.toExponential(x)"],
+	["Number.prototype.toPrecision", "12.5", "value.toPrecision(x)"],
+	["BigInt.prototype.toString", "123n", "value.toString(x)"],
+	["BigInt.prototype.valueOf", "123n", "value.valueOf(x)"],
+	["Symbol.prototype.toString", "Symbol.iterator", "value.toString(x)"],
+	["Symbol.prototype.valueOf", "Symbol.iterator", "value.valueOf(x)"],
+] as const;
+
+it.each(primitiveCellConsumers)(
+	"resolves immutable primitive-cell consumers at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.structure.genericLookups).toBe(1);
+		expect(result.structure.genericCalls).toBe(1);
+	},
+);
+it.each(primitiveCellConsumers)(
+	"retains mutable primitive-cell method lookup at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.structure.genericLookups).toBe(2);
+		expect(result.structure.genericCalls).toBe(2);
+	},
+);
+it.each([
+	"let value='abc';function probe(x){globalThis.sink(value);return value.includes(x);}globalThis.set=(x)=>value=x;globalThis.probe=probe;",
+	"const value=new String('abc');function probe(x){globalThis.sink(value);return value.includes(x);}globalThis.probe=probe;",
+	"const value={includes(x){return x;}};function probe(x){globalThis.sink(value);return value.includes(x);}globalThis.probe=probe;",
+])("retains mutable binding or object contents in %s", (source) => {
+	const result = inspectStaticValueFunction(source, "probe");
+	expect(result.structure.genericLookups).toBe(2);
+	expect(result.structure.genericCalls).toBe(2);
+});
+
+it("does not license a primitive read using its own later TDZ check", () => {
+	const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+	const writer = new CoreFunctionBuilder(program),
+		writeEntry = writer.createBlock();
+	const [number] = writer.appendInstruction(writeEntry, "createNumber", [], {
+		attributes: { value: 3 },
+	});
+	writer.appendInstruction(writeEntry, "storeGlobal", [number!], {
+		attributes: { index: 0 },
+	});
+	writer.setTerminator(writeEntry, { kind: "return", value: number! });
+	writer.finish(writeEntry);
+	const reader = new CoreFunctionBuilder(program),
+		readEntry = reader.createBlock();
+	const [loaded] = reader.appendInstruction(readEntry, "loadGlobal", [], {
+		attributes: { index: 0 },
+	});
+	reader.appendInstruction(readEntry, "throwIfTdz", [loaded!]);
+	const [formatted] = reader.appendInstruction(readEntry, "unary", [loaded!], {
+		attributes: { operator: "tostring" },
+	});
+	reader.setTerminator(readEntry, { kind: "return", value: formatted! });
+	const fn = program.function(reader.finish(readEntry).function);
+	const analysis = new CoreAnalysisManager(
+		program,
+		{ ...context, data: { ...context.data, singleAssignmentGlobalSlots: [0] } },
+		new CoreOptimizationReportBuilder(program),
+	).get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id });
+	expect(analysis.query(loaded!).kind).toBe("unknown");
+	expect(
+		analysis.queryAt(
+			loaded!,
+			fn.instructionNext(coreInstructionId(fn.kernel.valueDefinitionOwner(loaded!)))!,
+		).kind,
+	).toBe("unknown");
+	const consumer = coreInstructionId(fn.kernel.valueDefinitionOwner(formatted!));
+	expect(analysis.queryAt(loaded!, consumer)).toMatchObject({
+		kind: "known",
+		brand: "number",
+	});
+	expect(analysis.query(loaded!).kind).toBe("unknown");
+});
+
+it("invalidates initialized primitive facts when another function adds a cell writer", () => {
+	const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{ representation: "boxed" }]),
+		after = builder.createBlock();
+	const callback = inspectCoreBlockParameters(builder, entry)[0]!.value;
+	const [number] = builder.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 3 },
+	});
+	const [nil] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.appendInstruction(entry, "storeGlobal", [number!], {
+		attributes: { index: 0 },
+	});
+	builder.appendInstruction(entry, "call", [callback, nil!, number!]);
+	builder.setTerminator(entry, { kind: "jump", edge: { block: after, arguments: [] } });
+	const [loaded] = builder.appendInstruction(after, "loadGlobal", [], {
+		attributes: { index: 0 },
+	});
+	builder.setTerminator(after, { kind: "return", value: loaded! });
+	const fn = program.function(builder.finish(entry).function);
+	const other = new CoreFunctionBuilder(program),
+		otherEntry = other.createBlock();
+	const [replacement] = other.appendInstruction(otherEntry, "createNumber", [], {
+		attributes: { value: 4 },
+	});
+	other.setTerminator(otherEntry, { kind: "return", value: replacement! });
+	const otherFn = other.finish(otherEntry).function;
+	const analysis = new CoreAnalysisManager(
+		program,
+		{ ...context, data: { ...context.data, singleAssignmentGlobalSlots: [0] } },
+		new CoreOptimizationReportBuilder(program),
+	).get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id });
+	expect(analysis.constant(loaded!)).toEqual({ kind: "number", value: 3 });
+	const editor = CoreEditor.open(program, otherFn);
+	editor.appendInstruction(otherEntry, "storeGlobal", [replacement!], {
+		attributes: { index: 0 },
+	});
+	editor.commit();
+	expect(analysis.query(loaded!).kind).toBe("unknown");
 });

@@ -300,8 +300,20 @@ export class CoreStaticValueAnalysis {
 			throw new Error("Stale static-value facts");
 	}
 
+	#refreshCells(): void {
+		if (
+			this.#cellRevision !== undefined &&
+			this.#cellRevision !== this.#program.programFlowRevision
+		) {
+			this.#observations.clear();
+			this.#cache.clear();
+			this.#cellRevision = this.#program.programFlowRevision;
+		}
+	}
+
 	query(value: CoreValueId): CoreStaticValueResult {
 		this.assertCurrent();
+		this.#refreshCells();
 		this.statistics.queries++;
 		if (!this.#fn.isValueLive(value))
 			throw new Error("Static-value query references a dead SSA value");
@@ -333,14 +345,7 @@ export class CoreStaticValueAnalysis {
 
 	queryAt(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
 		this.assertCurrent();
-		if (
-			this.#cellRevision !== undefined &&
-			this.#cellRevision !== this.#program.programFlowRevision
-		) {
-			this.#observations.clear();
-			this.#cache.clear();
-			this.#cellRevision = this.#program.programFlowRevision;
-		}
+		this.#refreshCells();
 		const key = `${value}:${consumer}`;
 		const cached = this.#observations.get(key);
 		if (cached !== undefined) return cached;
@@ -1114,7 +1119,12 @@ export class CoreStaticValueAnalysis {
 			const input = this.#memory().valueForRead(instruction, location);
 			if (input !== undefined && input !== value) {
 				const fact = this.query(input);
-				return fact.kind === "known" ? { ...fact, value } : fact;
+				if (fact.kind === "known") return { ...fact, value };
+			}
+			if (this.#cells !== undefined && opcode !== "loadLocal") {
+				this.#cellRevision = this.#program.programFlowRevision;
+				const fact = this.#cells(this.#fn, instruction, value, instruction);
+				if (fact !== undefined) return fact;
 			}
 		}
 
@@ -1972,6 +1982,11 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 								scope: "function",
 								function: functionId,
 							}),
+						() =>
+							get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: fn.id,
+							}).exceptional(),
 					),
 			);
 		},

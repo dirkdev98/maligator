@@ -1,5 +1,6 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreStaticValue, CoreStaticValueAnalysis } from "./core-static-values.ts";
@@ -10,6 +11,14 @@ interface CellAccess {
 	readonly instruction: CoreInstructionId;
 	readonly value: CoreValueId;
 	readonly write: boolean;
+}
+function immutablePrimitive(fact: CoreStaticValue): boolean {
+	return (
+		fact.state === "immutable-value" &&
+		["undefined", "null", "boolean", "number", "string", "bigint", "symbol"].includes(
+			fact.brand,
+		)
+	);
 }
 function cellKey(
 	fn: CoreFunctionStore,
@@ -29,7 +38,10 @@ export class CoreStaticCellIndex {
 	readonly #closed: Set<string>;
 	readonly #functions = new Map<CoreFunctionId, Map<string, Array<CellAccess>>>();
 	readonly #cells = new Map<string, Map<CoreFunctionId, Array<CellAccess>>>();
-	readonly #facts = new Map<string, CoreStaticValue | undefined>();
+	readonly #facts = new Map<
+		string,
+		{ fact: CoreStaticValue; write: CellAccess } | undefined
+	>();
 	#revision = -1;
 	#dataVersion = -1;
 	#proofWork = 0;
@@ -100,27 +112,10 @@ export class CoreStaticCellIndex {
 		value: CoreValueId,
 		consumer: CoreInstructionId,
 		getAnalysis: (fn: CoreFunctionId) => CoreStaticValueAnalysis,
+		control: () => CoreControlFlow,
 	): CoreStaticValue | undefined {
 		const key = cellKey(fn, load);
 		if (key === undefined || !this.#closed.has(key)) return undefined;
-		// The source TDZ check must remain before any fact licensed by a different activation's
-		// initializer.
-		if (fn.instructionBlock(load) !== fn.instructionBlock(consumer)) return undefined;
-		let initialized = false;
-		for (
-			let instruction = fn.instructionNext(load);
-			instruction !== undefined && instruction !== consumer;
-			instruction = fn.instructionNext(instruction)
-		)
-			if (
-				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "throwIfTdz" &&
-				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) === value
-			) {
-				initialized = true;
-				break;
-			}
-		if (!initialized) return undefined;
 		this.#refresh();
 		if (this.#proofWork >= 65536) return undefined;
 		if (!this.#facts.has(key)) {
@@ -137,11 +132,49 @@ export class CoreStaticCellIndex {
 					(fact.allocationIdentities?.length ?? 0) === 0 &&
 					this.#readOnly(accesses, write, fact, getAnalysis)
 				)
-					this.#facts.set(key, fact);
+					this.#facts.set(key, { fact, write });
 			}
 		}
-		const source = this.#facts.get(key);
-		if (source === undefined) return undefined;
+		const proof = this.#facts.get(key);
+		if (proof === undefined) return undefined;
+		const source = proof.fact;
+		let initialized = false;
+		if (immutablePrimitive(source) && proof.write.function === fn.id) {
+			const writeBlock = fn.instructionBlock(proof.write.instruction);
+			const loadBlock = fn.instructionBlock(load);
+			if (writeBlock !== loadBlock)
+				initialized = control().instructionDominatesBlock(writeBlock, loadBlock);
+			else
+				for (const instruction of fn.instructionIds(loadBlock)) {
+					if (instruction === load) break;
+					if (instruction === proof.write.instruction) {
+						initialized = true;
+						break;
+					}
+				}
+		}
+		if (
+			!initialized &&
+			load !== consumer &&
+			fn.instructionBlock(load) === fn.instructionBlock(consumer)
+		) {
+			// A different activation's initializer cannot prove this read has left the TDZ.
+			for (
+				let instruction = fn.instructionNext(load);
+				instruction !== undefined && instruction !== consumer;
+				instruction = fn.instructionNext(instruction)
+			) {
+				if (
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "throwIfTdz" &&
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) === value
+				) {
+					initialized = true;
+					break;
+				}
+			}
+		}
+		if (!initialized) return undefined;
 		return {
 			...source,
 			value,
@@ -162,6 +195,7 @@ export class CoreStaticCellIndex {
 		fact: CoreStaticValue,
 		getAnalysis: (fn: CoreFunctionId) => CoreStaticValueAnalysis,
 	): boolean {
+		if (immutablePrimitive(fact)) return true;
 		const description = this.#program.staticDescriptions.description(fact.description);
 
 		for (const access of accesses) {
