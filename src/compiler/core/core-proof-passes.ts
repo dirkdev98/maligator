@@ -846,7 +846,8 @@ const materializeFlowScalars: CoreFunctionPass = {
 	},
 };
 
-export const CORE_SCALAR_REPRESENTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+export const CORE_LATE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	refinePrimitiveEffects,
 	materializeLocalScalars,
 	materializeFlowScalars,
 ];

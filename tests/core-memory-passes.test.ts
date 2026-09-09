@@ -417,7 +417,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("createObjectShaped");
 	});
 
-	it("retains the boxing move when forwarding an unboxed slot value", () => {
+	it("retains the boxing move when forwarding an unboxed slot value to global storage", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -431,6 +431,10 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		});
 		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
 			attributes: { stringIndex: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [loaded!], {
+			attributes: { index: 0 },
+			outputCount: 0,
 		});
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
@@ -513,7 +517,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		},
 	);
 
-	it("keeps a cell boxed when its exact value flows through a boxed block parameter", () => {
+	it("unboxes a numeric join after eliminating its object slot", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
@@ -556,18 +560,13 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const returned = inspectCoreTerminatorPayload(fn, fn.blockTerminator(merge));
 		expect(returned.kind).toBe("return");
 		if (returned.kind !== "return") throw new Error("Expected return terminator");
-		expect(fn.valueRepresentation(value)).toBe("boxed");
-		expect(fn.valueRepresentation(returned.value)).toBe("boxed");
+		expect(fn.valueRepresentation(value)).toBe("f64");
+		expect(fn.valueRepresentation(returned.value)).toBe("f64");
 		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "move"
-			)
-				continue;
-			const [source] = inspectCoreInstructionOperands(fn, instruction);
-			const [result] = inspectCoreInstructionResults(fn, instruction);
-			expect(fn.valueRepresentation(result!)).not.toBe("f64");
-			expect(fn.valueRepresentation(source!)).toBe("boxed");
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			expect(["createObjectShaped", "loadPropertyStatic"]).not.toContain(
+				fn.instructionOpcodeName(instruction),
+			);
 		}
 	});
 

@@ -85059,6 +85059,26 @@
 						"case": "Boolean"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-proof-passes.ts",
+						"symbol": "CORE_LATE_PROOF_PASSES"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "omits collection points after lowering %s to truthiness",
+						"case": "Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Boolean(null)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85489,6 +85509,25 @@
 						"case": "null"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-proof-passes.ts",
+						"symbol": "CORE_LATE_PROOF_PASSES"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "omits collection points after lowering %s to truthiness",
+						"case": "Boolean.prototype.valueOf.call(Object.prototype.valueOf.call(new Boolean(x)))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

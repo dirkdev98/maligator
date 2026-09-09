@@ -11,6 +11,33 @@ import {
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+describe("late primitive effect and representation proofs", () => {
+	it.each([
+		"Boolean(x)",
+		"new Boolean(x).valueOf()",
+		"Boolean.prototype.valueOf.call(Object.prototype.valueOf.call(new Boolean(x)))",
+	])("omits collection points after lowering %s to truthiness", (expression) => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { return ${expression}; } globalThis.target = target;`,
+			"target",
+		);
+		expect(result.execution?.gc.safepoints).toEqual([]);
+		expect(result.native.registerRepresentations).toContain("boolean");
+	});
+
+	it.each([
+		"Number.prototype.valueOf.call(new Number(+x))",
+		"Number.prototype.valueOf.call(new Number(x))",
+		"String.prototype.valueOf.call(new String(x))",
+	])("preserves collection points for observable coercion in %s", (expression) => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { return ${expression}; } globalThis.target = target;`,
+			"target",
+		);
+		expect(result.execution?.gc.safepoints.length).toBeGreaterThan(0);
+	});
+});
+
 const rejectedPrimitiveConstructors = [
 	["BigInt", "bigintConstructor"],
 	["BigInt.asIntN", "notConstructor"],
