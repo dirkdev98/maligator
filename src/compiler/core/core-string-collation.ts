@@ -24,19 +24,22 @@ export function coreStringCollationPlan(
 	const localeValue =
 		inputs[2] === undefined
 			? { kind: "undefined" as const }
-			: analysis.constant(inputs[2]);
+			: analysis.constant(inputs[2], instruction);
 	if (localeValue?.kind !== "undefined" && localeValue?.kind !== "string")
 		return undefined;
 	const locale = localeValue.kind === "undefined" ? "en-US" : localeValue.value;
 	const defaults = { locale, options: 2 };
 	if (!isStringCollationPlan(defaults)) return undefined;
 	const optionsValue = inputs[3];
-	if (optionsValue === undefined || analysis.constant(optionsValue)?.kind === "undefined")
+	if (
+		optionsValue === undefined ||
+		analysis.constant(optionsValue, instruction)?.kind === "undefined"
+	)
 		return defaults;
 	// Receiver/argument coercion must not reenter and mutate the captured option data.
 	if (
 		inputs.slice(0, 2).some((value) => {
-			const fact = analysis.query(value);
+			const fact = analysis.queryAt(value, instruction);
 			return (
 				fact.kind !== "known" ||
 				![
@@ -74,7 +77,7 @@ export function coreStringCollationPlan(
 			member.kind === "constant"
 				? analysis.descriptionConstant(member.description)
 				: member.kind === "operand"
-					? analysis.constant(fact.operands[member.index]!)
+					? analysis.constant(fact.operands[member.index]!, instruction)
 					: undefined;
 		if (constant === undefined) return undefined;
 		options.set(property.key, constant);

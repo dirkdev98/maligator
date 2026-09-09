@@ -1,7 +1,7 @@
 import { mathUnaryOperationKeys } from "../shared/builtin-registry.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import type { KnownBuiltinError } from "../shared/known-builtin-errors.ts";
-import type { CoreValueId } from "./core-ir.ts";
+import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 
 const primitives = new Set([
@@ -50,13 +50,14 @@ const receiverErrors = [
 
 export function corePrimitiveBuiltinError(
 	analysis: CoreStaticValueAnalysis,
+	instruction: CoreInstructionId,
 	operation: string,
 	inputs: ReadonlyArray<CoreValueId>,
 	construct = false,
 ): KnownBuiltinError | undefined {
 	const brand = (value: CoreValueId | undefined) => {
 		if (value === undefined) return "undefined";
-		const fact = analysis.query(value);
+		const fact = analysis.queryAt(value, instruction);
 		return fact.kind === "known" && primitives.has(fact.brand) ? fact.brand : undefined;
 	};
 	const receiver = brand(inputs[0]),
@@ -159,7 +160,7 @@ export function corePrimitiveBuiltinError(
 			evaluateConstantBuiltin(operation, undefined, [
 				inputs[index] === undefined
 					? { kind: "undefined" }
-					: analysis.constant(inputs[index]!),
+					: analysis.constant(inputs[index]!, instruction),
 			]).kind !== "value"
 		)
 			return undefined;
@@ -168,7 +169,9 @@ export function corePrimitiveBuiltinError(
 		(operation === "BigInt.asIntN" || operation === "BigInt.asUintN") &&
 		["undefined", "null", "number", "symbol"].includes(brand(inputs[2]) ?? "") &&
 		evaluateConstantBuiltin(operation, undefined, [
-			inputs[1] === undefined ? { kind: "undefined" } : analysis.constant(inputs[1]),
+			inputs[1] === undefined
+				? { kind: "undefined" }
+				: analysis.constant(inputs[1], instruction),
 			{ kind: "bigint", value: 0n },
 		]).kind === "value"
 	)

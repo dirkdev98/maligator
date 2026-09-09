@@ -58,10 +58,11 @@ export function coreStaticNumberSum(
 				? analysis.descriptionConstant(member.description)
 				: operand === undefined
 					? undefined
-					: analysis.constant(operand);
+					: analysis.constant(operand, instruction);
 		if (value?.kind === "number") values.push(value.value);
 		else {
-			const element = operand === undefined ? undefined : analysis.query(operand);
+			const element =
+				operand === undefined ? undefined : analysis.queryAt(operand, instruction);
 			if (
 				value !== undefined ||
 				(element?.kind === "known" &&

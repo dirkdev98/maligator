@@ -413,6 +413,12 @@ licenses facts at a load; otherwise, a retained TDZ check licenses them only at 
 later consumer. A read never uses its own future TDZ check as proof. Cross-function
 writer changes invalidate both ordinary and observation-specific query caches.
 Object and array cells retain their separate read-only-content proof.
+Primitive lowering queries constants and brands at the consuming instruction, so a
+retained TDZ check can license a fold, residual exception, or prepared input without
+making the original load unconditionally constant. Split data still materializes a
+fresh array on escape; String.raw and exact sums can consume initialized primitive
+cells without aggregate inputs. Collation keeps target-owned comparison data and
+retains primitive coercion before using captured locale/options data.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

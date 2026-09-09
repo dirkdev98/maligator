@@ -83987,6 +83987,45 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "BigInt"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -84549,6 +84588,26 @@
 						"case": "BigInt.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -84675,6 +84734,26 @@
 						"case": "BigInt.prototype.valueOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -84864,6 +84943,26 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Boolean"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -84950,6 +85049,26 @@
 						"case": "Boolean.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -85115,6 +85234,26 @@
 						"case": "Boolean.prototype.valueOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -90552,6 +90691,45 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Math.abs"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Math.abs"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "Math.abs"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -94401,6 +94579,26 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Math.pow"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Math.pow"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -94631,6 +94829,26 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Math.round"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Math.round"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -95430,6 +95648,25 @@
 						"test": "retains unproved sum iteration for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["A", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes initialized primitive data without aggregate inputs at %s",
+						"case": "Math.sumPrecise"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -96014,6 +96251,45 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -96180,6 +96456,26 @@
 						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.isFinite"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.isFinite"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -96907,6 +97203,26 @@
 						"case": "Number.prototype.toExponential"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -97115,6 +97431,45 @@
 						"case": "Number.prototype.toFixed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -97343,6 +97698,26 @@
 						"case": "Number.prototype.toPrecision"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -97567,6 +97942,26 @@
 						"case": "Number.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -97732,6 +98127,26 @@
 						"case": "Number.prototype.valueOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -100691,6 +101106,26 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101208,6 +101643,26 @@
 						"case": "String.prototype.anchor"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.anchor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.anchor"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101374,6 +101829,26 @@
 						"case": "String.prototype.at"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.at"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.at"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101520,6 +101995,26 @@
 						"case": "String.prototype.big"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.big"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.big"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101666,6 +102161,26 @@
 						"case": "String.prototype.blink"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.blink"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.blink"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101812,6 +102327,26 @@
 						"case": "String.prototype.bold"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.bold"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.bold"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -101978,6 +102513,45 @@
 						"case": "String.prototype.charAt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.charAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.charAt"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "String.prototype.charAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -102124,6 +102698,26 @@
 						"case": "String.prototype.charCodeAt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -102290,6 +102884,26 @@
 						"case": "String.prototype.codePointAt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -102454,6 +103068,26 @@
 						"case": "String.prototype.concat"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.concat"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.concat"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -102624,6 +103258,26 @@
 						"case": "String.prototype.endsWith"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.endsWith"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.endsWith"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -102770,6 +103424,26 @@
 						"case": "String.prototype.fixed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.fixed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.fixed"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -102936,6 +103610,26 @@
 						"case": "String.prototype.fontcolor"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103102,6 +103796,26 @@
 						"case": "String.prototype.fontsize"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.fontsize"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.fontsize"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103272,6 +103986,26 @@
 						"case": "String.prototype.includes"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.includes"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.includes"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103442,6 +104176,26 @@
 						"case": "String.prototype.indexOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.indexOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.indexOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103591,6 +104345,26 @@
 						"case": "String.prototype.isWellFormed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103737,6 +104511,26 @@
 						"case": "String.prototype.italics"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.italics"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.italics"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -103907,6 +104701,26 @@
 						"case": "String.prototype.lastIndexOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -104073,6 +104887,26 @@
 						"case": "String.prototype.link"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.link"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.link"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -104213,6 +105047,24 @@
 						"file": "tests/static-value-discovery.test.ts",
 						"test": "retains mutable primitive-cell method lookup at %s",
 						"case": "String.prototype.localeCompare"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-collation.ts",
+						"symbol": "coreStringCollationPlan"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains target collation with initialized locale data and primitive inputs"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -104444,6 +105296,26 @@
 						"case": "String.prototype.normalize"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.normalize"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.normalize"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -104610,6 +105482,26 @@
 						"case": "String.prototype.padEnd"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -104776,6 +105668,26 @@
 						"case": "String.prototype.padStart"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.padStart"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.padStart"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -104981,6 +105893,26 @@
 						"case": "String.prototype.repeat"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.repeat"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.repeat"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105170,6 +106102,26 @@
 						"case": "String.prototype.replace"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.replace"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.replace"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105359,6 +106311,26 @@
 						"case": "String.prototype.replaceAll"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105549,6 +106521,26 @@
 						"case": "String.prototype.slice"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.slice"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.slice"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105695,6 +106687,26 @@
 						"case": "String.prototype.small"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.small"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.small"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105857,6 +106869,42 @@
 						"case": "String.prototype.split"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "materializes initialized split data only when its result escapes"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "materializes initialized split data only when its result escapes"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "materialized"
 				}
 			]
 		},
@@ -106027,6 +107075,26 @@
 						"case": "String.prototype.startsWith"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.startsWith"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.startsWith"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106173,6 +107241,26 @@
 						"case": "String.prototype.strike"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.strike"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.strike"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106319,6 +107407,26 @@
 						"case": "String.prototype.sub"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.sub"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.sub"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106489,6 +107597,26 @@
 						"case": "String.prototype.substr"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.substr"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.substr"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106659,6 +107787,26 @@
 						"case": "String.prototype.substring"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.substring"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.substring"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106805,6 +107953,26 @@
 						"case": "String.prototype.sup"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.sup"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.sup"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107212,6 +108380,26 @@
 						"case": "String.prototype.toLowerCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107338,6 +108526,26 @@
 						"case": "String.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107487,6 +108695,26 @@
 						"case": "String.prototype.toUpperCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107636,6 +108864,26 @@
 						"case": "String.prototype.toWellFormed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.toWellFormed"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.toWellFormed"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107805,6 +109053,26 @@
 						"case": "String.prototype.trim"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.trim"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.trim"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107974,6 +109242,26 @@
 						"case": "String.prototype.trimEnd"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108123,6 +109411,26 @@
 						"case": "String.prototype.trimStart"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.trimStart"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.trimStart"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108288,6 +109596,26 @@
 						"case": "String.prototype.valueOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108470,6 +109798,25 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
 						"case": "String.raw(globalThis.template,new String(x))"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes initialized primitive data without aggregate inputs at %s",
+						"case": "String.raw"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "eliminated"
 				}
@@ -108964,6 +110311,45 @@
 						"case": "Symbol.keyFor(1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Symbol.keyFor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Symbol.keyFor"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "Symbol.keyFor"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -109189,6 +110575,26 @@
 						"case": "Symbol.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -109312,6 +110718,26 @@
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
 						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
 						"case": "Symbol.prototype.valueOf"
 					},
 					"lowering": "specialized"
@@ -115081,6 +116507,26 @@
 						"case": "decodeURIComponent(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "decodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "decodeURIComponent"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -115183,12 +116629,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"lowering": "constant"
 				},
@@ -115251,6 +116697,25 @@
 						"case": "encodeURI(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "residualizes primitive-cell exceptions at %s",
+						"case": "encodeURI"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves observation-point primitive folds and effects with %s primordials"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -115401,6 +116866,26 @@
 						"case": "encodeURIComponent(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "folds initialized primitive-cell data at %s",
+						"case": "encodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable operation identity when folding primitive-cell data at %s",
+						"case": "encodeURIComponent"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -120963,12 +122448,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"lowering": "constant"
 				},

@@ -134,7 +134,7 @@ export function coreStaticStringRawParts(
 			element.kind === "constant"
 				? analysis.descriptionConstant(element.description)
 				: element.kind === "operand"
-					? analysis.constant(operands[element.index]!)
+					? analysis.constant(operands[element.index]!, instruction)
 					: undefined;
 		const converted = evaluateConstantBuiltin("String", undefined, [value]);
 		if (converted.kind !== "value" || converted.value.kind !== "string") return undefined;
@@ -142,7 +142,7 @@ export function coreStaticStringRawParts(
 		const substitution = inputs[index + 2];
 		if (index + 1 < literals.length && substitution !== undefined) {
 			const constant = evaluateConstantBuiltin("String", undefined, [
-				analysis.constant(substitution),
+				analysis.constant(substitution, instruction),
 			]);
 			if (constant.kind === "value" && constant.value.kind === "string")
 				append(constant.value.value);

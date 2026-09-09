@@ -215,9 +215,9 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 					continue;
 				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
-					fact = analysis.query(input);
+					fact = analysis.queryAt(input, instruction);
 				if (fact.kind === "known" && fact.brand === "string") {
-					const value = analysis.constant(input);
+					const value = analysis.constant(input, instruction);
 					if (value?.kind === "string")
 						plans.push({
 							instruction,
@@ -243,8 +243,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 			) {
 				const start = fn.kernel.instructionOperandStart(instruction);
-				const left = analysis.query(fn.kernel.operandAt(start)),
-					right = analysis.query(fn.kernel.operandAt(start + 1));
+				const left = analysis.queryAt(fn.kernel.operandAt(start), instruction),
+					right = analysis.queryAt(fn.kernel.operandAt(start + 1), instruction);
 				if (
 					left.kind === "known" &&
 					right.kind === "known" &&
@@ -324,7 +324,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			);
 			const numericOperation = fn.instructionOpcodeName(instruction) !== "callKnown";
 			if (attributes.construct) {
-				const target = analysis.query(inputs[0]!);
+				const target = analysis.queryAt(inputs[0]!, instruction);
 				if (
 					knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable === false
 				)
@@ -352,7 +352,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						},
 					});
 				else if (target.kind === "known" && target.canonical === operation) {
-					const error = corePrimitiveBuiltinError(analysis, operation, inputs, true);
+					const error = corePrimitiveBuiltinError(
+						analysis,
+						instruction,
+						operation,
+						inputs,
+						true,
+					);
 					if (error !== undefined)
 						plans.push({
 							instruction,
@@ -366,7 +372,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (!numericOperation) {
-				const error = corePrimitiveBuiltinError(analysis, operation, inputs);
+				const error = corePrimitiveBuiltinError(analysis, instruction, operation, inputs);
 				if (error !== undefined) {
 					plans.push({
 						instruction,
@@ -392,7 +398,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (operation === "Object.prototype.toString") {
-				const fact = analysis.query(inputs[0]!);
+				const fact = analysis.queryAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					[
@@ -426,7 +432,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			) {
 				const receiver =
 					inputs[operation === "String" || operation === "Symbol.keyFor" ? 1 : 0];
-				const fact = receiver === undefined ? undefined : analysis.query(receiver);
+				const fact =
+					receiver === undefined ? undefined : analysis.queryAt(receiver, instruction);
 				if (fact?.kind === "known" && fact.brand === "symbol") {
 					const description = program.staticDescriptions.description(fact.description);
 					if (description.kind === "symbol") {
@@ -469,7 +476,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const first =
 					inputs[1] === undefined
 						? { kind: "undefined" as const }
-						: analysis.constant(inputs[1]);
+						: analysis.constant(inputs[1], instruction);
 				if (evaluateConstantBuiltin("String", undefined, [first]).kind === "value") {
 					plans.push({ instruction, value: { kind: "undefined" } });
 					continue;
@@ -567,8 +574,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			}
 			if (operation === "String.prototype.split") {
 				const elements = evaluateConstantStringSplit(
-					analysis.constant(inputs[0]!),
-					inputs.slice(1).map((value) => analysis.constant(value)),
+					analysis.constant(inputs[0]!, instruction),
+					inputs.slice(1).map((value) => analysis.constant(value, instruction)),
 				);
 				if (
 					elements !== undefined &&
@@ -584,8 +591,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const base = inputs[numericOperation ? 0 : 1],
 					exponent = inputs[numericOperation ? 1 : 2];
 				if (base !== undefined && exponent !== undefined) {
-					const fact = analysis.query(base),
-						power = analysis.constant(exponent);
+					const fact = analysis.queryAt(base, instruction),
+						power = analysis.constant(exponent, instruction);
 					if (
 						fact.kind === "known" &&
 						fact.brand === "number" &&
@@ -598,7 +605,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 			}
 			if (operation === "Math.hypot" && inputs.length === 2) {
-				const fact = analysis.query(inputs[1]!);
+				const fact = analysis.queryAt(inputs[1]!, instruction);
 				if (fact.kind === "known" && fact.brand === "number") {
 					plans.push({
 						instruction,
@@ -616,8 +623,12 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			}
 			const evaluated = evaluateConstantBuiltin(
 				operation,
-				operation.includes(".prototype.") ? analysis.constant(inputs[0]!) : undefined,
-				inputs.slice(numericOperation ? 0 : 1).map((value) => analysis.constant(value)),
+				operation.includes(".prototype.")
+					? analysis.constant(inputs[0]!, instruction)
+					: undefined,
+				inputs
+					.slice(numericOperation ? 0 : 1)
+					.map((value) => analysis.constant(value, instruction)),
 			);
 			if (evaluated.kind === "value") {
 				plans.push({ instruction, value: evaluated.value });
@@ -662,7 +673,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				operation.endsWith(".prototype.valueOf") ||
 				operation === "Symbol.prototype[%Symbol.toPrimitive%]"
 			) {
-				const fact = analysis.query(inputs[0]!);
+				const fact = analysis.queryAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					fact.brand === operation.slice(0, operation.indexOf(".")).toLowerCase()
@@ -675,7 +686,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				(operation === "Number" || operation === "String") &&
 				inputs[1] !== undefined
 			) {
-				const fact = analysis.query(inputs[1]);
+				const fact = analysis.queryAt(inputs[1], instruction);
 				if (fact.kind === "known" && fact.brand === operation.toLowerCase())
 					plans.push({
 						instruction,

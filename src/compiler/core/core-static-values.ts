@@ -1918,8 +1918,9 @@ export class CoreStaticValueAnalysis {
 		return result;
 	}
 
-	constant(value: CoreValueId): ConstantValue | undefined {
-		const fact = this.query(value);
+	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {
+		const fact =
+			consumer === undefined ? this.query(value) : this.queryAt(value, consumer);
 		if (fact.kind === "unknown") return undefined;
 		return this.descriptionConstant(fact.description);
 	}

@@ -612,6 +612,8 @@ it("does not license a primitive read using its own later TDZ check", () => {
 		brand: "number",
 	});
 	expect(analysis.query(loaded!).kind).toBe("unknown");
+	expect(analysis.constant(loaded!)).toBeUndefined();
+	expect(analysis.constant(loaded!, consumer)).toEqual({ kind: "number", value: 3 });
 });
 
 it("invalidates initialized primitive facts when another function adds a cell writer", () => {
@@ -653,4 +655,188 @@ it("invalidates initialized primitive facts when another function adds a cell wr
 	});
 	editor.commit();
 	expect(analysis.query(loaded!).kind).toBe("unknown");
+});
+
+const observedPrimitiveConsumers = [
+	["String.prototype.charAt", "' abcdefé '", "value.charAt(2)"],
+	["String.prototype.charCodeAt", "' abcdefé '", "value.charCodeAt(2)"],
+	["String.prototype.codePointAt", "' abcdefé '", "value.codePointAt(2)"],
+	["String.prototype.at", "' abcdefé '", "value.at(2)"],
+	["String.prototype.indexOf", "' abcdefé '", "value.indexOf('b')"],
+	["String.prototype.lastIndexOf", "' abcdefé '", "value.lastIndexOf('b')"],
+	["String.prototype.includes", "' abcdefé '", "value.includes('b')"],
+	["String.prototype.startsWith", "' abcdefé '", "value.startsWith(' ')"],
+	["String.prototype.endsWith", "' abcdefé '", "value.endsWith(' ')"],
+	["String.prototype.slice", "' abcdefé '", "value.slice(2,4)"],
+	["String.prototype.substring", "' abcdefé '", "value.substring(2,4)"],
+	["String.prototype.substr", "' abcdefé '", "value.substr(2,4)"],
+	["String.prototype.anchor", "' abcdefé '", "value.anchor(2)"],
+	["String.prototype.big", "' abcdefé '", "value.big(2)"],
+	["String.prototype.blink", "' abcdefé '", "value.blink(2)"],
+	["String.prototype.bold", "' abcdefé '", "value.bold(2)"],
+	["String.prototype.fixed", "' abcdefé '", "value.fixed(2)"],
+	["String.prototype.fontcolor", "' abcdefé '", "value.fontcolor(2)"],
+	["String.prototype.fontsize", "' abcdefé '", "value.fontsize(2)"],
+	["String.prototype.italics", "' abcdefé '", "value.italics(2)"],
+	["String.prototype.link", "' abcdefé '", "value.link(2)"],
+	["String.prototype.small", "' abcdefé '", "value.small(2)"],
+	["String.prototype.strike", "' abcdefé '", "value.strike(2)"],
+	["String.prototype.sub", "' abcdefé '", "value.sub(2)"],
+	["String.prototype.sup", "' abcdefé '", "value.sup(2)"],
+	["String.prototype.concat", "' abcdefé '", "value.concat(2)"],
+	["String.prototype.normalize", "' abcdefé '", "value.normalize('NFC')"],
+	["String.prototype.repeat", "' abcdefé '", "value.repeat(2)"],
+	["String.prototype.trim", "' abcdefé '", "value.trim(2)"],
+	["String.prototype.trimStart", "' abcdefé '", "value.trimStart(2)"],
+	["String.prototype.trimEnd", "' abcdefé '", "value.trimEnd(2)"],
+	["String.prototype.trimLeft", "' abcdefé '", "value.trimLeft(2)"],
+	["String.prototype.trimRight", "' abcdefé '", "value.trimRight(2)"],
+	["String.prototype.toUpperCase", "' abcdefé '", "value.toUpperCase(2)"],
+	["String.prototype.toLowerCase", "' abcdefé '", "value.toLowerCase(2)"],
+	["String.prototype.isWellFormed", "' abcdefé '", "value.isWellFormed(2)"],
+	["String.prototype.toWellFormed", "' abcdefé '", "value.toWellFormed(2)"],
+	["String.prototype.replace", "' abcdefé '", "value.replace('a','z')"],
+	["String.prototype.replaceAll", "' abcdefé '", "value.replaceAll('a','z')"],
+	["String.prototype.padStart", "' abcdefé '", "value.padStart(8,'_')"],
+	["String.prototype.padEnd", "' abcdefé '", "value.padEnd(8,'_')"],
+	["String.prototype.toString", "' abcdefé '", "value.toString(1)"],
+	["String.prototype.valueOf", "' abcdefé '", "value.valueOf(2)"],
+	["Boolean.prototype.toString", "false", "value.toString(1)"],
+	["Boolean.prototype.valueOf", "false", "value.valueOf(2)"],
+	["Number.prototype.toString", "12.5", "value.toString(10)"],
+	["Number.prototype.valueOf", "12.5", "value.valueOf(2)"],
+	["Number.prototype.toFixed", "12.5", "value.toFixed(2)"],
+	["Number.prototype.toExponential", "12.5", "value.toExponential(2)"],
+	["Number.prototype.toPrecision", "12.5", "value.toPrecision(2)"],
+	["BigInt.prototype.toString", "123n", "value.toString(10)"],
+	["BigInt.prototype.valueOf", "123n", "value.valueOf(2)"],
+	["Symbol.prototype.toString", "Symbol.iterator", "value.toString(1)"],
+	["Symbol.prototype.valueOf", "Symbol.iterator", "value.valueOf(2)"],
+	["Math.abs", "-12.5", "Math.abs(value)"],
+	["Math.pow", "12.5", "Math.pow(value,0)"],
+	["Math.round", "-0.5", "Math.round(value)"],
+	["Number.isFinite", "12.5", "Number.isFinite(value)"],
+	["Boolean", "0", "Boolean(value)"],
+	["Number", "'123.5'", "Number(value)"],
+	["BigInt", "'12345678901234567890'", "BigInt(value)"],
+	["String", "Symbol.iterator", "String(value)"],
+	["encodeURIComponent", "'a b'", "encodeURIComponent(value)"],
+	["decodeURIComponent", "'a%20b'", "decodeURIComponent(value)"],
+	["Symbol.keyFor", "Symbol.iterator", "Symbol.keyFor(value)"],
+] as const;
+
+it.each(observedPrimitiveConsumers)(
+	"folds initialized primitive-cell data at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.core.some((op) => op.opcode === "callKnown")).toBe(false);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		expect(result.structure.genericCalls).toBe(1);
+	},
+);
+it.each(observedPrimitiveConsumers)(
+	"retains mutable operation identity when folding primitive-cell data at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.structure.genericCalls).toBeGreaterThanOrEqual(2);
+	},
+);
+
+it.each([
+	["Math.abs", "Symbol.iterator", "Math.abs(value,x)", "symbolNumber"],
+	["Number", "Symbol.iterator", "Number(value,x)", "symbolNumber"],
+	["BigInt", "Symbol.iterator", "BigInt(value,x)", "bigintValue"],
+	["encodeURI", "Symbol.iterator", "encodeURI(value,x)", "symbolString"],
+	[
+		"String.prototype.charAt",
+		"null",
+		"String.prototype.charAt.call(value,x)",
+		"stringNullish",
+	],
+	[
+		"Number.prototype.toFixed",
+		"Symbol.iterator",
+		"Number.prototype.toFixed.call(value,x)",
+		"numberReceiver",
+	],
+	["Number.prototype.toFixed", "101", "(12.5).toFixed(value,x)", "numberFixed"],
+	["Symbol.keyFor", "12.5", "Symbol.keyFor(value,x)", "symbolKey"],
+] as const)(
+	"residualizes primitive-cell exceptions at %s",
+	(_operation, initializer, expression, error) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			result.core
+				.filter((op) => op.opcode === "builtinError")
+				.map((op) => op.attributes.error),
+		).toEqual([error]);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		expect(result.structure.genericCalls).toBe(1);
+	},
+);
+
+it.each([
+	["String.raw", "'head'", "String.raw({raw:[value,'tail']},x)"],
+	["Math.sumPrecise", "0.5", "Math.sumPrecise([value,1])"],
+] as const)(
+	"consumes initialized primitive data without aggregate inputs at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.core.some((op) => op.opcode === "callKnown")).toBe(false);
+		expect(result.structure.allocations).toBe(0);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		expect(result.structure.genericCalls).toBe(1);
+	},
+);
+
+it("retains target collation with initialized locale data and primitive inputs", () => {
+	const result = inspectStaticValueFunction(
+		"const locale='en-US';function probe(x){globalThis.sink(locale);return 'a2'.localeCompare(''+x,locale,{numeric:true});}globalThis.probe=probe;",
+		"probe",
+	);
+	expect(result.core.some((op) => op.opcode === "preparedStringCompare")).toBe(true);
+	expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+});
+
+it("materializes initialized split data only when its result escapes", () => {
+	const source =
+		"const value='aba';function probe(x){globalThis.sink(value);return value.split('b');}globalThis.probe=probe;";
+	const escaping = inspectStaticValueFunction(source, "probe");
+	expect(escaping.core.some((op) => op.opcode === "callKnown")).toBe(false);
+	expect(escaping.structure.allocations).toBe(1);
+	const scalar = inspectStaticValueFunction(
+		source.replace("value.split('b');", "value.split('b').length;"),
+		"probe",
+	);
+	expect(scalar.core.some((op) => op.opcode === "callKnown")).toBe(false);
+	expect(scalar.structure.allocations).toBe(0);
+	expect(scalar.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+});
+
+it("folds initialized string-cell length without dropping its TDZ check", () => {
+	const result = inspectStaticValueFunction(
+		"const value='a😀b';function probe(){globalThis.sink(value);return value.length;}globalThis.probe=probe;",
+		"probe",
+	);
+	expect(result.structure.genericLookups).toBe(1);
+	expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+	expect(
+		result.core.some(
+			(op) =>
+				["createNumber", "createF64"].includes(op.opcode) && op.attributes.value === 4,
+		),
+	).toBe(true);
 });
