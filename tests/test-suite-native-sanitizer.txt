@@ -38,6 +38,7 @@ tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
 tests/native/symbol-metadata-profiles.test.ts
 tests/native/symbol-registry-reuse.test.ts
+tests/native/string-raw-profiles.test.ts
 tests/native/node-buffer.test.ts
 tests/native/node-http-limits.test.ts
 tests/native/node-http-request.test.ts

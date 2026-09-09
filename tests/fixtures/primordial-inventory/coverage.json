@@ -153845,6 +153845,132 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-string-raw-profiles.test.ts",
+						"test": "consumes %s without a template or raw array through ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/string-raw-profiles.test.ts",
+						"test": "preserves interleaved conversion, abrupt completion and observable templates with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

@@ -441,6 +441,15 @@ replacement argument, so those positions require a primitive pattern. Receiver
 identity remains subject to the separate protocol proof. Locale arguments and raw
 template objects retain their object semantics.
 
+String.raw may consume a private, single-use template and dense raw array whose
+own data elements contain dynamic values. Raw segments and substitutions are
+converted in their original interleaved order at the call, after argument
+evaluation; repeated values retain repeated conversion. The template and array
+can disappear because no callback can observe or mutate their structure. Escaped
+arrays, captured aliases, holes, getters and proxies retain ordinary property
+reads. The result remains a primitive string, including when it escapes or is
+retained across suspension.
+
 Exact Boolean text observations normalize to Core ToString and select the VM's hot
 true/false strings. Native operator input certificates retain semantic Boolean kinds
 when a physical register also serves unrelated boxed values. Selection queries the

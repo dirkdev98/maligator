@@ -390,6 +390,11 @@ only reproducible input.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
+- [ ] Preserve callable Proxy targets through Function.prototype.bind. Under mutable
+      primordials, binding a Proxy around String.raw with an apply trap produces a
+      bound invocation that throws "Value is not a function"; direct, call, apply,
+      and Reflect.apply invocation succeed. Node accepts the bound call.
+
 - [ ] Preserve Proxy targets and handlers across reentrant trap lookup. The
       `revoke-as-side-effect.js` case crashes in `getPrototypeOf` after the trap
       getter revokes the proxy; audit internal methods that reload those slots

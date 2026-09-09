@@ -130,15 +130,18 @@ export function coreStaticStringRawParts(
 		const property = properties.get(String(index));
 		if (property?.descriptor.kind !== "data") return undefined;
 		const element = property.descriptor.value;
+		const input = element.kind === "operand" ? operands[element.index] : undefined;
 		const value =
 			element.kind === "constant"
 				? analysis.descriptionConstant(element.description)
-				: element.kind === "operand"
-					? analysis.constant(operands[element.index]!, instruction)
+				: input !== undefined
+					? analysis.constant(input, instruction)
 					: undefined;
 		const converted = evaluateConstantBuiltin("String", undefined, [value]);
-		if (converted.kind !== "value" || converted.value.kind !== "string") return undefined;
-		append(converted.value.value);
+		if (converted.kind === "value" && converted.value.kind === "string")
+			append(converted.value.value);
+		else if (input !== undefined) parts.push({ value: input });
+		else return undefined;
 		const substitution = inputs[index + 2];
 		if (index + 1 < literals.length && substitution !== undefined) {
 			const constant = evaluateConstantBuiltin("String", undefined, [
