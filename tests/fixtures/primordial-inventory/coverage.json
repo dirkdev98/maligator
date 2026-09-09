@@ -99456,7 +99456,26 @@
 			"kind": "call",
 			"operations": ["Object.getOwnPropertyDescriptor"],
 			"task": "H-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves descriptor identity while eliminating the original wrapper"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.getOwnPropertyDescriptor\",\"<construct>\"]",
@@ -99596,7 +99615,27 @@
 			"kind": "call",
 			"operations": ["Object.hasOwn"],
 			"task": "H-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates joined wrapper observations at %s",
+						"case": "Object.hasOwn(value, 'length')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.hasOwn\",\"<construct>\"]",
@@ -99956,7 +99995,27 @@
 			"kind": "call",
 			"operations": ["Object.prototype.hasOwnProperty"],
 			"task": "H-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates joined wrapper observations at %s",
+						"case": "Object.prototype.hasOwnProperty.call(value, '0')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.prototype.hasOwnProperty\",\"<construct>\"]",
@@ -100016,7 +100075,27 @@
 			"kind": "call",
 			"operations": ["Object.prototype.propertyIsEnumerable"],
 			"task": "H-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates joined wrapper observations at %s",
+						"case": "Object.prototype.propertyIsEnumerable.call(value, '0')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.prototype.propertyIsEnumerable\",\"<construct>\"]",
@@ -100745,7 +100824,26 @@
 			"kind": "call",
 			"operations": ["Reflect.getOwnPropertyDescriptor"],
 			"task": "H-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves descriptor identity while eliminating the original wrapper"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Reflect.getOwnPropertyDescriptor\",\"<construct>\"]",
@@ -100805,7 +100903,27 @@
 			"kind": "call",
 			"operations": ["Reflect.has"],
 			"task": "H-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-wrapper-observations.ts",
+						"symbol": "primitiveWrapperObservation"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates joined wrapper observations at %s",
+						"case": "Reflect.has(value, 'valueOf')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains a wrapper exposed during property-key conversion"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Reflect.has\",\"<construct>\"]",
@@ -104440,12 +104558,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "'\ud83d\ude00'.codePointAt(0)"
+						"case": "'😀'.codePointAt(0)"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "'\ud83d\ude00'.codePointAt(0)"
+						"case": "'😀'.codePointAt(0)"
 					},
 					"lowering": "constant"
 				},
@@ -104480,12 +104598,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
+						"case": "'a😀b'.codePointAt(new Number(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
+						"case": "'a😀b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -106969,12 +107087,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'\u00e9'.normalize(new String(x))"
+						"case": "'é'.normalize(new String(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'\u00e9'.normalize(new String(x))"
+						"case": "'é'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -119052,12 +119170,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"lowering": "constant"
 				},
@@ -124871,12 +124989,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"lowering": "constant"
 				},

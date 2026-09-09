@@ -840,4 +840,309 @@ for (const receiver of [null, undefined, 1, "x", {}, Number.prototype, Object.pr
 		globalThis.wrapperUnknownPrototype(17, receiver),
 	);
 
+function booleanMembership(x) {
+	const value = new Boolean(x);
+	return [
+		"valueOf" in value,
+		"absentWrapperProperty" in value,
+		Object.hasOwn(value, "length"),
+		value.hasOwnProperty("length"),
+		value.propertyIsEnumerable("0"),
+		Reflect.has(value, "valueOf"),
+		Object.prototype.hasOwnProperty.call(value, "0"),
+		Object.prototype.propertyIsEnumerable.call(value, "0"),
+		Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		value instanceof Object,
+		value instanceof Boolean,
+		value instanceof Number,
+		value instanceof String,
+		value instanceof BigInt,
+		value instanceof Symbol,
+	];
+}
+globalThis.booleanMembership = booleanMembership;
+function numberMembership(x) {
+	const value = new Number(x);
+	return [
+		"valueOf" in value,
+		"absentWrapperProperty" in value,
+		Object.hasOwn(value, "length"),
+		value.hasOwnProperty("length"),
+		value.propertyIsEnumerable("0"),
+		Reflect.has(value, "valueOf"),
+		Object.prototype.hasOwnProperty.call(value, "0"),
+		Object.prototype.propertyIsEnumerable.call(value, "0"),
+		Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		value instanceof Object,
+		value instanceof Boolean,
+		value instanceof Number,
+		value instanceof String,
+		value instanceof BigInt,
+		value instanceof Symbol,
+	];
+}
+globalThis.numberMembership = numberMembership;
+function stringMembership(x) {
+	const value = new String(x);
+	return [
+		"valueOf" in value,
+		"absentWrapperProperty" in value,
+		Object.hasOwn(value, "length"),
+		value.hasOwnProperty("length"),
+		value.propertyIsEnumerable("0"),
+		Reflect.has(value, "valueOf"),
+		Object.prototype.hasOwnProperty.call(value, "0"),
+		Object.prototype.propertyIsEnumerable.call(value, "0"),
+		Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		value instanceof Object,
+		value instanceof Boolean,
+		value instanceof Number,
+		value instanceof String,
+		value instanceof BigInt,
+		value instanceof Symbol,
+	];
+}
+globalThis.stringMembership = stringMembership;
+function bigintMembership(x) {
+	const value = Object(BigInt(x));
+	return [
+		"valueOf" in value,
+		"absentWrapperProperty" in value,
+		Object.hasOwn(value, "length"),
+		value.hasOwnProperty("length"),
+		value.propertyIsEnumerable("0"),
+		Reflect.has(value, "valueOf"),
+		Object.prototype.hasOwnProperty.call(value, "0"),
+		Object.prototype.propertyIsEnumerable.call(value, "0"),
+		Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		value instanceof Object,
+		value instanceof Boolean,
+		value instanceof Number,
+		value instanceof String,
+		value instanceof BigInt,
+		value instanceof Symbol,
+	];
+}
+globalThis.bigintMembership = bigintMembership;
+function symbolMembership(x) {
+	const value = Object(Symbol.for(x));
+	return [
+		"valueOf" in value,
+		"absentWrapperProperty" in value,
+		Object.hasOwn(value, "length"),
+		value.hasOwnProperty("length"),
+		value.propertyIsEnumerable("0"),
+		Reflect.has(value, "valueOf"),
+		Object.prototype.hasOwnProperty.call(value, "0"),
+		Object.prototype.propertyIsEnumerable.call(value, "0"),
+		Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		value instanceof Object,
+		value instanceof Boolean,
+		value instanceof Number,
+		value instanceof String,
+		value instanceof BigInt,
+		value instanceof Symbol,
+	];
+}
+globalThis.symbolMembership = symbolMembership;
+function stringOwnProperties(x) {
+	const value = new String(x);
+	return [
+		[
+			"length" in value,
+			Object.hasOwn(value, "length"),
+			Reflect.has(value, "length"),
+			Object.prototype.propertyIsEnumerable.call(value, "length"),
+			Object.getOwnPropertyDescriptor(value, "length"),
+			Reflect.getOwnPropertyDescriptor(value, "length"),
+		],
+		[
+			"0" in value,
+			Object.hasOwn(value, "0"),
+			Reflect.has(value, "0"),
+			Object.prototype.propertyIsEnumerable.call(value, "0"),
+			Object.getOwnPropertyDescriptor(value, "0"),
+			Reflect.getOwnPropertyDescriptor(value, "0"),
+		],
+		[
+			"1" in value,
+			Object.hasOwn(value, "1"),
+			Reflect.has(value, "1"),
+			Object.prototype.propertyIsEnumerable.call(value, "1"),
+			Object.getOwnPropertyDescriptor(value, "1"),
+			Reflect.getOwnPropertyDescriptor(value, "1"),
+		],
+		[
+			"3" in value,
+			Object.hasOwn(value, "3"),
+			Reflect.has(value, "3"),
+			Object.prototype.propertyIsEnumerable.call(value, "3"),
+			Object.getOwnPropertyDescriptor(value, "3"),
+			Reflect.getOwnPropertyDescriptor(value, "3"),
+		],
+		[
+			"-0" in value,
+			Object.hasOwn(value, "-0"),
+			Reflect.has(value, "-0"),
+			Object.prototype.propertyIsEnumerable.call(value, "-0"),
+			Object.getOwnPropertyDescriptor(value, "-0"),
+			Reflect.getOwnPropertyDescriptor(value, "-0"),
+		],
+		[
+			(-0) in value,
+			Object.hasOwn(value, -0),
+			Reflect.has(value, -0),
+			Object.prototype.propertyIsEnumerable.call(value, -0),
+			Object.getOwnPropertyDescriptor(value, -0),
+			Reflect.getOwnPropertyDescriptor(value, -0),
+		],
+		[
+			"01" in value,
+			Object.hasOwn(value, "01"),
+			Reflect.has(value, "01"),
+			Object.prototype.propertyIsEnumerable.call(value, "01"),
+			Object.getOwnPropertyDescriptor(value, "01"),
+			Reflect.getOwnPropertyDescriptor(value, "01"),
+		],
+		[
+			(-1) in value,
+			Object.hasOwn(value, -1),
+			Reflect.has(value, -1),
+			Object.prototype.propertyIsEnumerable.call(value, -1),
+			Object.getOwnPropertyDescriptor(value, -1),
+			Reflect.getOwnPropertyDescriptor(value, -1),
+		],
+		[
+			0.5 in value,
+			Object.hasOwn(value, 0.5),
+			Reflect.has(value, 0.5),
+			Object.prototype.propertyIsEnumerable.call(value, 0.5),
+			Object.getOwnPropertyDescriptor(value, 0.5),
+			Reflect.getOwnPropertyDescriptor(value, 0.5),
+		],
+		[
+			NaN in value,
+			Object.hasOwn(value, NaN),
+			Reflect.has(value, NaN),
+			Object.prototype.propertyIsEnumerable.call(value, NaN),
+			Object.getOwnPropertyDescriptor(value, NaN),
+			Reflect.getOwnPropertyDescriptor(value, NaN),
+		],
+		[
+			Infinity in value,
+			Object.hasOwn(value, Infinity),
+			Reflect.has(value, Infinity),
+			Object.prototype.propertyIsEnumerable.call(value, Infinity),
+			Object.getOwnPropertyDescriptor(value, Infinity),
+			Reflect.getOwnPropertyDescriptor(value, Infinity),
+		],
+		[
+			4294967295 in value,
+			Object.hasOwn(value, 4294967295),
+			Reflect.has(value, 4294967295),
+			Object.prototype.propertyIsEnumerable.call(value, 4294967295),
+			Object.getOwnPropertyDescriptor(value, 4294967295),
+			Reflect.getOwnPropertyDescriptor(value, 4294967295),
+		],
+		[
+			"9007199254740993" in value,
+			Object.hasOwn(value, "9007199254740993"),
+			Reflect.has(value, "9007199254740993"),
+			Object.prototype.propertyIsEnumerable.call(value, "9007199254740993"),
+			Object.getOwnPropertyDescriptor(value, "9007199254740993"),
+			Reflect.getOwnPropertyDescriptor(value, "9007199254740993"),
+		],
+		[
+			"valueOf" in value,
+			Object.hasOwn(value, "valueOf"),
+			Reflect.has(value, "valueOf"),
+			Object.prototype.propertyIsEnumerable.call(value, "valueOf"),
+			Object.getOwnPropertyDescriptor(value, "valueOf"),
+			Reflect.getOwnPropertyDescriptor(value, "valueOf"),
+		],
+		[
+			"absentWrapperProperty" in value,
+			Object.hasOwn(value, "absentWrapperProperty"),
+			Reflect.has(value, "absentWrapperProperty"),
+			Object.prototype.propertyIsEnumerable.call(value, "absentWrapperProperty"),
+			Object.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+			Reflect.getOwnPropertyDescriptor(value, "absentWrapperProperty"),
+		],
+	];
+}
+globalThis.stringOwnProperties = stringOwnProperties;
+function stringDescriptorIdentity(x) {
+	const value = new String(x);
+	const a = Object.getOwnPropertyDescriptor(value, "0");
+	const b = Reflect.getOwnPropertyDescriptor(value, "0");
+	if (a) a.value = "changed";
+	return [a, b, a === b];
+}
+globalThis.stringDescriptorIdentity = stringDescriptorIdentity;
+function mutatedWrapperOwn(x, mutate) {
+	const value = new String(x);
+	mutate(value);
+	return [
+		"changed" in value,
+		Object.hasOwn(value, "changed"),
+		Object.getOwnPropertyDescriptor(value, "changed"),
+		Object.prototype.propertyIsEnumerable.call(value, "changed"),
+		value instanceof String,
+	];
+}
+globalThis.mutatedWrapperOwn = mutatedWrapperOwn;
+for (const family of ["boolean", "number", "string", "bigint", "symbol"]) {
+	capture("membership:" + family, () => globalThis[family + "Membership"]("17"));
+}
+for (const text of [
+	"",
+	"a",
+	"a😀b",
+	"\ud800",
+	"\udc00",
+	undefined,
+	null,
+	-0,
+	17n,
+	Symbol.iterator,
+]) {
+	capture("string own:" + String(text), () => globalThis.stringOwnProperties(text));
+	capture("descriptor identity:" + String(text), () =>
+		globalThis.stringDescriptorIdentity(text),
+	);
+}
+capture("own coercion", () =>
+	globalThis.stringOwnProperties({
+		[Symbol.toPrimitive](hint) {
+			events.push("own:" + hint);
+			return "a😀b";
+		},
+	}),
+);
+capture("own coercion throw", () =>
+	globalThis.stringOwnProperties({
+		[Symbol.toPrimitive](hint) {
+			events.push("own throw:" + hint);
+			throw new RangeError("conversion");
+		},
+	}),
+);
+capture("own mutation", () =>
+	globalThis.mutatedWrapperOwn("abc", (value) => {
+		Object.defineProperty(value, "changed", { value: 19, enumerable: true });
+		Object.setPrototypeOf(value, null);
+	}),
+);
+function customWrapperInstance(x, constructor) {
+	return new Number(x) instanceof constructor;
+}
+globalThis.customWrapperInstance = customWrapperInstance;
+capture("custom instanceof", () =>
+	globalThis.customWrapperInstance(17, {
+		[Symbol.hasInstance](value) {
+			events.push("instance:" + value.valueOf());
+			return true;
+		},
+	}),
+);
 console.log(JSON.stringify({ results, events }));

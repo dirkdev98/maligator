@@ -33,6 +33,11 @@ import {
 } from "./core-string-construction.ts";
 import type { CoreStringPart } from "./core-string-construction.ts";
 import { eliminateSymbolDescription } from "./core-symbol-descriptions.ts";
+import {
+	lowerPrimitiveWrapperObservation,
+	primitiveWrapperObservation,
+} from "./core-wrapper-observations.ts";
+import type { PrimitiveWrapperObservation } from "./core-wrapper-observations.ts";
 
 const noncoercingNumberPredicates = new Set([
 	"Number.isNaN",
@@ -1348,6 +1353,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				constantConsumers = new Map<CoreInstructionId, boolean>(),
 				stringCoercions = new Set<CoreInstructionId>(),
 				truthyBranches = new Set<CoreInstructionId>(),
+				objectObservations = new Map<CoreInstructionId, PrimitiveWrapperObservation>(),
 				propertyReads = new Map<CoreInstructionId, WrapperPropertyRead>();
 			const wrapperPrototype = (): WrapperPropertyRead | undefined => {
 				if (!lockedCoercions) return undefined;
@@ -1555,6 +1561,31 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					const consumerStart =
 						fn.kernel.instructionOperandStart(consumer) + argumentOffset;
 					const consumerOperand = fn.kernel.useOperand(use) - argumentOffset;
+					if (
+						lockedCoercions &&
+						(opcode === "binary" ||
+							(opcode === "callKnown" &&
+								!consumerAttributes.construct &&
+								consumerAttributes.argumentMode === undefined))
+					) {
+						const observation = primitiveWrapperObservation(
+							fn,
+							analysis,
+							context.compilationContext.facts.world,
+							wrapper,
+							consumer,
+							value,
+							consumerOperand,
+							(opcode === "binary"
+								? consumerAttributes.operator
+								: consumerAttributes.operation) as string,
+							argumentOffset,
+						);
+						if (observation !== undefined) {
+							objectObservations.set(consumer, observation);
+							continue;
+						}
+					}
 					const index =
 						opcode === "loadProperty" && consumerOperand === 0
 							? analysis.constant(fn.kernel.operandAt(consumerStart + 1))
@@ -1778,10 +1809,13 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						stringCoercions.size +
 						allocations.size +
 						propertyReads.size +
+						objectObservations.size * 20 +
 						truthyBranches.size
 			)
 				continue;
 			const editor = CoreEditor.open(program, fn.id);
+			for (const [consumer, observation] of objectObservations)
+				lowerPrimitiveWrapperObservation(editor, fn, consumer, observation);
 			for (const [lookup, read] of propertyReads) {
 				if (read.kind === "undefined") {
 					editor.replaceInstruction(lookup, "createUndefined", []);

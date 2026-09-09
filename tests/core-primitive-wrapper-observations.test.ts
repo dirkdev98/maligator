@@ -304,3 +304,97 @@ for (const [family, allocation, another] of wrappers) {
 		});
 	});
 }
+
+for (const [family, allocation, another] of wrappers) {
+	describe(`${family} wrapper membership`, () => {
+		it.each([
+			"'valueOf' in value",
+			"'absentWrapperProperty' in value",
+			"Object.hasOwn(value, 'length')",
+			"value.hasOwnProperty('length')",
+			"value.propertyIsEnumerable('0')",
+			"Reflect.has(value, 'valueOf')",
+			"Object.prototype.hasOwnProperty.call(value, '0')",
+			"Object.prototype.propertyIsEnumerable.call(value, '0')",
+			"Reflect.getOwnPropertyDescriptor(value, 'absentWrapperProperty')",
+			"value instanceof Object",
+			"value instanceof Boolean",
+			"value instanceof Number",
+			"value instanceof String",
+			"value instanceof BigInt",
+			"value instanceof Symbol",
+		])("eliminates joined wrapper observations at %s", (consumer) => {
+			const result = inspect(
+				`let value = ${allocation}; for (let i = 0; i < y; i++) value = ${another}; return ${consumer};`,
+			);
+			expect(constructors(result)).toEqual([]);
+		});
+		it.each([
+			"'changed' in value",
+			"Object.hasOwn(value, 'changed')",
+			"Reflect.getOwnPropertyDescriptor(value, 'changed')",
+			"Object.prototype.propertyIsEnumerable.call(value, 'changed')",
+			"value instanceof Number",
+		])("retains state exposed before %s", (consumer) => {
+			const result = inspect(
+				`const value = ${allocation}; y(value); return ${consumer};`,
+			);
+			expect(constructors(result).length).toBeGreaterThan(0);
+		});
+		it("retains an unknown instanceof protocol", () => {
+			const result = inspect(`const value = ${allocation}; return value instanceof y;`);
+			expect(constructors(result).length).toBeGreaterThan(0);
+		});
+	});
+}
+
+describe("String wrapper own properties", () => {
+	const keys = [
+		"'length'",
+		"'0'",
+		"'1'",
+		"'3'",
+		"'-0'",
+		"-0",
+		"'01'",
+		"-1",
+		"0.5",
+		"NaN",
+		"Infinity",
+		"4294967295",
+		"'9007199254740993'",
+		"'valueOf'",
+		"'absentWrapperProperty'",
+	];
+	for (const consumer of [
+		(key: string) => `${key} in value`,
+		(key: string) => `Object.hasOwn(value, ${key})`,
+		(key: string) => `Reflect.has(value, ${key})`,
+		(key: string) => `Object.prototype.propertyIsEnumerable.call(value, ${key})`,
+		(key: string) => `Object.getOwnPropertyDescriptor(value, ${key})`,
+		(key: string) => `Reflect.getOwnPropertyDescriptor(value, ${key})`,
+	]) {
+		it.each(keys)(`eliminates the wrapper in ${consumer("%s")}`, (key) => {
+			const result = inspect(`const value = new String(x); return ${consumer(key)};`);
+			expect(constructors(result)).toEqual([]);
+		});
+	}
+	it("preserves descriptor identity while eliminating the original wrapper", () => {
+		const result = inspect(
+			"const value = new String(x); const a = Object.getOwnPropertyDescriptor(value, '0'); const b = Reflect.getOwnPropertyDescriptor(value, '0'); return [a, b, a === b];",
+		);
+		expect(constructors(result)).toEqual([]);
+	});
+	it("preserves descriptor reads across loop-carried String wrappers", () => {
+		const result = inspect(
+			"let value = new String(x); for(let i = 0; i < y; i++) value = new String(z); return [Object.getOwnPropertyDescriptor(value, 'length'), Reflect.getOwnPropertyDescriptor(value, '1')];",
+		);
+		expect(constructors(result)).toEqual([]);
+	});
+	it("retains a wrapper exposed during property-key conversion", () => {
+		const result = inspect(
+			"const value = new String(x); return Object.getOwnPropertyDescriptor(value, {[Symbol.toPrimitive](){ y(value); return '0'; }});",
+		);
+		expect(constructors(result).length).toBeGreaterThan(0);
+	});
+});
