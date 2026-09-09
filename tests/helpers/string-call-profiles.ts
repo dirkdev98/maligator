@@ -80,3 +80,52 @@ export const constantStringCallCases: ReadonlyArray<readonly [string, string, st
 		"'a\"b'",
 	]),
 ];
+
+export const dynamicStringCallCases: ReadonlyArray<
+	readonly [string, string, string, string]
+> = [
+	["String", "undefined", "value", "String(x)"],
+	["String.fromCharCode", "undefined", "value,65", "+x"],
+	["String.fromCodePoint", "undefined", "value,65", "+x"],
+	...constantStringCallCases
+		.filter(
+			([callee]) =>
+				callee.startsWith("String.prototype.") &&
+				!["String.prototype.replace", "String.prototype.replaceAll"].includes(callee),
+		)
+		.map(([callee, , args]): readonly [string, string, string, string] => [
+			callee,
+			"value",
+			args,
+			"String(x)",
+		]),
+	["String.prototype.replace", "value", "'a','$$$&'", "String(x)"],
+	["String.prototype.replaceAll", "value", "'a','-'", "String(x)"],
+	...[
+		"encodeURI",
+		"encodeURIComponent",
+		"decodeURI",
+		"decodeURIComponent",
+		"escape",
+		"unescape",
+	].map((callee): readonly [string, string, string, string] => [
+		callee,
+		"undefined",
+		"value",
+		"String(x)",
+	]),
+	...["at", "charAt", "charCodeAt", "codePointAt", "slice", "substring", "substr"].map(
+		(method): readonly [string, string, string, string] => [
+			`String.prototype.${method}`,
+			"'A😀abcZ'",
+			"value",
+			"+x",
+		],
+	),
+	...["includes", "indexOf", "lastIndexOf", "startsWith", "endsWith"].flatMap(
+		(method): ReadonlyArray<readonly [string, string, string, string]> => [
+			[`String.prototype.${method}`, "'A😀abcZ'", "value,1", "String(x)"],
+			[`String.prototype.${method}`, "'A😀abcZ'", "'a',value", "+x"],
+		],
+	),
+];

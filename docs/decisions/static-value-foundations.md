@@ -71,7 +71,7 @@ Runtime archive and generated-object cache identities include generated `.inc`
 tables alongside source/header inputs, so a registry edit cannot reuse stale
 dispatch or intrinsic definitions.
 
-Constant evaluation uses the `mal-binary64-utf16-i128-unicode17-v3` target contract.
+Constant evaluation uses the `mal-binary64-utf16-i128-unicode17-v4` target contract.
 Portable folds cover certified binary64 arithmetic, exact number formatting, UTF-16
 code units, and the runtime's bounded 128-bit BigInt semantics. Work and output bounds
 leave expensive operations at runtime. A required runtime exception is never reported
@@ -483,12 +483,13 @@ retains primitive coercion before using captured locale/options data.
 Residual primitive calls can expose initialized scalar cell values as ordinary
 constant operands for existing typed kernels. The original cell load and TDZ check
 remain in place. This does not recreate BigInts or identity-bearing Symbols.
-String search receivers retain their existing guarded helper path, and callback
-replacements keep their separate allocation cost model; exposing constants at those
-sites does not by itself justify extra lowering work. Character access with a proved
-primitive String and numeric position uses the shared inline UTF-16 kernel. Lazy
-string storage can flatten there; unknown receivers and positions retain the flat
-helper guard or ordinary coercion path.
+String searches with proved primitive String receiver and needle and a numeric
+position use the shared search kernel directly. Cons strings retain both GC roots
+while flattening before the scan; unknown string operands keep the guarded entry.
+Callback replacements retain their separate allocation cost model. Character access
+with a proved primitive String and numeric position uses the shared inline UTF-16
+kernel. Lazy string storage can flatten there; unknown receivers and positions retain
+the flat helper guard or ordinary coercion path.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

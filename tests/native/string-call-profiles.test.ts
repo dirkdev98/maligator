@@ -14,7 +14,12 @@ import {
 	constantCallProfileSource,
 } from "../helpers/constant-call-profiles.ts";
 import {
+	dynamicCallProfiles,
+	dynamicCallProfileSource,
+} from "../helpers/dynamic-call-profiles.ts";
+import {
 	constantStringCallCases,
+	dynamicStringCallCases,
 	localeCaseTags,
 	localeCaseText,
 } from "../helpers/string-call-profiles.ts";
@@ -138,4 +143,82 @@ console.log('root case passed');
 			rmSync(outDir, { recursive: true, force: true });
 		}
 	}, 600_000);
+});
+
+describe("dynamic string call differential", () => {
+	it.each(["locked", "mutable"] as const)(
+		"preserves dynamic string profiles with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-dynamic-string-profiles-"));
+			try {
+				const cases = dynamicStringCallCases.flatMap(
+					([callee, receiver, args, expression], index) =>
+						dynamicCallProfiles.map((profile) => ({
+							entry: [callee, receiver, args] as const,
+							expression,
+							profile,
+							name: `dynamic_${index}_${profile}`,
+						})),
+				);
+				const fixture = path.join(outDir, "dynamic-string-profiles.mjs");
+				const methods = ["includes", "indexOf", "lastIndexOf", "startsWith", "endsWith"];
+				writeFileSync(
+					fixture,
+					`${cases.map(({ entry, expression, profile, name }) => dynamicCallProfileSource(entry, profile, expression, name)).join("\n")}
+function encode(value){return typeof value+':'+JSON.stringify(value);}
+const cases=[${cases.map(({ name, expression, profile }) => `[globalThis.${name},${expression === "+x"},${profile === "suspension"}]`).join(",")}];
+for(let index=0;index<cases.length;index++){
+ const [run,numeric,generator]=cases[index];
+ const values=numeric?[-Infinity,-1,-0,0,0.5,1,2,65536,1114111,1114112,Infinity,NaN]:['','a','ab a','A😀Z',' IİΣ ','e\\u0301','\\ud800','%F0%9F%98%80','%GG'];
+ for(const value of values)for(const count of [0,3]){
+  const events=[];const input={[Symbol.toPrimitive](hint){events.push(hint);return value;}};
+  try {
+   const result=run(input,v=>{events.push(encode(v));return v;},count);
+   if(generator){const first=result.next();const last=result.next();console.log(index,count,encode(first.value),first.done,encode(last.value),last.done,events.join('|'));}
+   else console.log(index,count,encode(result),events.join('|'));
+  }catch(error){console.log(index,count,error.name,events.join('|'));}
+ }
+ const sentinel={};let caught=false;
+ try{const result=run({[Symbol.toPrimitive](){throw sentinel;}},v=>v,3);if(generator)result.next();}catch(error){caught=error===sentinel;}
+ if(!caught)throw new Error('lost conversion exception '+index);
+}
+${methods.map((method) => `function search_${method}(x,y,p){const s=String(x),n=String(y),i=+p;return s.${method}(n,i);}globalThis.search_${method}=search_${method};`).join("\n")}
+for(const method of ${JSON.stringify(methods)}){
+ const run=globalThis['search_'+method];
+ for(const size of [0,1,64,1024])for(const position of [-Infinity,-1,0,0.5,1,64,Infinity,NaN]){
+  let source='',needle='';for(let i=0;i<size;i++){source+='a😀b';needle+='a😀b';}
+  console.log('rope',method,size,String(position),run(source,needle,position),run(source,'😀b',position));
+ }
+ const events=[];
+ const input=value=>({[Symbol.toPrimitive](hint){events.push(hint);return value;}});
+ console.log('order',method,run(input('ab'),input('b'),input(0)),events.join('|'));
+ const original=String.prototype[method];
+ if(Object.getOwnPropertyDescriptor(String.prototype,method).writable){
+  try{String.prototype[method]=()=> 'changed';if(run('a','b',0)!=='changed')throw new Error('lost mutation');}finally{String.prototype[method]=original;}
+ }
+}
+`,
+				);
+				const expected = execFileSync(process.execPath, [fixture], {
+					encoding: "utf8",
+					maxBuffer: 16 * 1024 * 1024,
+				});
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "dynamic-string-profiles",
+					config: resolveBuildConfig({
+						engine: { primordials, intl: { enabled: true } },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 });

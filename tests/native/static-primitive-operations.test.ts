@@ -15,9 +15,11 @@ import {
 	constantCallProfileSource,
 } from "../helpers/constant-call-profiles.ts";
 import {
+	dynamicCallProfiles,
+	dynamicCallProfileSource,
+} from "../helpers/dynamic-call-profiles.ts";
+import {
 	dynamicNumericCallCases,
-	dynamicNumericCallSource,
-	dynamicNumericProfiles,
 	numericCallCases,
 } from "../helpers/numeric-call-profiles.ts";
 
@@ -28,7 +30,7 @@ describe("primitive operation differential", () => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-dynamic-numeric-profiles-"));
 			try {
 				const cases = dynamicNumericCallCases.flatMap((entry, index) =>
-					dynamicNumericProfiles.map((profile) => ({
+					dynamicCallProfiles.map((profile) => ({
 						entry,
 						profile,
 						name: `probe_${index}_${profile}`,
@@ -37,7 +39,7 @@ describe("primitive operation differential", () => {
 				const fixture = path.join(outDir, "dynamic-numeric-profiles.mjs");
 				writeFileSync(
 					fixture,
-					`${cases.map(({ entry, profile, name }) => dynamicNumericCallSource(entry, profile, name)).join("\n")}
+					`${cases.map(({ entry, profile, name }) => dynamicCallProfileSource(entry, profile, "+x", name)).join("\n")}
 function encode(value) {
   if (Object.is(value, -0)) return '-0';
   if (typeof value === 'number' && Number.isFinite(value)) return 'number:' + value.toPrecision(12);

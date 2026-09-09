@@ -2277,12 +2277,14 @@ describe("primitive operation results", () => {
 		(method) => {
 			for (const expression of [
 				`'abc'.${method}(x, +x)`,
-				`String(x).${method}('b', +x)`,
 				`String.prototype.${method}.call(x, x, 1)`,
 			]) {
 				const output = inspect(expression);
 				expect(output.c.source).toContain("mal_builtin_string_search_direct(");
 			}
+			expect(inspect(`String(x).${method}('b', +x)`).c.source).toContain(
+				"mal_builtin_string_search_strings(",
+			);
 			const coercive = inspect(`'abc'.${method}('a', x)`);
 			expect(coercive.c.source).not.toContain("mal_builtin_string_search_direct(");
 		},

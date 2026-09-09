@@ -134503,6 +134503,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -134959,6 +134995,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -135511,6 +135565,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -136025,6 +136097,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -136596,6 +136704,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -137090,6 +137252,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -137584,6 +137782,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -138078,6 +138312,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -138688,6 +138958,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -139201,6 +139525,78 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -139772,6 +140168,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -140284,6 +140734,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -140802,6 +141288,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -141296,6 +141818,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -141810,6 +142368,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -142324,6 +142918,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -142842,6 +143472,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -143380,6 +144046,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -143877,6 +144579,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -144371,6 +145091,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -144889,6 +145645,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -145403,6 +146195,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -146361,6 +147189,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -146914,6 +147760,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -147447,6 +148347,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -148039,6 +148993,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -148596,6 +149604,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -149133,6 +150177,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -149710,6 +150790,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -150204,6 +151320,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -151162,6 +152314,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -151656,6 +152844,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -152150,6 +153374,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -152687,6 +153947,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -153224,6 +154520,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -153718,6 +155050,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -154194,6 +155562,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -154670,6 +156056,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -155167,6 +156571,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -155919,6 +157341,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -156416,6 +157892,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -156913,6 +158407,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -157450,6 +158962,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -157967,6 +159497,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -158464,6 +160012,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -159236,6 +160802,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -169807,6 +171427,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -170325,6 +171963,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -170842,6 +172498,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -171340,6 +173014,24 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

@@ -5908,6 +5908,17 @@ function emitInstruction(
 							: nativeNumberOperand(positionOperand);
 					if (position !== null) {
 						const result = `search_result_${ip}`;
+						if (
+							operandRep(instruction.thisValue) === "string" &&
+							operandRep(instruction.arguments[0]) === "string"
+						) {
+							return [
+								`MalValue ${result} = mal_builtin_string_search_strings(mal_value_to_string(${boxedOperand(instruction.thisValue)}), mal_value_to_string(${boxedOperand(instruction.arguments[0])}), ${position}, MAL_STRING_SEARCH_${search[0]});`,
+								`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+								poll,
+							];
+						}
+
 						return [
 							`MalValue ${result};`,
 							`if (mal_builtin_string_search_direct(${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0])}, ${position}, MAL_STRING_SEARCH_${search[0]}, &${result})) {`,

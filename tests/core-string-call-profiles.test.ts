@@ -5,9 +5,14 @@ import {
 	constantCallProfiles,
 	constantCallProfileSource,
 } from "./helpers/constant-call-profiles.ts";
+import {
+	dynamicCallProfiles,
+	dynamicCallProfileSource,
+} from "./helpers/dynamic-call-profiles.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 import {
 	constantStringCallCases,
+	dynamicStringCallCases,
 	localeCaseTags,
 	localeCaseText,
 } from "./helpers/string-call-profiles.ts";
@@ -122,4 +127,67 @@ describe("constant locale case conversion", () => {
 			).toBe("unsupported");
 		}
 	});
+});
+
+describe("dynamic string call profiles", () => {
+	for (const profile of dynamicCallProfiles) {
+		it.each(dynamicStringCallCases)(
+			`specializes %s through ${profile} after one conversion`,
+			(callee, receiver, args, expression) => {
+				const out = inspectStaticValueFunction(
+					dynamicCallProfileSource([callee, receiver, args], profile, expression),
+					"probe",
+					{ intl: true },
+				);
+				expect(out.structure.genericLookups).toBe(0);
+				expect(out.structure.allocations).toBe(0);
+				const conversions = out.core.filter((op) =>
+					expression === "+x"
+						? op.opcode === "unary" && op.attributes.operator === "+"
+						: op.opcode === "callKnown" && op.attributes.operation === "String",
+				);
+				expect(conversions).toHaveLength(1);
+				if (profile !== "suspension" && callee !== "String.prototype.concat") {
+					expect(out.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(
+						expression === "String(x)" ? 1 : 0,
+					);
+				}
+			},
+		);
+		it.each(dynamicStringCallCases)(
+			`retains mutable %s through ${profile}`,
+			(callee, receiver, args, expression) => {
+				const out = inspectStaticValueFunction(
+					dynamicCallProfileSource([callee, receiver, args], profile, expression),
+					"probe",
+					{ locked: false, intl: true },
+				);
+				expect(out.structure.genericLookups).toBeGreaterThan(0);
+				expect(out.structure.genericCalls).toBeGreaterThan(0);
+			},
+		);
+	}
+	it.each(["includes", "indexOf", "lastIndexOf", "startsWith", "endsWith"])(
+		"uses the string search entry for proved %s inputs",
+		(method) => {
+			const out = inspectStaticValueFunction(
+				`function probe(x,y,p){const s=String(x),n=String(y),i=+p;return s.${method}(n,i);}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(out.c.source).toContain("mal_builtin_string_search_strings(");
+			expect(out.c.source).not.toContain("mal_builtin_string_search_direct(");
+			expect(out.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(2);
+		},
+	);
+	it.each(["includes", "indexOf", "lastIndexOf", "startsWith", "endsWith"])(
+		"retains the guarded %s entry for unknown search values",
+		(method) => {
+			const out = inspectStaticValueFunction(
+				`function probe(x,y,p){return String(x).${method}(y,+p);}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(out.c.source).toContain("mal_builtin_string_search_direct(");
+			expect(out.c.source).not.toContain("mal_builtin_string_search_strings(");
+		},
+	);
 });

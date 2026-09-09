@@ -460,6 +460,45 @@ static i64 mal_builtin_string_reverse_find(
     return -1;
 }
 
+static MalValue mal_builtin_string_search_flat(
+    MalString *string, MalString *search, f64 position, MalStringSearchOp operation
+) {
+    MalValue result;
+    usize length = mal_string_length(string);
+    usize search_length = mal_string_length(search);
+    if (operation == MAL_STRING_SEARCH_LAST_INDEX_OF) {
+        if (search_length > length) {
+            result = mal_value_from_i32(-1);
+            return result;
+        }
+        usize max_start = length - search_length;
+        position = isnan(position) ? INFINITY : mal_ops_number_to_integer_or_infinity(position);
+        usize start = position <= 0 ? 0 : position >= (f64) max_start ? max_start : (usize) position;
+        result = mal_value_from_i32((i32) mal_builtin_string_reverse_find(string, search, start));
+        return result;
+    }
+    position = mal_ops_number_to_length(position);
+    usize start = position >= (f64) length ? length : (usize) position;
+    switch (operation) {
+        case MAL_STRING_SEARCH_INDEX_OF:
+            result = mal_value_from_i32((i32) mal_builtin_string_find(string, search, start));
+            break;
+        case MAL_STRING_SEARCH_INCLUDES:
+            result = mal_value_new_boolean(mal_builtin_string_find(string, search, start) >= 0);
+            break;
+        case MAL_STRING_SEARCH_STARTS_WITH:
+            result = mal_value_new_boolean(mal_builtin_string_matches_at(string, search, start));
+            break;
+        case MAL_STRING_SEARCH_ENDS_WITH:
+            result = mal_value_new_boolean(search_length <= start &&
+                mal_builtin_string_matches_at(string, search, start - search_length));
+            break;
+        default:
+            abort();
+    }
+    return result;
+}
+
 bool mal_builtin_string_search_direct(
     MalValue receiver, MalValue needle, f64 position,
     MalStringSearchOp operation, MalValue *result
@@ -468,41 +507,28 @@ bool mal_builtin_string_search_direct(
         !mal_builtin_string_is_flat_value(needle)) {
         return false;
     }
-    MalString *string = mal_value_to_string(receiver);
-    MalString *search = mal_value_to_string(needle);
-    usize length = mal_string_length(string);
-    usize search_length = mal_string_length(search);
-    if (operation == MAL_STRING_SEARCH_LAST_INDEX_OF) {
-        if (search_length > length) {
-            *result = mal_value_from_i32(-1);
-            return true;
-        }
-        usize max_start = length - search_length;
-        position = isnan(position) ? INFINITY : mal_ops_number_to_integer_or_infinity(position);
-        usize start = position <= 0 ? 0 : position >= (f64) max_start ? max_start : (usize) position;
-        *result = mal_value_from_i32((i32) mal_builtin_string_reverse_find(string, search, start));
-        return true;
-    }
-    position = mal_ops_number_to_length(position);
-    usize start = position >= (f64) length ? length : (usize) position;
-    switch (operation) {
-        case MAL_STRING_SEARCH_INDEX_OF:
-            *result = mal_value_from_i32((i32) mal_builtin_string_find(string, search, start));
-            break;
-        case MAL_STRING_SEARCH_INCLUDES:
-            *result = mal_value_new_boolean(mal_builtin_string_find(string, search, start) >= 0);
-            break;
-        case MAL_STRING_SEARCH_STARTS_WITH:
-            *result = mal_value_new_boolean(mal_builtin_string_matches_at(string, search, start));
-            break;
-        case MAL_STRING_SEARCH_ENDS_WITH:
-            *result = mal_value_new_boolean(search_length <= start &&
-                mal_builtin_string_matches_at(string, search, start - search_length));
-            break;
-        default:
-            abort();
-    }
+    *result = mal_builtin_string_search_flat(
+        mal_value_to_string(receiver), mal_value_to_string(needle), position, operation);
     return true;
+}
+
+MalValue mal_builtin_string_search_strings(
+    MalString *string, MalString *search, f64 position, MalStringSearchOp operation
+) {
+    if (mal_string_storage(string) != MAL_STRING_STORAGE_CONS &&
+        mal_string_storage(search) != MAL_STRING_STORAGE_CONS) {
+        return mal_builtin_string_search_flat(string, search, position, operation);
+    }
+    // Flattening either cons string may relocate both inputs.
+    MalValue roots[] = { mal_value_from_string(string), mal_value_from_string(search) };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    (void) mal_string_code_units(mal_value_to_string(roots[0]));
+    (void) mal_string_code_units(mal_value_to_string(roots[1]));
+    MalValue result = mal_builtin_string_search_flat(
+        mal_value_to_string(roots[0]), mal_value_to_string(roots[1]), position, operation);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_builtin_string_symbol_descriptive_string(

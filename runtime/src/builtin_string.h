@@ -116,6 +116,11 @@ bool mal_builtin_string_character_direct(
     MalStringCharacterOp operation, MalValue *result
 );
 
+// Exact primitive strings may be cons strings; flattening retains both GC roots.
+MalValue mal_builtin_string_search_strings(
+    MalString *string, MalString *search, f64 position, MalStringSearchOp operation
+);
+
 // A false result is side-effect-free; flat primitive strings take the allocation-free path.
 bool mal_builtin_string_search_direct(
     MalValue receiver, MalValue needle, f64 position,

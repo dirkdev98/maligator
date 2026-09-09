@@ -4,20 +4,22 @@ import {
 	constantCallProfileSource,
 } from "./helpers/constant-call-profiles.ts";
 import {
+	dynamicCallProfiles,
+	dynamicCallProfileSource,
+} from "./helpers/dynamic-call-profiles.ts";
+import {
 	dynamicNumericCallCases,
-	dynamicNumericCallSource,
-	dynamicNumericProfiles,
 	numericCallCases,
 } from "./helpers/numeric-call-profiles.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("partially static numeric call profiles", () => {
-	for (const profile of dynamicNumericProfiles) {
+	for (const profile of dynamicCallProfiles) {
 		it.each(dynamicNumericCallCases)(
 			`resolves %s through ${profile} after one conversion`,
 			(...entry) => {
 				const output = inspectStaticValueFunction(
-					dynamicNumericCallSource(entry, profile),
+					dynamicCallProfileSource(entry, profile, "+x"),
 					"probe",
 				);
 				expect(output.structure.genericLookups).toBe(0);
@@ -46,7 +48,7 @@ describe("partially static numeric call profiles", () => {
 			`retains mutable partial %s through ${profile}`,
 			(...entry) => {
 				const output = inspectStaticValueFunction(
-					dynamicNumericCallSource(entry, profile),
+					dynamicCallProfileSource(entry, profile, "+x"),
 					"probe",
 					{ locked: false },
 				);
@@ -60,7 +62,7 @@ describe("partially static numeric call profiles", () => {
 		(callee) => {
 			const entry = dynamicNumericCallCases.find(([name]) => name === callee)!;
 			const output = inspectStaticValueFunction(
-				dynamicNumericCallSource(entry, "suspension"),
+				dynamicCallProfileSource(entry, "suspension", "+x"),
 				"probe",
 			);
 			expect(
