@@ -84236,6 +84236,25 @@
 						"case": "BigInt.asIntN(new Number(x),2n)"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "BigInt.asIntN"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -84382,6 +84401,25 @@
 						"case": "BigInt.asUintN(8,Object(BigInt(x)))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "BigInt.asUintN"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -91639,6 +91677,25 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Math.atan2"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -93399,6 +93456,25 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Math.hypot"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -94289,6 +94365,25 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Math.max"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -94434,6 +94529,25 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Math.min"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -94599,6 +94713,25 @@
 						"case": "Math.pow"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Math.pow"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97223,6 +97356,25 @@
 						"case": "Number.prototype.toExponential"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97470,6 +97622,25 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97718,6 +97889,25 @@
 						"case": "Number.prototype.toPrecision"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97962,6 +98152,25 @@
 						"case": "Number.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101292,6 +101501,25 @@
 						"case": "String.fromCharCode(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.fromCharCode"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101497,6 +101725,25 @@
 						"case": "String.fromCodePoint(new Number(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.fromCodePoint"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102738,6 +102985,25 @@
 						"case": "String.prototype.charCodeAt"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105336,6 +105602,25 @@
 						"case": "String.prototype.normalize"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.normalize"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105522,6 +105807,25 @@
 						"case": "String.prototype.padEnd"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105708,6 +106012,25 @@
 						"case": "String.prototype.padStart"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.padStart"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105933,6 +106256,25 @@
 						"case": "String.prototype.repeat"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.repeat"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106561,6 +106903,25 @@
 						"case": "String.prototype.slice"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.slice"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107637,6 +107998,25 @@
 						"case": "String.prototype.substr"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.substr"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107827,6 +108207,25 @@
 						"case": "String.prototype.substring"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.substring"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108122,6 +108521,25 @@
 						"case": "String.prototype.toLocaleLowerCase"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.toLocaleLowerCase"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108249,6 +108667,25 @@
 						"file": "tests/static-value-discovery.test.ts",
 						"test": "retains mutable primitive-cell method lookup at %s",
 						"case": "String.prototype.toLocaleUpperCase"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "String.prototype.toLocaleUpperCase"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -124061,6 +124498,25 @@
 						"case": "parseInt(new String(x),10)"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "specializes initialized cell parameters at %s",
+						"case": "parseInt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

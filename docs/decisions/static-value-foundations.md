@@ -425,6 +425,12 @@ making the original load unconditionally constant. Split data still materializes
 fresh array on escape; String.raw and exact sums can consume initialized primitive
 cells without aggregate inputs. Collation keeps target-owned comparison data and
 retains primitive coercion before using captured locale/options data.
+Residual primitive calls can expose initialized scalar cell values as ordinary
+constant operands for existing typed kernels. The original cell load and TDZ check
+remain in place. This does not recreate BigInts or identity-bearing Symbols.
+String character/search receivers retain their existing guarded helper path, and
+callback replacements keep their separate allocation cost model; exposing constants
+at those sites does not by itself justify extra lowering work.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

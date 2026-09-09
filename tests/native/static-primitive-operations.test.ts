@@ -12,6 +12,38 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves primitive parameter specialization and cell effects with %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/primitive-cell-parameters.mjs";
+			const expected = execFileSync(process.execPath, [fixture], {
+				encoding: "utf8",
+			});
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-primitive-parameters-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "primitive-parameters",
+					config: resolveBuildConfig({
+						engine: {
+							primordials,
+							eval: false,
+							realms: false,
+							intl: { enabled: true, features: ["collator"] },
+						},
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves immutable Symbol data, registry effects, and cell identity with %s primordials",
 		(primordials) => {
 			const fixture = "tests/local/symbol-cell-consumers.mjs";

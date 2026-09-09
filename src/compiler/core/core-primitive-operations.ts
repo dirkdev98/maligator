@@ -8,11 +8,13 @@ import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import { corePrimitiveBuiltinError } from "./core-primitive-errors.ts";
 import { coreStaticNumberSum } from "./core-static-number-sum.ts";
+import { coreStaticConstantOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
@@ -28,6 +30,17 @@ const noncoercingNumberPredicates = new Set([
 	"Number.isFinite",
 	"Number.isInteger",
 	"Number.isSafeInteger",
+]);
+// These kernels retain their receiver guard even when the receiver is a constant.
+const guardedStringReceivers = new Set([
+	"String.prototype.charAt",
+	"String.prototype.codePointAt",
+	"String.prototype.at",
+	"String.prototype.indexOf",
+	"String.prototype.lastIndexOf",
+	"String.prototype.includes",
+	"String.prototype.startsWith",
+	"String.prototype.endsWith",
 ]);
 const wrapperCoercingUnaryOperators = new Set([
 	"+",
@@ -191,6 +204,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					truthiness?: true;
 			  }
 		> = [];
+		const parameterPlans: Array<{
+			instruction: CoreInstructionId;
+			inputs: ReadonlyArray<CoreValueId>;
+			parameters: ReadonlyArray<{ index: number; operation: CoreStaticMemberOperation }>;
+		}> = [];
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
 			if (plans.length * 4 + sequenceEdits + 4 > context.remainingEdits) break;
@@ -650,6 +668,39 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (numericOperation) continue;
+			// Exposing callback receiver constants can increase intermediate string allocations.
+			if (
+				operation !== "String.prototype.replace" &&
+				operation !== "String.prototype.replaceAll"
+			) {
+				const parameters: Array<{ index: number; operation: CoreStaticMemberOperation }> =
+					[];
+				for (const [index, input] of inputs.entries()) {
+					if (index === 0 && guardedStringReceivers.has(operation)) continue;
+					if (fn.kernel.valueDefinitionKind(input) !== 1) continue;
+					const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(input));
+					if (
+						!["loadGlobal", "loadCaptured"].includes(fn.instructionOpcodeName(definition))
+					)
+						continue;
+					const fact = analysis.queryAt(input, instruction);
+					if (
+						fact.kind !== "known" ||
+						!["undefined", "null", "boolean", "number", "string"].includes(fact.brand)
+					)
+						continue;
+					const constant = coreStaticConstantOperation(program, fact.description);
+					if (constant !== undefined) parameters.push({ index, operation: constant });
+				}
+				if (
+					parameters.length > 0 &&
+					plans.length * 4 + sequenceEdits + parameters.length + 5 <=
+						context.remainingEdits
+				) {
+					parameterPlans.push({ instruction, inputs, parameters });
+					sequenceEdits += parameters.length + 1;
+				}
+			}
 			if (operation === "Boolean" && inputs[1] !== undefined) {
 				plans.push({
 					instruction,
@@ -694,7 +745,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					});
 			}
 		}
-		if (plans.length === 0) return undefined;
+		if (plans.length === 0 && parameterPlans.length === 0) return undefined;
 		const editor = CoreEditor.open(program, fn.id);
 		const strings = new Map<string, number>(),
 			bigints = new Map<bigint, number>();
@@ -904,6 +955,23 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			editor.replaceInstruction(plan.instruction, operation.opcode, operation.inputs, {
 				attributes: operation.attributes,
 			});
+		}
+		const replaced = new Set(plans.map((plan) => plan.instruction));
+		for (const plan of parameterPlans) {
+			if (replaced.has(plan.instruction)) continue;
+			const inputs = [...plan.inputs];
+			for (const { index, operation } of plan.parameters)
+				inputs[index] = editor.insertInstruction(
+					fn.instructionBlock(plan.instruction),
+					plan.instruction,
+					operation.opcode,
+					operation.inputs,
+					{
+						attributes: operation.attributes,
+						sourcePosition: fn.instructionSourcePosition(plan.instruction),
+					},
+				).outputs[0]!;
+			editor.replaceOperands(plan.instruction, inputs);
 		}
 		return editor.commit();
 	},

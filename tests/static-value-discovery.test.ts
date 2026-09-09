@@ -1028,3 +1028,181 @@ it("does not infer registry membership from a shared description at a join", () 
 		),
 	).toBe(true);
 });
+
+const primitiveCellParameters = [
+	[
+		"String.prototype.charCodeAt",
+		"'abcdefgh'",
+		"value.charCodeAt(+x)",
+		"mal_builtin_string_char_code_at_number",
+		0,
+	],
+	[
+		"String.prototype.slice",
+		"'abcdefgh'",
+		"value.slice(+x,6)",
+		"mal_builtin_string_range_numeric",
+		0,
+	],
+	[
+		"String.prototype.substring",
+		"'abcdefgh'",
+		"value.substring(+x,6)",
+		"mal_builtin_string_range_numeric",
+		0,
+	],
+	[
+		"String.prototype.substr",
+		"'abcdefgh'",
+		"value.substr(+x,6)",
+		"mal_builtin_string_range_numeric",
+		0,
+	],
+	[
+		"Number.prototype.toFixed",
+		"2",
+		"(+x).toFixed(value)",
+		"mal_builtin_number_to_fixed_numeric",
+		0,
+	],
+	[
+		"Number.prototype.toExponential",
+		"2",
+		"(+x).toExponential(value)",
+		"mal_builtin_number_to_exponential_numeric",
+		0,
+	],
+	[
+		"Number.prototype.toPrecision",
+		"2",
+		"(+x).toPrecision(value)",
+		"mal_builtin_number_to_precision_numeric",
+		0,
+	],
+	[
+		"Number.prototype.toString",
+		"16",
+		"(+x).toString(value)",
+		"mal_builtin_number_to_string_numeric",
+		0,
+	],
+	["BigInt.asIntN", "8", "BigInt.asIntN(value,x)", "mal_builtin_bigint_width_number", 0],
+	[
+		"BigInt.asUintN",
+		"8",
+		"BigInt.asUintN(value,x)",
+		"mal_builtin_bigint_width_number",
+		0,
+	],
+	[
+		"BigInt.prototype.toString",
+		"16",
+		"BigInt(x).toString(value)",
+		"mal_builtin_bigint_to_string_radix",
+		1,
+	],
+	["parseInt", "16", "parseInt(String(x),value)", "mal_builtin_parse_int_string", 1],
+	[
+		"String.prototype.repeat",
+		"3",
+		"String(x).repeat(value)",
+		"mal_builtin_string_repeat_numeric",
+		1,
+	],
+	[
+		"String.prototype.padStart",
+		"12",
+		"String(x).padStart(value,'_')",
+		"mal_builtin_string_pad_numeric",
+		1,
+	],
+	[
+		"String.prototype.padEnd",
+		"12",
+		"String(x).padEnd(value,'_')",
+		"mal_builtin_string_pad_numeric",
+		1,
+	],
+	[
+		"String.prototype.normalize",
+		"'NFD'",
+		"String(x).normalize(value)",
+		"mal_builtin_string_normalize_known",
+		1,
+	],
+	[
+		"String.prototype.toLocaleUpperCase",
+		"'en-US'",
+		"String(x).toLocaleUpperCase(value)",
+		"mal_builtin_string_case_known",
+		1,
+	],
+	[
+		"String.prototype.toLocaleLowerCase",
+		"'en-US'",
+		"String(x).toLocaleLowerCase(value)",
+		"mal_builtin_string_case_known",
+		1,
+	],
+	["Math.pow", "2", "Math.pow(+x,value)", "mal_builtin_math_pow_number", 0],
+	["Math.atan2", "2", "Math.atan2(+x,value)", "atan2(", 0],
+	["Math.hypot", "3", "Math.hypot(+x,value)", "mal_builtin_math_hypot_numbers", 0],
+	["Math.max", "0", "Math.max(+x,value)", "isnan(", 0],
+	["Math.min", "0", "Math.min(+x,value)", "isnan(", 0],
+	[
+		"String.fromCharCode",
+		"65",
+		"String.fromCharCode(value,+x)",
+		"mal_builtin_string_from_codes_numbers",
+		0,
+	],
+	[
+		"String.fromCodePoint",
+		"65",
+		"String.fromCodePoint(value,+x)",
+		"mal_builtin_string_from_codes_numbers",
+		0,
+	],
+] as const;
+it.each(primitiveCellParameters)(
+	"specializes initialized cell parameters at %s",
+	(_operation, initializer, expression, helper, remainingCalls) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		expect(result.c.source).toContain(helper);
+		expect(result.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(
+			remainingCalls,
+		);
+	},
+);
+it.each(primitiveCellParameters)(
+	"retains mutable operation identity for cell parameters at %s",
+	(_operation, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.structure.genericCalls).toBeGreaterThanOrEqual(2);
+	},
+);
+it("retains captured initialization checks while specializing primitive parameters", () => {
+	const result = inspectStaticValueFunction(
+		`function make(){globalThis.early=probe;const digits=2;return probe;function probe(x){return (+x).toFixed(digits);}}globalThis.make=make;`,
+		"probe",
+	);
+	expect(result.core.some((op) => op.opcode === "loadCaptured")).toBe(true);
+	expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+	expect(result.c.source).toContain("mal_builtin_number_to_fixed_numeric");
+	expect(result.c.source).not.toContain("mal_vm_call_known_native");
+});
+it("retains a mutable cell parameter after an unknown call can write it", () => {
+	const result = inspectStaticValueFunction(
+		`let digits=2;globalThis.change=x=>digits=x;function probe(x){globalThis.sink();return (+x).toFixed(digits);}globalThis.probe=probe;`,
+		"probe",
+	);
+	expect(result.c.source).toContain("mal_vm_call_known_native");
+});
