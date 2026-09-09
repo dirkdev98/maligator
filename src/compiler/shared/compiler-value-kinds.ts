@@ -48,6 +48,8 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	)
 		return false;
 	if (opcode === "unary") {
+		if (operator === "tostring")
+			return masks.length === 1 && masks[0] === COMPILER_VALUE_KIND_BOOLEAN;
 		return (
 			masks.length === 1 &&
 			["-", "+", "~", "increment", "decrement", "tonumeric"].includes(operator) &&

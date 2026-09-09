@@ -665,6 +665,22 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (numericOperation) continue;
+			if (operation === "Boolean.prototype.toString" || operation === "String") {
+				const input = inputs[operation === "String" ? 1 : 0];
+				const fact =
+					input === undefined ? undefined : analysis.queryAt(input, instruction);
+				if (input !== undefined && fact?.kind === "known" && fact.brand === "boolean") {
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "unary",
+							inputs: [input],
+							attributes: { operator: "tostring" },
+						},
+					});
+					continue;
+				}
+			}
 			// Exposing callback receiver constants can increase intermediate string allocations.
 			if (
 				operation !== "String.prototype.replace" &&

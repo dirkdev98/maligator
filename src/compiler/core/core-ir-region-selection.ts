@@ -1763,7 +1763,7 @@ export function buildCoreOptimizationPlan(
 				directEntries,
 			),
 		),
-		operatorInputs: coreOperatorInputPlans(program, liveFunctions),
+		operatorInputs: coreOperatorInputPlans(program, analyses, liveFunctions),
 		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,

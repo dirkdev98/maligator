@@ -406,6 +406,14 @@ replacement argument, so those positions require a primitive pattern. Receiver
 identity remains subject to the separate protocol proof. Locale arguments and raw
 template objects retain their object semantics.
 
+Exact Boolean text observations normalize to Core ToString and select the VM's hot
+true/false strings. Native operator input certificates retain semantic Boolean kinds
+when a physical register also serves unrelated boxed values. Selection queries the
+current local kind analysis for conversions introduced after effect refinement;
+function versions protect the resulting proof. Method and String calls still require
+proven callee identity, while implicit conversion does not consult those properties.
+Unknown and mixed kinds retain generic conversion, including wrapper coercion.
+
 Single-assignment primitive cells retain their payload facts through arbitrary uses:
 passing a primitive to a callback cannot mutate it. The shared cell index still
 requires a unique Core writer. A dominating initializer in the same activation

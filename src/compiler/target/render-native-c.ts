@@ -5197,6 +5197,18 @@ function emitInstruction(
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
 			if (
+				operator === "tostring" &&
+				(reps[src] === "boolean" ||
+					(nativePlan?.kind === "exact-operator-input-kinds" &&
+						nativePlan.inputKindMasks.length === 1 &&
+						nativePlan.inputKindMasks[0] === COMPILER_VALUE_KIND_BOOLEAN))
+			) {
+				const value =
+					reps[src] === "boolean" ? `r${src}` : `mal_value_to_boolean(${boxed(src)})`;
+				const text = `mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${value} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`;
+				return [`r${dst} = ${callValue(dst, text)};`, poll];
+			}
+			if (
 				nativePlan?.kind === "exact-operator-input-kinds" &&
 				nativePlan.inputKindMasks.length === 1 &&
 				!isNumericRep(reps[src]!)

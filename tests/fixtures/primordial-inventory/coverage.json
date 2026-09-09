@@ -85107,6 +85107,49 @@
 						"case": "Boolean.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitInstruction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses hot text despite boxed register reuse for %s",
+						"case": "Boolean(x).toString()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves generic conversion for %s",
+						"case": "x.toString()"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitInstruction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses hot text despite boxed register reuse for %s",
+						"case": "Boolean.prototype.toString.call(Boolean(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves generic conversion for %s",
+						"case": "x.toString()"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101355,6 +101398,49 @@
 						"case": "registered/String"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitInstruction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses hot text despite boxed register reuse for %s",
+						"case": "String(Boolean(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves generic conversion for %s",
+						"case": "String(x)"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitInstruction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses hot text despite boxed register reuse for %s",
+						"case": "Reflect.apply(String, null, [Boolean(x)])"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves generic conversion for %s",
+						"case": "String(x)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

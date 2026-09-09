@@ -1,8 +1,12 @@
+import { COMPILER_VALUE_KIND_BOOLEAN } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
-import { coreExactOperatorInputKindMasks } from "./core-ir-value-kinds.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	coreExactOperatorInputKindMasks,
+} from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -122,6 +126,7 @@ export function coreOperatorInputProofIsCurrent(
 
 export function coreOperatorInputPlans(
 	program: CoreProgram,
+	analyses: CoreAnalysisManager,
 	functions: ReadonlyArray<CoreFunctionId>,
 ): ReadonlyArray<CoreOperatorInputPlan> {
 	const plans: Array<CoreOperatorInputPlan> = [];
@@ -131,7 +136,21 @@ export function coreOperatorInputPlans(
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "unary" && opcode !== "binary") continue;
-			const masks = coreExactOperatorInputKindMasks(fn, instruction);
+			let masks = coreExactOperatorInputKindMasks(fn, instruction);
+			if (
+				masks === undefined &&
+				opcode === "unary" &&
+				fn.instructionAttributes(instruction).operator === "tostring"
+			) {
+				// Memory transforms can introduce conversions after primitive effect refinement.
+				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				});
+				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+				if (kinds.kindMask(input) === COMPILER_VALUE_KIND_BOOLEAN)
+					masks = [COMPILER_VALUE_KIND_BOOLEAN];
+			}
 			if (masks === undefined) continue;
 			const plan = Object.freeze({
 				function: functionId,

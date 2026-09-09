@@ -4000,7 +4000,9 @@ bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out) {
         return false;
     }
 
-    *out = mal_ops_to_string(&vm->heap, primitive);
+    *out = mal_value_is_boolean(primitive)
+        ? mal_intrinsic_hot_ascii(vm, mal_value_to_boolean(primitive) ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE)
+        : mal_ops_to_string(&vm->heap, primitive);
     return true;
 }
 

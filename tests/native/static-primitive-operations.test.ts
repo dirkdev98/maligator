@@ -12,6 +12,38 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves Boolean text, boxed receivers, and mutable callee identity with %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/boolean-text.mjs";
+			const expected = execFileSync(process.execPath, [fixture], {
+				encoding: "utf8",
+			});
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-boolean-text-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "boolean-text",
+					config: resolveBuildConfig({
+						engine: {
+							primordials,
+							eval: false,
+							realms: false,
+							intl: { enabled: true, features: ["collator"] },
+						},
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves typed character kernels, lazy strings, and coercion order with %s primordials",
 		(primordials) => {
 			const fixture = "tests/local/typed-string-characters.mjs";

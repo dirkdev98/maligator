@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { COMPILER_VALUE_KIND_BOOLEAN } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { evaluateConstantBuiltin } from "../src/compiler/shared/constant-builtins.ts";
 import { knownBuiltinErrorNames } from "../src/compiler/shared/known-builtin-errors.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
@@ -2548,5 +2549,48 @@ describe("primitive operation results", () => {
 			"probe",
 		);
 		expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
+	});
+});
+
+describe("proven Boolean text conversion", () => {
+	it.each([
+		"Boolean(x).toString()",
+		"String(Boolean(x))",
+		"`${Boolean(x)}`",
+		"Boolean.prototype.toString.call(Boolean(x))",
+		"Reflect.apply(String, null, [Boolean(x)])",
+	])("uses hot text despite boxed register reuse for %s", (expression) => {
+		const result = inspectStaticValueFunction(
+			`function probe(x) { globalThis.sink(x); return ${expression}; } globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(result.c.source).toContain("MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE");
+		expect(result.c.source).not.toContain("mal_vm_unary_op");
+		expect(result.core.some((operation) => operation.opcode === "callKnown")).toBe(false);
+		const decoded = deserializeCompilerArtifact(serializeCompilerArtifact(result.image));
+		expect(
+			decoded.native.functions.flatMap((fn) => fn.instructions ?? []),
+		).toContainEqual({
+			kind: "exact-operator-input-kinds",
+			inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+		});
+	});
+	it.each(["`${x ? true : 7}`", "`${x}`", "x.toString()", "String(x)"])(
+		"preserves generic conversion for %s",
+		(expression) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x) { globalThis.sink(x); return ${expression}; } globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(result.c.source).not.toContain("MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE");
+		},
+	);
+	it("keeps implicit Boolean conversion independent of mutable String and prototype methods", () => {
+		const result = inspectStaticValueFunction(
+			"function probe(x) { globalThis.sink(x); return `${!!x}`; } globalThis.probe = probe;",
+			"probe",
+			{ locked: false },
+		);
+		expect(result.c.source).toContain("MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE");
 	});
 });
