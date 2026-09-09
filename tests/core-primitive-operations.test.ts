@@ -815,7 +815,7 @@ describe("primitive operation results", () => {
 							: "case";
 			expect(dynamic.c.source).toContain(`mal_builtin_string_${helper}_known(`);
 			expect(inspect(`String(x).${method}()`, false).c.source).not.toContain(
-				"mal_builtin_string_case_known(",
+				`mal_builtin_string_${helper}_known(`,
 			);
 		},
 	);
@@ -1063,6 +1063,9 @@ describe("primitive operation results", () => {
 		(method) => {
 			const unknown = inspect(`Number.${method}.call(null,x)`);
 			expect(unknown.c.source).not.toContain("mal_vm_call_known_native");
+			expect(
+				inspect(`Number.${method}.call(null,x)`, false).structure.genericCalls,
+			).toBeGreaterThan(0);
 			const numeric = inspect(`Number.${method}(+x)`);
 			expect(numeric.c.source).toContain("isfinite(");
 			expect(numeric.c.source).not.toContain("_known(");
@@ -1261,6 +1264,13 @@ describe("primitive operation results", () => {
 					operation.attributes.operation === `Math.${method}`,
 			),
 		).toBe(true);
+		for (const output of [
+			inspect(`Math.${method}(x)`),
+			inspect(`Math.${method}(+x)`, false),
+		])
+			expect(
+				output.core.some((operation) => operation.opcode === "mathUnaryNumber"),
+			).toBe(false);
 	});
 
 	it("limits output and search work before producing a constant", () => {
@@ -1322,5 +1332,31 @@ describe("primitive operation results", () => {
 					operation.opcode === "createNumber" && operation.attributes.value === 0,
 			),
 		).toBe(false);
+	});
+	it.each(["0", "1", "2", "99", "-0", "4294967294"])(
+		"eliminates a contained String wrapper for the numeric property %s",
+		(index) => {
+			const expression = `new String(x)[${index}]`;
+			const output = inspect(expression);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+			expect(
+				output.core.filter(
+					(operation) =>
+						operation.opcode === "unary" && operation.attributes.operator === "tostring",
+				),
+			).toHaveLength(1);
+			expect(
+				inspect(expression, false).fn.instructions.some(
+					(operation) => operation.opcode === "CONSTRUCT",
+				),
+			).toBe(true);
+		},
+	);
+	it("retains String wrapper identity across key coercion and escape", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x){const wrapper=new String('abc');const key={toString(){x(wrapper);return '0';}};return wrapper[key];}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
 	});
 });

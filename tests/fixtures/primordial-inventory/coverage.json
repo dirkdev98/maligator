@@ -74718,7 +74718,27 @@
 			"kind": "construct",
 			"operations": ["Boolean"],
 			"task": "F-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required wrapper or Symbol conversion for %s"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Boolean.prototype.toString\",\"<call>\"]",
@@ -74789,6 +74809,25 @@
 						"case": "Boolean.prototype.valueOf.call(true)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable method lookup for %s"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -80122,6 +80161,26 @@
 						"case": "Math.abs(-3)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "abs"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "abs"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80163,6 +80222,26 @@
 						"case": "Math.acos(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "acos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "acos"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80204,6 +80283,26 @@
 						"case": "Math.acosh(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "acosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "acosh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80245,6 +80344,26 @@
 						"case": "Math.asin(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "asin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "asin"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80286,6 +80405,26 @@
 						"case": "Math.asinh(-Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "asinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "asinh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80327,6 +80466,26 @@
 						"case": "Math.atan(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "atan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "atan"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80368,6 +80527,26 @@
 						"case": "Math.atan2(-0,1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "atan2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "atan2"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80409,6 +80588,26 @@
 						"case": "Math.atanh(-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "atanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "atanh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80450,6 +80649,26 @@
 						"case": "Math.cbrt(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cbrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cbrt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80491,6 +80710,26 @@
 						"case": "Math.ceil(-0.1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "ceil"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "ceil"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80532,6 +80771,26 @@
 						"case": "Math.clz32(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "clz32"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "clz32"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80573,6 +80832,26 @@
 						"case": "Math.cos(0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cos"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80614,6 +80893,26 @@
 						"case": "Math.cosh(-Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "cosh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80655,6 +80954,26 @@
 						"case": "Math.exp(-Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "exp"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "exp"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80696,6 +81015,26 @@
 						"case": "Math.expm1(-Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "expm1"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "expm1"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80737,6 +81076,26 @@
 						"case": "Math.f16round(1.1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "f16round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "f16round"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80778,6 +81137,26 @@
 						"case": "Math.floor(0.1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "floor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "floor"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80819,6 +81198,26 @@
 						"case": "Math.fround(1.1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "fround"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "fround"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80860,6 +81259,26 @@
 						"case": "Math.hypot()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "hypot"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "hypot"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80901,6 +81320,26 @@
 						"case": "Math.imul(0xffffffff,5)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "imul"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "imul"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80942,6 +81381,26 @@
 						"case": "Math.log(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -80983,6 +81442,26 @@
 						"case": "Math.log10(Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log10"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81024,6 +81503,26 @@
 						"case": "Math.log1p(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log1p"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log1p"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81065,6 +81564,26 @@
 						"case": "Math.log2(-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "log2"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81106,6 +81625,26 @@
 						"case": "Math.max(-0,0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "max"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "max"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81147,6 +81686,26 @@
 						"case": "Math.min(0,-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "min"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "min"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81188,6 +81747,26 @@
 						"case": "Math.pow(NaN,0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "pow"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric %s kernel only with proven inputs",
+						"case": "pow"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81249,6 +81828,26 @@
 						"case": "Math.round(-0.5)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "round"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81290,6 +81889,26 @@
 						"case": "Math.sign(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sign"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sign"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81331,6 +81950,26 @@
 						"case": "Math.sin(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sin"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81372,6 +82011,26 @@
 						"case": "Math.sinh(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sinh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81413,6 +82072,26 @@
 						"case": "Math.sqrt(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sqrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "sqrt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81454,6 +82133,24 @@
 						"case": "Math.sumPrecise([1e20,1,-1e20])"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains iterator semantics while bypassing sumPrecise dispatch"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains iterator semantics while bypassing sumPrecise dispatch"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81495,6 +82192,26 @@
 						"case": "Math.tan(-0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "tan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "tan"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81536,6 +82253,26 @@
 						"case": "Math.tanh(-Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "tanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "tanh"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81577,6 +82314,26 @@
 						"case": "Math.trunc(-0.5)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "trunc"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses target Math.%s after one dynamic numeric conversion",
+						"case": "trunc"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81639,7 +82396,27 @@
 			"kind": "construct",
 			"operations": ["Number"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required wrapper or Symbol conversion for %s"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.isFinite\",\"<call>\"]",
@@ -81669,6 +82446,45 @@
 						"case": "Number.isFinite(Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isFinite"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isFinite"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isFinite"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "keeps unused coercions, exceptions and callbacks at %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -81710,6 +82526,45 @@
 						"case": "Number.isInteger(1.5)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isInteger"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "keeps unused coercions, exceptions and callbacks at %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -81792,6 +82647,45 @@
 						"case": "Number.isSafeInteger(9007199254740992)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isSafeInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isSafeInteger"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "specializes Number.%s without coercing unknown inputs",
+						"case": "isSafeInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "keeps unused coercions, exceptions and callbacks at %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -81833,6 +82727,25 @@
 						"case": "(1.25).toExponential(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses a typed target kernel for dynamic numbers with %s",
+						"case": "toExponential()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains option validation and coercion for %s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81874,6 +82787,25 @@
 						"case": "(1.25).toFixed(2)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses a typed target kernel for dynamic numbers with %s",
+						"case": "toFixed(2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains option validation and coercion for %s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81935,6 +82867,25 @@
 						"case": "(1.005).toPrecision(3)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses a typed target kernel for dynamic numbers with %s",
+						"case": "toPrecision(3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains option validation and coercion for %s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -81976,6 +82927,25 @@
 						"case": "Number.MIN_VALUE.toString()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses a typed target kernel for dynamic numbers with %s",
+						"case": "toString(16)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains option validation and coercion for %s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -82017,6 +82987,25 @@
 						"case": "Number.prototype.valueOf.call(1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable method lookup for %s"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -84909,7 +85898,27 @@
 			"kind": "construct",
 			"operations": ["String"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required wrapper or Symbol conversion for %s"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"String.fromCharCode\",\"<call>\"]",
@@ -84939,6 +85948,26 @@
 						"case": "String.fromCharCode(65537,-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "constructs String.%s from unboxed numeric inputs",
+						"case": "fromCharCode"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "constructs String.%s from unboxed numeric inputs",
+						"case": "fromCharCode"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -84980,6 +86009,26 @@
 						"case": "String.fromCodePoint(128512,55296)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "constructs String.%s from unboxed numeric inputs",
+						"case": "fromCodePoint"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "constructs String.%s from unboxed numeric inputs",
+						"case": "fromCodePoint"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85021,6 +86070,26 @@
 						"case": "'x'.anchor('a\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "anchor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "anchor"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85062,6 +86131,26 @@
 						"case": "'abc'.at(-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "at"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "at"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85103,6 +86192,26 @@
 						"case": "'x'.big('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "big"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "big"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85144,6 +86253,26 @@
 						"case": "'x'.blink('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "blink"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "blink"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85185,6 +86314,26 @@
 						"case": "'x'.bold()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "bold"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "bold"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85226,6 +86375,26 @@
 						"case": "'abc'.charAt(Infinity)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "charAt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "charAt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85308,6 +86477,26 @@
 						"case": "'😀'.codePointAt(0)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "codePointAt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads static UTF-16 text at dynamic numeric positions with %s",
+						"case": "codePointAt"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85349,6 +86538,24 @@
 						"case": "'a'.concat('b',null,1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "guards primitive concat inputs before its shared builder"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "guards primitive concat inputs before its shared builder"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85390,6 +86597,30 @@
 						"case": "'abc'.endsWith('b',2)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "endsWith"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "endsWith"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85431,6 +86662,26 @@
 						"case": "'x'.fixed('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fixed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85472,6 +86723,26 @@
 						"case": "'x'.fontcolor('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fontcolor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fontcolor"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85513,6 +86784,26 @@
 						"case": "'x'.fontsize('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fontsize"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "fontsize"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85554,6 +86845,30 @@
 						"case": "'abc'.includes('b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "includes"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "includes"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85595,6 +86910,30 @@
 						"case": "'abc'.indexOf('b',NaN)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "indexOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "indexOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85636,6 +86975,29 @@
 						"case": "'\\ud800x'.isWellFormed()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "isWellFormed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "isWellFormed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85677,6 +87039,26 @@
 						"case": "'x'.italics('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "italics"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "italics"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85718,6 +87100,30 @@
 						"case": "'aba'.lastIndexOf('a')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "lastIndexOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "lastIndexOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85759,6 +87165,26 @@
 						"case": "'x'.link('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "link"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "link"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85780,7 +87206,26 @@
 			"kind": "call",
 			"operations": ["String.prototype.localeCompare"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T", "P"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "prepares immutable target collation for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable collation identity and option reentrancy"
+					},
+					"lowering": "specialized"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.localeCompare\",\"<construct>\"]",
@@ -85860,6 +87305,29 @@
 						"case": "'e\\u0301'.normalize()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "normalize"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "normalize"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85901,6 +87369,26 @@
 						"case": "'a'.padEnd(4,'xy')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "padEnd"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "padEnd"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85942,6 +87430,26 @@
 						"case": "'a'.padStart(4,'xy')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "padStart"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "padStart"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85983,6 +87491,26 @@
 						"case": "'ab'.repeat(3)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "adapted-invocation"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "repeat"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses the numeric String %s builder without coercing unknown counts",
+						"case": "repeat"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86024,6 +87552,29 @@
 						"case": "'aba'.replace('a','$$$&')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses plain-string %s kernels while retaining callback work",
+						"case": "replace"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses plain-string %s kernels while retaining callback work",
+						"case": "replace"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86065,6 +87616,29 @@
 						"case": "'aba'.replaceAll('a','x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses plain-string %s kernels while retaining callback work",
+						"case": "replaceAll"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "uses plain-string %s kernels while retaining callback work",
+						"case": "replaceAll"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86126,6 +87700,30 @@
 						"case": "'abcdef'.slice(-3,-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "slice"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "slice"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86167,6 +87765,26 @@
 						"case": "'x'.small('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "small"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "small"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86188,7 +87806,44 @@
 			"kind": "call",
 			"operations": ["String.prototype.split"],
 			"task": "F-12",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates the split array for a scalar consumer and retains fresh escaping results"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the String wrapper that a custom %s protocol can observe"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates the split array for a scalar consumer and retains fresh escaping results"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains separate fresh split results"
+					},
+					"lowering": "materialized"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.split\",\"<construct>\"]",
@@ -86228,6 +87883,30 @@
 						"case": "'abc'.startsWith('b',1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "startsWith"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects guarded direct String %s for independent static inputs",
+						"case": "startsWith"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86269,6 +87948,26 @@
 						"case": "'x'.strike('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "strike"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "strike"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86310,6 +88009,26 @@
 						"case": "'x'.sub('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "sub"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "sub"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86351,6 +88070,30 @@
 						"case": "'abcdef'.substr(-3,2)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "substr"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "substr"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86392,6 +88135,30 @@
 						"case": "'abcdef'.substring(4,1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"adapted-invocation"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "substring"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "selects numeric String %s bounds with guarded receivers",
+						"case": "substring"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86433,6 +88200,26 @@
 						"case": "'x'.sup('a\\\"b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "sup"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds legacy %s constants and directly builds dynamic strings",
+						"case": "sup"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86454,7 +88241,31 @@
 			"kind": "call",
 			"operations": ["String.prototype.toLocaleLowerCase"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLocaleLowerCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLocaleLowerCase"
+					},
+					"lowering": "specialized"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toLocaleLowerCase\",\"<construct>\"]",
@@ -86474,7 +88285,31 @@
 			"kind": "call",
 			"operations": ["String.prototype.toLocaleUpperCase"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLocaleUpperCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLocaleUpperCase"
+					},
+					"lowering": "specialized"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toLocaleUpperCase\",\"<construct>\"]",
@@ -86514,6 +88349,29 @@
 						"case": "'A'.toLowerCase()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLowerCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toLowerCase"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86596,6 +88454,29 @@
 						"case": "'a'.toUpperCase()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toUpperCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toUpperCase"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86637,6 +88518,29 @@
 						"case": "'\\ud800x'.toWellFormed()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toWellFormed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "toWellFormed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86678,6 +88582,29 @@
 						"case": "'\\ufeff a\\u2028'.trim()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trim"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trim"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86719,6 +88646,29 @@
 						"case": "' a '.trimEnd()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trimEnd"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trimEnd"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86760,6 +88710,29 @@
 						"case": "' a '.trimStart()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trimStart"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds certified String %s constants and specializes dynamic receivers",
+						"case": "trimStart"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86801,6 +88774,25 @@
 						"case": "String.prototype.valueOf.call('x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "removes a contained %s wrapper while retaining conversion",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable method lookup for %s"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -86862,6 +88854,24 @@
 						"case": "String.raw({raw:['a','b']},'x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T", "A", "L"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-string-construction.ts",
+						"symbol": "coreStaticStringRawParts"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds private raw segments and emits ordered substitution conversions"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains raw template observations for %s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -92512,6 +94522,26 @@
 						"case": "decodeURI('%20')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "decodeURI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "decodeURI"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -92557,6 +94587,26 @@
 						"case": "decodeURIComponent('%F0%9F%98%80')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "decodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "decodeURIComponent"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -92602,6 +94652,26 @@
 						"case": "encodeURI('a b?x=😀')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "encodeURI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "encodeURI"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -92647,6 +94717,26 @@
 						"case": "encodeURIComponent('a/b')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "encodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "encodeURIComponent"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -98152,6 +100242,26 @@
 						"case": "escape('😀')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "escape"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "escape"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -98957,6 +101067,26 @@
 						"case": "unescape('%uD800')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "unescape"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "lowers canonical %s on primitive strings",
+						"case": "unescape"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111685,15 +113815,37 @@
 			"owner": "String instances",
 			"key": "length",
 			"task": "F-08",
-			"exposures": [],
-			"state": "expansion-obligation"
+			"exposures": ["[\"String\",\"<construct>\"]"],
+			"instanceObservation": {
+				"producer": "[\"String\",\"<construct>\"]",
+				"positive": {
+					"file": "tests/core-primitive-operations.test.ts",
+					"test": "reads a contained String wrapper's own length through the primitive string path"
+				},
+				"negative": {
+					"file": "tests/core-primitive-operations.test.ts",
+					"test": "retains String wrapper identity across key coercion and escape"
+				}
+			},
+			"state": "reconciled"
 		},
 		{
 			"owner": "String instances",
 			"key": "<indexed-properties>",
 			"task": "F-08",
-			"exposures": [],
-			"state": "expansion-obligation"
+			"exposures": ["[\"String\",\"<construct>\"]"],
+			"instanceObservation": {
+				"producer": "[\"String\",\"<construct>\"]",
+				"positive": {
+					"file": "tests/core-primitive-operations.test.ts",
+					"test": "eliminates a contained String wrapper for the numeric property %s"
+				},
+				"negative": {
+					"file": "tests/core-primitive-operations.test.ts",
+					"test": "retains String wrapper identity across key coercion and escape"
+				}
+			},
+			"state": "reconciled"
 		},
 		{
 			"owner": "Math",

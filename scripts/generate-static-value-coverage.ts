@@ -117,6 +117,9 @@ const previous = existsSync(output)
 	? (JSON.parse(readFileSync(output, "utf8")) as StaticValueCoverage)
 	: undefined;
 const priorRows = new Map(previous?.rows.map((row) => [row.id, row]));
+const priorSeeds = new Map(
+	previous?.seeds.map((seed) => [catalogExposureId(seed.owner, seed.key), seed]),
+);
 const rows: Array<StaticValueCoverageRow> = primordialCatalog.nodes.flatMap((node) =>
 	node[4].map((property) => {
 		const key = catalogPropertyKey(primordialCatalog, property);
@@ -204,6 +207,10 @@ const ownerNodes = new Map(
 	),
 );
 function seedExposures(seed: Seed): ReadonlyArray<string> {
+	const observation = priorSeeds.get(
+		catalogExposureId(seed.owner, seed.key),
+	)?.instanceObservation;
+	if (observation !== undefined) return [observation.producer];
 	const host = HOST_MODULES.get(seed.owner);
 	if (host !== undefined) {
 		const root = `${host.installer}:${seed.key}`;
@@ -237,6 +244,13 @@ const coverage: StaticValueCoverage = {
 			key: seed.key,
 			task: seed.task,
 			exposures,
+			...(priorSeeds.get(catalogExposureId(seed.owner, seed.key))?.instanceObservation ===
+			undefined
+				? {}
+				: {
+						instanceObservation: priorSeeds.get(catalogExposureId(seed.owner, seed.key))!
+							.instanceObservation,
+					}),
 			state:
 				exposures.length > 0
 					? "reconciled"

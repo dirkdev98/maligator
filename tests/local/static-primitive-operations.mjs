@@ -1467,6 +1467,7 @@ const exoticString = new String("A😀");
 for (const key of ["0", "1", "2", "length"]) {
 	const descriptor = Object.getOwnPropertyDescriptor(exoticString, key);
 	if (
+		descriptor.value !== (key === "length" ? 3 : "A😀"[+key]) ||
 		descriptor.writable ||
 		descriptor.configurable ||
 		descriptor.enumerable !== (key !== "length")
@@ -1479,6 +1480,43 @@ exoticString.extra = 1;
 exoticAlias.extra++;
 show(exoticString.extra);
 show(exoticString !== new String("A😀"));
+
+function wrappedIndexes(value) {
+	return [
+		new String(value)[0],
+		new String(value)[1],
+		new String(value)[2],
+		new String(value)[99],
+		new String(value)[-0],
+		new String(value)[4294967294],
+	];
+}
+for (const value of ["", "A😀", "\ud800x", 12, false, 1n]) {
+	show(wrappedIndexes(value));
+}
+let indexedCoercions = 0;
+show(
+	wrappedIndexes({
+		toString() {
+			indexedCoercions++;
+			return "ab";
+		},
+	}),
+);
+show(indexedCoercions);
+show(capturedFailure(() => wrappedIndexes(Symbol.iterator)).name);
+const indexedWrapper = new String("ab");
+show(
+	indexedWrapper[
+		{
+			toString() {
+				indexedWrapper.extra = 17;
+				return "0";
+			},
+		}
+	],
+);
+show(indexedWrapper.extra);
 
 function repeatedPrimitiveWork(text, value) {
 	const source = String(text),

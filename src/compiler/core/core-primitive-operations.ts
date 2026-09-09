@@ -846,17 +846,29 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					}
 					const opcode = fn.instructionOpcodeName(consumer),
 						consumerAttributes = fn.instructionAttributes(consumer);
+					const index =
+						opcode === "loadProperty" && fn.kernel.useOperand(use) === 0
+							? analysis.constant(
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1),
+								)
+							: undefined;
+					const property =
+						opcode === "loadPropertyStatic"
+							? analysis.string(consumerAttributes.stringIndex as number)
+							: index?.kind === "number" &&
+								  Number.isInteger(index.value) &&
+								  index.value >= 0 &&
+								  index.value < 0xffffffff
+								? String(index.value)
+								: undefined;
 					if (opcode === "move")
 						pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
 					else if (opcode === "unary" && consumerAttributes.operator === "!")
 						truthiness.add(consumer);
 					else if (
 						wrapper === "String" &&
-						opcode === "loadPropertyStatic" &&
-						(analysis.string(consumerAttributes.stringIndex as number) === "length" ||
-							/^(0|[1-9][0-9]*)$/.test(
-								analysis.string(consumerAttributes.stringIndex as number),
-							))
+						property !== undefined &&
+						(property === "length" || /^(0|[1-9][0-9]*)$/.test(property))
 					)
 						continue;
 					else if (

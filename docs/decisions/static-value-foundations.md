@@ -310,6 +310,16 @@ Closure applies only to the selected tasks while validating the complete invento
 and every supplied decision. A failed closure writes its report and exits nonzero.
 The report is a source-evidence index; the relevant test runs remain necessary.
 
+Instance-property seeds identify an observed constructor result and name positive
+and escaping/coercion witnesses. They do not add invented installed descriptors to
+the primordial graph. Reconciliation validates the constructor identity, task,
+exposure reference and witnesses; its optimization cells still need closure.
+
+Contained String wrappers also disappear for fixed numeric index reads, including
+negative zero and absent indexes. Conversion remains at construction, and index
+reads use the primitive string. A key coercion that exposes the wrapper, or an
+escaping result whose descriptors can be inspected, retains the String object.
+
 ## Baseline measurement
 
 ```sh

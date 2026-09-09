@@ -86,6 +86,11 @@ export interface StaticValueCoverage {
 			| "reconciled"
 			| "not-installed-in-full-inventory"
 			| "expansion-obligation";
+		readonly instanceObservation?: {
+			readonly producer: string;
+			readonly positive: CoverageWitness;
+			readonly negative: CoverageWitness;
+		};
 	}>;
 }
 
@@ -226,6 +231,41 @@ export function validateStaticValueCoverage(
 	for (const id of expected)
 		if (!actual.has(id))
 			throw new Error(`Installed descriptor has no coverage record: ${id}`);
+	const seeds = new Set<string>();
+	for (const seed of coverage.seeds) {
+		const id = catalogExposureId(seed.owner, seed.key);
+		if (seeds.has(id)) throw new Error(`Duplicate coverage seed ${id}`);
+		seeds.add(id);
+		if (
+			!["reconciled", "not-installed-in-full-inventory", "expansion-obligation"].includes(
+				seed.state,
+			) ||
+			!/^[C-N]-\d\d$/.test(seed.task) ||
+			new Set(seed.exposures).size !== seed.exposures.length ||
+			seed.exposures.some((exposure) => !actual.has(exposure)) ||
+			(seed.state === "reconciled") !== seed.exposures.length > 0
+		)
+			throw new Error(`Invalid seed reconciliation ${id}`);
+		const observation = seed.instanceObservation;
+		if (observation !== undefined) {
+			const producer = coverage.rows.find((row) => row.id === observation.producer);
+			if (
+				!seed.owner.endsWith(" instances") ||
+				producer?.kind !== "construct" ||
+				producer.owner !== seed.owner.slice(0, -" instances".length) ||
+				!seed.exposures.includes(producer.id) ||
+				producer.task !== seed.task ||
+				!observation.positive.file ||
+				!observation.positive.test ||
+				!observation.negative.file ||
+				!observation.negative.test ||
+				options.witnessExists?.(observation.positive) === false ||
+				options.witnessExists?.(observation.negative) === false
+			)
+				throw new Error(`Invalid instance observation ${id}`);
+		} else if (seed.owner.endsWith(" instances") && seed.state === "reconciled")
+			throw new Error(`Missing instance observation ${id}`);
+	}
 	if (
 		options.closure &&
 		coverage.seeds.some(

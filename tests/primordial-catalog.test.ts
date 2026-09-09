@@ -188,6 +188,66 @@ describe("shared primordial catalog and coverage obligations", () => {
 			}),
 		).toThrow("Unknown coverage closure task");
 	});
+	it("ties instance property observations to the producing constructor and executable witnesses", () => {
+		const instance = coverage.seeds.find(
+			(seed) => seed.owner === "String instances" && seed.key === "<indexed-properties>",
+		)!;
+		expect(instance.exposures).toEqual([JSON.stringify(["String", "<construct>"])]);
+		const observation = instance.instanceObservation!;
+		const withInstance = (seed: typeof instance) => ({
+			...coverage,
+			seeds: coverage.seeds.map((row) => (row === instance ? seed : row)),
+		});
+		expect(() =>
+			validateStaticValueCoverage(
+				withInstance({ ...instance, instanceObservation: undefined }),
+				catalog,
+				coverageEvidence,
+			),
+		).toThrow("Missing instance observation");
+		for (const producer of [
+			JSON.stringify(["Boolean", "<construct>"]),
+			JSON.stringify(["String", "<call>"]),
+		])
+			expect(() =>
+				validateStaticValueCoverage(
+					withInstance({
+						...instance,
+						exposures: [producer],
+						instanceObservation: { ...observation, producer },
+					}),
+					catalog,
+					coverageEvidence,
+				),
+			).toThrow("Invalid instance observation");
+		expect(() =>
+			validateStaticValueCoverage(
+				withInstance({
+					...instance,
+					instanceObservation: {
+						...observation,
+						positive: { ...observation.positive, test: "nonexistent instance witness" },
+					},
+				}),
+				catalog,
+				coverageEvidence,
+			),
+		).toThrow("Invalid instance observation");
+		expect(() =>
+			validateStaticValueCoverage(
+				withInstance({ ...instance, exposures: [] }),
+				catalog,
+				coverageEvidence,
+			),
+		).toThrow("Invalid seed reconciliation");
+		expect(() =>
+			validateStaticValueCoverage(
+				{ ...coverage, seeds: [...coverage.seeds, instance] },
+				catalog,
+				coverageEvidence,
+			),
+		).toThrow("Duplicate coverage seed");
+	});
 	it("requires source evidence for implemented grouped cells", () => {
 		const first = coverage.rows[0]!;
 		const witness = {
