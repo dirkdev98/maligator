@@ -92,6 +92,7 @@ describe("wire loader side-data validation", () => {
 				compileEntrypointToBuffer(
 					path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 					{
+						intrinsicGlobalReads: true,
 						stripTypes: stripCompactTypes,
 					},
 				),
@@ -848,13 +849,14 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("direct-builtin-invalid-string", invalidString);
 	});
 
-	it("loads guarded Math, collection and number formatting tags and rejects malformed hints", () => {
+	it("loads guarded Math, collection, formatting and predicate tags and rejects malformed hints", () => {
 		const entrypoint = path.join(directory, "guarded-call-tags.mjs");
 		writeFileSync(
 			entrypoint,
 			`function guardedOperations(map, array, value) {
 				array.push(value);
 				globalThis.formatted = [value.toFixed(), value.toExponential(2), value.toPrecision(2, 0, 0, 0, 0)];
+				globalThis.predicates = [Number.isNaN(value), Number.isFinite(value, 0, 0, 0, 0), Number.isInteger(), Number.isSafeInteger(value)];
 				return Math.round(value) + Math.max(value, 3) + map.get("answer");
 			}
 			globalThis.guardedOperations = guardedOperations;
@@ -908,6 +910,12 @@ describe("wire loader side-data validation", () => {
 					(site) =>
 						site.instruction.guardedBuiltinCall?.operation ===
 						`Number.prototype.${method}`,
+				),
+			).toBe(true);
+		for (const method of ["isNaN", "isFinite", "isInteger", "isSafeInteger"])
+			expect(
+				guardedSites.some(
+					(site) => site.instruction.guardedBuiltinCall?.operation === `Number.${method}`,
 				),
 			).toBe(true);
 		if (

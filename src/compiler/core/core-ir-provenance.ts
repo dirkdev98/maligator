@@ -2707,12 +2707,16 @@ function iteratorEntryPairVirtualizationCandidates(
 			source === undefined ? undefined : specializationDefinition(fn, roots, source);
 		const sourceAttributes =
 			sourceDefinition === undefined ? {} : fn.instructionAttributes(sourceDefinition);
-		const intrinsic = constructedIntrinsicName(fn, roots, sourceDefinition);
+		const sourceOpcode =
+			sourceDefinition === undefined
+				? undefined
+				: fn.instructionOpcodeName(sourceDefinition);
+		// Construction bounds candidate search; the runtime cursor guard proves the collection kind.
 		if (
 			sourceAttributes.exactCollectionReceiver !== "Map" &&
 			sourceAttributes.exactCollectionReceiver !== "Set" &&
-			intrinsic !== "Map" &&
-			intrinsic !== "Set"
+			sourceOpcode !== "construct" &&
+			!(sourceOpcode === "callKnown" && sourceAttributes.construct === true)
 		)
 			continue;
 		const pair = instructionResult(fn, outerStep, 0)!;

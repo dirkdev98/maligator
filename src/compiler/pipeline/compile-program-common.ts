@@ -15,6 +15,8 @@ export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
 export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize";
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
+	/** Only for embedded engine code; user programs must resolve mutable realm globals. */
+	intrinsicGlobalReads?: boolean;
 	optimization?: CompileCoreOptions["optimization"];
 	coreVerification?: CompileCoreOptions["coreVerification"];
 	coreInstrumentation?: CompileCoreOptions["coreInstrumentation"];

@@ -53,6 +53,10 @@ typedef enum MalGuardedBuiltinCallOp {
     MAL_GUARDED_BUILTIN_NUMBER_TO_FIXED,
     MAL_GUARDED_BUILTIN_NUMBER_TO_EXPONENTIAL,
     MAL_GUARDED_BUILTIN_NUMBER_TO_PRECISION,
+    MAL_GUARDED_BUILTIN_NUMBER_IS_NAN,
+    MAL_GUARDED_BUILTIN_NUMBER_IS_FINITE,
+    MAL_GUARDED_BUILTIN_NUMBER_IS_INTEGER,
+    MAL_GUARDED_BUILTIN_NUMBER_IS_SAFE_INTEGER,
 } MalGuardedBuiltinCallOp;
 
 /** Packed literal-template tags; mirrored by src/compiler/core/semantic-lowering.ts. */

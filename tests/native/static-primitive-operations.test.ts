@@ -11,6 +11,75 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it("keeps the embedded compiler independent of replaced user globals", () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-eval-replaced-globals-"));
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture: "tests/local/eval-replaced-globals.mjs",
+				name: "eval-globals",
+				config: resolveBuildConfig({
+					engine: { primordials: "mutable", eval: true, realms: false },
+				}),
+				outDir,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary)).toBe("eval replaced globals passed\n");
+				// The embedded compiler reaches many safepoints per source expression.
+				expect(
+					runToStdout(binary, {
+						env: { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" },
+						timeoutMs: 60_000,
+					}),
+				).toBe("eval replaced globals passed\n");
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 600_000);
+	it("preserves locked global writes under GC stress without optional features", () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-locked-global-bindings-"));
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture: "tests/local/locked-global-bindings.mjs",
+				name: "bindings",
+				config: resolveBuildConfig({
+					engine: { primordials: "locked", eval: false, realms: false },
+				}),
+				outDir,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary)).toBe("locked global bindings passed\n");
+				expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
+					"locked global bindings passed\n",
+				);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 600_000);
+	it.each([false, true])(
+		"preserves guarded Number predicates and noncoercing arguments with realms=%s",
+		(realms) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-predicate-guards-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/guarded-number-predicates.mjs",
+					name: "guards",
+					config: resolveBuildConfig({ engine: { primordials: "mutable", realms } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe("number predicate guards passed\n");
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						"number predicate guards passed\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 	it.each([false, true])(
 		"preserves guarded number formatting and callee mutations with realms=%s",
 		(realms) => {

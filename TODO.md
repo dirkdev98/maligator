@@ -442,6 +442,13 @@ only reproducible input.
 
 ## Realm correctness and runtime capabilities
 
+- [ ] Preserve the iterator creation Realm when bypassing builtin `next` dispatch.
+      On checkpoint `48aa2375`, a foreign Map's direct `entries().next().value` has
+      the foreign Array prototype, while the same pair obtained through `for...of`
+      has the current Realm's prototype in both backends. Audit protocol cursors
+      and entry-pair materialization guards in `runtime/src/builtin_iterator.c`;
+      cover borrowed `next` methods and modified foreign Array iteration as well.
+
 - [ ] Implement module loading for ShadowRealm.prototype.importValue. Preserve
       wrapping, rejection, module identity, and cross-Realm error semantics.
 

@@ -106,7 +106,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		compilerWirePath,
 		compileEntrypointToBuffer(
 			path.join(repositoryRoot, "src/compiler/pipeline/eval-compiler-entry.mts"),
-			{ stripTypes: stripCompactTypes },
+			{ stripTypes: stripCompactTypes, intrinsicGlobalReads: true },
 		),
 	);
 	const compilerProducerDigestsPath = path.join(outDir, "compiler-producers.json");

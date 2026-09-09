@@ -16,6 +16,7 @@ export function compileEntrypointToBuffer(
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
 	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
 	const runtime = compileSemanticProgramToRuntimeImage(semantic, {
+		semanticLowering: { intrinsicGlobalReads: options.intrinsicGlobalReads },
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,

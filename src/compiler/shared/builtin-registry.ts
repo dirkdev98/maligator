@@ -515,7 +515,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			effects: [],
 			result: "boolean",
 			realm: "semantic-identity",
-			lowerings: ["generic", "exact-builtin-call"],
+			lowerings: ["generic", "exact-builtin-call", "guarded-number-predicate"],
 		}),
 	),
 	...(["toFixed", "toExponential", "toPrecision"] as const).map(

@@ -363,6 +363,26 @@ and the original callee receives the original arguments once. Foreign callees,
 wrappers and coercing or invalid
 options use ordinary dispatch, preserving error realms and coercion order.
 
+Mutable Number predicates guard the captured native callback after all arguments
+have been evaluated. The existing noncoercing kernels return a Boolean without
+allocation, exceptions or realm state, so callback identity also admits functions
+from another realm. Native numeric operands use the corresponding finite, NaN or
+integer test; boxed operands use the same inline noncoercing kernels. A failed guard calls the captured function with the original receiver
+and full argument list; its result remains unconstrained.
+
+Public global names use the global environment unless an immutable binding proof
+permits intrinsic loading. NaN and Infinity are permanently non-writable and
+non-configurable; compiler-private operations remain intrinsic. Mutable constructor
+replacement, accessors, deletion and assignment therefore observe the current global
+binding. Optimizations requiring an exact constructor remain restricted to a proved
+intrinsic; a global name alone does not establish that identity. The embedded eval
+compiler explicitly enables intrinsic global reads for its own implementation.
+This does not freeze properties or grant immutable-binding facts, and the mode is
+not propagated to the user source it compiles. Replacing a public constructor or
+globalThis therefore affects dynamic user code without redirecting compiler internals.
+Existing entry-pair regions admit constructed iterator sources through their exact
+runtime cursor guard; they do not require an immutable public constructor binding.
+
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
 keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases

@@ -240,23 +240,13 @@ MalValue mal_builtin_number_is_nan_known(const MalValue *args, i32 arg_count) {
         return mal_value_new_boolean(false);
     }
 
-    return mal_value_new_boolean(
-        mal_value_is_nan(args[0]) || (mal_value_is_f64(args[0]) && isnan(mal_value_to_f64(args[0])))
-    );
+    return mal_value_new_boolean(mal_builtin_number_value_is_nan(args[0]));
 }
 
 static MalValue mal_builtin_number_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_number_is_nan_known(args, arg_count);
-}
-
-static bool mal_builtin_number_value_is_finite(MalValue value) {
-    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
-        return true;
-    }
-
-    return mal_value_is_f64(value) && isfinite(mal_value_to_f64(value));
 }
 
 MalValue mal_builtin_number_is_finite_known(const MalValue *args, i32 arg_count) {
@@ -267,19 +257,6 @@ static MalValue mal_builtin_number_is_finite(MalVm *vm, MalValue this_value, con
     (void) vm;
     (void) this_value;
     return mal_builtin_number_is_finite_known(args, arg_count);
-}
-
-static bool mal_builtin_number_value_is_integer(MalValue value) {
-    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
-        return true;
-    }
-
-    if (!mal_value_is_f64(value)) {
-        return false;
-    }
-
-    f64 number = mal_value_to_f64(value);
-    return isfinite(number) && trunc(number) == number;
 }
 
 MalValue mal_builtin_number_is_integer_known(const MalValue *args, i32 arg_count) {
@@ -293,17 +270,34 @@ static MalValue mal_builtin_number_is_integer(MalVm *vm, MalValue this_value, co
 }
 
 MalValue mal_builtin_number_is_safe_integer_known(const MalValue *args, i32 arg_count) {
-    if (arg_count < 1 || !mal_builtin_number_value_is_integer(args[0])) {
-        return mal_value_new_boolean(false);
-    }
-
-    return mal_value_new_boolean(fabs(mal_ops_to_number(args[0])) <= MAL_NUMBER_MAX_SAFE_INTEGER);
+    return mal_value_new_boolean(arg_count >= 1 && mal_builtin_number_value_is_safe_integer(args[0]));
 }
 
 static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_number_is_safe_integer_known(args, arg_count);
+}
+
+const MalNativeFunctionCallback mal_builtin_number_predicate_callbacks[4] = {
+    mal_builtin_number_is_nan,
+    mal_builtin_number_is_finite,
+    mal_builtin_number_is_integer,
+    mal_builtin_number_is_safe_integer,
+};
+
+bool mal_builtin_number_predicate_try_direct(
+    MalNumberPredicate predicate, MalValue callee, MalValue argument, MalValue *result
+) {
+    if (!mal_builtin_number_predicate_callee_matches(predicate, callee)) return false;
+    switch (predicate) {
+        case MAL_NUMBER_PREDICATE_IS_NAN: *result = mal_builtin_number_is_nan_known(&argument, 1); break;
+        case MAL_NUMBER_PREDICATE_IS_FINITE: *result = mal_builtin_number_is_finite_known(&argument, 1); break;
+        case MAL_NUMBER_PREDICATE_IS_INTEGER: *result = mal_builtin_number_is_integer_known(&argument, 1); break;
+        case MAL_NUMBER_PREDICATE_IS_SAFE_INTEGER: *result = mal_builtin_number_is_safe_integer_known(&argument, 1); break;
+        default: return false;
+    }
+    return true;
 }
 
 f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {

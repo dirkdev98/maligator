@@ -41,6 +41,7 @@ const context = resolveNativeBuildContext({
 			compileEntrypointToBuffer(
 				path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 				{
+					intrinsicGlobalReads: true,
 					stripTypes: stripCompactTypes,
 				},
 			),

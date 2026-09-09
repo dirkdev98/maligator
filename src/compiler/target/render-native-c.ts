@@ -169,11 +169,11 @@ const NUMBER_FORMAT_KERNELS: Readonly<
 	"Number.prototype.toPrecision": ["precision", 1, 100, -1],
 };
 
-const NUMBER_PREDICATES = new Set([
-	"Number.isNaN",
-	"Number.isFinite",
-	"Number.isInteger",
-	"Number.isSafeInteger",
+const NUMBER_PREDICATES = new Map([
+	["Number.isNaN", "MAL_NUMBER_PREDICATE_IS_NAN"],
+	["Number.isFinite", "MAL_NUMBER_PREDICATE_IS_FINITE"],
+	["Number.isInteger", "MAL_NUMBER_PREDICATE_IS_INTEGER"],
+	["Number.isSafeInteger", "MAL_NUMBER_PREDICATE_IS_SAFE_INTEGER"],
 ]);
 
 const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>> = {
@@ -6557,6 +6557,32 @@ function emitInstruction(
 				}
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			const numberPredicate = NUMBER_PREDICATES.get(guardedBuiltinOperation ?? "");
+			if (numberPredicate !== undefined) {
+				const argument = args[0];
+				const number = argument === undefined ? null : nativeNumberOperand(argument);
+				const test =
+					argument === undefined
+						? "false"
+						: number === null
+							? `mal_builtin_number_value_${numberPredicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}(${boxedOperand(argument)})`
+							: guardedBuiltinOperation === "Number.isNaN"
+								? `isnan(${number})`
+								: guardedBuiltinOperation === "Number.isFinite"
+									? `isfinite(${number})`
+									: `isfinite(${number}) && trunc(${number}) == ${number}${guardedBuiltinOperation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
+				return [
+					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
+					storeBoolean(instruction.dst, test),
+					`} else {`,
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
+					poll,
+				];
+			}
 			if (
 				guardedBuiltinOperation === "Number.prototype.toFixed" ||
 				guardedBuiltinOperation === "Number.prototype.toExponential" ||

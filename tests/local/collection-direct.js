@@ -43,6 +43,25 @@ let setEntryTotal = 0;
 for (const [first, second] of entrySet.entries()) setEntryTotal += first + second;
 ok("Set entry pair semantics", setEntryTotal === 16);
 
+const originalMap = Map;
+let replacementEntryTotal = 0;
+try {
+	globalThis.Map = function () {
+		return {
+			*[Symbol.iterator]() {
+				yield [5, 7];
+			},
+		};
+	};
+	for (const [key, value] of new Map()) replacementEntryTotal += key + value;
+} finally {
+	globalThis.Map = originalMap;
+}
+ok(
+	"replaced Map constructor uses ordinary iterator protocol",
+	replacementEntryTotal === 12,
+);
+
 function privateFreshMapGet(key) {
 	const values = new Map();
 	values.set("answer", 42);

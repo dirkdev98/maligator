@@ -1894,7 +1894,7 @@ describe("native update-expression representation", () => {
 		["Map", "new Map([[1, 2]])", "map-iterator-cursor"],
 		["Set", "new Set([1, 2])", "set-iterator-cursor"],
 	])("selects the %s stateful iterator protocol", (_name, iterable, kind) => {
-		const definition = lower(
+		const definition = lockedDefinition(
 			`"use strict"; function visit() { for (const value of ${iterable}) globalThis.value = value; } globalThis.visit = visit;`,
 		);
 		expect(specializations(definition).some((region) => region.kind === kind)).toBe(true);
@@ -1902,7 +1902,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 	});
 
-	it("virtualizes exact Map entry pairs while retaining materialization fallback", () => {
+	it("guards constructed iterator entry pairs while retaining materialization fallback", () => {
 		const source = `
 			function visit() {
 				let total = 0;
@@ -1911,7 +1911,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.visit = visit;
 		`;
-		const definition = lockedDefinition(source);
+		const definition = lower(source);
 		const regions = specializations(definition).filter(
 			(region) => region.kind === "iterator-entry-pair-virtualization",
 		);
@@ -2147,9 +2147,6 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(
 			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); \}/,
 		);
-		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{ (MAL_ROOT_MASK\(0x[\da-f]+\)); mal_gc_safepoint\(vm\); \}\n\s+MalObject \*__property_receiver_[\s\S]*?\} else \{\n\s+\1;\n\s+r\d+ = mal_vm_op_load_property_ic/,
-		);
 
 		const lockedOutput = emitLocked(source);
 		expect(lockedOutput).not.toContain("mal_builtin_math_unary_number_known");
@@ -2266,6 +2263,35 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it.each(["isNaN", "isFinite", "isInteger", "isSafeInteger"])(
+		"retains fallback for guarded Number.%s with numeric, arbitrary and omitted arguments",
+		(method) => {
+			const definition = lower(`
+				function predicate(value, effect) { return [Number.${method}(value, effect()), Number.${method}(+value), Number.${method}()]; }
+				globalThis.predicate = predicate;
+			`);
+			const calls = definition.runtime.functions.flatMap(({ instructions }) =>
+				instructions.filter(
+					(instruction) =>
+						instruction.opcode === "CALL" &&
+						instruction.guardedBuiltinCall?.operation === `Number.${method}`,
+				),
+			);
+			expect(calls).toHaveLength(3);
+			for (const argumentCount of [0, 1, 2]) {
+				expect(calls).toContainEqual(expect.objectContaining({ argumentCount }));
+			}
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+				definition,
+			);
+			const output = emitProgramImage(definition);
+			expect(output).toContain("mal_vm_op_load_property_ic");
+			expect(output).toContain("mal_builtin_number_value_is_");
+			expect(output).toContain("mal_builtin_number_predicate_callee_matches");
+			expect(output).toContain("mal_vm_call_cached");
+		},
+	);
+
 	it.each(["toFixed", "toExponential", "toPrecision"])(
 		"preserves lookup and fallback around guarded numeric %s formatting",
 		(method) => {
@@ -2303,7 +2329,8 @@ describe("native update-expression representation", () => {
 		const source = `"use strict"; function calculate() { return Math.floor(1.25); } globalThis.keep = calculate;`;
 		const mutableOutput = emit(source);
 		expect(mutableOutput).toContain("mal_vm_op_load_property_ic");
-		expect(mutableOutput).toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
+		expect(mutableOutput).toContain("mal_vm_op_load_global_property");
+		expect(mutableOutput).not.toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
 
 		const lockedOutput = emitLocked(source);
 		expect(lockedOutput).not.toContain("mal_builtin_math_unary_number_known");
@@ -2322,7 +2349,7 @@ describe("native update-expression representation", () => {
 	});
 
 	it("routes exact class calls through the ordinary-call runtime check", () => {
-		const output = emit(`
+		const output = emitLocked(`
 			"use strict";
 			class Example {
 				constructor() { return { value: 1 }; }
@@ -2349,7 +2376,7 @@ describe("native update-expression representation", () => {
 	});
 
 	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {
-		const output = emit(`
+		const output = emitLocked(`
 			const target = function target(value) { "use strict"; return this === null ? value : 0; };
 			globalThis.result = target.call(null, 1);
 		`);
@@ -2478,7 +2505,7 @@ describe("native update-expression representation", () => {
 		`;
 		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_projection(vm,");
-		expect(output).toContain("mal_builtin_string_slice_to_number_direct(vm,");
+		expect(output).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
@@ -2608,7 +2635,9 @@ describe("native update-expression representation", () => {
 			"regexp-exec-projection-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const lowered = compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
 		const projections = specializations(lowered).filter(
 			(region) => region.kind === "regexp-exec-projection",
 		);
@@ -2621,7 +2650,7 @@ describe("native update-expression representation", () => {
 				genericTwin: "retained",
 				materialization: "whole-region",
 				guard: {
-					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
 					obligations: ["fallback", "materialize"],
 				},
 			},
@@ -2822,7 +2851,13 @@ describe("native update-expression representation", () => {
 			"string-slice-number-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const mutable = compileSemanticProgramToProgramImage(semantic);
+		expect(
+			specializations(mutable).some((region) => region.kind === "string-slice-number"),
+		).toBe(false);
+		const lowered = compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
 		const regions = specializations(lowered).filter(
 			(region) => region.kind === "string-slice-number",
 		);
@@ -2830,13 +2865,13 @@ describe("native update-expression representation", () => {
 		expect(regions[0]).toMatchObject({
 			kind: "string-slice-number",
 			representation: "primitive-string-span-number",
-			builtinIdentities: "runtime-guarded",
+			builtinIdentities: "authority-invariant",
 			sliceStart: 1,
 			license: {
 				genericTwin: "retained",
 				materialization: "none",
 				guard: {
-					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
 					obligations: ["fallback"],
 				},
 			},
@@ -2860,7 +2895,7 @@ describe("native update-expression representation", () => {
 			specializations(cached).filter((region) => region.kind === "string-slice-number"),
 		).toEqual(regions);
 		expect(emitProgramImage(cached, { compiled: true })).toContain(
-			"mal_builtin_string_slice_to_number_direct(vm,",
+			"mal_builtin_string_slice_to_number_direct_locked(vm,",
 		);
 
 		const functionIndex = lowered.native.functions.findIndex((fn) =>
@@ -2890,7 +2925,7 @@ describe("native update-expression representation", () => {
 			functionIndex,
 			owner.specializations.with(regionIndex, {
 				...region,
-				builtinIdentities: "authority-invariant",
+				builtinIdentities: "runtime-guarded",
 			}),
 		);
 		expect(() => serializeCompilerArtifact(invalidIdentity)).toThrow(
@@ -2909,7 +2944,9 @@ describe("native update-expression representation", () => {
 			"regexp-iterator-projection-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const lowered = compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
 		const projections = specializations(lowered).filter(
 			(region) => region.kind === "regexp-iterator-projection",
 		);
@@ -2922,9 +2959,9 @@ describe("native update-expression representation", () => {
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
-				admission: { mode: "per-use" },
+				admission: { mode: "stable" },
 				guard: {
-					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
 					obligations: ["fallback", "materialize"],
 				},
 			},
@@ -3414,7 +3451,7 @@ describe("native update-expression representation", () => {
 	});
 
 	it("parses a closed RegExp capture span through the exact Number intrinsic", () => {
-		const output = emit(`
+		const output = emitLocked(`
 			function parse(regexp, value) {
 				const match = regexp.exec(value);
 				if (match === null) return -1;
@@ -3464,7 +3501,7 @@ describe("native update-expression representation", () => {
 	});
 
 	it("projects closed matchAll captures directly through Number", () => {
-		const output = emit(`
+		const output = emitLocked(`
 			function total(value, regexp) {
 				let sum = 0;
 				for (const match of value.matchAll(regexp)) sum += Number(match[1]);
@@ -3551,8 +3588,8 @@ describe("native update-expression representation", () => {
 			"Map.prototype.has",
 			"Map.prototype.delete",
 			"Set.prototype.add",
-			"Set.prototype.has",
-			"Set.prototype.delete",
+			"Map.prototype.has",
+			"Map.prototype.delete",
 		]);
 	});
 

@@ -643,10 +643,12 @@ function compileAndBuild(
 					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 					bakeProgram: () =>
 						compileEntrypoint(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 				}
@@ -1198,10 +1200,12 @@ function buildIsolatedTestRunner(
 					entrypoint: evalCompiler.entrypoint,
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 					bakeProgram: () =>
 						compileEntrypoint(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 				}
@@ -1331,10 +1335,12 @@ function executeProfiledTests(
 					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 					bakeProgram: () =>
 						compileEntrypoint(evalCompiler.entrypoint, {
+							intrinsicGlobalReads: true,
 							stripTypes: context.stripTypes,
 						}),
 				}

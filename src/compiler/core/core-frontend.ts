@@ -9,6 +9,8 @@ export interface CoreFrontendOptions {
 	readonly evalDirect?: boolean;
 	readonly directEvalContext?: DirectEvalContext;
 	readonly facts?: CompilerProgramFacts;
+	/** Engine implementation code reads intrinsic globals without freezing their properties. */
+	readonly intrinsicGlobalReads?: boolean;
 	readonly runPhase?: <T>(phase: "construct core ir", run: () => T) => T;
 }
 
@@ -25,6 +27,7 @@ export function lowerSemanticProgramToCore(
 			evalDirect: options.evalDirect,
 			directEvalContext: options.directEvalContext,
 			facts: options.facts,
+			intrinsicGlobalReads: options.intrinsicGlobalReads,
 		}),
 	);
 }

@@ -1097,6 +1097,10 @@ describe("program-image-codec", () => {
 					"Number.prototype.toFixed",
 					"Number.prototype.toExponential",
 					"Number.prototype.toPrecision",
+					"Number.isNaN",
+					"Number.isFinite",
+					"Number.isInteger",
+					"Number.isSafeInteger",
 				] as const
 			).flatMap((operation) =>
 				[0, 1, 5].map(

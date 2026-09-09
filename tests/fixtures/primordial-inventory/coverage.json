@@ -95280,6 +95280,29 @@
 						"test": "keeps unused coercions, exceptions and callbacks at %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"mutable-proxy-realm",
+						"effectful-guard-failure",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_number.c",
+						"symbol": "mal_builtin_number_predicate_try_direct"
+					},
+					"positive": {
+						"file": "tests/program-image-emission.test.ts",
+						"test": "retains fallback for guarded Number.%s with numeric, arbitrary and omitted arguments",
+						"case": "isFinite"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -95425,6 +95448,29 @@
 						"test": "keeps unused coercions, exceptions and callbacks at %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"mutable-proxy-realm",
+						"effectful-guard-failure",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_number.c",
+						"symbol": "mal_builtin_number_predicate_try_direct"
+					},
+					"positive": {
+						"file": "tests/program-image-emission.test.ts",
+						"test": "retains fallback for guarded Number.%s with numeric, arbitrary and omitted arguments",
+						"case": "isInteger"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -95531,6 +95577,29 @@
 						"case": "Number.isNaN(NaN)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"mutable-proxy-realm",
+						"effectful-guard-failure",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_number.c",
+						"symbol": "mal_builtin_number_predicate_try_direct"
+					},
+					"positive": {
+						"file": "tests/program-image-emission.test.ts",
+						"test": "retains fallback for guarded Number.%s with numeric, arbitrary and omitted arguments",
+						"case": "isNaN"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -95676,6 +95745,29 @@
 						"test": "keeps unused coercions, exceptions and callbacks at %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"mutable-proxy-realm",
+						"effectful-guard-failure",
+						"brand-with-unknown-contents"
+					],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_number.c",
+						"symbol": "mal_builtin_number_predicate_try_direct"
+					},
+					"positive": {
+						"file": "tests/program-image-emission.test.ts",
+						"test": "retains fallback for guarded Number.%s with numeric, arbitrary and omitted arguments",
+						"case": "isSafeInteger"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

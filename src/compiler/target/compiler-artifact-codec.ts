@@ -39,7 +39,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 75;
+export const COMPILER_ARTIFACT_VERSION = 76;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -62,9 +62,7 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 		(operation) =>
 			operation.startsWith("Array.prototype.") && operation !== "Array.prototype.push",
 	),
-	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) =>
-		operation.startsWith("Number.prototype."),
-	),
+	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Number.")),
 ] as const;
 const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.forEach",

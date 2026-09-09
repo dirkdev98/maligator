@@ -40,7 +40,10 @@ import type {
 	StaticArgumentsAccess,
 } from "../frontend/semantic-analysis.ts";
 import { SyntaxDiagnostic } from "../frontend/syntax-diagnostic.ts";
-import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	conservativeCompilerProgramFacts,
+} from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type {
 	CompilerBinaryOperator,
@@ -80,6 +83,7 @@ interface CoreFrontendContext {
 	core: CoreProgram;
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
+	intrinsicGlobalReads: boolean;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -645,6 +649,17 @@ const unboundCoreEmitter: CoreInstructionEmitter = {
 	},
 };
 
+const compilerPrivateIntrinsics = new Set<string>([
+	"__cjs_require",
+	"__directEval",
+	"__dynamicImport",
+	"__configureDeferredNamespace",
+	"__evaluateModuleSync",
+	"__newDisposeCapability",
+	"__addDisposableResource",
+	"__disposeResources",
+]);
+
 const compilerIntrinsics = new Set<string>([
 	"Object",
 	"Array",
@@ -709,18 +724,22 @@ const compilerIntrinsics = new Set<string>([
 	"eval",
 	"NaN",
 	"Infinity",
-	"__cjs_require",
-	"__directEval",
-	"__dynamicImport",
-	"__configureDeferredNamespace",
-	"__evaluateModuleSync",
-	"__newDisposeCapability",
-	"__addDisposableResource",
-	"__disposeResources",
+	...compilerPrivateIntrinsics,
 ]);
 
-function isCompilerIntrinsic(name: string): name is CompilerIntrinsic {
-	return compilerIntrinsics.has(name);
+function identifierLoadsIntrinsic(
+	program: CoreFrontendContext,
+	name: string,
+): name is CompilerIntrinsic {
+	// NaN and Infinity are non-writable, non-configurable globals in every policy.
+	return (
+		compilerIntrinsics.has(name) &&
+		(program.intrinsicGlobalReads ||
+			name === "NaN" ||
+			name === "Infinity" ||
+			compilerPrivateIntrinsics.has(name) ||
+			compilerFactIsWorldInvariant(program.facts.immutableGlobalBindings.get(name)))
+	);
 }
 
 const compilerBinaryOperators = new Set<string>([
@@ -770,12 +789,14 @@ export function constructSemanticProgramCore(
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
+		intrinsicGlobalReads?: boolean;
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
+		intrinsicGlobalReads: options.intrinsicGlobalReads ?? false,
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
 		directEvalContext: options.directEvalContext ?? {
@@ -4871,7 +4892,7 @@ function compileStaticIdentifierTarget(
 		return;
 	}
 
-	if (binding.undeclared && !isCompilerIntrinsic(binding.name)) {
+	if (binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)) {
 		// A statically-undeclared name can still resolve through the global object's
 		// Object Environment Record. The runtime store checks whether the property
 		// exists and throws for an actually-unresolvable strict assignment.
@@ -9652,10 +9673,14 @@ function compileIdentifierAssignment(
 		? globalPropertyLocation(program, binding.name)
 		: null;
 	const runtimeGlobalLocation =
-		binding.undeclared && !isCompilerIntrinsic(binding.name)
+		binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)
 			? globalPropertyLocation(program, binding.name)
 			: null;
-	if (binding.undeclared && !isCompilerIntrinsic(binding.name) && !hostGlobalLocation) {
+	if (
+		binding.undeclared &&
+		!compilerPrivateIntrinsics.has(binding.name) &&
+		!hostGlobalLocation
+	) {
 		// A plain assignment must resolve against the runtime global object in both
 		// modes. Sloppy code creates an absent property; strict code throws only when
 		// the property is actually absent. Resolve the strict reference before the
@@ -9878,7 +9903,7 @@ function compileLogicalAssignment(
 				: null;
 			location =
 				hostGlobalLocation ??
-				(binding.undeclared && !isCompilerIntrinsic(binding.name)
+				(binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)
 					? globalPropertyLocation(program, binding.name)
 					: getOrCreateBindingLocation(program, fn, binding));
 			current = loadRegisterFromLocation(fn, cursor.block, location);
@@ -10270,7 +10295,7 @@ function compileUnaryExpression(
 		if (binding) {
 			retainHostGlobal(program, binding);
 		}
-		if (binding?.undeclared && !isCompilerIntrinsic(argument.name)) {
+		if (binding?.undeclared && !identifierLoadsIntrinsic(program, argument.name)) {
 			if (
 				fn.semanticFile.withDynamicNodes.has(argument) ||
 				directEvalFreeIdentifierUsesDynamicEnvironment(program, fn, argument)
@@ -12899,7 +12924,7 @@ function compileStaticIdentifier(
 	}
 	retainHostGlobal(program, binding);
 
-	if (binding.undeclared && isCompilerIntrinsic(identifier.name)) {
+	if (binding.undeclared && identifierLoadsIntrinsic(program, identifier.name)) {
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "loadIntrinsic",
@@ -13567,6 +13592,9 @@ function getOrCreateBindingLocation(
 	fn: CoreFrontendFunction,
 	binding: Binding,
 ) {
+	if (binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)) {
+		return globalPropertyLocation(program, binding.name);
+	}
 	let location = program.bindingToStorage.get(binding);
 	if (!location) {
 		switch (binding.scopedTo) {

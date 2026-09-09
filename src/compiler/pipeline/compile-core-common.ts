@@ -38,6 +38,7 @@ export interface CompileCoreOptions {
 	coreInstrumentation?: CoreInstrumentationMode;
 	coreOptimizationBenchmarkAblation?: CoreOptimizationBenchmarkAblation;
 	semanticLowering?: {
+		intrinsicGlobalReads?: boolean;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;

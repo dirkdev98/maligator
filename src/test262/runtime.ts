@@ -388,10 +388,12 @@ export function test262PrepareBuild() {
 			),
 			bake: () =>
 				compileEntrypointToBuffer(compilerEntrypoint, {
+					intrinsicGlobalReads: true,
 					stripTypes: stripCompactTypes,
 				}),
 			bakeProgram: () =>
 				compileEntrypoint(compilerEntrypoint, {
+					intrinsicGlobalReads: true,
 					stripTypes: stripCompactTypes,
 				}),
 		},
