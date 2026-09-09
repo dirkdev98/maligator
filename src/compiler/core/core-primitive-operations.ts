@@ -64,7 +64,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 	],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
-	changes: { cfg: false, calls: true, facts: true, representations: false },
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const { program, item } = context,

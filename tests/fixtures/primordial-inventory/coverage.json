@@ -49251,7 +49251,7 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "consumes a dynamic symbol description without its identity for %s",
-						"case": "Symbol(String(x)).description"
+						"case": "Symbol(x).description"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
@@ -105915,11 +105915,47 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "consumes a dynamic symbol description without its identity for %s",
-						"case": "Symbol(String(x)).description"
+						"case": "Symbol(x).description"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains a dynamic symbol whose identity escapes before its description"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains conditional Symbol coercion in a catch and finally region"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable dynamic symbol description dispatch"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates per-iteration Symbol identities while preserving loop-carried descriptions"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable dynamic symbol description dispatch"
 					},
 					"lowering": "specialized"
 				}
@@ -106304,6 +106340,25 @@
 						"case": "Symbol('x').description"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "consumes a dynamic symbol description without its identity for %s",
+						"case": "Symbol(x).description"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable dynamic symbol description dispatch"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106377,7 +106432,7 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "consumes a dynamic symbol description without its identity for %s",
-						"case": "Symbol(String(x)).toString()"
+						"case": "Symbol(x).toString()"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",

@@ -348,9 +348,11 @@ escaping result whose descriptors can be inspected, retains the String object.
 
 Fresh Symbols consumed only through their descriptions or descriptive strings can
 carry the converted description directly. The bounded use walk rejects identity
-escapes and requires a known input brand excluding undefined; unknown inputs retain
-the constructor's absent-description branch. ToString stays at creation, before
-later effects and observations. Registry operations keep their runtime identity.
+escapes. An input that may be undefined branches before ToString and rejoins with
+the description plus its textual form; an absent description stays undefined for
+the getter and uses an empty string inside descriptive text. ToString stays at
+creation, before later effects and observations, with the original exception
+handler. Registry operations keep their runtime identity.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while

@@ -649,6 +649,10 @@ describe("primitive operation results", () => {
 		},
 	);
 	it.each([
+		"Symbol(x).description",
+		"Symbol(x).toString()",
+		"String(Symbol(x))",
+		"Object(Symbol(x)).description",
 		"Symbol(String(x)).description",
 		"Symbol(+x).description",
 		"Symbol({toString(){return x();}}).description",
@@ -669,8 +673,8 @@ describe("primitive operation results", () => {
 			).toBe(false);
 		},
 	);
-	it.each(["Symbol(x).description", "Symbol.for(String(x)).description"])(
-		"retains symbol identity or an unknown description at %s",
+	it.each(["Symbol(x)", "Symbol.for(String(x)).description"])(
+		"retains escaping or registered symbol identity at %s",
 		(expression) => {
 			expect(
 				inspect(expression).core.some((op) =>
@@ -679,6 +683,57 @@ describe("primitive operation results", () => {
 			).toBe(true);
 		},
 	);
+	it("shares one conditional Symbol coercion across description and text consumers", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x,after){const s=Symbol(x);after();return [s.description,s.toString(),String(s)];}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "tostring",
+			),
+		).toHaveLength(1);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Symbol"),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.attributes.operation === "Symbol.prototype.description<get>",
+			),
+		).toBe(false);
+	});
+	it("retains conditional Symbol coercion in a catch and finally region", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x,after){try{const s=Symbol(x);after();return s.description;}catch(error){return error;}finally{after();}}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Symbol"),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "tostring",
+			),
+		).toBe(true);
+	});
+	it("eliminates per-iteration Symbol identities while preserving loop-carried descriptions", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(values){let text='';for(let i=0;i<values.length;i++){const s=Symbol(values[i]);text+=s.description;}return text;}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Symbol"),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "tostring",
+			),
+		).toBe(true);
+	});
 	it("retains a dynamic symbol whose identity escapes before its description", () => {
 		const output = inspectStaticValueFunction(
 			"function probe(x){const s=Symbol(String(x)); x(s); return s.description;}globalThis.probe=probe;",
@@ -687,9 +742,18 @@ describe("primitive operation results", () => {
 		expect(output.core.some((op) => op.attributes.operation === "Symbol")).toBe(true);
 	});
 	it("retains mutable dynamic symbol description dispatch", () => {
-		const output = inspect("Symbol(String(x)).description", false);
-		expect(output.structure.genericCalls).toBeGreaterThan(0);
-		expect(output.structure.genericLookups).toBeGreaterThan(0);
+		for (const expression of [
+			"Symbol(String(x)).description",
+			"Symbol(x).description",
+			"Symbol(x).toString()",
+			"String(Symbol(x))",
+		]) {
+			const output = inspect(expression, false);
+			expect(output.structure.genericCalls).toBeGreaterThan(0);
+			if (expression === "String(Symbol(x))")
+				expect(output.structure.genericCalls).toBe(2);
+			else expect(output.structure.genericLookups).toBeGreaterThan(0);
+		}
 	});
 	it.each(primitiveDataExpressions)(
 		"reads certified primitive data without a runtime lookup for %s",

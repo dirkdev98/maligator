@@ -1,9 +1,121 @@
 function show(value) {
 	console.log(typeof value, Object.is(value, -0) ? "-0" : String(value));
 }
+function unknownSymbolViews(value, after) {
+	const symbol = Symbol(value);
+	after();
+	return [symbol.description, symbol.toString(), String(symbol)];
+}
+let unknownSymbolEvents = "";
+for (const value of [
+	undefined,
+	null,
+	"",
+	"undefined",
+	"😀",
+	"\ud800",
+	-0,
+	NaN,
+	1n,
+	Symbol("invalid"),
+]) {
+	unknownSymbolEvents = "";
+	try {
+		const views = unknownSymbolViews(value, () => {
+			unknownSymbolEvents += "after|";
+		});
+		for (const view of views) show(view);
+	} catch (error) {
+		show(error.name);
+	}
+	show(unknownSymbolEvents);
+}
+for (const value of [undefined, "description", Symbol("invalid"), {}]) {
+	unknownSymbolEvents = "";
+	const input = {
+		[Symbol.toPrimitive](hint) {
+			unknownSymbolEvents += `${hint}|`;
+			return value;
+		},
+	};
+	try {
+		const views = unknownSymbolViews(input, () => {
+			unknownSymbolEvents += "after|";
+			input[Symbol.toPrimitive] = () => "changed";
+		});
+		for (const view of views) show(view);
+	} catch (error) {
+		show(error.name);
+	}
+	show(unknownSymbolEvents);
+}
+function caughtSymbolDescription(value, after) {
+	try {
+		const symbol = Symbol(value);
+		after();
+		return symbol.description;
+	} catch (error) {
+		return error.name;
+	} finally {
+		unknownSymbolEvents += "finally|";
+	}
+}
+for (const value of [
+	undefined,
+	"ok",
+	Symbol("invalid"),
+	{
+		toString() {
+			throw new RangeError("conversion");
+		},
+	},
+]) {
+	unknownSymbolEvents = "";
+	show(
+		caughtSymbolDescription(value, () => {
+			unknownSymbolEvents += "after|";
+		}),
+	);
+	show(unknownSymbolEvents);
+}
+unknownSymbolEvents = "";
+show(
+	caughtSymbolDescription("ok", () => {
+		unknownSymbolEvents += "after|";
+		throw new SyntaxError("later");
+	}),
+);
+show(unknownSymbolEvents);
+function extraSymbolArgument(value, extra) {
+	return Symbol(value, extra()).description;
+}
+unknownSymbolEvents = "";
+show(
+	extraSymbolArgument(
+		{
+			toString() {
+				unknownSymbolEvents += "coerce|";
+				return "text";
+			},
+		},
+		() => {
+			unknownSymbolEvents += "extra|";
+		},
+	),
+);
+show(unknownSymbolEvents);
 function dynamicSymbolDescription(value) {
 	return Symbol(String(value)).description;
 }
+function loopSymbolDescriptions(values) {
+	let text = "";
+	for (let index = 0; index < values.length; index++) {
+		const symbol = Symbol(values[index]);
+		text += symbol.description;
+	}
+	return text;
+}
+show(loopSymbolDescriptions([undefined, null, "", "text", 1]));
 function dynamicSymbolText(value) {
 	const symbol = Symbol(String(value));
 	return symbol.toString() + "|" + String(symbol);
