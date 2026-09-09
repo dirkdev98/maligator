@@ -122,6 +122,28 @@ for (const [operation, method, args] of methods) {
 				expect(calls(result, operation)).toHaveLength(1);
 			},
 		);
+		it.each(["Boolean", "Number", "String", "BigInt", "Symbol"])(
+			"observes the exact private slot contract of %s.prototype",
+			(family) => {
+				const result = inspect(`return ${method}.call(${family}.prototype${args});`);
+				expect(calls(result, operation)).toHaveLength(0);
+				const errors = result.core
+					.filter((item) => item.opcode === "builtinError")
+					.map((item) => item.attributes.error);
+				if (
+					["Boolean", "Number", "String"].includes(family) &&
+					operation.startsWith(`${family}.prototype`)
+				)
+					expect(errors).toHaveLength(0);
+				else
+					expect(errors).toEqual([`${operation.split(".")[0]!.toLowerCase()}Receiver`]);
+			},
+		);
+		it("retains mutable prototype identity when reading its private slot", () => {
+			const family = operation.split(".")[0]!;
+			const result = inspect(`return ${method}.call(${family}.prototype${args});`, false);
+			expect(result.structure.genericCalls).toBeGreaterThan(0);
+		});
 		it("does not reuse a different receiver's slot", () => {
 			const result = inspect(
 				`const a=${method}.call(x${args});const b=${method}.call(z${args});return[a,b];`,
@@ -270,4 +292,39 @@ describe("primordial own descriptors", () => {
 			expect(calls(result, `${owner}.getOwnPropertyDescriptor`)).toHaveLength(1);
 		},
 	);
+});
+
+describe("primitive prototype payloads", () => {
+	it.each([
+		"Number.prototype.toString",
+		"Number.prototype.toFixed",
+		"Number.prototype.toExponential",
+		"Number.prototype.toPrecision",
+	])("exposes positive zero to dynamic options in %s", (operation) => {
+		const result = inspect(`return ${operation}.call(Number.prototype,x);`);
+		const receiver = calls(result, operation)[0]!.inputs[0]!;
+		expect(
+			result.core.find((item) => item.outputs.includes(receiver))?.attributes.value,
+		).toBe(0);
+	});
+	it("retains a receiver check across a mixed primordial join", () => {
+		const result = inspect(
+			"const value=x?Boolean.prototype:Number.prototype;y(value);return Boolean.prototype.valueOf.call(value);",
+		);
+		expect(result.core.some((item) => item.opcode === "builtinError")).toBe(false);
+		expect(calls(result, "Boolean.prototype.valueOf")).toHaveLength(1);
+	});
+	it("reads an escaped Symbol wrapper's description from its primitive payload", () => {
+		const result = inspect(
+			"const value=Object(Symbol(x));y(value);return Object.getOwnPropertyDescriptor(Symbol.prototype,'description').get.call(value);",
+		);
+		const wrapper = calls(result, "Object")[0]!;
+		expect(wrapper).toBeDefined();
+		expect(
+			calls(result, "Symbol.prototype.description<get>").every(
+				(item) => item.inputs[0] !== wrapper.outputs[0],
+			),
+		).toBe(true);
+		expect(result.structure.genericCalls).toBe(1);
+	});
 });

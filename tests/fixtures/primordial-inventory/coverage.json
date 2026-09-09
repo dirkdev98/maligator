@@ -84844,6 +84844,26 @@
 						"case": "BigInt.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -85166,6 +85186,26 @@
 					"negative": {
 						"file": "tests/core-primitive-call-reuse.test.ts",
 						"test": "keeps mutable descriptor and method lookup",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
 						"case": "BigInt.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
@@ -85841,6 +85881,46 @@
 						"case": "Boolean.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -86224,6 +86304,46 @@
 						"case": "Boolean.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -98564,6 +98684,66 @@
 						"case": "Number.prototype.toExponential"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "exposes positive zero to dynamic options in %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -98989,6 +99169,66 @@
 						"case": "Number.prototype.toFixed"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "exposes positive zero to dynamic options in %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -99415,6 +99655,66 @@
 						"case": "Number.prototype.toPrecision"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "exposes positive zero to dynamic options in %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -99876,6 +100176,66 @@
 						"case": "Number.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "exposes positive zero to dynamic options in %s",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -100240,6 +100600,46 @@
 						"case": "Number.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -111934,6 +112334,46 @@
 						"case": "String.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -113203,6 +113643,46 @@
 						"case": "String.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitivePrototypePayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -114260,6 +114740,46 @@
 						"case": "Symbol.prototype.description<get>"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reads an escaped Symbol wrapper's description from its primitive payload",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -114575,6 +115095,26 @@
 					"negative": {
 						"file": "tests/core-primitive-call-reuse.test.ts",
 						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
 						"case": "Symbol.prototype.toString"
 					},
 					"lowering": "residual-throw"
@@ -114903,6 +115443,26 @@
 						"case": "Symbol.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -115205,6 +115765,26 @@
 					"negative": {
 						"file": "tests/core-primitive-call-reuse.test.ts",
 						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "observes the exact private slot contract of %s.prototype",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains mutable prototype identity when reading its private slot",
 						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
 					},
 					"lowering": "residual-throw"

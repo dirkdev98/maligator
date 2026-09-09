@@ -1770,4 +1770,475 @@ capture("late descriptor invalid newTarget", () =>
 		{},
 	),
 );
+function primitivePrototype0Boolean(effect) {
+	return Boolean.prototype.valueOf.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype0Boolean = primitivePrototype0Boolean;
+function primitivePrototype0Number(effect) {
+	return Boolean.prototype.valueOf.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype0Number = primitivePrototype0Number;
+function primitivePrototype0String(effect) {
+	return Boolean.prototype.valueOf.call(String.prototype, effect());
+}
+globalThis.primitivePrototype0String = primitivePrototype0String;
+function primitivePrototype0BigInt(effect) {
+	return Boolean.prototype.valueOf.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype0BigInt = primitivePrototype0BigInt;
+function primitivePrototype0Symbol(effect) {
+	return Boolean.prototype.valueOf.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype0Symbol = primitivePrototype0Symbol;
+function primitivePrototype1Boolean(effect) {
+	return Boolean.prototype.toString.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype1Boolean = primitivePrototype1Boolean;
+function primitivePrototype1Number(effect) {
+	return Boolean.prototype.toString.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype1Number = primitivePrototype1Number;
+function primitivePrototype1String(effect) {
+	return Boolean.prototype.toString.call(String.prototype, effect());
+}
+globalThis.primitivePrototype1String = primitivePrototype1String;
+function primitivePrototype1BigInt(effect) {
+	return Boolean.prototype.toString.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype1BigInt = primitivePrototype1BigInt;
+function primitivePrototype1Symbol(effect) {
+	return Boolean.prototype.toString.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype1Symbol = primitivePrototype1Symbol;
+function primitivePrototype2Boolean(effect) {
+	return Number.prototype.valueOf.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype2Boolean = primitivePrototype2Boolean;
+function primitivePrototype2Number(effect) {
+	return Number.prototype.valueOf.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype2Number = primitivePrototype2Number;
+function primitivePrototype2String(effect) {
+	return Number.prototype.valueOf.call(String.prototype, effect());
+}
+globalThis.primitivePrototype2String = primitivePrototype2String;
+function primitivePrototype2BigInt(effect) {
+	return Number.prototype.valueOf.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype2BigInt = primitivePrototype2BigInt;
+function primitivePrototype2Symbol(effect) {
+	return Number.prototype.valueOf.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype2Symbol = primitivePrototype2Symbol;
+function primitivePrototype3Boolean(effect) {
+	return Number.prototype.toString.call(Boolean.prototype, 16, effect());
+}
+globalThis.primitivePrototype3Boolean = primitivePrototype3Boolean;
+function primitivePrototype3Number(effect) {
+	return Number.prototype.toString.call(Number.prototype, 16, effect());
+}
+globalThis.primitivePrototype3Number = primitivePrototype3Number;
+function primitivePrototype3String(effect) {
+	return Number.prototype.toString.call(String.prototype, 16, effect());
+}
+globalThis.primitivePrototype3String = primitivePrototype3String;
+function primitivePrototype3BigInt(effect) {
+	return Number.prototype.toString.call(BigInt.prototype, 16, effect());
+}
+globalThis.primitivePrototype3BigInt = primitivePrototype3BigInt;
+function primitivePrototype3Symbol(effect) {
+	return Number.prototype.toString.call(Symbol.prototype, 16, effect());
+}
+globalThis.primitivePrototype3Symbol = primitivePrototype3Symbol;
+function primitivePrototype4Boolean(effect) {
+	return Number.prototype.toFixed.call(Boolean.prototype, 2, effect());
+}
+globalThis.primitivePrototype4Boolean = primitivePrototype4Boolean;
+function primitivePrototype4Number(effect) {
+	return Number.prototype.toFixed.call(Number.prototype, 2, effect());
+}
+globalThis.primitivePrototype4Number = primitivePrototype4Number;
+function primitivePrototype4String(effect) {
+	return Number.prototype.toFixed.call(String.prototype, 2, effect());
+}
+globalThis.primitivePrototype4String = primitivePrototype4String;
+function primitivePrototype4BigInt(effect) {
+	return Number.prototype.toFixed.call(BigInt.prototype, 2, effect());
+}
+globalThis.primitivePrototype4BigInt = primitivePrototype4BigInt;
+function primitivePrototype4Symbol(effect) {
+	return Number.prototype.toFixed.call(Symbol.prototype, 2, effect());
+}
+globalThis.primitivePrototype4Symbol = primitivePrototype4Symbol;
+function primitivePrototype5Boolean(effect) {
+	return Number.prototype.toExponential.call(Boolean.prototype, 3, effect());
+}
+globalThis.primitivePrototype5Boolean = primitivePrototype5Boolean;
+function primitivePrototype5Number(effect) {
+	return Number.prototype.toExponential.call(Number.prototype, 3, effect());
+}
+globalThis.primitivePrototype5Number = primitivePrototype5Number;
+function primitivePrototype5String(effect) {
+	return Number.prototype.toExponential.call(String.prototype, 3, effect());
+}
+globalThis.primitivePrototype5String = primitivePrototype5String;
+function primitivePrototype5BigInt(effect) {
+	return Number.prototype.toExponential.call(BigInt.prototype, 3, effect());
+}
+globalThis.primitivePrototype5BigInt = primitivePrototype5BigInt;
+function primitivePrototype5Symbol(effect) {
+	return Number.prototype.toExponential.call(Symbol.prototype, 3, effect());
+}
+globalThis.primitivePrototype5Symbol = primitivePrototype5Symbol;
+function primitivePrototype6Boolean(effect) {
+	return Number.prototype.toPrecision.call(Boolean.prototype, 4, effect());
+}
+globalThis.primitivePrototype6Boolean = primitivePrototype6Boolean;
+function primitivePrototype6Number(effect) {
+	return Number.prototype.toPrecision.call(Number.prototype, 4, effect());
+}
+globalThis.primitivePrototype6Number = primitivePrototype6Number;
+function primitivePrototype6String(effect) {
+	return Number.prototype.toPrecision.call(String.prototype, 4, effect());
+}
+globalThis.primitivePrototype6String = primitivePrototype6String;
+function primitivePrototype6BigInt(effect) {
+	return Number.prototype.toPrecision.call(BigInt.prototype, 4, effect());
+}
+globalThis.primitivePrototype6BigInt = primitivePrototype6BigInt;
+function primitivePrototype6Symbol(effect) {
+	return Number.prototype.toPrecision.call(Symbol.prototype, 4, effect());
+}
+globalThis.primitivePrototype6Symbol = primitivePrototype6Symbol;
+function primitivePrototype7Boolean(effect) {
+	return String.prototype.valueOf.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype7Boolean = primitivePrototype7Boolean;
+function primitivePrototype7Number(effect) {
+	return String.prototype.valueOf.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype7Number = primitivePrototype7Number;
+function primitivePrototype7String(effect) {
+	return String.prototype.valueOf.call(String.prototype, effect());
+}
+globalThis.primitivePrototype7String = primitivePrototype7String;
+function primitivePrototype7BigInt(effect) {
+	return String.prototype.valueOf.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype7BigInt = primitivePrototype7BigInt;
+function primitivePrototype7Symbol(effect) {
+	return String.prototype.valueOf.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype7Symbol = primitivePrototype7Symbol;
+function primitivePrototype8Boolean(effect) {
+	return String.prototype.toString.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype8Boolean = primitivePrototype8Boolean;
+function primitivePrototype8Number(effect) {
+	return String.prototype.toString.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype8Number = primitivePrototype8Number;
+function primitivePrototype8String(effect) {
+	return String.prototype.toString.call(String.prototype, effect());
+}
+globalThis.primitivePrototype8String = primitivePrototype8String;
+function primitivePrototype8BigInt(effect) {
+	return String.prototype.toString.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype8BigInt = primitivePrototype8BigInt;
+function primitivePrototype8Symbol(effect) {
+	return String.prototype.toString.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype8Symbol = primitivePrototype8Symbol;
+function primitivePrototype9Boolean(effect) {
+	return BigInt.prototype.valueOf.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype9Boolean = primitivePrototype9Boolean;
+function primitivePrototype9Number(effect) {
+	return BigInt.prototype.valueOf.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype9Number = primitivePrototype9Number;
+function primitivePrototype9String(effect) {
+	return BigInt.prototype.valueOf.call(String.prototype, effect());
+}
+globalThis.primitivePrototype9String = primitivePrototype9String;
+function primitivePrototype9BigInt(effect) {
+	return BigInt.prototype.valueOf.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype9BigInt = primitivePrototype9BigInt;
+function primitivePrototype9Symbol(effect) {
+	return BigInt.prototype.valueOf.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype9Symbol = primitivePrototype9Symbol;
+function primitivePrototype10Boolean(effect) {
+	return BigInt.prototype.toString.call(Boolean.prototype, 16, effect());
+}
+globalThis.primitivePrototype10Boolean = primitivePrototype10Boolean;
+function primitivePrototype10Number(effect) {
+	return BigInt.prototype.toString.call(Number.prototype, 16, effect());
+}
+globalThis.primitivePrototype10Number = primitivePrototype10Number;
+function primitivePrototype10String(effect) {
+	return BigInt.prototype.toString.call(String.prototype, 16, effect());
+}
+globalThis.primitivePrototype10String = primitivePrototype10String;
+function primitivePrototype10BigInt(effect) {
+	return BigInt.prototype.toString.call(BigInt.prototype, 16, effect());
+}
+globalThis.primitivePrototype10BigInt = primitivePrototype10BigInt;
+function primitivePrototype10Symbol(effect) {
+	return BigInt.prototype.toString.call(Symbol.prototype, 16, effect());
+}
+globalThis.primitivePrototype10Symbol = primitivePrototype10Symbol;
+function primitivePrototype11Boolean(effect) {
+	return Symbol.prototype.valueOf.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype11Boolean = primitivePrototype11Boolean;
+function primitivePrototype11Number(effect) {
+	return Symbol.prototype.valueOf.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype11Number = primitivePrototype11Number;
+function primitivePrototype11String(effect) {
+	return Symbol.prototype.valueOf.call(String.prototype, effect());
+}
+globalThis.primitivePrototype11String = primitivePrototype11String;
+function primitivePrototype11BigInt(effect) {
+	return Symbol.prototype.valueOf.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype11BigInt = primitivePrototype11BigInt;
+function primitivePrototype11Symbol(effect) {
+	return Symbol.prototype.valueOf.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype11Symbol = primitivePrototype11Symbol;
+function primitivePrototype12Boolean(effect) {
+	return Symbol.prototype.toString.call(Boolean.prototype, effect());
+}
+globalThis.primitivePrototype12Boolean = primitivePrototype12Boolean;
+function primitivePrototype12Number(effect) {
+	return Symbol.prototype.toString.call(Number.prototype, effect());
+}
+globalThis.primitivePrototype12Number = primitivePrototype12Number;
+function primitivePrototype12String(effect) {
+	return Symbol.prototype.toString.call(String.prototype, effect());
+}
+globalThis.primitivePrototype12String = primitivePrototype12String;
+function primitivePrototype12BigInt(effect) {
+	return Symbol.prototype.toString.call(BigInt.prototype, effect());
+}
+globalThis.primitivePrototype12BigInt = primitivePrototype12BigInt;
+function primitivePrototype12Symbol(effect) {
+	return Symbol.prototype.toString.call(Symbol.prototype, effect());
+}
+globalThis.primitivePrototype12Symbol = primitivePrototype12Symbol;
+function primitivePrototype13Boolean(effect) {
+	return Symbol.prototype[Symbol.toPrimitive].call(Boolean.prototype, "hint", effect());
+}
+globalThis.primitivePrototype13Boolean = primitivePrototype13Boolean;
+function primitivePrototype13Number(effect) {
+	return Symbol.prototype[Symbol.toPrimitive].call(Number.prototype, "hint", effect());
+}
+globalThis.primitivePrototype13Number = primitivePrototype13Number;
+function primitivePrototype13String(effect) {
+	return Symbol.prototype[Symbol.toPrimitive].call(String.prototype, "hint", effect());
+}
+globalThis.primitivePrototype13String = primitivePrototype13String;
+function primitivePrototype13BigInt(effect) {
+	return Symbol.prototype[Symbol.toPrimitive].call(BigInt.prototype, "hint", effect());
+}
+globalThis.primitivePrototype13BigInt = primitivePrototype13BigInt;
+function primitivePrototype13Symbol(effect) {
+	return Symbol.prototype[Symbol.toPrimitive].call(Symbol.prototype, "hint", effect());
+}
+globalThis.primitivePrototype13Symbol = primitivePrototype13Symbol;
+function primitivePrototype14Boolean(effect) {
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(
+		Boolean.prototype,
+		effect(),
+	);
+}
+globalThis.primitivePrototype14Boolean = primitivePrototype14Boolean;
+function primitivePrototype14Number(effect) {
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(
+		Number.prototype,
+		effect(),
+	);
+}
+globalThis.primitivePrototype14Number = primitivePrototype14Number;
+function primitivePrototype14String(effect) {
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(
+		String.prototype,
+		effect(),
+	);
+}
+globalThis.primitivePrototype14String = primitivePrototype14String;
+function primitivePrototype14BigInt(effect) {
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(
+		BigInt.prototype,
+		effect(),
+	);
+}
+globalThis.primitivePrototype14BigInt = primitivePrototype14BigInt;
+function primitivePrototype14Symbol(effect) {
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(
+		Symbol.prototype,
+		effect(),
+	);
+}
+globalThis.primitivePrototype14Symbol = primitivePrototype14Symbol;
+for (const name of [
+	"primitivePrototype0Boolean",
+	"primitivePrototype0Number",
+	"primitivePrototype0String",
+	"primitivePrototype0BigInt",
+	"primitivePrototype0Symbol",
+	"primitivePrototype1Boolean",
+	"primitivePrototype1Number",
+	"primitivePrototype1String",
+	"primitivePrototype1BigInt",
+	"primitivePrototype1Symbol",
+	"primitivePrototype2Boolean",
+	"primitivePrototype2Number",
+	"primitivePrototype2String",
+	"primitivePrototype2BigInt",
+	"primitivePrototype2Symbol",
+	"primitivePrototype3Boolean",
+	"primitivePrototype3Number",
+	"primitivePrototype3String",
+	"primitivePrototype3BigInt",
+	"primitivePrototype3Symbol",
+	"primitivePrototype4Boolean",
+	"primitivePrototype4Number",
+	"primitivePrototype4String",
+	"primitivePrototype4BigInt",
+	"primitivePrototype4Symbol",
+	"primitivePrototype5Boolean",
+	"primitivePrototype5Number",
+	"primitivePrototype5String",
+	"primitivePrototype5BigInt",
+	"primitivePrototype5Symbol",
+	"primitivePrototype6Boolean",
+	"primitivePrototype6Number",
+	"primitivePrototype6String",
+	"primitivePrototype6BigInt",
+	"primitivePrototype6Symbol",
+	"primitivePrototype7Boolean",
+	"primitivePrototype7Number",
+	"primitivePrototype7String",
+	"primitivePrototype7BigInt",
+	"primitivePrototype7Symbol",
+	"primitivePrototype8Boolean",
+	"primitivePrototype8Number",
+	"primitivePrototype8String",
+	"primitivePrototype8BigInt",
+	"primitivePrototype8Symbol",
+	"primitivePrototype9Boolean",
+	"primitivePrototype9Number",
+	"primitivePrototype9String",
+	"primitivePrototype9BigInt",
+	"primitivePrototype9Symbol",
+	"primitivePrototype10Boolean",
+	"primitivePrototype10Number",
+	"primitivePrototype10String",
+	"primitivePrototype10BigInt",
+	"primitivePrototype10Symbol",
+	"primitivePrototype11Boolean",
+	"primitivePrototype11Number",
+	"primitivePrototype11String",
+	"primitivePrototype11BigInt",
+	"primitivePrototype11Symbol",
+	"primitivePrototype12Boolean",
+	"primitivePrototype12Number",
+	"primitivePrototype12String",
+	"primitivePrototype12BigInt",
+	"primitivePrototype12Symbol",
+	"primitivePrototype13Boolean",
+	"primitivePrototype13Number",
+	"primitivePrototype13String",
+	"primitivePrototype13BigInt",
+	"primitivePrototype13Symbol",
+	"primitivePrototype14Boolean",
+	"primitivePrototype14Number",
+	"primitivePrototype14String",
+	"primitivePrototype14BigInt",
+	"primitivePrototype14Symbol",
+]) {
+	capture(name, () =>
+		globalThis[name](() => {
+			events.push(name + ":argument");
+			return {};
+		}),
+	);
+}
+function prototypeDynamictoString(x) {
+	return Number.prototype.toString.call(Number.prototype, x);
+}
+globalThis.prototypeDynamictoString = prototypeDynamictoString;
+function prototypeDynamictoFixed(x) {
+	return Number.prototype.toFixed.call(Number.prototype, x);
+}
+globalThis.prototypeDynamictoFixed = prototypeDynamictoFixed;
+function prototypeDynamictoExponential(x) {
+	return Number.prototype.toExponential.call(Number.prototype, x);
+}
+globalThis.prototypeDynamictoExponential = prototypeDynamictoExponential;
+function prototypeDynamictoPrecision(x) {
+	return Number.prototype.toPrecision.call(Number.prototype, x);
+}
+globalThis.prototypeDynamictoPrecision = prototypeDynamictoPrecision;
+for (const method of ["toString", "toFixed", "toExponential", "toPrecision"]) {
+	for (const value of [
+		undefined,
+		null,
+		-1,
+		0,
+		2,
+		16,
+		101,
+		NaN,
+		Infinity,
+		Symbol("digits"),
+		{
+			valueOf() {
+				events.push("prototype digits");
+				return 2;
+			},
+		},
+		{
+			valueOf() {
+				events.push("prototype digits throw");
+				throw new RangeError("digits");
+			},
+		},
+	])
+		capture("prototype dynamic:" + method, () =>
+			globalThis["prototypeDynamic" + method](value),
+		);
+}
+function escapedSymbolDescription(x, escape) {
+	const value = Object(Symbol(x));
+	escape(value);
+	return Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(value);
+}
+globalThis.escapedSymbolDescription = escapedSymbolDescription;
+for (const value of [
+	undefined,
+	"",
+	"hello",
+	{
+		toString() {
+			events.push("symbol description input");
+			return "initial";
+		},
+	},
+])
+	capture("escaped symbol description", () =>
+		globalThis.escapedSymbolDescription(value, (wrapper) => {
+			events.push("symbol wrapper escape");
+			Object.defineProperty(wrapper, "description", { value: "overridden" });
+			Object.setPrototypeOf(wrapper, null);
+			if (value !== undefined && typeof value === "object")
+				value.toString = () => "changed";
+		}),
+	);
+
 console.log(JSON.stringify({ results, events }));

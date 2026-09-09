@@ -60,7 +60,32 @@ const wrapperPayloadMethods = new Set([
 	"Symbol.prototype.valueOf",
 	"Symbol.prototype.toString",
 	"Symbol.prototype[%Symbol.toPrimitive%]",
+	"Symbol.prototype.description<get>",
 ]);
+
+function primitivePrototypePayload(
+	analysis: CoreStaticValueAnalysis,
+	receiver: CoreValueId,
+	operation: string,
+): ConstantValue | undefined {
+	if (!wrapperPayloadMethods.has(operation)) return undefined;
+	const fact = analysis.query(receiver);
+	if (
+		fact.kind !== "known" ||
+		fact.canonical === undefined ||
+		!operation.startsWith(`${fact.canonical}.`)
+	)
+		return undefined;
+	switch (fact.canonical) {
+		case "Boolean.prototype":
+			return { kind: "boolean", value: false };
+		case "Number.prototype":
+			return { kind: "number", value: 0 };
+		case "String.prototype":
+			return { kind: "string", value: "" };
+	}
+	return undefined;
+}
 
 function primitiveWrapperPayload(
 	fn: CoreFunctionStore,
@@ -822,10 +847,14 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				sequenceEdits += payload.booleanConstructor !== undefined ? 4 : 1;
 				continue;
 			}
+			const prototypePayload =
+				!numericOperation && inputs[0] !== undefined
+					? primitivePrototypePayload(analysis, inputs[0], operation)
+					: undefined;
 			const evaluated = evaluateConstantBuiltin(
 				operation,
 				operation.includes(".prototype.")
-					? analysis.constant(inputs[0]!, instruction)
+					? (prototypePayload ?? analysis.constant(inputs[0]!, instruction))
 					: undefined,
 				inputs
 					.slice(numericOperation ? 0 : 1)
@@ -848,6 +877,24 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						attributes: { error: evaluated.builtinError },
 					},
 				});
+				continue;
+			}
+			if (prototypePayload?.kind === "number") {
+				parameterPlans.push({
+					instruction,
+					inputs,
+					parameters: [
+						{
+							index: 0,
+							operation: {
+								opcode: "createNumber",
+								inputs: [],
+								attributes: { value: prototypePayload.value },
+							},
+						},
+					],
+				});
+				sequenceEdits++;
 				continue;
 			}
 			if (numericOperation) continue;

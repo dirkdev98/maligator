@@ -101,6 +101,15 @@ const STATIC_CONSTRUCTORS = new Set([
 	"Intl.DurationFormat",
 ]);
 
+// BigInt and Symbol prototypes do not carry primitive internal slots.
+const primitivePrototypeBrands = new Map([
+	["Boolean.prototype", "Boolean"],
+	["Number.prototype", "Number"],
+	["String.prototype", "String"],
+	["BigInt.prototype", "Object"],
+	["Symbol.prototype", "Object"],
+]);
+
 export type StaticAllocationIdentity =
 	| {
 			readonly kind: "fresh-per-evaluation";
@@ -1328,6 +1337,7 @@ export class CoreStaticValueAnalysis {
 									: "object",
 					),
 					canonical: node[0],
+					exactBrand: primitivePrototypeBrands.get(node[0]),
 					identity: { kind: "intrinsic", key: node[0] },
 					environmentDependencies: ["primordials.locked", "realm.current"],
 				};
