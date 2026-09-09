@@ -42,6 +42,7 @@ export type StaticDescription =
 	| {
 			readonly kind: "symbol";
 			readonly description?: string | null;
+			readonly registered?: boolean;
 			readonly reference?: {
 				readonly kind: "well-known" | "registry";
 				readonly key: string;

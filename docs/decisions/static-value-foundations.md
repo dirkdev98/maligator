@@ -413,6 +413,12 @@ licenses facts at a load; otherwise, a retained TDZ check licenses them only at 
 later consumer. A read never uses its own future TDZ check as proof. Cross-function
 writer changes invalidate both ordinary and observation-specific query caches.
 Object and array cells retain their separate read-only-content proof.
+Symbol data records registry membership independently of per-evaluation identity.
+Fresh and registered Symbol payloads are immutable; storing them in a cell retains
+their data and TDZ obligations. Only intrinsic and registry identities remain stable
+across cell reads. Fresh identities stay tied to the runtime cell/activation, so
+repeated closure creation cannot pool distinct Symbols. Registry creation and key
+coercion still execute even when later metadata observations fold.
 Primitive lowering queries constants and brands at the consuming instruction, so a
 retained TDZ check can license a fold, residual exception, or prepared input without
 making the original load unconditionally constant. Split data still materializes a

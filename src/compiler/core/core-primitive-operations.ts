@@ -443,7 +443,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 								value = { kind: "string", value: description.reference.key };
 							else if (
 								description.reference?.kind === "well-known" ||
-								fact.identity?.kind === "fresh-per-evaluation"
+								description.registered === false
 							)
 								value = { kind: "undefined" };
 						} else if (description.description !== undefined) {

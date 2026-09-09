@@ -840,3 +840,191 @@ it("folds initialized string-cell length without dropping its TDZ check", () => 
 		),
 	).toBe(true);
 });
+
+const symbolCellConsumers = [
+	["fresh/Symbol.prototype.toString", "Symbol('payload')", "value.toString(x)", "F"],
+	[
+		"fresh/Symbol.prototype.description<get>",
+		"Symbol('payload')",
+		"value.description",
+		"F",
+	],
+	["fresh/Symbol.prototype.valueOf", "Symbol('payload')", "value.valueOf(x)", "T"],
+	[
+		"fresh/Symbol.prototype[%Symbol.toPrimitive%]",
+		"Symbol('payload')",
+		"value[Symbol.toPrimitive](x)",
+		"T",
+	],
+	["fresh/Symbol.keyFor", "Symbol('payload')", "Symbol.keyFor(value,x)", "F"],
+	["fresh/String", "Symbol('payload')", "String(value,x)", "F"],
+	[
+		"registered/Symbol.prototype.toString",
+		"Symbol.for('payload')",
+		"value.toString(x)",
+		"F",
+	],
+	[
+		"registered/Symbol.prototype.description<get>",
+		"Symbol.for('payload')",
+		"value.description",
+		"F",
+	],
+	[
+		"registered/Symbol.prototype.valueOf",
+		"Symbol.for('payload')",
+		"value.valueOf(x)",
+		"T",
+	],
+	[
+		"registered/Symbol.prototype[%Symbol.toPrimitive%]",
+		"Symbol.for('payload')",
+		"value[Symbol.toPrimitive](x)",
+		"T",
+	],
+	["registered/Symbol.keyFor", "Symbol.for('payload')", "Symbol.keyFor(value,x)", "F"],
+	["registered/String", "Symbol.for('payload')", "String(value,x)", "F"],
+	["absent/Symbol.prototype.toString", "Symbol()", "value.toString(x)", "F"],
+	["absent/Symbol.prototype.description<get>", "Symbol()", "value.description", "F"],
+	["absent/Symbol.prototype.valueOf", "Symbol()", "value.valueOf(x)", "T"],
+	[
+		"absent/Symbol.prototype[%Symbol.toPrimitive%]",
+		"Symbol()",
+		"value[Symbol.toPrimitive](x)",
+		"T",
+	],
+	["absent/Symbol.keyFor", "Symbol()", "Symbol.keyFor(value,x)", "F"],
+	["absent/String", "Symbol()", "String(value,x)", "F"],
+	[
+		"unknown-fresh/Symbol.prototype.toString",
+		"Symbol(globalThis.description)",
+		"value.toString(x)",
+		"D",
+	],
+	[
+		"unknown-fresh/Symbol.prototype.description<get>",
+		"Symbol(globalThis.description)",
+		"value.description",
+		"D",
+	],
+	[
+		"unknown-fresh/Symbol.prototype.valueOf",
+		"Symbol(globalThis.description)",
+		"value.valueOf(x)",
+		"T",
+	],
+	[
+		"unknown-fresh/Symbol.prototype[%Symbol.toPrimitive%]",
+		"Symbol(globalThis.description)",
+		"value[Symbol.toPrimitive](x)",
+		"T",
+	],
+	[
+		"unknown-fresh/Symbol.keyFor",
+		"Symbol(globalThis.description)",
+		"Symbol.keyFor(value,x)",
+		"F",
+	],
+	["unknown-fresh/String", "Symbol(globalThis.description)", "String(value,x)", "D"],
+	[
+		"unknown-registry/Symbol.prototype.toString",
+		"Symbol.for(globalThis.description)",
+		"value.toString(x)",
+		"D",
+	],
+	[
+		"unknown-registry/Symbol.prototype.description<get>",
+		"Symbol.for(globalThis.description)",
+		"value.description",
+		"D",
+	],
+	[
+		"unknown-registry/Symbol.prototype.valueOf",
+		"Symbol.for(globalThis.description)",
+		"value.valueOf(x)",
+		"T",
+	],
+	[
+		"unknown-registry/Symbol.prototype[%Symbol.toPrimitive%]",
+		"Symbol.for(globalThis.description)",
+		"value[Symbol.toPrimitive](x)",
+		"T",
+	],
+	[
+		"unknown-registry/Symbol.keyFor",
+		"Symbol.for(globalThis.description)",
+		"Symbol.keyFor(value,x)",
+		"D",
+	],
+	[
+		"unknown-registry/String",
+		"Symbol.for(globalThis.description)",
+		"String(value,x)",
+		"D",
+	],
+] as const;
+
+it.each(symbolCellConsumers)(
+	"consumes immutable Symbol-cell facts at %s",
+	(_case, initializer, expression, axis) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.structure.genericCalls).toBe(1);
+		expect(result.structure.genericLookups).toBe(1);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		if (axis !== "D")
+			expect(result.core.some((op) => op.opcode === "callKnown")).toBe(false);
+	},
+);
+it.each(symbolCellConsumers)(
+	"retains mutable Symbol-cell producers and operations at %s",
+	(_case, initializer, expression) => {
+		const result = inspectStaticValueFunction(
+			`const value=${initializer};function probe(x){globalThis.sink(value,x);return ${expression};}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false },
+		);
+		if (expression === "value.description")
+			expect(result.structure.genericLookups).toBeGreaterThanOrEqual(2);
+		else expect(result.structure.genericCalls).toBeGreaterThanOrEqual(2);
+	},
+);
+it.each([
+	["Symbol.for('same')", "Symbol.for('same')", true],
+	["Symbol.for('same')", "Symbol.for('other')", false],
+	["Symbol.iterator", "Symbol.iterator", true],
+	["Symbol.iterator", "Symbol.toStringTag", false],
+	["Symbol.iterator", "Symbol.for('Symbol.iterator')", false],
+] as const)(
+	"folds stable Symbol identities across initialized cells at %s and %s",
+	(left, right, same) => {
+		const result = inspectStaticValueFunction(
+			`const a=${left},b=${right};function probe(x){globalThis.sink(a,b,x);return a===b;}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			result.core.some(
+				(op) => op.opcode === "binary" && op.attributes.operator === "===",
+			),
+		).toBe(false);
+		expect(
+			result.core.some(
+				(op) => op.opcode === "createBoolean" && op.attributes.value === same,
+			),
+		).toBe(true);
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+	},
+);
+it("does not infer registry membership from a shared description at a join", () => {
+	const result = inspectStaticValueFunction(
+		"function probe(x,key){const value=x?Symbol(key):Symbol.for(key);globalThis.sink(value);return Symbol.keyFor(value);}globalThis.probe=probe;",
+		"probe",
+	);
+	expect(
+		result.core.some(
+			(op) => op.opcode === "callKnown" && op.attributes.operation === "Symbol.keyFor",
+		),
+	).toBe(true);
+});

@@ -181,7 +181,11 @@ export class CoreStaticCellIndex {
 			identity:
 				source.identity === undefined
 					? undefined
-					: { kind: "private-cell", function: fn.id, key },
+					: source.brand === "symbol" &&
+						  (source.identity.kind === "intrinsic" ||
+								source.identity.kind === "symbol-registry")
+						? source.identity
+						: { kind: "private-cell", function: fn.id, key },
 			state: source.state === "immutable-value" ? "immutable-value" : "stored-instance",
 			construction: undefined,
 			privateUntilObservation: false,

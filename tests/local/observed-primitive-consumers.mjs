@@ -12,9 +12,11 @@ function record(label, action) {
 					? Object.is(value, -0)
 						? "-0"
 						: String(value)
-					: kind === "symbol"
-						? value.toString()
-						: JSON.stringify(value)),
+					: kind === "bigint"
+						? String(value)
+						: kind === "symbol"
+							? value.toString()
+							: JSON.stringify(value)),
 		);
 	} catch (error) {
 		results.push(label + ":error:" + error.name);
@@ -284,7 +286,7 @@ globalThis.observed42 = observed42;
 const value43 = " abcdefé ";
 function observed43(x) {
 	globalThis.sink(value43, x);
-	return value43.value43Of(2);
+	return value43.valueOf(2);
 }
 globalThis.observed43 = observed43;
 const value44 = false;
@@ -296,7 +298,7 @@ globalThis.observed44 = observed44;
 const value45 = false;
 function observed45(x) {
 	globalThis.sink(value45, x);
-	return value45.value45Of(2);
+	return value45.valueOf(2);
 }
 globalThis.observed45 = observed45;
 const value46 = 12.5;
@@ -308,7 +310,7 @@ globalThis.observed46 = observed46;
 const value47 = 12.5;
 function observed47(x) {
 	globalThis.sink(value47, x);
-	return value47.value47Of(2);
+	return value47.valueOf(2);
 }
 globalThis.observed47 = observed47;
 const value48 = 12.5;
@@ -338,7 +340,7 @@ globalThis.observed51 = observed51;
 const value52 = 123n;
 function observed52(x) {
 	globalThis.sink(value52, x);
-	return value52.value52Of(2);
+	return value52.valueOf(2);
 }
 globalThis.observed52 = observed52;
 const value53 = Symbol.iterator;
@@ -350,7 +352,7 @@ globalThis.observed53 = observed53;
 const value54 = Symbol.iterator;
 function observed54(x) {
 	globalThis.sink(value54, x);
-	return value54.value54Of(2);
+	return value54.valueOf(2);
 }
 globalThis.observed54 = observed54;
 const value55 = -12.5;
@@ -869,6 +871,8 @@ record("decodeURIComponent", () =>
 	}),
 );
 record("effects", () => effects);
+if (results.some((value) => value.includes(":error:")))
+	throw new Error(results.filter((value) => value.includes(":error:")).join("\n"));
 function initializedFormat() {
 	return initializedNumber.toFixed(2);
 }

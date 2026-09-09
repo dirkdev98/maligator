@@ -101117,13 +101117,33 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "folds initialized primitive-cell data at %s",
-						"case": "String"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/String"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable operation identity when folding primitive-cell data at %s",
-						"case": "String"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/String"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/String"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/String"
 					},
 					"lowering": "constant"
 				}
@@ -110322,13 +110342,13 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "folds initialized primitive-cell data at %s",
-						"case": "Symbol.keyFor"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.keyFor"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable operation identity when folding primitive-cell data at %s",
-						"case": "Symbol.keyFor"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.keyFor"
 					},
 					"lowering": "constant"
 				},
@@ -110350,6 +110370,26 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.keyFor"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.keyFor"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -110475,6 +110515,26 @@
 						"test": "retains mutable dynamic symbol description dispatch"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.description<get>"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -110566,13 +110626,13 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "resolves immutable primitive-cell consumers at %s",
-						"case": "Symbol.prototype.toString"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.toString"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable primitive-cell method lookup at %s",
-						"case": "Symbol.prototype.toString"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.toString"
 					},
 					"lowering": "specialized"
 				},
@@ -110586,13 +110646,33 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "folds initialized primitive-cell data at %s",
-						"case": "Symbol.prototype.toString"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.toString"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable operation identity when folding primitive-cell data at %s",
-						"case": "Symbol.prototype.toString"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.toString"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.toString"
 					},
 					"lowering": "constant"
 				}
@@ -110712,13 +110792,13 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "resolves immutable primitive-cell consumers at %s",
-						"case": "Symbol.prototype.valueOf"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.valueOf"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable primitive-cell method lookup at %s",
-						"case": "Symbol.prototype.valueOf"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.valueOf"
 					},
 					"lowering": "specialized"
 				},
@@ -110732,13 +110812,13 @@
 					},
 					"positive": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "folds initialized primitive-cell data at %s",
-						"case": "Symbol.prototype.valueOf"
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype.valueOf"
 					},
 					"negative": {
 						"file": "tests/static-value-discovery.test.ts",
-						"test": "retains mutable operation identity when folding primitive-cell data at %s",
-						"case": "Symbol.prototype.valueOf"
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype.valueOf"
 					},
 					"lowering": "specialized"
 				}
@@ -110867,6 +110947,26 @@
 						"case": "Symbol.prototype[Symbol.toPrimitive].call(1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "consumes immutable Symbol-cell facts at %s",
+						"case": "registered/Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable Symbol-cell producers and operations at %s",
+						"case": "registered/Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

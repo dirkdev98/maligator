@@ -1358,6 +1358,7 @@ export class CoreStaticValueAnalysis {
 						...primitive(
 							intern.intern({
 								kind: "symbol",
+								registered,
 								...(description === undefined ? {} : { description }),
 								...(registered && key !== undefined
 									? { reference: { kind: "registry", key } as const }
@@ -1365,7 +1366,6 @@ export class CoreStaticValueAnalysis {
 							}),
 							"symbol",
 						),
-						state: "initial-allocation",
 						identity: registered
 							? key === undefined
 								? undefined
