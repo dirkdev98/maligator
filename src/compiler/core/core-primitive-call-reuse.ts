@@ -17,6 +17,23 @@ const primitiveBrands = new Set([
 	"bigint",
 	"symbol",
 ]);
+const immutableReceiverMethods = new Map([
+	["Boolean.prototype.valueOf", 0],
+	["Boolean.prototype.toString", 0],
+	["Number.prototype.valueOf", 0],
+	["Number.prototype.toString", 1],
+	["Number.prototype.toFixed", 1],
+	["Number.prototype.toExponential", 1],
+	["Number.prototype.toPrecision", 1],
+	["String.prototype.valueOf", 0],
+	["String.prototype.toString", 0],
+	["BigInt.prototype.valueOf", 0],
+	["BigInt.prototype.toString", 1],
+	["Symbol.prototype.valueOf", 0],
+	["Symbol.prototype.toString", 0],
+	["Symbol.prototype[%Symbol.toPrimitive%]", 0],
+	["Symbol.prototype.description<get>", 0],
+]);
 const predicates = new Set([
 	"Number.isNaN",
 	"Number.isFinite",
@@ -108,8 +125,9 @@ function candidate(operation: string): boolean {
 		operation !== "String.raw" &&
 		!operation.includes("toLocale") &&
 		!operation.endsWith("localeCompare") &&
-		((builtinPrimitiveResult(operation) !== undefined &&
-			builtinPrimitiveResult(operation) !== "symbol") ||
+		(immutableReceiverMethods.has(operation) ||
+			(builtinPrimitiveResult(operation) !== undefined &&
+				builtinPrimitiveResult(operation) !== "symbol") ||
 			[
 				"String.prototype.replace",
 				"String.prototype.replaceAll",
@@ -121,6 +139,8 @@ function candidate(operation: string): boolean {
 }
 
 function argumentsUsed(operation: string): number {
+	const immutable = immutableReceiverMethods.get(operation);
+	if (immutable !== undefined) return immutable;
 	if (variadic.has(operation)) return Infinity;
 	if (binary.has(operation)) return 2;
 	const method = operation.slice(operation.lastIndexOf(".") + 1);
@@ -164,7 +184,11 @@ function canDiscard(
 	)
 		return first !== "symbol";
 	if (operation === "Symbol.keyFor") return first === "symbol";
-	if (operation.startsWith("Symbol.prototype.")) return receiver === "symbol";
+	if (
+		operation.startsWith("Symbol.prototype.") ||
+		operation === "Symbol.prototype[%Symbol.toPrimitive%]"
+	)
+		return receiver === "symbol";
 	if (operation.startsWith("Boolean.prototype.")) return receiver === "boolean";
 	if (operation.startsWith("String.prototype.")) {
 		if (receiver !== "string") return false;
@@ -300,15 +324,24 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 				const args = Array.from({ length: argumentCount }, (_, index) =>
 					fn.kernel.operandAt(start + index + 1),
 				);
-				const receiverBrand = operation.includes(".prototype.")
-					? brand(receiver)
-					: undefined;
+				const immutableReceiver = immutableReceiverMethods.has(operation);
+				const usesReceiver = immutableReceiver || operation.includes(".prototype.");
+				let receiverBrand = usesReceiver ? brand(receiver) : undefined;
+				if (immutableReceiver && receiverBrand === undefined) {
+					const fact = analysis.query(receiver);
+					if (
+						fact.kind === "known" &&
+						fact.exactBrand !== undefined &&
+						operation.startsWith(`${fact.exactBrand}.prototype`)
+					)
+						receiverBrand = fact.exactBrand.toLowerCase();
+				}
 				const brands = args.map(brand);
 				if (
 					!predicates.has(operation) &&
 					operation !== "Boolean" &&
 					(brands.some((value) => value === undefined) ||
-						(operation.includes(".prototype.") && receiverBrand === undefined))
+						(usesReceiver && !immutableReceiver && receiverBrand === undefined))
 				)
 					continue;
 				const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
@@ -321,8 +354,8 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 					continue;
 				}
 				if (operation === "String.prototype.split") continue;
-				// Primitive results have no fresh identity; the first call remains in place.
-				const key = `${operation}:${operation.includes(".prototype.") ? valueKey(receiver) : ""}:${args.map(valueKey).join(",")}`;
+				// Strict receiver checks expose immutable slots, so reuse also preserves Symbol identity.
+				const key = `${operation}:${usesReceiver ? valueKey(receiver) : ""}:${args.map(valueKey).join(",")}`;
 				const previous = available.get(key);
 				if (previous !== undefined) plans.push({ instruction, replacement: previous });
 				else available.set(key, result);

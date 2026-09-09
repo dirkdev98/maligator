@@ -1,9 +1,17 @@
+import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import {
 	knownBuiltinCallProves,
 	compilerFactIsWorldInvariant,
 } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
-import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { PrimordialValue } from "../shared/primordial-catalog-types.ts";
+import {
+	primordialConstantDescription,
+	primordialNodeAvailable,
+	provePrimordialAccess,
+} from "../shared/primordial-catalog.ts";
+import type { PrimordialKey } from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
 import type { StaticDescriptionId, StaticMember } from "../shared/static-values.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -20,6 +28,11 @@ export interface CoreStaticMemberOperation {
 	readonly inputs: ReadonlyArray<CoreValueId>;
 	readonly attributes?: Readonly<Record<string, CoreAttributeValue>>;
 }
+
+type StaticDescriptorMember = { readonly key: string } & (
+	| { readonly operation: CoreStaticMemberOperation }
+	| { readonly text: string }
+);
 
 export function coreStaticMemberOperation(
 	program: CoreProgram,
@@ -392,7 +405,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 			instruction: CoreInstructionId;
 			operation?: CoreStaticMemberOperation;
 			text?: string;
-			descriptor?: ReadonlyArray<{ key: string; operation: CoreStaticMemberOperation }>;
+			descriptor?: ReadonlyArray<StaticDescriptorMember>;
 		}> = [];
 		let edits = 0;
 		for (const instruction of fn.instructionIds()) {
@@ -457,6 +470,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 					"Object.hasOwn",
 					"Reflect.has",
 					"Object.getOwnPropertyDescriptor",
+					"Reflect.getOwnPropertyDescriptor",
 				].includes(canonical)
 			)
 				continue;
@@ -474,14 +488,126 @@ export const foldStaticReflections: CoreFunctionPass = {
 				edits++;
 				continue;
 			}
-			const description = program.staticDescriptions.description(fact.description);
-			if (description.kind !== "array" && description.kind !== "object") continue;
 			const input =
 				fn.kernel.instructionOperandCount(instruction) > argument + 1
 					? analysis.constant(fn.kernel.operandAt(start + argument + 1))
 					: { kind: "undefined" as const };
-			if (input === undefined) continue;
-			const key = input.kind === "undefined" ? "undefined" : String(input.value);
+			let key: PrimordialKey | undefined =
+				input === undefined
+					? undefined
+					: input.kind === "undefined"
+						? "undefined"
+						: String(input.value);
+			if (
+				key === undefined &&
+				fn.kernel.instructionOperandCount(instruction) > argument + 1
+			) {
+				const symbol = analysis.query(fn.kernel.operandAt(start + argument + 1));
+				if (
+					symbol.kind === "known" &&
+					symbol.brand === "symbol" &&
+					symbol.canonical !== undefined
+				)
+					key = { symbol: symbol.canonical };
+			}
+			if (key === undefined) continue;
+			if (
+				fact.canonical !== undefined &&
+				["object", "array", "function"].includes(fact.brand)
+			) {
+				const world = context.compilationContext.facts.world;
+				const proof = provePrimordialAccess(
+					world,
+					{ kind: "intrinsic", id: fact.canonical, realm: "current" },
+					key,
+				);
+				if (proof === undefined) continue;
+				const resolution =
+					proof.resolution?.owner[0] === fact.canonical ? proof.resolution : undefined;
+				const boolean = (value: boolean): CoreStaticMemberOperation => ({
+					opcode: "createBoolean",
+					inputs: [],
+					attributes: { value },
+				});
+				if (canonical === "Object.hasOwn" || canonical === "Reflect.has") {
+					plans.push({
+						instruction,
+						operation: boolean(
+							canonical === "Object.hasOwn"
+								? resolution !== undefined
+								: proof.kind === "descriptor",
+						),
+					});
+					edits++;
+					continue;
+				}
+				if (resolution === undefined) {
+					plans.push({
+						instruction,
+						operation: { opcode: "createUndefined", inputs: [] },
+					});
+					edits++;
+					continue;
+				}
+				const member = (
+					key: string,
+					value: PrimordialValue | null,
+				): StaticDescriptorMember | undefined => {
+					if (typeof value === "number") {
+						if (value < 0)
+							return { key, operation: { opcode: "createUndefined", inputs: [] } };
+						const node = getPrimordialCatalog().nodes[value];
+						if (node === undefined || !primordialNodeAvailable(world, node[0]))
+							return undefined;
+						return {
+							key,
+							operation: {
+								opcode: "loadPrimordial",
+								inputs: [],
+								attributes: {
+									nodeIndex: value,
+									worldAssumptions: {
+										...builtinWorldAssumptions(node[0], "exact-builtin-proof", true),
+									},
+								},
+							},
+						};
+					}
+					if (value?.[0] === "string") return { key, text: value[1] };
+					const constant = primordialConstantDescription(value);
+					if (constant === undefined) return undefined;
+					const operation = coreStaticConstantOperation(
+						program,
+						program.staticDescriptions.intern(constant),
+					);
+					return operation === undefined ? undefined : { key, operation };
+				};
+				const [, flags, value, get, set] = resolution.descriptor;
+				// Catalog descriptor bits follow MalPropertyFlags, including accessor/data distinction.
+				const members =
+					(flags & 8) !== 0
+						? [member("get", get), member("set", set)]
+						: [
+								member("value", value),
+								{ key: "writable", operation: boolean((flags & 1) !== 0) },
+							];
+				if (!members.every((item): item is StaticDescriptorMember => item !== undefined))
+					continue;
+				analysis.verify(fact, instruction);
+				plans.push({
+					instruction,
+					descriptor: [
+						...members,
+						{ key: "enumerable", operation: boolean((flags & 2) !== 0) },
+						{ key: "configurable", operation: boolean((flags & 4) !== 0) },
+					],
+				});
+				edits += 6;
+				continue;
+			}
+			if (typeof key !== "string") continue;
+			const description = program.staticDescriptions.description(fact.description);
+			if (description.kind !== "array" && description.kind !== "object") continue;
 			let property = description.properties.find((property) => property.key === key);
 			if (description.kind === "array" && key === "length") {
 				if (description.length === null) continue;
@@ -580,7 +706,9 @@ export const foldStaticReflections: CoreFunctionPass = {
 			...new Set(
 				plans.flatMap((plan) =>
 					plan.text === undefined
-						? (plan.descriptor?.map((member) => member.key) ?? [])
+						? (plan.descriptor?.flatMap((member) =>
+								"text" in member ? [member.key, member.text] : [member.key],
+							) ?? [])
 						: [plan.text],
 				),
 			),
@@ -605,16 +733,23 @@ export const foldStaticReflections: CoreFunctionPass = {
 					{ attributes: plan.operation.attributes },
 				);
 			else if (plan.descriptor !== undefined) {
-				const values = plan.descriptor.map(
-					(member) =>
-						editor.insertInstruction(
-							fn.instructionBlock(plan.instruction),
-							plan.instruction,
-							member.operation.opcode,
-							member.operation.inputs,
-							{ attributes: member.operation.attributes },
-						).outputs[0]!,
-				);
+				const values = plan.descriptor.map((member) => {
+					const operation =
+						"operation" in member
+							? member.operation
+							: {
+									opcode: "createString",
+									inputs: [],
+									attributes: { stringIndex: index(member.text) },
+								};
+					return editor.insertInstruction(
+						fn.instructionBlock(plan.instruction),
+						plan.instruction,
+						operation.opcode,
+						operation.inputs,
+						{ attributes: operation.attributes },
+					).outputs[0]!;
+				});
 				editor.replaceInstruction(plan.instruction, "createObjectShaped", values, {
 					attributes: {
 						keyStringIndices: plan.descriptor.map((member) => index(member.key)),

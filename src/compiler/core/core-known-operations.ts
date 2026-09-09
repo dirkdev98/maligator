@@ -23,6 +23,13 @@ import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 import type { CoreProgram } from "./core-store.ts";
 
+const invocationAdapters = new Set([
+	"Function.prototype.call",
+	"Function.prototype.apply",
+	"Reflect.apply",
+	"Reflect.construct",
+]);
+
 type Argument = CoreValueId | CoreStaticMemberOperation;
 const undefinedArgument: CoreStaticMemberOperation = {
 	opcode: "createUndefined",
@@ -152,6 +159,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: [
 		"call",
+		"callKnown",
 		"construct",
 		"callSpread",
 		"callSpreadIterable",
@@ -228,46 +236,59 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction),
 				args = inputs(fn, instruction);
+			const attributes =
+				opcode === "callKnown" ? fn.instructionAttributes(instruction) : undefined;
+			const knownAdapter =
+				attributes !== undefined &&
+				attributes.construct !== true &&
+				attributes.argumentMode === undefined &&
+				typeof attributes.operation === "string" &&
+				invocationAdapters.has(attributes.operation)
+					? attributes.operation
+					: undefined;
 			if (
+				knownAdapter !== undefined ||
 				opcode === "call" ||
 				opcode === "construct" ||
 				opcode === "callSpread" ||
 				opcode === "callSpreadIterable" ||
 				opcode === "constructSpread"
 			) {
-				let target = invocationTarget(analysis, fn, args[0]!);
+				let target: InvocationTarget | undefined =
+					knownAdapter === undefined
+						? invocationTarget(analysis, fn, args[0]!)
+						: { operation: knownAdapter, leading: [] };
 				if (target === undefined) continue;
 				let construct = opcode === "construct" || opcode === "constructSpread";
-				let receiver: Argument = args[construct ? 0 : 1]!;
-				let arguments_: ReadonlyArray<Argument> = args.slice(construct ? 1 : 2);
+				const invocation = knownAdapter === undefined ? args.slice(1) : args;
+				let receiver: Argument = construct ? args[0]! : invocation[0]!;
+				let arguments_: ReadonlyArray<Argument> = construct
+					? invocation
+					: invocation.slice(1);
+				const directCall = opcode === "call" || knownAdapter !== undefined;
 				let argumentMode: KnownArgumentMode | undefined =
 					opcode === "callSpreadIterable"
 						? "iterable"
 						: opcode.endsWith("Spread")
 							? "array"
 							: undefined;
-				if (opcode === "call" && target.operation === "Function.prototype.call") {
-					const invoked = invocationTarget(analysis, fn, args[1]!);
+				if (directCall && target.operation === "Function.prototype.call") {
+					const invoked = invocationTarget(analysis, fn, invocation[0]!);
 					if (invoked !== undefined) {
 						target = invoked;
-						receiver = args[2] ?? undefinedArgument;
-						arguments_ = args.slice(3);
+						receiver = invocation[1] ?? undefinedArgument;
+						arguments_ = invocation.slice(2);
 					}
-				} else if (
-					opcode === "call" &&
-					["Function.prototype.apply", "Reflect.apply", "Reflect.construct"].includes(
-						target.operation,
-					)
-				) {
+				} else if (directCall && invocationAdapters.has(target.operation)) {
 					const reflect = target.operation.startsWith("Reflect.");
 					const isConstruct = target.operation === "Reflect.construct";
-					const value = args[reflect ? 2 : 1];
+					const value = invocation[reflect ? 1 : 0];
 					const invoked =
 						value === undefined ? undefined : invocationTarget(analysis, fn, value);
 					const list = argumentList(
 						program,
 						analysis,
-						args[isConstruct ? 3 : reflect ? 4 : 3],
+						invocation[isConstruct ? 2 : reflect ? 3 : 2],
 						instruction,
 						!reflect,
 					);
@@ -275,10 +296,10 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						target = invoked;
 						construct = isConstruct;
 						receiver = isConstruct
-							? (args[4] ?? value!)
-							: (args[reflect ? 3 : 2] ?? undefinedArgument);
+							? (invocation[3] ?? value!)
+							: (invocation[reflect ? 2 : 1] ?? undefinedArgument);
 						arguments_ = list ?? [
-							args[isConstruct ? 3 : reflect ? 4 : 3] ?? undefinedArgument,
+							invocation[isConstruct ? 2 : reflect ? 3 : 2] ?? undefinedArgument,
 						];
 						if (list === undefined)
 							argumentMode = reflect ? "array-like" : "nullable-array-like";
@@ -286,6 +307,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 							receiver = primordialArgument(invoked.operation);
 					}
 				}
+				if (target.operation === knownAdapter) continue;
 				if (target.receiver !== undefined) {
 					if (!construct) receiver = target.receiver;
 					else if (receiver === args[0]) receiver = primordialArgument(target.operation);

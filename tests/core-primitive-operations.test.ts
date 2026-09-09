@@ -2777,7 +2777,6 @@ describe("immutable escaping primitive wrapper payloads", () => {
 		["new Number(x)", "Number.prototype.valueOf.call(value)"],
 		["new String(x)", "String.prototype.valueOf.call(value)"],
 		["Object(x)", "Boolean.prototype.valueOf.call(value)"],
-		["new Boolean(x)", "Number.prototype.valueOf.call(value)"],
 		["new String(String(x))", "String.prototype.slice.call(value, 1)"],
 		["new Boolean(x)", "Object.prototype.toString.call(value)"],
 		["new Proxy(new Boolean(x), {})", "Boolean.prototype.valueOf.call(value)"],
@@ -2806,6 +2805,26 @@ describe("immutable escaping primitive wrapper payloads", () => {
 			).toBe(true);
 		},
 	);
+	it("preserves an escaping wrapper before its known wrong-brand failure", () => {
+		const result = inspectStaticValueFunction(
+			"function probe(x){const value=new Boolean(x);globalThis.sink(value);return Number.prototype.valueOf.call(value);}globalThis.probe=probe;",
+			"probe",
+		);
+		const allocation = result.core.find(
+			(op) => op.attributes.operation === "Boolean" && op.attributes.construct,
+		);
+		expect(allocation).toBeDefined();
+		expect(
+			result.core.some(
+				(op) => op.opcode === "call" && op.inputs.includes(allocation!.outputs[0]!),
+			),
+		).toBe(true);
+		expect(
+			result.core
+				.filter((item) => item.opcode === "builtinError")
+				.map((item) => item.attributes.error),
+		).toContain("numberReceiver");
+	});
 	it("preserves own method lookup after an escaping callback", () => {
 		const result = inspectStaticValueFunction(
 			"function probe(x){const value=new Boolean(x);globalThis.sink(value);return value.valueOf();}globalThis.probe=probe;",

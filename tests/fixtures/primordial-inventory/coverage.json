@@ -84724,6 +84724,126 @@
 						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "BigInt.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -84929,6 +85049,126 @@
 						"case": "BigInt"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -85481,6 +85721,126 @@
 						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -85744,6 +86104,126 @@
 						"case": "Boolean"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -97964,6 +98444,126 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Number.prototype.toExponential"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -98269,6 +98869,126 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Number.prototype.toFixed"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -98575,6 +99295,126 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Number.prototype.toPrecision"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -98916,6 +99756,126 @@
 						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Number.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -99160,6 +100120,126 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -110734,6 +111814,126 @@
 						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "String.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -111883,6 +113083,126 @@
 						"case": "String"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -112820,6 +114140,126 @@
 						"case": "{}"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype.description<get>"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -113018,6 +114458,126 @@
 						"case": "Symbol"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -113223,6 +114783,126 @@
 						"case": "Symbol"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -113408,6 +115088,126 @@
 						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses an immutable receiver slot across an effectful call",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses successful reads in known comparison consumers",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads through %s adapters",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "reuses strict reads inside a dynamic loop",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "does not reuse a different receiver's slot",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "discards a proven wrapper read after preserving its escape",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "retains the first potentially throwing receiver check when the results are unused",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-errors.ts",
+						"symbol": "corePrimitiveBuiltinError"
+					},
+					"positive": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "preserves an escaping ordinary object before a known receiver failure",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-call-reuse.test.ts",
+						"test": "keeps mutable descriptor and method lookup",
+						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},

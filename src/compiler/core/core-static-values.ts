@@ -846,6 +846,9 @@ export class CoreStaticValueAnalysis {
 		const first = facts[0];
 		if (first === undefined || facts.some((fact) => fact.brand !== first.brand))
 			return { kind: "unknown", reason: "conflicting-join" };
+		const exactBrand = facts.every((fact) => fact.exactBrand === first.exactBrand)
+			? first.exactBrand
+			: undefined;
 		const construction = facts.every(
 			({ construction: other }) =>
 				other === first.construction ||
@@ -885,6 +888,7 @@ export class CoreStaticValueAnalysis {
 				discriminator: value,
 				identity,
 				construction,
+				exactBrand,
 				state: first.state === "immutable-value" ? first.state : "joined-allocation",
 			};
 		if (
@@ -1020,6 +1024,7 @@ export class CoreStaticValueAnalysis {
 			discriminator: value,
 			identity,
 			construction,
+			exactBrand,
 			prototype,
 			state: "joined-allocation",
 			operands: bindings,
@@ -1856,6 +1861,7 @@ export class CoreStaticValueAnalysis {
 			value,
 			description,
 			brand,
+			exactBrand: brand === "array" ? "Array" : "Object",
 			prototype: {
 				kind: "intrinsic",
 				id: brand === "array" ? "Array.prototype" : "Object.prototype",

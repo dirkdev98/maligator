@@ -1145,4 +1145,629 @@ capture("custom instanceof", () =>
 		},
 	}),
 );
+function strictRead0(x, mutate, z) {
+	const a = Boolean.prototype.valueOf.call(x);
+	mutate(x);
+	const b = Boolean.prototype.valueOf.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead0 = strictRead0;
+function strictDistinct0(x, z) {
+	const a = Boolean.prototype.valueOf.call(x);
+	const b = Boolean.prototype.valueOf.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct0 = strictDistinct0;
+function strictRead1(x, mutate, z) {
+	const a = Boolean.prototype.toString.call(x);
+	mutate(x);
+	const b = Boolean.prototype.toString.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead1 = strictRead1;
+function strictDistinct1(x, z) {
+	const a = Boolean.prototype.toString.call(x);
+	const b = Boolean.prototype.toString.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct1 = strictDistinct1;
+function strictRead2(x, mutate, z) {
+	const a = Number.prototype.valueOf.call(x);
+	mutate(x);
+	const b = Number.prototype.valueOf.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead2 = strictRead2;
+function strictDistinct2(x, z) {
+	const a = Number.prototype.valueOf.call(x);
+	const b = Number.prototype.valueOf.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct2 = strictDistinct2;
+function strictRead3(x, mutate, z) {
+	const a = Number.prototype.toString.call(x, 16);
+	mutate(x);
+	const b = Number.prototype.toString.call(x, 16);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead3 = strictRead3;
+function strictDistinct3(x, z) {
+	const a = Number.prototype.toString.call(x, 16);
+	const b = Number.prototype.toString.call(z, 16);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct3 = strictDistinct3;
+function strictRead4(x, mutate, z) {
+	const a = Number.prototype.toFixed.call(x, 2);
+	mutate(x);
+	const b = Number.prototype.toFixed.call(x, 2);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead4 = strictRead4;
+function strictDistinct4(x, z) {
+	const a = Number.prototype.toFixed.call(x, 2);
+	const b = Number.prototype.toFixed.call(z, 2);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct4 = strictDistinct4;
+function strictRead5(x, mutate, z) {
+	const a = Number.prototype.toExponential.call(x, 3);
+	mutate(x);
+	const b = Number.prototype.toExponential.call(x, 3);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead5 = strictRead5;
+function strictDistinct5(x, z) {
+	const a = Number.prototype.toExponential.call(x, 3);
+	const b = Number.prototype.toExponential.call(z, 3);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct5 = strictDistinct5;
+function strictRead6(x, mutate, z) {
+	const a = Number.prototype.toPrecision.call(x, 4);
+	mutate(x);
+	const b = Number.prototype.toPrecision.call(x, 4);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead6 = strictRead6;
+function strictDistinct6(x, z) {
+	const a = Number.prototype.toPrecision.call(x, 4);
+	const b = Number.prototype.toPrecision.call(z, 4);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct6 = strictDistinct6;
+function strictRead7(x, mutate, z) {
+	const a = String.prototype.valueOf.call(x);
+	mutate(x);
+	const b = String.prototype.valueOf.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead7 = strictRead7;
+function strictDistinct7(x, z) {
+	const a = String.prototype.valueOf.call(x);
+	const b = String.prototype.valueOf.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct7 = strictDistinct7;
+function strictRead8(x, mutate, z) {
+	const a = String.prototype.toString.call(x);
+	mutate(x);
+	const b = String.prototype.toString.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead8 = strictRead8;
+function strictDistinct8(x, z) {
+	const a = String.prototype.toString.call(x);
+	const b = String.prototype.toString.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct8 = strictDistinct8;
+function strictRead9(x, mutate, z) {
+	const a = BigInt.prototype.valueOf.call(x);
+	mutate(x);
+	const b = BigInt.prototype.valueOf.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead9 = strictRead9;
+function strictDistinct9(x, z) {
+	const a = BigInt.prototype.valueOf.call(x);
+	const b = BigInt.prototype.valueOf.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct9 = strictDistinct9;
+function strictRead10(x, mutate, z) {
+	const a = BigInt.prototype.toString.call(x, 16);
+	mutate(x);
+	const b = BigInt.prototype.toString.call(x, 16);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead10 = strictRead10;
+function strictDistinct10(x, z) {
+	const a = BigInt.prototype.toString.call(x, 16);
+	const b = BigInt.prototype.toString.call(z, 16);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct10 = strictDistinct10;
+function strictRead11(x, mutate, z) {
+	const a = Symbol.prototype.valueOf.call(x);
+	mutate(x);
+	const b = Symbol.prototype.valueOf.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead11 = strictRead11;
+function strictDistinct11(x, z) {
+	const a = Symbol.prototype.valueOf.call(x);
+	const b = Symbol.prototype.valueOf.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct11 = strictDistinct11;
+function strictRead12(x, mutate, z) {
+	const a = Symbol.prototype.toString.call(x);
+	mutate(x);
+	const b = Symbol.prototype.toString.call(x);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead12 = strictRead12;
+function strictDistinct12(x, z) {
+	const a = Symbol.prototype.toString.call(x);
+	const b = Symbol.prototype.toString.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct12 = strictDistinct12;
+function strictRead13(x, mutate, z) {
+	const a = Symbol.prototype[Symbol.toPrimitive].call(x, z);
+	mutate(x);
+	const b = Symbol.prototype[Symbol.toPrimitive].call(x, z);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead13 = strictRead13;
+function strictDistinct13(x, z) {
+	const a = Symbol.prototype[Symbol.toPrimitive].call(x, z);
+	const b = Symbol.prototype[Symbol.toPrimitive].call(z, z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct13 = strictDistinct13;
+function strictRead14(x, mutate, z) {
+	const a = Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(x);
+	mutate(x);
+	const b = Reflect.apply(
+		Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get,
+		x,
+		[],
+	);
+	return [
+		Object.is(a, b),
+		typeof a,
+		String(a),
+		String(b),
+		Object.is(a, -0),
+		Object.is(b, -0),
+	];
+}
+globalThis.strictRead14 = strictRead14;
+function strictDistinct14(x, z) {
+	const a = Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(x);
+	const b = Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get.call(z);
+	return Object.is(a, b);
+}
+globalThis.strictDistinct14 = strictDistinct14;
+
+const strictInputs = {
+	Boolean: [false, true, new Boolean(false), new Boolean(true), Boolean.prototype],
+	Number: [
+		-0,
+		NaN,
+		Infinity,
+		-Infinity,
+		17.125,
+		new Number(-0),
+		new Number(NaN),
+		new Number(17.125),
+		Number.prototype,
+	],
+	String: ["", "a😀\ud800", new String(""), new String("a😀\ud800"), String.prototype],
+	BigInt: [17n, -17n, Object(17n), Object(-17n)],
+	Symbol: [
+		Symbol(),
+		Symbol("undefined"),
+		Symbol("same"),
+		Symbol.for("same"),
+		Object(Symbol("same")),
+	],
+};
+function changeWrapperWithoutChangingItsSlot(value) {
+	events.push("strict intervening:" + typeof value);
+	if (
+		value !== null &&
+		typeof value === "object" &&
+		value !== Boolean.prototype &&
+		value !== Number.prototype &&
+		value !== String.prototype &&
+		!Object.isFrozen(value)
+	) {
+		Object.defineProperty(value, "valueOf", {
+			value() {
+				throw new Error("unexpected hook");
+			},
+			configurable: true,
+		});
+		Object.defineProperty(value, "toString", {
+			value() {
+				throw new Error("unexpected hook");
+			},
+			configurable: true,
+		});
+		Object.setPrototypeOf(value, null);
+	}
+}
+const strictCases = [
+	[0, "Boolean"],
+	[1, "Boolean"],
+	[2, "Number"],
+	[3, "Number"],
+	[4, "Number"],
+	[5, "Number"],
+	[6, "Number"],
+	[7, "String"],
+	[8, "String"],
+	[9, "BigInt"],
+	[10, "BigInt"],
+	[11, "Symbol"],
+	[12, "Symbol"],
+	[13, "Symbol"],
+	[14, "Symbol"],
+];
+const strictDifferentInputs = {
+	Boolean: [false, true],
+	Number: [17, 19],
+	String: ["first", "second"],
+	BigInt: [17n, 19n],
+	Symbol: [Symbol("same"), Symbol("same")],
+};
+for (const [id, family] of strictCases) {
+	const read = globalThis["strictRead" + id];
+	for (const input of strictInputs[family])
+		capture("strict read " + id, () =>
+			read(input, changeWrapperWithoutChangingItsSlot, "ignored"),
+		);
+	for (const input of [
+		null,
+		undefined,
+		{},
+		[],
+		() => 0,
+		Object.create(globalThis[family].prototype),
+		new Proxy(Object(strictInputs[family][0]), {}),
+	])
+		capture("strict bad receiver " + id, () =>
+			read(input, changeWrapperWithoutChangingItsSlot, "ignored"),
+		);
+	const pair = strictDifferentInputs[family];
+	capture("strict distinct " + id, () =>
+		globalThis["strictDistinct" + id](Object(pair[0]), Object(pair[1])),
+	);
+}
+function primitiveDescriptorMetadata() {
+	const value = Object.getOwnPropertyDescriptor(Number.prototype, "valueOf");
+	const other = Reflect.getOwnPropertyDescriptor(Number.prototype, "valueOf");
+	const locked = Object.isFrozen(Number.prototype);
+	assert(Object.keys(value).join(",") === "value,writable,enumerable,configurable");
+	assert(
+		value.value === Number.prototype.valueOf &&
+			value.writable === !locked &&
+			!value.enumerable &&
+			value.configurable === !locked,
+	);
+	value.value = 17;
+	assert(value !== other && other.value === Number.prototype.valueOf);
+	const getter = Object.getOwnPropertyDescriptor(Symbol.prototype, "description");
+	const second = Reflect.getOwnPropertyDescriptor(Symbol.prototype, "description");
+	assert(Object.keys(getter).join(",") === "get,set,enumerable,configurable");
+	assert(
+		typeof getter.get === "function" &&
+			getter.set === undefined &&
+			!getter.enumerable &&
+			getter.configurable === !Object.isFrozen(Symbol.prototype),
+	);
+	assert(getter.get.call(Object(Symbol("descriptor"))) === "descriptor");
+	getter.get = 19;
+	assert(getter !== second && typeof second.get === "function");
+	const name = Object.getOwnPropertyDescriptor(Number, "name");
+	assert(
+		name.value === "Number" &&
+			!name.writable &&
+			!name.enumerable &&
+			name.configurable === !Object.isFrozen(Number),
+	);
+	const length = Reflect.getOwnPropertyDescriptor(String.prototype, "length");
+	assert(
+		length.value === 0 && !length.writable && !length.enumerable && !length.configurable,
+	);
+	const pi = Object.getOwnPropertyDescriptor(Math, "PI");
+	assert(pi.value === Math.PI && !pi.writable && !pi.enumerable && !pi.configurable);
+	const symbol = Reflect.getOwnPropertyDescriptor(Symbol, "iterator");
+	assert(
+		symbol.value === Symbol.iterator &&
+			!symbol.writable &&
+			!symbol.enumerable &&
+			!symbol.configurable,
+	);
+	assert(Object.getOwnPropertyDescriptor(Number, "valueOf") === undefined);
+	assert(
+		Reflect.getOwnPropertyDescriptor(Number.prototype, Symbol.toPrimitive) === undefined,
+	);
+	assert(!Object.hasOwn(Number, "valueOf") && Reflect.has(Number, "valueOf"));
+	return true;
+}
+globalThis.primitiveDescriptorMetadata = primitiveDescriptorMetadata;
+capture("primitive descriptor metadata", () => globalThis.primitiveDescriptorMetadata());
+function wrongWrapperReceiver(effect) {
+	return Number.prototype.toFixed.call(
+		{ valueOf: effect },
+		{
+			valueOf() {
+				events.push("wrong digits");
+				return 2;
+			},
+		},
+	);
+}
+globalThis.wrongWrapperReceiver = wrongWrapperReceiver;
+let firstReceiverError, secondReceiverError;
+try {
+	globalThis.wrongWrapperReceiver(() => {
+		events.push("wrong receiver hook");
+		return 1;
+	});
+} catch (error) {
+	firstReceiverError = error;
+}
+try {
+	globalThis.wrongWrapperReceiver(() => {
+		events.push("wrong receiver hook");
+		return 1;
+	});
+} catch (error) {
+	secondReceiverError = error;
+}
+assert(
+	firstReceiverError instanceof TypeError &&
+		secondReceiverError instanceof TypeError &&
+		firstReceiverError !== secondReceiverError,
+);
+function repeatedCoercingRadix(value, radix) {
+	return [
+		Number.prototype.toString.call(value, radix),
+		Number.prototype.toString.call(value, radix),
+	];
+}
+globalThis.repeatedCoercingRadix = repeatedCoercingRadix;
+let radixCalls = 0;
+capture("repeated coercing radix", () =>
+	globalThis.repeatedCoercingRadix(new Number(31), {
+		valueOf() {
+			events.push("radix:" + ++radixCalls);
+			return radixCalls === 1 ? 16 : 2;
+		},
+	}),
+);
+function repeatedCoercingReceiver(value) {
+	return [String.prototype.trim.call(value), String.prototype.trim.call(value)];
+}
+globalThis.repeatedCoercingReceiver = repeatedCoercingReceiver;
+let receiverCalls = 0;
+capture("repeated coercing receiver", () =>
+	globalThis.repeatedCoercingReceiver({
+		[Symbol.toPrimitive]() {
+			events.push("receiver:" + ++receiverCalls);
+			return receiverCalls === 1 ? " first " : " second ";
+		},
+	}),
+);
+function ignoredSymbolHints(value, hint) {
+	const a = Symbol.prototype[Symbol.toPrimitive].call(value, hint());
+	const b = Symbol.prototype[Symbol.toPrimitive].call(value, hint());
+	return a === b;
+}
+globalThis.ignoredSymbolHints = ignoredSymbolHints;
+capture("ignored hints", () =>
+	globalThis.ignoredSymbolHints(Object(Symbol("hint")), () => {
+		events.push("hint effect");
+		return {};
+	}),
+);
+function mutableDescriptorProxy(key) {
+	return Object.getOwnPropertyDescriptor(
+		new Proxy(Number.prototype, {
+			getOwnPropertyDescriptor(target, key) {
+				events.push("descriptor proxy:" + String(key));
+				return Reflect.getOwnPropertyDescriptor(target, key);
+			},
+		}),
+		key,
+	);
+}
+globalThis.mutableDescriptorProxy = mutableDescriptorProxy;
+capture("descriptor proxy", () => {
+	const descriptor = globalThis.mutableDescriptorProxy({
+		[Symbol.toPrimitive](hint) {
+			events.push("descriptor key:" + hint);
+			return "valueOf";
+		},
+	});
+	return typeof descriptor.value;
+});
+function reflectDescription(value, argumentsList) {
+	return Reflect.apply(
+		Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get,
+		value,
+		argumentsList,
+	);
+}
+globalThis.reflectDescription = reflectDescription;
+for (const value of [Symbol("adapted"), Object(Symbol("wrapped")), {}]) {
+	for (const list of [
+		null,
+		undefined,
+		[],
+		{
+			get length() {
+				events.push("adapted length");
+				return 1;
+			},
+			get 0() {
+				events.push("adapted argument");
+				return {};
+			},
+		},
+		{
+			get length() {
+				events.push("adapted throwing length");
+				throw new RangeError("length");
+			},
+		},
+	])
+		capture("reflect description:" + typeof value, () =>
+			globalThis.reflectDescription(value, list),
+		);
+}
+function reflectDescriptorConstruct(value, argumentsList, newTarget) {
+	return Reflect.construct(
+		Object.getOwnPropertyDescriptor(Number.prototype, "constructor").value,
+		argumentsList,
+		newTarget,
+	);
+}
+globalThis.reflectDescriptorConstruct = reflectDescriptorConstruct;
+function CustomNumber() {}
+capture("late descriptor construct", () => {
+	const value = globalThis.reflectDescriptorConstruct(
+		0,
+		{
+			get length() {
+				events.push("construct list length");
+				return 1;
+			},
+			get 0() {
+				events.push("construct list argument");
+				return 17;
+			},
+		},
+		CustomNumber,
+	);
+	return [
+		Number.prototype.valueOf.call(value),
+		Object.getPrototypeOf(value) === CustomNumber.prototype,
+	];
+});
+capture("late descriptor invalid newTarget", () =>
+	globalThis.reflectDescriptorConstruct(
+		0,
+		{
+			get length() {
+				events.push("invalid newTarget list length");
+				return 0;
+			},
+		},
+		{},
+	),
+);
 console.log(JSON.stringify({ results, events }));

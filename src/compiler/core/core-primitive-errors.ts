@@ -62,6 +62,18 @@ export function corePrimitiveBuiltinError(
 	};
 	const receiver = brand(inputs[0]),
 		first = brand(inputs[1]);
+	const receiverMismatch = (expected: string): boolean => {
+		if (receiver !== undefined) return receiver !== expected.toLowerCase();
+		const fact = analysis.queryAt(inputs[0]!, instruction);
+		return (
+			fact.kind === "known" &&
+			(fact.brand === "array" ||
+				fact.brand === "function" ||
+				(fact.brand === "object" &&
+					fact.exactBrand !== undefined &&
+					fact.exactBrand !== expected))
+		);
+	};
 	if (construct) {
 		if (operation === "Number" && first === "symbol") return "symbolNumber";
 		if (operation === "String" && first === "symbol") return "symbolString";
@@ -71,15 +83,14 @@ export function corePrimitiveBuiltinError(
 		if (
 			(operation.startsWith(`${owner}.prototype.`) ||
 				operation.startsWith(`${owner}.prototype[`)) &&
-			receiver !== undefined &&
-			receiver !== owner.toLowerCase()
+			receiverMismatch(owner)
 		)
 			return error;
 	}
 	if (operation.startsWith("String.prototype.")) {
 		const method = operation.slice("String.prototype.".length);
 		if (method === "valueOf" || method === "toString") {
-			if (receiver !== undefined && receiver !== "string") return "stringReceiver";
+			if (receiverMismatch("String")) return "stringReceiver";
 		} else {
 			if (receiver === "null" || receiver === "undefined")
 				return nullishStringErrors.get(method) ?? "stringNullish";
