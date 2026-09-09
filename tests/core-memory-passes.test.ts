@@ -76,7 +76,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		["Object(!!x)", "Object", "Boolean", true],
 		["new Object(+x)", "Object", "Number", true],
 		["Object(String(x))", "Object", "String", true],
-		["new Boolean(x)", "Boolean", "Boolean", false],
+		["new Boolean(x)", "Boolean", "Boolean", true],
 		["new Number(x)", "Number", "Number", false],
 		["new String(x)", "String", "String", false],
 	] as const)(

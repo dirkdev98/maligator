@@ -6,11 +6,38 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it.each(["locked", "mutable"] as const)(
+		"releases discarded Boolean inputs across suspension with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-boolean-wrapper-lifetime-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/boolean-wrapper-lifetime.mjs",
+					name: "boolean-wrapper-lifetime",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: false },
+						surface: { node: true },
+					}),
+					mainFile: HOST_MAIN,
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted])
+					for (const env of [{}, STRESS_ENV])
+						expect(runToStdout(binary, { env: { ...env, MAL_HOST_GC: "1" } })).toBe(
+							"boolean wrapper lifetime PASS\n",
+						);
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 	it.each(["locked", "mutable"] as const)(
 		"preserves immutable wrapper payloads, identity, and coercion effects with %s primordials",
 		(primordials) => {

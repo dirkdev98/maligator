@@ -54,7 +54,7 @@ function primitiveWrapperPayload(
 	analysis: CoreStaticValueAnalysis,
 	receiver: CoreValueId,
 	operation: string,
-): { input: CoreValueId; truthiness: boolean } | undefined {
+): { input: CoreValueId; booleanConstructor?: CoreInstructionId } | undefined {
 	if (!wrapperPayloadMethods.has(operation)) return undefined;
 	const brand = operation.slice(0, operation.indexOf(".")).toLowerCase();
 	for (let depth = 0; depth < 64; depth++) {
@@ -84,9 +84,12 @@ function primitiveWrapperPayload(
 		if (constructor !== "Object" && constructor.toLowerCase() !== brand) return undefined;
 		// Escaping wrappers keep their identity, but their primitive internal slot cannot change.
 		if (constructor === "Boolean")
-			return { input, truthiness: fact.kind !== "known" || fact.brand !== "boolean" };
-		if (fact.kind === "known" && fact.brand === brand)
-			return { input, truthiness: false };
+			return {
+				input,
+				booleanConstructor:
+					fact.kind !== "known" || fact.brand !== "boolean" ? definition : undefined,
+			};
+		if (fact.kind === "known" && fact.brand === brand) return { input };
 		return undefined;
 	}
 	return undefined;
@@ -271,7 +274,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			method: string;
 			inputs: ReadonlyArray<CoreValueId>;
 			input: CoreValueId;
-			truthiness: boolean;
+			booleanConstructor?: CoreInstructionId;
 		}> = [];
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
@@ -709,7 +712,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					: undefined;
 			if (payload !== undefined) {
 				payloadPlans.push({ instruction, method: operation, inputs, ...payload });
-				sequenceEdits += payload.truthiness ? 3 : 1;
+				sequenceEdits += payload.booleanConstructor !== undefined ? 4 : 1;
 				continue;
 			}
 			const evaluated = evaluateConstantBuiltin(
@@ -838,20 +841,35 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		if (plans.length === 0 && parameterPlans.length === 0 && payloadPlans.length === 0)
 			return undefined;
 		const editor = CoreEditor.open(program, fn.id);
+		const booleanPayloads = new Map<CoreInstructionId, CoreValueId>();
 		for (const plan of payloadPlans) {
 			let input = plan.input;
-			if (plan.truthiness)
-				for (let step = 0; step < 2; step++)
-					input = editor.insertInstruction(
-						fn.instructionBlock(plan.instruction),
-						plan.instruction,
-						"unary",
-						[input],
-						{
-							attributes: { operator: "!" },
-							sourcePosition: fn.instructionSourcePosition(plan.instruction),
-						},
-					).outputs[0]!;
+			if (plan.booleanConstructor !== undefined) {
+				const constructor = plan.booleanConstructor;
+				const normalized = booleanPayloads.get(constructor);
+				if (normalized !== undefined) input = normalized;
+				else {
+					// Boolean wrappers discard their input; forwarding must not retain it across suspension.
+					for (let step = 0; step < 2; step++)
+						input = editor.insertInstruction(
+							fn.instructionBlock(constructor),
+							constructor,
+							"unary",
+							[input],
+							{
+								attributes: { operator: "!" },
+								sourcePosition: fn.instructionSourcePosition(constructor),
+							},
+						).outputs[0]!;
+					const start = fn.kernel.instructionOperandStart(constructor);
+					const inputs = Array.from(
+						{ length: fn.kernel.instructionOperandCount(constructor) },
+						(_, index) => (index === 1 ? input : fn.kernel.operandAt(start + index)),
+					);
+					editor.replaceOperands(constructor, inputs);
+					booleanPayloads.set(constructor, input);
+				}
+			}
 			if (
 				plan.method.endsWith(".prototype.valueOf") ||
 				plan.method === "String.prototype.toString" ||
