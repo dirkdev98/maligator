@@ -719,6 +719,119 @@ for (const reject of globalThis.rejectedArrayLikeConstructors) {
 		check(calls === throwAt, "later arguments are not evaluated after a throw");
 	}
 }
+globalThis.invalidPrimitiveTargets = [
+	(list, effect) => Reflect.construct(Boolean, effect(list), Math.abs),
+	(list, effect) => Reflect.construct(Boolean, effect(list), null),
+	(list, effect) => Reflect.construct(Boolean, effect(list), []),
+	(list, effect) => Reflect.construct(Boolean, effect(list), {}),
+	(list, effect) => Reflect.construct(Boolean, effect(list), 17),
+	(list, effect) => Reflect.construct(Boolean, effect(list), Symbol.iterator),
+	(list, effect) => Reflect.construct(Number, effect(list), Math.abs),
+	(list, effect) => Reflect.construct(Number, effect(list), null),
+	(list, effect) => Reflect.construct(Number, effect(list), []),
+	(list, effect) => Reflect.construct(Number, effect(list), {}),
+	(list, effect) => Reflect.construct(Number, effect(list), 17),
+	(list, effect) => Reflect.construct(Number, effect(list), Symbol.iterator),
+	(list, effect) => Reflect.construct(String, effect(list), Math.abs),
+	(list, effect) => Reflect.construct(String, effect(list), null),
+	(list, effect) => Reflect.construct(String, effect(list), []),
+	(list, effect) => Reflect.construct(String, effect(list), {}),
+	(list, effect) => Reflect.construct(String, effect(list), 17),
+	(list, effect) => Reflect.construct(String, effect(list), Symbol.iterator),
+	(list, effect) => Reflect.construct(BigInt, effect(list), Math.abs),
+	(list, effect) => Reflect.construct(BigInt, effect(list), null),
+	(list, effect) => Reflect.construct(BigInt, effect(list), []),
+	(list, effect) => Reflect.construct(BigInt, effect(list), {}),
+	(list, effect) => Reflect.construct(BigInt, effect(list), 17),
+	(list, effect) => Reflect.construct(BigInt, effect(list), Symbol.iterator),
+	(list, effect) => Reflect.construct(Symbol, effect(list), Math.abs),
+	(list, effect) => Reflect.construct(Symbol, effect(list), null),
+	(list, effect) => Reflect.construct(Symbol, effect(list), []),
+	(list, effect) => Reflect.construct(Symbol, effect(list), {}),
+	(list, effect) => Reflect.construct(Symbol, effect(list), 17),
+	(list, effect) => Reflect.construct(Symbol, effect(list), Symbol.iterator),
+];
+for (const reject of globalThis.invalidPrimitiveTargets) {
+	let previous;
+	for (let iteration = 0; iteration < 2; iteration++) {
+		let effects = 0;
+		ordering.length = 0;
+		try {
+			reject(unreadList, (value) => {
+				effects++;
+				return value;
+			});
+			throw new Error("invalid target must reject");
+		} catch (error) {
+			check(
+				error instanceof TypeError && error !== previous,
+				"invalid target fresh error",
+			);
+			previous = error;
+		}
+		check(effects === 1 && ordering.length === 0, "invalid target precedes list reads");
+	}
+	const sentinel = {};
+	try {
+		reject(unreadList, () => {
+			throw sentinel;
+		});
+		throw new Error("argument expression must reject");
+	} catch (error) {
+		check(error === sentinel, "argument expression precedes target validation");
+	}
+}
+globalThis.abruptPrimitiveTargets = [
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], Boolean),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], Number),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], String),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], BigInt),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], Symbol),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], Array),
+	(effect) => Reflect.construct(BigInt, [effect(), effect()], Object),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], Boolean),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], Number),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], String),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], BigInt),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], Symbol),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], Array),
+	(effect) => Reflect.construct(Symbol, [effect(), effect()], Object),
+];
+for (const reject of globalThis.abruptPrimitiveTargets) {
+	let effects = 0;
+	let coercions = 0;
+	const value = {
+		[Symbol.toPrimitive]() {
+			coercions++;
+			throw new Error("conversion");
+		},
+	};
+	try {
+		reject(() => {
+			effects++;
+			return value;
+		});
+		throw new Error("primitive constructor must reject");
+	} catch (error) {
+		check(
+			error instanceof TypeError,
+			"valid target reaches primitive constructor rejection",
+		);
+	}
+	check(
+		effects === 2 && coercions === 0,
+		"constructor rejection follows expressions without coercion",
+	);
+	const sentinel = {};
+	try {
+		reject(() => {
+			throw sentinel;
+		});
+		throw new Error("argument expression must reject");
+	} catch (error) {
+		check(error === sentinel, "valid target preserves throwing expression");
+	}
+}
 function spreadReject(input) {
 	return new Math.abs(...input);
 }

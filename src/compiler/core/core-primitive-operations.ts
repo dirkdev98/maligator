@@ -469,14 +469,30 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				].includes(operation)
 			)
 				continue;
+			const newTarget = attributes.construct
+				? analysis.queryAt(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+						instruction,
+					)
+				: undefined;
+			const targetConstructable =
+				newTarget?.kind !== "known"
+					? undefined
+					: newTarget.brand !== "function"
+						? false
+						: knownOperations()[knownOperationIndex(newTarget.canonical ?? "") ?? -1]
+								?.constructable;
 			if (
 				attributes.construct &&
 				(attributes.argumentMode === undefined ||
 					attributes.argumentMode === "array-like" ||
 					attributes.argumentMode === "nullable-array-like") &&
-				knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable === false
+				(knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable ===
+					false ||
+					targetConstructable === false)
 			) {
 				// Reflect checks constructability before reading its list; source spreads run first.
+				if (newTarget?.kind === "known") analysis.verify(newTarget, instruction);
 				plans.push({
 					instruction,
 					operation: {
@@ -511,12 +527,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (attributes.construct) {
-				const target = analysis.queryAt(inputs[0]!, instruction);
+				const target = newTarget!;
 				if (
 					(operation === "BigInt" || operation === "Symbol") &&
 					target.kind === "known" &&
-					target.canonical === operation
-				)
+					targetConstructable === true
+				) {
+					analysis.verify(target, instruction);
 					plans.push({
 						instruction,
 						operation: {
@@ -527,7 +544,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 							},
 						},
 					});
-				else if (target.kind === "known" && target.canonical === operation) {
+				} else if (target.kind === "known" && target.canonical === operation) {
 					const error = corePrimitiveBuiltinError(
 						analysis,
 						instruction,

@@ -740,6 +740,74 @@ describe("Reflect.get primitive descriptors", () => {
 	});
 });
 
+describe("primitive constructor target validation", () => {
+	it.each(
+		["Boolean", "Number", "String", "BigInt", "Symbol"].flatMap((constructor) =>
+			[
+				"undefined",
+				"null",
+				"false",
+				"17",
+				"'text'",
+				"17n",
+				"Symbol.iterator",
+				"[]",
+				"{}",
+				"Math.abs",
+			].map((target) => [constructor, target]),
+		),
+	)(
+		"rejects %s with nonconstructor target %s before list reads",
+		(constructor, target) => {
+			const result = inspect(
+				`Reflect.construct(${constructor}, {get length(){return x();}, [y()]: y()}, ${target})`,
+			);
+			expect(
+				result.core
+					.filter((op) => op.opcode === "builtinError")
+					.map((op) => op.attributes.error),
+			).toEqual(["notConstructor"]);
+			expect(result.core.some((op) => op.attributes.construct)).toBe(false);
+			expect(result.structure.allocations).toBe(0);
+			expect(result.structure.genericCalls).toBe(2);
+			expect(result.structure.coercions).toBe(1);
+		},
+	);
+	it.each(
+		["BigInt", "Symbol"].flatMap((constructor) =>
+			["Boolean", "Number", "String", "BigInt", "Symbol", "Array", "Object"].map(
+				(target) => [constructor, target],
+			),
+		),
+	)("rejects %s after arguments with valid target %s", (constructor, target) => {
+		const result = inspect(`Reflect.construct(${constructor}, [x(), y()], ${target})`);
+		expect(
+			result.core
+				.filter((op) => op.opcode === "builtinError")
+				.map((op) => op.attributes.error),
+		).toEqual([constructor === "BigInt" ? "bigintConstructor" : "symbolConstructor"]);
+		expect(result.core.some((op) => op.attributes.construct)).toBe(false);
+		expect(result.structure.allocations).toBe(0);
+		expect(result.structure.genericCalls).toBe(2);
+	});
+	it.each(["Boolean", "Number", "String", "BigInt", "Symbol"])(
+		"retains %s target validation and list protocol when unknown",
+		(constructor) => {
+			for (const expression of [
+				`Reflect.construct(${constructor},x,y)`,
+				`Reflect.construct(${constructor},x,Array)`,
+				`Reflect.construct(${constructor},[x],y)`,
+			]) {
+				const result = inspect(expression);
+				expect(result.core.some((op) => op.opcode === "builtinError")).toBe(false);
+				expect(result.core.some((op) => op.attributes.construct)).toBe(true);
+			}
+			const mutable = inspect(`Reflect.construct(${constructor},x,Math.abs)`, false);
+			expect(mutable.core.some((op) => op.opcode === "builtinError")).toBe(false);
+		},
+	);
+});
+
 describe("rejected primitive construction profiles", () => {
 	const profiles = [
 		["dynamic-new-target", (value: string) => `return Reflect.construct(${value},[],x);`],

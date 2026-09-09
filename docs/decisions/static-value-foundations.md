@@ -362,6 +362,13 @@ access remain separate obligations. `BigInt` and `Symbol` have throwing construc
 bodies, so an unknown `newTarget` still requires validation before entry. Mutable
 callables keep their distinct construction paths.
 
+Primitive construction also uses exact `newTarget` facts: known nonconstructors
+reject before a reflective argument list is read, while argument expressions still
+execute. After list expansion, `BigInt` and `Symbol` with any proved canonical
+constructor as `newTarget` become their residual constructor-body errors. Unknown
+targets and effectful lists retain runtime validation; source spreads still run
+before construction checks.
+
 Contained String wrappers also disappear for fixed numeric index reads, including
 negative zero and absent indexes. Conversion remains at construction, and index
 reads use the primitive string. A key coercion that exposes the wrapper, or an

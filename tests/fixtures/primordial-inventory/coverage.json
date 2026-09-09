@@ -96130,6 +96130,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"reason": "A proven nonconstructor newTarget rejects before Reflect list observations; preserve list-expression evaluation and property-key conversion while eliminating the unobserved list shell and constructor dispatch. Unknown targets and observable lists retain their runtime path.",
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "rejects %s with nonconstructor target %s before list reads",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains %s target validation and list protocol when unknown",
+						"case": "BigInt"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -98362,6 +98383,27 @@
 						"test": "preserves escaped wrapper state before %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation", "effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"reason": "A proven nonconstructor newTarget rejects before Reflect list observations; preserve list-expression evaluation and property-key conversion while eliminating the unobserved list shell and constructor dispatch. Unknown targets and observable lists retain their runtime path.",
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "rejects %s with nonconstructor target %s before list reads",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains %s target validation and list protocol when unknown",
+						"case": "Boolean"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -118399,6 +118441,27 @@
 						"case": "new-target"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["adapted-invocation", "effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"reason": "A proven nonconstructor newTarget rejects before Reflect list observations; preserve list-expression evaluation and property-key conversion while eliminating the unobserved list shell and constructor dispatch. Unknown targets and observable lists retain their runtime path.",
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "rejects %s with nonconstructor target %s before list reads",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains %s target validation and list protocol when unknown",
+						"case": "Number"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -126961,6 +127024,27 @@
 						"case": "new-target"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["adapted-invocation", "effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"reason": "A proven nonconstructor newTarget rejects before Reflect list observations; preserve list-expression evaluation and property-key conversion while eliminating the unobserved list shell and constructor dispatch. Unknown targets and observable lists retain their runtime path.",
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "rejects %s with nonconstructor target %s before list reads",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains %s target validation and list protocol when unknown",
+						"case": "String"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -130605,12 +130689,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"lowering": "constant"
 				},
@@ -130645,12 +130729,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -135760,12 +135844,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -146821,6 +146905,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"reason": "A proven nonconstructor newTarget rejects before Reflect list observations; preserve list-expression evaluation and property-key conversion while eliminating the unobserved list shell and constructor dispatch. Unknown targets and observable lists retain their runtime path.",
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "rejects %s with nonconstructor target %s before list reads",
+						"case": "Symbol"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains %s target validation and list protocol when unknown",
+						"case": "Symbol"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -155776,12 +155881,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
@@ -161999,12 +162104,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
