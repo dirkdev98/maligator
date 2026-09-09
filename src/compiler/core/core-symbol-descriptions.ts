@@ -1,8 +1,67 @@
 import { CoreEditor } from "./core-editor.ts";
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionPassContext } from "./core-pass.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
+
+export function forwardSymbolDescription(
+	context: CoreFunctionPassContext,
+	analysis: CoreStaticValueAnalysis,
+	consumer: CoreInstructionId,
+	receiver: CoreValueId | undefined,
+	registryKey: boolean,
+) {
+	if (receiver === undefined || context.remainingEdits < 3) return undefined;
+	const { program, item } = context;
+	const fn = program.function(item.function);
+	for (let depth = 0; depth < 64; depth++) {
+		if (fn.kernel.valueDefinitionKind(receiver) !== 1) return undefined;
+		const producer = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
+		const start = fn.kernel.instructionOperandStart(producer);
+		if (fn.instructionOpcodeName(producer) === "move") {
+			receiver = fn.kernel.operandAt(start);
+			continue;
+		}
+		if (fn.instructionOpcodeName(producer) !== "callKnown") return undefined;
+		const attributes = fn.instructionAttributes(producer);
+		if (
+			attributes.construct ||
+			attributes.argumentMode !== undefined ||
+			(attributes.operation !== "Symbol.for" &&
+				(registryKey || attributes.operation !== "Symbol")) ||
+			fn.kernel.instructionOperandCount(producer) < 2
+		)
+			return undefined;
+		let input = fn.kernel.operandAt(start + 1);
+		const fact = analysis.queryAt(input, producer);
+		const string = fact.kind === "known" && fact.brand === "string";
+		if (!string && attributes.operation === "Symbol") return undefined;
+		const editor = CoreEditor.open(program, fn.id);
+		if (!string) {
+			// Capture the registry key at creation; later metadata reads must not repeat coercion.
+			input = editor.insertInstruction(
+				fn.instructionBlock(producer),
+				producer,
+				"unary",
+				[input],
+				{
+					attributes: { operator: "tostring" },
+					sourcePosition: fn.instructionSourcePosition(producer),
+				},
+			).outputs[0]!;
+			const inputs = Array.from(
+				{ length: fn.kernel.instructionOperandCount(producer) },
+				(_, index) => fn.kernel.operandAt(start + index),
+			);
+			inputs[1] = input;
+			editor.replaceOperands(producer, inputs);
+		}
+		editor.replaceInstruction(consumer, "move", [input]);
+		return editor.commit();
+	}
+	return undefined;
+}
 
 export function eliminateSymbolDescription(
 	context: CoreFunctionPassContext,

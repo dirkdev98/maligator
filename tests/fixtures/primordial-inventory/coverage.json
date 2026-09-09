@@ -60367,6 +60367,88 @@
 						"test": "retains a dynamic symbol whose identity escapes before its description"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "keeps mutable %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["M", "U", "L", "P"],
+					"state": "not-applicable",
+					"reason": "For Symbol.prototype.description<get> on a proved Symbol, metadata access returns its existing immutable description or registry key (or undefined), with no new result identity, mutable state update, callback/iterator protocol or payload preparation. Symbol creation and registry insertion, wrapper inputs, property lookup, argument coercion and wrong-brand error materialization remain separate operations and obligations.",
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -96441,6 +96523,26 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For BigInt.asIntN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -96898,6 +97000,26 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For BigInt.asUintN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -98882,6 +99004,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Boolean with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -99651,6 +99793,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Boolean.prototype.toString with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -100460,6 +100622,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Boolean.prototype.valueOf with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -106264,6 +106446,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.abs with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -106762,6 +106964,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.acos with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -107221,6 +107443,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.acosh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -107680,6 +107922,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.asin with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -108139,6 +108401,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.asinh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -108598,6 +108880,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.atan with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -109090,6 +109392,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.atan2 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -109549,6 +109871,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.atanh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -110008,6 +110350,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.cbrt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -110467,6 +110829,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.ceil with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -110926,6 +111308,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.clz32 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -111385,6 +111787,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.cos with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -111844,6 +112266,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.cosh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -112303,6 +112745,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.exp with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -112762,6 +113224,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.expm1 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -113221,6 +113703,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.f16round with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -113680,6 +114182,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.floor with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -114139,6 +114661,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.fround with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -114651,6 +115193,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.hypot with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -115110,6 +115672,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.imul with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -115569,6 +116151,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.log with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -116028,6 +116630,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.log10 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -116487,6 +117109,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.log1p with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -116946,6 +117588,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.log2 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -117458,6 +118120,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.max with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -117950,6 +118632,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.min with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -118462,6 +119164,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.pow with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -119242,6 +119964,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.round with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -119701,6 +120443,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.sign with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -120180,6 +120942,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.sin with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -120639,6 +121421,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.sinh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -121098,6 +121900,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.sqrt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -121977,6 +122799,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.tan with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -122436,6 +123278,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.tanh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -122895,6 +123757,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Math.trunc with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -123429,6 +124311,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -123943,6 +124845,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.isFinite with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -124443,6 +125365,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.isInteger with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -124922,6 +125864,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.isNaN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -125422,6 +126384,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.isSafeInteger with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -126254,6 +127236,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.prototype.toExponential with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -127105,6 +128107,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.prototype.toFixed with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -127957,6 +128979,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.prototype.toPrecision with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -128844,6 +129886,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.prototype.toString with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -129634,6 +130696,26 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For Number.prototype.valueOf with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -153924,6 +155006,84 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "keeps mutable %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["M", "U", "L", "P"],
+					"state": "not-applicable",
+					"reason": "For Symbol.keyFor on a proved Symbol, metadata access returns its existing immutable description or registry key (or undefined), with no new result identity, mutable state update, callback/iterator protocol or payload preparation. Symbol creation and registry insertion, wrapper inputs, property lookup, argument coercion and wrong-brand error materialization remain separate operations and obligations.",
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -154469,6 +155629,134 @@
 						"case": "Symbol.prototype.description<get>"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents", "large-recursive-loop"],
+					"axes": ["T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer", "environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["adapted-invocation", "dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "keeps mutable %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"dynamic-receiver-static-parameter"
+					],
+					"axes": ["M", "U", "L", "P"],
+					"state": "not-applicable",
+					"reason": "For Symbol.prototype.description<get> on a proved Symbol, metadata access returns its existing immutable description or registry key (or undefined), with no new result identity, mutable state update, callback/iterator protocol or payload preparation. Symbol creation and registry insertion, wrapper inputs, property lookup, argument coercion and wrong-brand error materialization remain separate operations and obligations.",
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -170550,6 +171838,26 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For isFinite with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -170952,6 +172260,26 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For isNaN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},
@@ -171848,6 +173176,26 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": [
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "For parseInt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},

@@ -32,7 +32,10 @@ import {
 	coreStaticStringReplacementParts,
 } from "./core-string-construction.ts";
 import type { CoreStringPart } from "./core-string-construction.ts";
-import { eliminateSymbolDescription } from "./core-symbol-descriptions.ts";
+import {
+	eliminateSymbolDescription,
+	forwardSymbolDescription,
+} from "./core-symbol-descriptions.ts";
 import {
 	lowerPrimitiveWrapperObservation,
 	primitiveWrapperObservation,
@@ -715,6 +718,20 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					}
 				}
 			}
+			if (
+				operation === "Symbol.prototype.description<get>" ||
+				operation === "Symbol.keyFor"
+			) {
+				const forwarded = forwardSymbolDescription(
+					context,
+					analysis,
+					instruction,
+					inputs[operation === "Symbol.keyFor" ? 1 : 0],
+					operation === "Symbol.keyFor",
+				);
+				if (forwarded !== undefined) return forwarded;
+			}
+
 			if (
 				operation === "Symbol" &&
 				fn.kernel.valueUseCount(

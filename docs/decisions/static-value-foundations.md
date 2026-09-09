@@ -532,6 +532,25 @@ without coercion and stores results in the destination's actual representation.
 Other known numeric calls retain their ordinary path when lowering has not carried
 the numeric proof across suspension.
 
+Symbol metadata may forward the string used by a known Symbol producer even when
+its identity escapes. Registry keys are converted once at Symbol.for evaluation;
+description and keyFor consumers reuse that string while the registry call stays
+in place. Fresh Symbol descriptions forward only an already-proved String input,
+so the absent-description case and effectful conversion retain their distinction.
+Unknown producers, merged Symbols, proxies and mutable descriptor lookup retain
+their ordinary paths.
+
+For the witnessed primitive-only numeric calls, private state update and
+callback/iterator specialization are inapplicable: these algorithms mutate no
+JavaScript receiver or result state and take no callback or ECMAScript iterator.
+Math's internal numeric argument loops do not introduce a user iteration protocol.
+The separate caller conversion, reflective list access, callback, loop and
+suspension still run. Symbol metadata reads return an existing immutable String or
+undefined; they have no new result identity, mutable state, callback/iteration or
+payload preparation. Symbol creation, registry insertion, wrapper inputs and
+wrong-brand errors keep their own obligations. These classifications exclude
+mutable targets, unproved coercion, entropy and sumPrecise iteration.
+
 ## Baseline measurement
 
 ```sh
