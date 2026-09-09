@@ -232,6 +232,49 @@ function onlyConstantResults(output: ReturnType<typeof inspect>) {
 }
 
 describe("primitive operation results", () => {
+	it.each([
+		"Symbol(String(x)).description",
+		"Symbol(+x).description",
+		"Symbol({toString(){return x();}}).description",
+		"Symbol(String(x)).toString()",
+		"String(Symbol(String(x)))",
+		"Object(Symbol(String(x))).description",
+	])(
+		"consumes a dynamic symbol description without its identity for %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(output.core.some((op) => op.attributes.operation === "Symbol")).toBe(false);
+			expect(
+				output.core.some((op) =>
+					["Symbol.prototype.description<get>", "Symbol.prototype.toString"].includes(
+						op.attributes.operation as string,
+					),
+				),
+			).toBe(false);
+		},
+	);
+	it.each(["Symbol(x).description", "Symbol.for(String(x)).description"])(
+		"retains symbol identity or an unknown description at %s",
+		(expression) => {
+			expect(
+				inspect(expression).core.some((op) =>
+					["Symbol", "Symbol.for"].includes(op.attributes.operation as string),
+				),
+			).toBe(true);
+		},
+	);
+	it("retains a dynamic symbol whose identity escapes before its description", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x){const s=Symbol(String(x)); x(s); return s.description;}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(output.core.some((op) => op.attributes.operation === "Symbol")).toBe(true);
+	});
+	it("retains mutable dynamic symbol description dispatch", () => {
+		const output = inspect("Symbol(String(x)).description", false);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
+		expect(output.structure.genericLookups).toBeGreaterThan(0);
+	});
 	it.each(primitiveDataExpressions)(
 		"reads certified primitive data without a runtime lookup for %s",
 		(expression) => {

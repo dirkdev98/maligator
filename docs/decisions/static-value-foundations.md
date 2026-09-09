@@ -339,6 +339,12 @@ negative zero and absent indexes. Conversion remains at construction, and index
 reads use the primitive string. A key coercion that exposes the wrapper, or an
 escaping result whose descriptors can be inspected, retains the String object.
 
+Fresh Symbols consumed only through their descriptions or descriptive strings can
+carry the converted description directly. The bounded use walk rejects identity
+escapes and requires a known input brand excluding undefined; unknown inputs retain
+the constructor's absent-description branch. ToString stays at creation, before
+later effects and observations. Registry operations keep their runtime identity.
+
 ## Baseline measurement
 
 ```sh

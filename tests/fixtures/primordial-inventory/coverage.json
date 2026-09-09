@@ -42651,7 +42651,27 @@
 			"kind": "accessor",
 			"operations": ["Symbol.prototype.description<get>"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "consumes a dynamic symbol description without its identity for %s",
+						"case": "Symbol(String(x)).description"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a dynamic symbol whose identity escapes before its description"
+					},
+					"lowering": "specialized"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.prototype\",\"symbol:%Symbol.toPrimitive%\"]",
@@ -92045,6 +92065,25 @@
 						"case": "Symbol(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "consumes a dynamic symbol description without its identity for %s",
+						"case": "Symbol(String(x)).description"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a dynamic symbol whose identity escapes before its description"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -92294,6 +92333,25 @@
 						"case": "Symbol.prototype.toString.call(1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "eliminateSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "consumes a dynamic symbol description without its identity for %s",
+						"case": "Symbol(String(x)).toString()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a dynamic symbol whose identity escapes before its description"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

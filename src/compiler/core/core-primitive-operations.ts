@@ -20,6 +20,7 @@ import {
 	coreStaticStringReplacementParts,
 } from "./core-string-construction.ts";
 import type { CoreStringPart } from "./core-string-construction.ts";
+import { eliminateSymbolDescription } from "./core-symbol-descriptions.ts";
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
@@ -397,6 +398,15 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						inputs: inputs.slice(0, 2),
 					});
 				continue;
+			}
+			if (operation === "Symbol") {
+				const eliminated = eliminateSymbolDescription(
+					context,
+					analysis,
+					instruction,
+					inputs[1],
+				);
+				if (eliminated !== undefined) return eliminated;
 			}
 			if (
 				operation === "String.raw" ||

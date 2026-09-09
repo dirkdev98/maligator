@@ -1,6 +1,81 @@
 function show(value) {
 	console.log(typeof value, Object.is(value, -0) ? "-0" : String(value));
 }
+function dynamicSymbolDescription(value) {
+	return Symbol(String(value)).description;
+}
+function dynamicSymbolText(value) {
+	const symbol = Symbol(String(value));
+	return symbol.toString() + "|" + String(symbol);
+}
+function numericSymbolDescription(value) {
+	return Symbol(+value).description;
+}
+function coercedSymbolDescription(callback, after) {
+	const symbol = Symbol({
+		toString() {
+			return callback();
+		},
+	});
+	after();
+	return symbol.description;
+}
+function escapedSymbolDescription(value, escape) {
+	const symbol = Symbol(String(value));
+	escape(symbol);
+	return symbol.description;
+}
+for (const value of [undefined, null, "", "undefined", "😀", "\ud800", -0, NaN, 1n]) {
+	show(dynamicSymbolDescription(value));
+	show(dynamicSymbolText(value));
+}
+for (const value of [-0, 0, NaN, Infinity, -Infinity, 1.25]) {
+	show(numericSymbolDescription(value));
+}
+for (const value of [undefined, "late", Symbol("invalid")]) {
+	let events = "";
+	try {
+		show(
+			coercedSymbolDescription(
+				() => {
+					events += "convert|";
+					return value;
+				},
+				() => {
+					events += "after|";
+				},
+			),
+		);
+	} catch (error) {
+		show(error.name);
+	}
+	show(events);
+}
+let symbolEvents = "";
+try {
+	coercedSymbolDescription(
+		() => {
+			symbolEvents += "throw|";
+			throw new URIError("description");
+		},
+		() => {
+			symbolEvents += "after|";
+		},
+	);
+} catch (error) {
+	show(error.name);
+}
+show(symbolEvents);
+let priorEscapedSymbol;
+for (let index = 0; index < 2; index++) {
+	show(
+		escapedSymbolDescription("same", (symbol) => {
+			show(typeof symbol);
+			show(symbol === priorEscapedSymbol);
+			priorEscapedSymbol = symbol;
+		}),
+	);
+}
 function numberPredicates(value) {
 	return [
 		Number.isFinite.call(null, value),
