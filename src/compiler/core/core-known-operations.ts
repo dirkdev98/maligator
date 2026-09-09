@@ -238,6 +238,29 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				args = inputs(fn, instruction);
 			const attributes =
 				opcode === "callKnown" ? fn.instructionAttributes(instruction) : undefined;
+			if (
+				typeof attributes?.operation === "string" &&
+				args.length === 2 &&
+				(attributes.argumentMode === "array-like" ||
+					attributes.argumentMode === "nullable-array-like")
+			) {
+				const list = argumentList(
+					program,
+					analysis,
+					args[1],
+					instruction,
+					attributes.argumentMode === "nullable-array-like",
+				);
+				if (list !== undefined) {
+					call(
+						instruction,
+						attributes.operation,
+						[args[0]!, ...list],
+						attributes.construct === true,
+					);
+					continue;
+				}
+			}
 			const knownAdapter =
 				attributes !== undefined &&
 				attributes.construct !== true &&

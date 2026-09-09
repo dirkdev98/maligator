@@ -95916,6 +95916,96 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -96261,6 +96351,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -96628,6 +96808,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -97274,6 +97544,114 @@
 						"case": "BigInt.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -97821,6 +98199,114 @@
 						"case": "BigInt.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -98252,6 +98738,96 @@
 						"case": "Boolean(null)"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -98859,6 +99435,114 @@
 						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -99524,6 +100208,114 @@
 						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105202,6 +105994,96 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105588,6 +106470,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -105935,6 +106893,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106282,6 +107316,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106629,6 +107739,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -106976,6 +108162,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107342,6 +108604,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -107689,6 +109041,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108036,6 +109464,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108383,6 +109887,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -108730,6 +110310,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -109077,6 +110733,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -109424,6 +111156,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -109771,6 +111579,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -110118,6 +112002,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -110465,6 +112425,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -110812,6 +112848,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -111159,6 +113271,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -111545,6 +113733,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -111892,6 +114170,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -112239,6 +114593,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -112586,6 +115016,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -112933,6 +115439,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -113280,6 +115862,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -113666,6 +116324,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -114032,6 +116780,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -114418,6 +117256,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -115072,6 +118000,96 @@
 						"case": "Math.round"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -115419,6 +118437,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -115786,6 +118880,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -116133,6 +119303,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -116480,6 +119726,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -117247,6 +120569,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -117594,6 +120992,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -117941,6 +121415,82 @@
 						"test": "retains mutable Math and wrapper prototype lookup"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -118331,6 +121881,96 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -118717,6 +122357,96 @@
 						"file": "tests/static-value-discovery.test.ts",
 						"test": "retains mutable operation identity when folding primitive-cell data at %s",
 						"case": "Number.isFinite"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
 				}
@@ -119107,6 +122837,82 @@
 						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -119456,6 +123262,82 @@
 						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -119844,6 +123726,82 @@
 						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -120530,6 +124488,114 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the receiver outside the payload proof for %s and %s",
 						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
 				}
@@ -121239,6 +125305,114 @@
 						"case": "Reflect.construct(Number,[x],globalThis.Target)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -121945,6 +126119,114 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the receiver outside the payload proof for %s and %s",
 						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
 				}
@@ -122690,6 +126972,114 @@
 						"case": "Reflect.construct(Number,[x],globalThis.Target)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -123336,6 +127726,114 @@
 						"case": "Reflect.construct(Number,[x],globalThis.Target)"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -130861,12 +135359,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "'\ud83d\ude00'.codePointAt(0)"
+						"case": "'😀'.codePointAt(0)"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "'\ud83d\ude00'.codePointAt(0)"
+						"case": "'😀'.codePointAt(0)"
 					},
 					"lowering": "constant"
 				},
@@ -130901,12 +135399,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
+						"case": "'a😀b'.codePointAt(new Number(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
+						"case": "'a😀b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -136016,12 +140514,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'\u00e9'.normalize(new String(x))"
+						"case": "'é'.normalize(new String(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'\u00e9'.normalize(new String(x))"
+						"case": "'é'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -147536,6 +152034,96 @@
 						"case": "registered/Symbol.keyFor"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -148611,6 +153199,114 @@
 						"case": "Symbol.prototype.toString"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -149158,6 +153854,114 @@
 						"case": "Symbol.prototype.valueOf"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -149685,6 +154489,114 @@
 						"case": "Symbol.prototype[%Symbol.toPrimitive%]"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -156053,12 +160965,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=\ud83d\ude00')"
+						"case": "encodeURI('a b?x=😀')"
 					},
 					"lowering": "constant"
 				},
@@ -162276,12 +167188,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('\ud83d\ude00')"
+						"case": "escape('😀')"
 					},
 					"lowering": "constant"
 				},
@@ -163762,6 +168674,82 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -164088,6 +169076,82 @@
 						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -164441,6 +169505,82 @@
 						"case": "parseFloat(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -164818,6 +169958,96 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity", "large-recursive-loop"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "T", "F", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "folds %s through ${profile} while retaining effects"
+					},
+					"negative": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "constant"
 				}
 			]
 		},

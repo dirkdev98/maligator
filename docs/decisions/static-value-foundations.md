@@ -515,6 +515,15 @@ are required. Unknown producers, proxies, merged receivers, generic coercion and
 mutable method lookup retain their ordinary behavior. This forwarding does not
 remove allocation or duplicate user coercion, and preserves all argument effects.
 
+Known calls with array-like argument mode can expand after later operand folding
+completes their call-site array proof. The same descriptor and inherited-hole
+checks govern initial adapter resolution and this later expansion; unknown lists,
+getters and proxies retain their protocol. Numeric and stable-symbol constant-call
+witnesses cover surrounding effects, escaping consumers, loops, suspension,
+repeated and unused calls, and reflective array arguments in both primordial modes.
+These witnesses certify the selected exact inputs, not arbitrary target libm
+evaluation or entropy and registry operations.
+
 ## Baseline measurement
 
 ```sh
