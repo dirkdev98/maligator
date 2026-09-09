@@ -126,6 +126,8 @@ function candidate(operation: string): boolean {
 		!operation.includes("toLocale") &&
 		!operation.endsWith("localeCompare") &&
 		(immutableReceiverMethods.has(operation) ||
+			// A successful registry lookup fixes this primitive key's Symbol identity permanently.
+			operation === "Symbol.for" ||
 			(builtinPrimitiveResult(operation) !== undefined &&
 				builtinPrimitiveResult(operation) !== "symbol") ||
 			[
@@ -270,8 +272,10 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 	run(context) {
 		const fn = context.program.function(context.item.function),
 			analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
-		const plans: Array<{ instruction: CoreInstructionId; replacement?: CoreValueId }> =
-			[];
+		const plans: Array<{
+			instruction: CoreInstructionId;
+			replacement?: CoreValueId;
+		}> = [];
 		const brand = (value: CoreValueId): string | undefined => {
 			const fact = analysis.query(value);
 			return fact.kind === "known" && primitiveBrands.has(fact.brand)

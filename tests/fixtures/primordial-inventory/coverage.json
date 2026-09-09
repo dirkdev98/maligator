@@ -154529,6 +154529,256 @@
 						"case": "Symbol.for(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "reuses the registered identity for ${key} in ${profile} after retaining the first call"
+					},
+					"negative": {
+						"file": "tests/core-symbol-registry-reuse.test.ts",
+						"test": "preserves mutable registry dispatch for ${key} in ${profile}"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["L"],
+					"state": "not-applicable",
+					"reason": "For the witnessed primitive registry keys, Symbol.for converts a primitive and searches/inserts its registry entry without invoking a user callback or ECMAScript iterator protocol. Prior input-object conversions, argument expressions and intervening effects remain ordered; unknown object keys still coerce on every call. Internal registry table traversal is not user-visible iteration.",
+					"negative": {
+						"file": "tests/native/symbol-registry-reuse.test.ts",
+						"test": "preserves registry identity, coercion order and abrupt completion with %s primordials"
+					},
+					"lowering": "semantic-boundary"
 				}
 			]
 		},

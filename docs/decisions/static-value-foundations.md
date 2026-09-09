@@ -532,6 +532,15 @@ without coercion and stores results in the destination's actual representation.
 Other known numeric calls retain their ordinary path when lowering has not carried
 the numeric proof across suspension.
 
+Repeated exact `Symbol.for` calls may reuse a prior successful result in the same
+basic block when the key is the same proved primitive value. Registry entries retain
+their Symbol identity across arbitrary effects. The first call still performs the
+lookup or insertion, even for unused results; unknown object keys retain repeated
+coercion, and fresh `Symbol` calls remain distinct. This rule performs no motion
+across control-flow or suspension boundaries. Primitive-key registry lookup has no
+user callback or iterator protocol; input conversion and argument effects remain
+separate obligations.
+
 Symbol metadata may forward the string used by a known Symbol producer even when
 its identity escapes. Registry keys are converted once at Symbol.for evaluation;
 description and keyFor consumers reuse that string while the registry call stays
