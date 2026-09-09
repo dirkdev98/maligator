@@ -11,6 +11,105 @@ import {
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+describe("inherited wrapper toLocaleString", () => {
+	it.each([
+		"new Boolean(x)",
+		"new Number(+x)",
+		"new String(String(x))",
+		"Object(BigInt(x))",
+		"Object(Symbol.for(x))",
+		"!!x",
+		"+x",
+		"String(x)",
+		"BigInt(x)",
+		"Symbol.for(x)",
+	])("resolves the exact toString consumer of %s without boxing", (receiver) => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { return Object.prototype.toLocaleString.call(${receiver}); }
+			globalThis.target = target;`,
+			"target",
+		);
+		expect(
+			result.core.filter(
+				(instruction) =>
+					instruction.opcode === "callKnown" &&
+					(instruction.attributes.operation === "Object.prototype.toLocaleString" ||
+						instruction.attributes.operation === "Object" ||
+						instruction.attributes.construct === true),
+			),
+		).toEqual([]);
+	});
+
+	it("evaluates extra arguments without forwarding a radix to the delegated method", () => {
+		const result = inspectStaticValueFunction(
+			`function target(x) {
+				return Object.prototype.toLocaleString.call(new Number(+x), 16, globalThis.effect());
+			} globalThis.target = target;`,
+			"target",
+		);
+		const method = result.core.find(
+			(instruction) => instruction.attributes.operation === "Number.prototype.toString",
+		);
+		expect(method?.inputs).toHaveLength(1);
+		expect(result.structure.genericCalls).toBe(1);
+	});
+
+	it.each([
+		["true", "true"],
+		["17", "17"],
+		['"text"', "text"],
+		["17n", "17"],
+		["Symbol.iterator", "Symbol(Symbol.iterator)"],
+	])("folds the inherited text of %s", (receiver, value) => {
+		const result = inspectStaticValueFunction(
+			`function target() { return Object.prototype.toLocaleString.call(${receiver}); }
+			globalThis.target = target;`,
+			"target",
+		);
+		expect(result.core.map((instruction) => instruction.opcode)).toEqual([
+			"createString",
+		]);
+		const literal = result.fn.instructions.find(
+			(instruction) => instruction.opcode === "CREATE_STRING",
+		);
+		if (literal === undefined) throw new Error("Missing runtime string constant");
+		expect(
+			String.fromCharCode(...result.image.runtime.stringConstants[literal.stringIndex]!),
+		).toBe(value);
+	});
+
+	it.each([
+		"const value = x;",
+		"const value = null;",
+		"const value = new Boolean(x); value.toString = x;",
+		"const value = new Boolean(x); Object.setPrototypeOf(value, x);",
+		"const value = new Boolean(x); globalThis.sink(value);",
+		"const value = new Proxy(new Boolean(x), x);",
+	])("retains the required property lookup after %s", (setup) => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { ${setup} return Object.prototype.toLocaleString.call(value); }
+			globalThis.target = target;`,
+			"target",
+		);
+		expect(
+			result.core.some(
+				(instruction) =>
+					instruction.attributes.operation === "Object.prototype.toLocaleString",
+			),
+		).toBe(true);
+	});
+
+	it("retains mutable toLocaleString and toString lookup", () => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { return Object.prototype.toLocaleString.call(new Boolean(x)); }
+			globalThis.target = target;`,
+			"target",
+			{ locked: false },
+		);
+		expect(result.structure.genericCalls).toBeGreaterThan(0);
+	});
+});
+
 describe("late primitive effect and representation proofs", () => {
 	it.each([
 		"Boolean(x)",

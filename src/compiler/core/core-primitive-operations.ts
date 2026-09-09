@@ -387,6 +387,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
 				![
 					"Object.prototype.toString",
+					"Object.prototype.toLocaleString",
 					"Object.prototype.valueOf",
 					"globalThis.escape",
 					"globalThis.unescape",
@@ -481,6 +482,34 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				) === 0
 			) {
 				plans.push({ instruction, value: { kind: "undefined" } });
+				continue;
+			}
+			if (operation === "Object.prototype.toLocaleString") {
+				const receiver = inputs[0]!,
+					fact = analysis.queryAt(receiver, instruction);
+				if (
+					fact.kind === "known" &&
+					context.compilationContext.facts.world.primordialPolicy === "locked" &&
+					!context.compilationContext.facts.world.realms
+				) {
+					const target = analysis.inherited(fact, "toString")?.resolution?.value?.[0];
+					if (target !== undefined && knownOperationIndex(target) !== undefined) {
+						analysis.verify(fact, instruction);
+						plans.push({
+							instruction,
+							operation: {
+								opcode: "callKnown",
+								inputs: [receiver],
+								attributes: {
+									operation: target,
+									worldAssumptions: {
+										...builtinWorldAssumptions(target, "exact-builtin-proof", true),
+									},
+								},
+							},
+						});
+					}
+				}
 				continue;
 			}
 			if (operation === "Object.prototype.valueOf") {
