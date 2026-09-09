@@ -84531,7 +84531,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -84657,7 +84657,7 @@
 					"lowering": "constant"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -84932,7 +84932,7 @@
 					"lowering": "constant"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -85095,6 +85095,26 @@
 						"case": "Boolean.prototype.valueOf.call(1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -96869,7 +96889,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -97077,7 +97097,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -97305,7 +97325,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -97529,7 +97549,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -97692,6 +97712,26 @@
 						"case": "Number.prototype.valueOf.call(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -101150,7 +101190,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -101316,7 +101356,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -101462,7 +101502,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -101608,7 +101648,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -101754,7 +101794,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -101920,7 +101960,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102066,7 +102106,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102232,7 +102272,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102396,7 +102436,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102566,7 +102606,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102712,7 +102752,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -102878,7 +102918,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103044,7 +103084,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103214,7 +103254,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103384,7 +103424,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103533,7 +103573,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103679,7 +103719,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -103849,7 +103889,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -104015,7 +104055,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -104153,6 +104193,26 @@
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable collation identity and option reentrancy"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.localeCompare"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.localeCompare"
 					},
 					"lowering": "specialized"
 				}
@@ -104366,7 +104426,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -104532,7 +104592,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -104698,7 +104758,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -104903,7 +104963,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -105092,7 +105152,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -105281,7 +105341,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -105471,7 +105531,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -105617,7 +105677,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -105777,6 +105837,26 @@
 						"case": "String.prototype.split.call(null,x)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.split"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.split"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -105929,7 +106009,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106075,7 +106155,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106221,7 +106301,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106391,7 +106471,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106561,7 +106641,7 @@
 					"lowering": "eliminated"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106707,7 +106787,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106836,7 +106916,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -106965,7 +107045,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107114,7 +107194,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107240,7 +107320,7 @@
 					"lowering": "constant"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107389,7 +107469,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107538,7 +107618,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107707,7 +107787,7 @@
 					"lowering": "residual-throw"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -107876,7 +107956,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -108025,7 +108105,7 @@
 					"lowering": "specialized"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
@@ -108188,6 +108268,26 @@
 						"case": "String.prototype.valueOf.call(1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "String.prototype.valueOf"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109069,6 +109169,26 @@
 						"test": "retains a dynamic symbol whose identity escapes before its description"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-cells.ts",
+						"symbol": "CoreStaticCellIndex"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "resolves immutable primitive-cell consumers at %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "retains mutable primitive-cell method lookup at %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109177,7 +109297,7 @@
 					"lowering": "constant"
 				},
 				{
-					"profiles": ["known-consumer"],
+					"profiles": ["environment-state-gc-suspension"],
 					"axes": ["R", "D"],
 					"state": "implemented",
 					"implementation": {
