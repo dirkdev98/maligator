@@ -470,6 +470,16 @@ target-owned state updates or callback/iterator execution are inapplicable becau
 construction is rejected. This does not classify normal calls, mutable targets,
 argument producers, or error-object materialization as inapplicable.
 
+Exact primitive-slot methods can consume a proven wrapper constructor's original
+payload even after the wrapper escapes. The constructor and escaping uses retain
+the object identity; only the method receiver changes. Number and String inputs
+must already have the matching primitive kind, and Object must wrap a matching
+primitive. Boolean may repeat its effect-free truthiness conversion on the original
+SSA value. Matching constructor/new-target identities and ordinary argument lists
+are required. Unknown producers, proxies, merged receivers, generic coercion and
+mutable method lookup retain their ordinary behavior. This forwarding does not
+remove allocation or duplicate user coercion, and preserves all argument effects.
+
 ## Baseline measurement
 
 ```sh

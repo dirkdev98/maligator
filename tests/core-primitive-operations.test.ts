@@ -2594,3 +2594,106 @@ describe("proven Boolean text conversion", () => {
 		expect(result.c.source).toContain("MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE");
 	});
 });
+
+describe("immutable escaping primitive wrapper payloads", () => {
+	it.each([
+		["new Boolean(x)", "Boolean.prototype.valueOf.call(value)"],
+		["new Boolean(x)", "Boolean.prototype.toString.call(value)"],
+		["Object(!!x)", "Boolean.prototype.valueOf.call(value)"],
+		["Object(!!x)", "Boolean.prototype.toString.call(value)"],
+		["new Number(+x)", "Number.prototype.valueOf.call(value)"],
+		["new Number(+x)", "Number.prototype.toString.call(value)"],
+		["new Number(+x)", "Number.prototype.toFixed.call(value)"],
+		["new Number(+x)", "Number.prototype.toExponential.call(value)"],
+		["new Number(+x)", "Number.prototype.toPrecision.call(value)"],
+		["Object(+x)", "Number.prototype.valueOf.call(value)"],
+		["Object(+x)", "Number.prototype.toString.call(value)"],
+		["Object(+x)", "Number.prototype.toFixed.call(value)"],
+		["Object(+x)", "Number.prototype.toExponential.call(value)"],
+		["Object(+x)", "Number.prototype.toPrecision.call(value)"],
+		["new String(String(x))", "String.prototype.valueOf.call(value)"],
+		["new String(String(x))", "String.prototype.toString.call(value)"],
+		["Object(String(x))", "String.prototype.valueOf.call(value)"],
+		["Object(String(x))", "String.prototype.toString.call(value)"],
+		["Object(BigInt(x))", "BigInt.prototype.valueOf.call(value)"],
+		["Object(BigInt(x))", "BigInt.prototype.toString.call(value)"],
+		["Object(Symbol.for(x))", "Symbol.prototype.valueOf.call(value)"],
+		["Object(Symbol.for(x))", "Symbol.prototype.toString.call(value)"],
+		["Object(Symbol.for(x))", "Symbol.prototype[Symbol.toPrimitive].call(value)"],
+	])("forwards the private payload from %s into %s", (producer, observation) => {
+		const result = inspectStaticValueFunction(
+			`function probe(x){const value=${producer};globalThis.sink(value);return ${observation};}globalThis.probe=probe;`,
+			"probe",
+		);
+		const allocation = result.core.find(
+			(o) =>
+				o.opcode === "callKnown" &&
+				(o.attributes.construct || o.attributes.operation === "Object"),
+		);
+		expect(allocation).toBeDefined();
+		const receiver = allocation!.outputs[0]!;
+		expect(result.core.filter((o) => o.opcode === "call")).toHaveLength(1);
+		expect(
+			result.core.some((o) => o.opcode === "call" && o.inputs.includes(receiver)),
+		).toBe(true);
+		expect(
+			result.core
+				.filter(
+					(o) =>
+						o.opcode === "callKnown" &&
+						typeof o.attributes.operation === "string" &&
+						o.attributes.operation.includes(".prototype."),
+				)
+				.every((o) => o.inputs[0] !== receiver),
+		).toBe(true);
+	});
+	it.each([
+		["new Number(x)", "Number.prototype.valueOf.call(value)"],
+		["new String(x)", "String.prototype.valueOf.call(value)"],
+		["Object(x)", "Boolean.prototype.valueOf.call(value)"],
+		["new Boolean(x)", "Number.prototype.valueOf.call(value)"],
+		["new String(String(x))", "String.prototype.slice.call(value, 1)"],
+		["new Boolean(x)", "Object.prototype.toString.call(value)"],
+		["new Proxy(new Boolean(x), {})", "Boolean.prototype.valueOf.call(value)"],
+		[
+			"Reflect.construct(Boolean,[x],globalThis.Target)",
+			"Boolean.prototype.valueOf.call(value)",
+		],
+	])(
+		"retains the receiver outside the payload proof for %s and %s",
+		(producer, observation) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x){const value=${producer};globalThis.sink(value);return ${observation};}globalThis.probe=probe;`,
+				"probe",
+			);
+			const escape = result.core.find((o) => o.opcode === "call");
+			expect(escape).toBeDefined();
+			const receiver = escape!.inputs[2];
+			expect(
+				result.core.some(
+					(o) =>
+						o.opcode === "callKnown" &&
+						typeof o.attributes.operation === "string" &&
+						o.attributes.operation.includes(".prototype.") &&
+						o.inputs[0] === receiver,
+				),
+			).toBe(true);
+		},
+	);
+	it("preserves own method lookup after an escaping callback", () => {
+		const result = inspectStaticValueFunction(
+			"function probe(x){const value=new Boolean(x);globalThis.sink(value);return value.valueOf();}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(result.core.filter((o) => o.opcode === "call")).toHaveLength(2);
+	});
+	it("preserves mutable constructor and borrowed-method identities", () => {
+		const result = inspectStaticValueFunction(
+			"function probe(x){const value=new Boolean(x);globalThis.sink(value);return Boolean.prototype.valueOf.call(value);}globalThis.probe=probe;",
+			"probe",
+			{ locked: false },
+		);
+		expect(result.core.some((o) => o.opcode === "construct")).toBe(true);
+		expect(result.core.some((o) => o.opcode === "call")).toBe(true);
+	});
+});

@@ -9,7 +9,7 @@ import { knownOperationIndex, knownOperations } from "../shared/known-operations
 import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreFunctionStore, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import { corePrimitiveBuiltinError } from "./core-primitive-errors.ts";
@@ -17,6 +17,7 @@ import { coreStaticNumberSum } from "./core-static-number-sum.ts";
 import { coreStaticConstantOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
+import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
 import {
 	coreStaticStringRawParts,
@@ -31,6 +32,65 @@ const noncoercingNumberPredicates = new Set([
 	"Number.isInteger",
 	"Number.isSafeInteger",
 ]);
+const wrapperPayloadMethods = new Set([
+	"Boolean.prototype.valueOf",
+	"Boolean.prototype.toString",
+	"Number.prototype.valueOf",
+	"Number.prototype.toString",
+	"Number.prototype.toFixed",
+	"Number.prototype.toExponential",
+	"Number.prototype.toPrecision",
+	"String.prototype.valueOf",
+	"String.prototype.toString",
+	"BigInt.prototype.valueOf",
+	"BigInt.prototype.toString",
+	"Symbol.prototype.valueOf",
+	"Symbol.prototype.toString",
+	"Symbol.prototype[%Symbol.toPrimitive%]",
+]);
+
+function primitiveWrapperPayload(
+	fn: CoreFunctionStore,
+	analysis: CoreStaticValueAnalysis,
+	receiver: CoreValueId,
+	operation: string,
+): { input: CoreValueId; truthiness: boolean } | undefined {
+	if (!wrapperPayloadMethods.has(operation)) return undefined;
+	const brand = operation.slice(0, operation.indexOf(".")).toLowerCase();
+	for (let depth = 0; depth < 64; depth++) {
+		if (fn.kernel.valueDefinitionKind(receiver) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
+		const start = fn.kernel.instructionOperandStart(definition);
+		if (fn.instructionOpcodeName(definition) === "move") {
+			receiver = fn.kernel.operandAt(start);
+			continue;
+		}
+		if (fn.instructionOpcodeName(definition) !== "callKnown") return undefined;
+		const attributes = fn.instructionAttributes(definition);
+		const constructor = attributes.operation as string;
+		if (
+			attributes.argumentMode !== undefined ||
+			fn.kernel.instructionOperandCount(definition) < 2 ||
+			(constructor !== "Object" &&
+				(!attributes.construct || !["Boolean", "Number", "String"].includes(constructor)))
+		)
+			return undefined;
+		if (attributes.construct) {
+			const target = analysis.queryAt(fn.kernel.operandAt(start), definition);
+			if (target.kind !== "known" || target.canonical !== constructor) return undefined;
+		}
+		const input = fn.kernel.operandAt(start + 1);
+		const fact = analysis.queryAt(input, definition);
+		if (constructor !== "Object" && constructor.toLowerCase() !== brand) return undefined;
+		// Escaping wrappers keep their identity, but their primitive internal slot cannot change.
+		if (constructor === "Boolean")
+			return { input, truthiness: fact.kind !== "known" || fact.brand !== "boolean" };
+		if (fact.kind === "known" && fact.brand === brand)
+			return { input, truthiness: false };
+		return undefined;
+	}
+	return undefined;
+}
 // These kernels retain their receiver guard even when the receiver is a constant.
 const guardedStringSearchReceivers = new Set([
 	"String.prototype.indexOf",
@@ -205,6 +265,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			instruction: CoreInstructionId;
 			inputs: ReadonlyArray<CoreValueId>;
 			parameters: ReadonlyArray<{ index: number; operation: CoreStaticMemberOperation }>;
+		}> = [];
+		const payloadPlans: Array<{
+			instruction: CoreInstructionId;
+			method: string;
+			inputs: ReadonlyArray<CoreValueId>;
+			input: CoreValueId;
+			truthiness: boolean;
 		}> = [];
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
@@ -636,6 +703,15 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					continue;
 				}
 			}
+			const payload =
+				!numericOperation && inputs[0] !== undefined
+					? primitiveWrapperPayload(fn, analysis, inputs[0], operation)
+					: undefined;
+			if (payload !== undefined) {
+				payloadPlans.push({ instruction, method: operation, inputs, ...payload });
+				sequenceEdits += payload.truthiness ? 3 : 1;
+				continue;
+			}
 			const evaluated = evaluateConstantBuiltin(
 				operation,
 				operation.includes(".prototype.")
@@ -735,6 +811,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				});
 			} else if (
 				operation.endsWith(".prototype.valueOf") ||
+				operation === "String.prototype.toString" ||
 				operation === "Symbol.prototype[%Symbol.toPrimitive%]"
 			) {
 				const fact = analysis.queryAt(inputs[0]!, instruction);
@@ -758,8 +835,35 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					});
 			}
 		}
-		if (plans.length === 0 && parameterPlans.length === 0) return undefined;
+		if (plans.length === 0 && parameterPlans.length === 0 && payloadPlans.length === 0)
+			return undefined;
 		const editor = CoreEditor.open(program, fn.id);
+		for (const plan of payloadPlans) {
+			let input = plan.input;
+			if (plan.truthiness)
+				for (let step = 0; step < 2; step++)
+					input = editor.insertInstruction(
+						fn.instructionBlock(plan.instruction),
+						plan.instruction,
+						"unary",
+						[input],
+						{
+							attributes: { operator: "!" },
+							sourcePosition: fn.instructionSourcePosition(plan.instruction),
+						},
+					).outputs[0]!;
+			if (
+				plan.method.endsWith(".prototype.valueOf") ||
+				plan.method === "String.prototype.toString" ||
+				plan.method === "Symbol.prototype[%Symbol.toPrimitive%]"
+			)
+				editor.replaceInstruction(plan.instruction, "move", [input]);
+			else if (plan.method === "Boolean.prototype.toString")
+				editor.replaceInstruction(plan.instruction, "unary", [input], {
+					attributes: { operator: "tostring" },
+				});
+			else editor.replaceOperands(plan.instruction, [input, ...plan.inputs.slice(1)]);
+		}
 		const strings = new Map<string, number>(),
 			bigints = new Map<bigint, number>();
 		const stringIndex = (value: string) => {

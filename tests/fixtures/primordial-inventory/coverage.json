@@ -84646,6 +84646,25 @@
 						"case": "BigInt.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "BigInt.prototype.toString.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -84792,6 +84811,25 @@
 						"case": "BigInt.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "BigInt.prototype.valueOf.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85150,6 +85188,25 @@
 						"case": "x.toString()"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Boolean.prototype.toString.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -85335,6 +85392,25 @@
 						"case": "Boolean.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Boolean.prototype.valueOf.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97418,6 +97494,25 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Number.prototype.toExponential.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97682,6 +97777,25 @@
 					"negative": {
 						"file": "tests/native/static-primitive-operations.test.ts",
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Number.prototype.toFixed.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
 				}
@@ -97951,6 +98065,25 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Number.prototype.toPrecision.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -98214,6 +98347,25 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Number.prototype.toString.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -98399,6 +98551,25 @@
 						"case": "Number.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Number.prototype.valueOf.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109260,6 +109431,25 @@
 						"case": "String.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "String.prototype.toString.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -110330,6 +110520,25 @@
 						"case": "String.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "String.prototype.valueOf.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111369,6 +111578,25 @@
 						"case": "registered/Symbol.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Symbol.prototype.toString.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111515,6 +111743,25 @@
 						"case": "registered/Symbol.prototype.valueOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Symbol.prototype.valueOf.call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111659,6 +111906,25 @@
 						"file": "tests/static-value-discovery.test.ts",
 						"test": "retains mutable Symbol-cell producers and operations at %s",
 						"case": "registered/Symbol.prototype[%Symbol.toPrimitive%]"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive].call(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
 				}
