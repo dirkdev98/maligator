@@ -102116,6 +102116,63 @@
 						"case": "String.prototype.at"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels after cell initialization at %s",
+						"case": "at"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "at"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "at"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102819,6 +102876,63 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels after cell initialization at %s",
+						"case": "charAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "charAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "charAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -103190,6 +103304,63 @@
 						"case": "String.prototype.codePointAt"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels after cell initialization at %s",
+						"case": "codePointAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "codePointAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/target/render-native-c.ts",
+						"symbol": "emitCompiledFunction"
+					},
+					"positive": {
+						"file": "tests/static-value-discovery.test.ts",
+						"test": "uses typed character kernels for primitive strings with unknown data at %s",
+						"case": "codePointAt"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

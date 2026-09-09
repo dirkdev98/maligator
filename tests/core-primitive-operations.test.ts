@@ -1756,15 +1756,17 @@ describe("primitive operation results", () => {
 	it.each(["at", "charAt", "codePointAt"])(
 		"reads static UTF-16 text at dynamic numeric positions with %s",
 		(method) => {
-			for (const expression of [
-				`'a😀z'.${method}(+x)`,
-				`String.prototype.${method}.call(x, 1)`,
-			])
-				expect(inspect(expression).c.source).toContain(
-					"mal_builtin_string_character_direct(",
-				);
+			const output = inspect(`'a😀z'.${method}(+x)`);
+			expect(output.c.source).toContain("mal_builtin_string_character_numeric(");
+			expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+			expect(inspect(`String.prototype.${method}.call(x, 1)`).c.source).toContain(
+				"mal_builtin_string_character_direct(",
+			);
 			expect(inspect(`'a😀z'.${method}(x)`).c.source).not.toContain(
 				"mal_builtin_string_character_direct(",
+			);
+			expect(inspect(`'a😀z'.${method}(x)`).c.source).not.toContain(
+				"mal_builtin_string_character_numeric(",
 			);
 		},
 	);

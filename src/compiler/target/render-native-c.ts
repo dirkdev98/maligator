@@ -5333,6 +5333,22 @@ function emitInstruction(
 		}
 		case "CALL_KNOWN": {
 			if (!instruction.construct && instruction.argumentMode === undefined) {
+				const character = STRING_CHARACTER_KERNELS[instruction.operation];
+				if (character !== undefined && operandRep(instruction.thisValue) === "string") {
+					const operand = instruction.arguments[0];
+					const position =
+						operand === undefined || decodeVmValueOperand(operand).kind === "undefined"
+							? "0.0"
+							: nativeNumberOperand(operand);
+					if (position !== null) {
+						const result = `character_result_${ip}`;
+						return [
+							`MalValue ${result} = mal_builtin_string_character_numeric(vm, mal_value_to_string(${boxedOperand(instruction.thisValue)}), ${position}, MAL_STRING_CHARACTER_${character});`,
+							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+							poll,
+						];
+					}
+				}
 				if (["isNaN", "isFinite"].includes(instruction.operation)) {
 					const input = instruction.arguments[0];
 					const number = input === undefined ? "NAN" : nativeNumberOperand(input);

@@ -837,23 +837,8 @@ bool mal_builtin_string_character_direct(
     MalStringCharacterOp operation, MalValue *result
 ) {
     if (!mal_builtin_string_is_flat_value(receiver)) return false;
-    MalString *string = mal_value_to_string(receiver);
-    usize length = mal_string_length(string);
-    position = mal_ops_number_to_integer_or_infinity(position);
-    if (operation == MAL_STRING_CHARACTER_AT && position < 0) position += (f64) length;
-    if (position < 0 || position >= (f64) length) {
-        *result = operation == MAL_STRING_CHARACTER_CHAR_AT
-            ? mal_builtin_string_empty(vm) : mal_value_new_undefined();
-        return true;
-    }
-    const c16 *units = mal_string_code_units(string);
-    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) {
-        u32 code_point;
-        mal_utf16_read_scalar(units, length, (usize) position, &code_point, nullptr);
-        *result = mal_value_from_i32((i32) code_point);
-    } else {
-        *result = mal_value_from_string(mal_intrinsic_code_unit(vm, units[(usize) position]));
-    }
+    *result = mal_builtin_string_character_numeric(
+        vm, mal_value_to_string(receiver), position, operation);
     return true;
 }
 

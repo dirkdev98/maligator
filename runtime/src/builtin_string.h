@@ -1,6 +1,7 @@
 #pragma once
 
 #include "unicode.h"
+#include "utf16.h"
 
 #include "./defaults.h"
 #include "heap_string.h"
@@ -88,6 +89,26 @@ typedef enum MalStringCharacterOp {
     MAL_STRING_CHARACTER_CHAR_AT,
     MAL_STRING_CHARACTER_CODE_POINT_AT,
 } MalStringCharacterOp;
+
+// Inlining exposes the exact character operation; lazy primitive strings may flatten here.
+static inline MalValue mal_builtin_string_character_numeric(
+    MalVm *vm, MalString *string, f64 position, MalStringCharacterOp operation
+) {
+    usize length = mal_string_length(string);
+    position = mal_ops_number_to_integer_or_infinity(position);
+    if (operation == MAL_STRING_CHARACTER_AT && position < 0) position += (f64) length;
+    if (position < 0 || position >= (f64) length) {
+        return operation == MAL_STRING_CHARACTER_CHAR_AT
+            ? mal_value_from_string(mal_intrinsic_ascii(vm, "")) : mal_value_new_undefined();
+    }
+    const c16 *units = mal_string_code_units(string);
+    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) {
+        u32 code_point;
+        mal_utf16_read_scalar(units, length, (usize) position, &code_point, nullptr);
+        return mal_value_from_i32((i32) code_point);
+    }
+    return mal_value_from_string(mal_intrinsic_code_unit(vm, units[(usize) position]));
+}
 
 // Flat-string guard misses leave receiver coercion and position conversion to the caller.
 bool mal_builtin_string_character_direct(

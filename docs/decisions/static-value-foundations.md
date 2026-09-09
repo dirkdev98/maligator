@@ -428,9 +428,12 @@ retains primitive coercion before using captured locale/options data.
 Residual primitive calls can expose initialized scalar cell values as ordinary
 constant operands for existing typed kernels. The original cell load and TDZ check
 remain in place. This does not recreate BigInts or identity-bearing Symbols.
-String character/search receivers retain their existing guarded helper path, and
-callback replacements keep their separate allocation cost model; exposing constants
-at those sites does not by itself justify extra lowering work.
+String search receivers retain their existing guarded helper path, and callback
+replacements keep their separate allocation cost model; exposing constants at those
+sites does not by itself justify extra lowering work. Character access with a proved
+primitive String and numeric position uses the shared inline UTF-16 kernel. Lazy
+string storage can flatten there; unknown receivers and positions retain the flat
+helper guard or ordinary coercion path.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

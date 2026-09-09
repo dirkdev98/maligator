@@ -32,10 +32,7 @@ const noncoercingNumberPredicates = new Set([
 	"Number.isSafeInteger",
 ]);
 // These kernels retain their receiver guard even when the receiver is a constant.
-const guardedStringReceivers = new Set([
-	"String.prototype.charAt",
-	"String.prototype.codePointAt",
-	"String.prototype.at",
+const guardedStringSearchReceivers = new Set([
 	"String.prototype.indexOf",
 	"String.prototype.lastIndexOf",
 	"String.prototype.includes",
@@ -676,7 +673,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const parameters: Array<{ index: number; operation: CoreStaticMemberOperation }> =
 					[];
 				for (const [index, input] of inputs.entries()) {
-					if (index === 0 && guardedStringReceivers.has(operation)) continue;
+					if (index === 0 && guardedStringSearchReceivers.has(operation)) continue;
 					if (fn.kernel.valueDefinitionKind(input) !== 1) continue;
 					const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(input));
 					if (

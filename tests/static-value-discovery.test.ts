@@ -1206,3 +1206,27 @@ it("retains a mutable cell parameter after an unknown call can write it", () => 
 	);
 	expect(result.c.source).toContain("mal_vm_call_known_native");
 });
+
+it.each(["charAt", "at", "codePointAt"])(
+	"uses typed character kernels after cell initialization at %s",
+	(method) => {
+		const source = `const value='a😀z';function probe(x){globalThis.sink(value);return value.${method}(+x);}globalThis.probe=probe;`;
+		const result = inspectStaticValueFunction(source, "probe");
+		expect(result.core.some((op) => op.opcode === "throwIfTdz")).toBe(true);
+		expect(result.c.source).toContain("mal_builtin_string_character_numeric(");
+		expect(result.c.source).not.toContain("mal_vm_call_known_native(");
+		const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
+		expect(mutable.structure.genericCalls).toBeGreaterThanOrEqual(2);
+	},
+);
+it.each(["charAt", "at", "codePointAt"])(
+	"uses typed character kernels for primitive strings with unknown data at %s",
+	(method) => {
+		const result = inspectStaticValueFunction(
+			`function probe(x){return String(x).${method}(2);}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(result.c.source).toContain("mal_builtin_string_character_numeric(");
+		expect(result.c.source).not.toContain("mal_builtin_string_character_direct(");
+	},
+);
