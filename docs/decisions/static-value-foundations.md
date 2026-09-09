@@ -164,6 +164,11 @@ Holes, unknown elements, accessors and unproved iterators retain runtime iterati
 Primitive type facts with unknown contents retain operand bindings in aggregate
 descriptions rather than becoming constant members.
 
+Constant numeric unary results reuse those same certified facts, allowing their dead
+argument work to disappear after a builtin folds. Protected immutable global data
+bindings resolve to catalog references under the locked-world proof; mutable reads
+retain lookup. Neither rule suppresses unknown coercions or failed conversions.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.
@@ -287,6 +292,23 @@ negative witnesses. Resolved/direct dispatch does not prove input allocation
 elimination. Budget bailouts, missing support and blanket runtime-only labels are
 not semantic inapplicability. Generation preserves existing decisions by exposure
 identity. Closure validation rejects pending cells and unreconciled seed obligations.
+
+Schema 2 groups decisions with identical evidence across explicit profile/axis
+lists. Validation expands their Cartesian product and rejects overlapping cells;
+grouping does not change the obligations. Implemented cells name a source entry and
+a positive witness, and every decision names a boundary witness. Parameterized
+witnesses can identify their exact source case. The checker verifies those source
+references and reports decided and pending counts by task:
+
+```sh
+node scripts/check-static-value-coverage.ts --wave F --out .cache/static-values-f/coverage.json
+node scripts/check-static-value-coverage.ts --wave F --closure --out .cache/static-values-f/closure.json
+```
+
+`--task F-01` selects one task; repeated task selectors and `--wave` are additive.
+Closure applies only to the selected tasks while validating the complete inventory
+and every supplied decision. A failed closure writes its report and exits nonzero.
+The report is a source-evidence index; the relevant test runs remain necessary.
 
 ## Baseline measurement
 

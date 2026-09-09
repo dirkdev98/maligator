@@ -23,7 +23,8 @@ import type { CoreStringPart } from "./core-string-construction.ts";
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
 	admission: {
-		predicate: "primitive call, scalar Math kernel, equality, or string-length candidate",
+		predicate:
+			"primitive call, constant unary result, scalar Math kernel, equality, or string length",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -31,6 +32,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const opcode = fn.instructionOpcodeName(instruction);
 				const attributes = fn.instructionAttributes(instruction);
 				if (opcode === "mathUnaryNumber" || opcode === "mathBinaryNumber") return true;
+				if (opcode === "unary") return true;
 				if (opcode === "callKnown" && attributes.argumentMode === undefined) return true;
 				if (
 					opcode === "binary" &&
@@ -55,6 +57,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		"mathUnaryNumber",
 		"mathBinaryNumber",
 		"binary",
+		"unary",
 		"loadPropertyStatic",
 	],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
@@ -85,6 +88,16 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
 			if (plans.length * 4 + sequenceEdits + 4 > context.remainingEdits) break;
+			if (
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "unary"
+			) {
+				const value = analysis.constant(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				);
+				if (value !== undefined) plans.push({ instruction, value });
+				continue;
+			}
 			if (
 				fn.instructionKind(instruction) === "operation" &&
 				fn.instructionOpcodeName(instruction) === "loadPropertyStatic"

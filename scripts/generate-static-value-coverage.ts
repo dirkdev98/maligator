@@ -224,7 +224,7 @@ function seedExposures(seed: Seed): ReadonlyArray<string> {
 	return [];
 }
 const coverage: StaticValueCoverage = {
-	schema: 1,
+	schema: 2,
 	defaultObligation: "pending-specialized-witnesses",
 	axes: staticValueAxes,
 	profiles: staticValueProfiles,

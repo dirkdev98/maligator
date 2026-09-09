@@ -158,6 +158,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 		"constructSpread",
 		"loadProperty",
 		"loadPropertyStatic",
+		"loadGlobalProperty",
 		"storeProperty",
 		"storePropertyStatic",
 	],
@@ -297,6 +298,21 @@ export const resolveKnownOperations: CoreFunctionPass = {
 					false,
 					argumentMode,
 				);
+				continue;
+			}
+			if (opcode === "loadGlobalProperty") {
+				const fact = analysis.query(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				);
+				if (fact.kind === "known" && fact.canonical !== undefined) {
+					const operation = primordialArgument(fact.canonical);
+					plans.push({
+						instruction,
+						opcode: "loadPrimordial",
+						args: [],
+						attributes: { ...operation.attributes },
+					});
+				}
 				continue;
 			}
 			const store = opcode === "storeProperty" || opcode === "storePropertyStatic";

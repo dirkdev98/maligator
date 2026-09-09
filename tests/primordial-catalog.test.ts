@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { primordialInstallerSourceInventory } from "../scripts/primordial-catalog-data.ts";
-import { validateStaticValueCoverage } from "../scripts/static-value-coverage.ts";
+import {
+	summarizeStaticValueCoverage,
+	validateStaticValueCoverage,
+} from "../scripts/static-value-coverage.ts";
 import type { StaticValueCoverage } from "../scripts/static-value-coverage.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import {
@@ -18,6 +21,24 @@ const catalog = getPrimordialCatalog();
 const coverage = JSON.parse(
 	readFileSync("tests/fixtures/primordial-inventory/coverage.json", "utf8"),
 ) as StaticValueCoverage;
+const sources = new Map<string, string>();
+function sourceContains(file: string, text: string) {
+	if (!existsSync(file)) return false;
+	let source = sources.get(file);
+	if (source === undefined) {
+		source = readFileSync(file, "utf8");
+		sources.set(file, source);
+	}
+	return source.includes(text);
+}
+const coverageEvidence = {
+	witnessExists: (witness: { file: string; test: string; case?: string }) =>
+		sourceContains(witness.file, witness.test) &&
+		(witness.case === undefined ||
+			sourceContains(witness.file, JSON.stringify(witness.case))),
+	implementationExists: (implementation: { file: string; symbol: string }) =>
+		sourceContains(implementation.file, implementation.symbol),
+};
 
 describe("shared primordial catalog and coverage obligations", () => {
 	it.each([
@@ -90,13 +111,120 @@ describe("shared primordial catalog and coverage obligations", () => {
 		);
 	});
 	it("covers every native-discovered descriptor without claiming pending work is complete", () => {
-		expect(() => validateStaticValueCoverage(coverage, catalog)).not.toThrow();
+		expect(() =>
+			validateStaticValueCoverage(coverage, catalog, coverageEvidence),
+		).not.toThrow();
 		expect(() =>
 			validateStaticValueCoverage({ ...coverage, rows: coverage.rows.slice(1) }, catalog),
 		).toThrow("no coverage record");
 		expect(() =>
 			validateStaticValueCoverage(coverage, catalog, { closure: true }),
 		).toThrow("Pending optimization obligations");
+	});
+	it("expands grouped decisions without allowing overlapping cells or hiding another task's pending work", () => {
+		const negative = {
+			file: "tests/primordial-catalog.test.ts",
+			test: "expands grouped decisions",
+		};
+		const decision = {
+			profiles: coverage.profiles,
+			axes: coverage.axes,
+			state: "not-applicable" as const,
+			reason: "The synthetic grid fixture has no observable operation",
+			lowering: "semantic-boundary" as const,
+			negative,
+		};
+		const task = "F-01";
+		const closed = {
+			...coverage,
+			rows: coverage.rows.map((row) =>
+				row.task === task ? { ...row, decisions: [decision] } : row,
+			),
+		};
+		expect(() =>
+			validateStaticValueCoverage(closed, catalog, {
+				...coverageEvidence,
+				closure: true,
+				tasks: [task],
+			}),
+		).not.toThrow();
+		expect(() =>
+			validateStaticValueCoverage(closed, catalog, {
+				...coverageEvidence,
+				closure: true,
+			}),
+		).toThrow("Pending optimization obligations");
+		const summary = summarizeStaticValueCoverage(closed, [task]);
+		expect(summary).toHaveLength(1);
+		expect(summary[0]!.pending).toBe(0);
+		expect(summary[0]!.notApplicable).toBe(
+			summary[0]!.exposures * coverage.axes.length * coverage.profiles.length,
+		);
+		const overlap = {
+			...closed,
+			rows: closed.rows.map((row) =>
+				row.task === task
+					? {
+							...row,
+							decisions: [
+								...row.decisions,
+								{ ...decision, profiles: [coverage.profiles[0]!], axes: ["R"] },
+							],
+						}
+					: row,
+			),
+		};
+		expect(() => validateStaticValueCoverage(overlap, catalog)).toThrow(
+			"Invalid coverage cell",
+		);
+		expect(() =>
+			validateStaticValueCoverage(closed, catalog, { closure: true, tasks: [task] }),
+		).toThrow("requires witness and implementation validation");
+		expect(() =>
+			validateStaticValueCoverage(closed, catalog, {
+				...coverageEvidence,
+				closure: true,
+				tasks: [],
+			}),
+		).toThrow("Unknown coverage closure task");
+	});
+	it("requires source evidence for implemented grouped cells", () => {
+		const first = coverage.rows[0]!;
+		const witness = {
+			file: "tests/primordial-catalog.test.ts",
+			test: "requires source evidence",
+		};
+		const decision = {
+			profiles: [coverage.profiles[0]!],
+			axes: ["R", "D"],
+			state: "implemented" as const,
+			lowering: "direct" as const,
+			positive: witness,
+			negative: witness,
+			implementation: {
+				file: "scripts/static-value-coverage.ts",
+				symbol: "validateStaticValueCoverage",
+			},
+		};
+		const supplied = {
+			...coverage,
+			rows: [{ ...first, decisions: [decision] }, ...coverage.rows.slice(1)],
+		};
+		expect(() =>
+			validateStaticValueCoverage(supplied, catalog, coverageEvidence),
+		).not.toThrow();
+		expect(() =>
+			validateStaticValueCoverage(supplied, catalog, {
+				...coverageEvidence,
+				implementationExists: () => false,
+			}),
+		).toThrow("Missing implementation path");
+		expect(() =>
+			validateStaticValueCoverage(supplied, catalog, {
+				...coverageEvidence,
+				witnessExists: () => false,
+			}),
+		).toThrow("Missing rejection witness");
 	});
 	it("rejects blanket runtime-only exemptions and direct dispatch as allocation elimination", () => {
 		const first = coverage.rows[0]!;
@@ -108,8 +236,8 @@ describe("shared primordial catalog and coverage obligations", () => {
 					...first,
 					decisions: [
 						{
-							profile: coverage.profiles[0]!,
-							axis: "A",
+							profiles: [coverage.profiles[0]!],
+							axes: ["A"],
 							state: "not-applicable" as const,
 							reason: "runtime-only family",
 							negative,
@@ -130,8 +258,8 @@ describe("shared primordial catalog and coverage obligations", () => {
 					...first,
 					decisions: [
 						{
-							profile: coverage.profiles[0]!,
-							axis: "A",
+							profiles: [coverage.profiles[0]!],
+							axes: ["A"],
 							state: "implemented" as const,
 							positive: negative,
 							negative,

@@ -1,5 +1,5 @@
 {
-	"schema": 1,
+	"schema": 2,
 	"defaultObligation": "pending-specialized-witnesses",
 	"axes": ["R", "D", "T", "F", "X", "A", "V", "M", "U", "L", "P", "C", "Z"],
 	"profiles": [
@@ -74387,7 +74387,28 @@
 			"kind": "call",
 			"operations": ["BigInt"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "BigInt('0xff')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "BigInt('0xff')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt\",\"<construct>\"]",
@@ -74412,7 +74433,28 @@
 			"kind": "call",
 			"operations": ["BigInt.asIntN"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "BigInt.asIntN(8,255n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "BigInt.asIntN(8,255n)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt.asIntN\",\"<construct>\"]",
@@ -74432,7 +74474,28 @@
 			"kind": "call",
 			"operations": ["BigInt.asUintN"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "BigInt.asUintN(8,-1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "BigInt.asUintN(8,-1n)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt.asUintN\",\"<construct>\"]",
@@ -74472,7 +74535,28 @@
 			"kind": "call",
 			"operations": ["BigInt.prototype.toLocaleString"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "(-255n).toString(16)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "(-255n).toString(16)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt.prototype.toString\",\"<construct>\"]",
@@ -74492,7 +74576,28 @@
 			"kind": "call",
 			"operations": ["BigInt.prototype.valueOf"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Object(1n).valueOf()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Object(1n).valueOf()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt.prototype.valueOf\",\"<construct>\"]",
@@ -74577,7 +74682,28 @@
 			"kind": "call",
 			"operations": ["Boolean"],
 			"task": "F-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Boolean(null)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Boolean(null)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Boolean\",\"<construct>\"]",
@@ -74602,7 +74728,28 @@
 			"kind": "call",
 			"operations": ["Boolean.prototype.toString"],
 			"task": "F-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "true.toString()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "true.toString()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Boolean.prototype.toString\",\"<construct>\"]",
@@ -74622,7 +74769,28 @@
 			"kind": "call",
 			"operations": ["Boolean.prototype.valueOf"],
 			"task": "F-01",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Boolean.prototype.valueOf.call(true)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Boolean.prototype.valueOf.call(true)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Boolean.prototype.valueOf\",\"<construct>\"]",
@@ -79934,7 +80102,28 @@
 			"kind": "call",
 			"operations": ["Math.abs"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.abs(-3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.abs(-3)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.abs\",\"<construct>\"]",
@@ -79954,7 +80143,28 @@
 			"kind": "call",
 			"operations": ["Math.acos"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.acos(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.acos(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.acos\",\"<construct>\"]",
@@ -79974,7 +80184,28 @@
 			"kind": "call",
 			"operations": ["Math.acosh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.acosh(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.acosh(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.acosh\",\"<construct>\"]",
@@ -79994,7 +80225,28 @@
 			"kind": "call",
 			"operations": ["Math.asin"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.asin(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.asin(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.asin\",\"<construct>\"]",
@@ -80014,7 +80266,28 @@
 			"kind": "call",
 			"operations": ["Math.asinh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.asinh(-Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.asinh(-Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.asinh\",\"<construct>\"]",
@@ -80034,7 +80307,28 @@
 			"kind": "call",
 			"operations": ["Math.atan"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.atan(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.atan(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.atan\",\"<construct>\"]",
@@ -80054,7 +80348,28 @@
 			"kind": "call",
 			"operations": ["Math.atan2"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.atan2(-0,1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.atan2(-0,1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.atan2\",\"<construct>\"]",
@@ -80074,7 +80389,28 @@
 			"kind": "call",
 			"operations": ["Math.atanh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.atanh(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.atanh(-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.atanh\",\"<construct>\"]",
@@ -80094,7 +80430,28 @@
 			"kind": "call",
 			"operations": ["Math.cbrt"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.cbrt(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.cbrt(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.cbrt\",\"<construct>\"]",
@@ -80114,7 +80471,28 @@
 			"kind": "call",
 			"operations": ["Math.ceil"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.ceil(-0.1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.ceil(-0.1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.ceil\",\"<construct>\"]",
@@ -80134,7 +80512,28 @@
 			"kind": "call",
 			"operations": ["Math.clz32"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.clz32(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.clz32(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.clz32\",\"<construct>\"]",
@@ -80154,7 +80553,28 @@
 			"kind": "call",
 			"operations": ["Math.cos"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.cos(0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.cos(0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.cos\",\"<construct>\"]",
@@ -80174,7 +80594,28 @@
 			"kind": "call",
 			"operations": ["Math.cosh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.cosh(-Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.cosh(-Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.cosh\",\"<construct>\"]",
@@ -80194,7 +80635,28 @@
 			"kind": "call",
 			"operations": ["Math.exp"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.exp(-Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.exp(-Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.exp\",\"<construct>\"]",
@@ -80214,7 +80676,28 @@
 			"kind": "call",
 			"operations": ["Math.expm1"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.expm1(-Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.expm1(-Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.expm1\",\"<construct>\"]",
@@ -80234,7 +80717,28 @@
 			"kind": "call",
 			"operations": ["Math.f16round"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.f16round(1.1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.f16round(1.1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.f16round\",\"<construct>\"]",
@@ -80254,7 +80758,28 @@
 			"kind": "call",
 			"operations": ["Math.floor"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.floor(0.1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.floor(0.1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.floor\",\"<construct>\"]",
@@ -80274,7 +80799,28 @@
 			"kind": "call",
 			"operations": ["Math.fround"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.fround(1.1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.fround(1.1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.fround\",\"<construct>\"]",
@@ -80294,7 +80840,28 @@
 			"kind": "call",
 			"operations": ["Math.hypot"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.hypot()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.hypot()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.hypot\",\"<construct>\"]",
@@ -80314,7 +80881,28 @@
 			"kind": "call",
 			"operations": ["Math.imul"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.imul(0xffffffff,5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.imul(0xffffffff,5)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.imul\",\"<construct>\"]",
@@ -80334,7 +80922,28 @@
 			"kind": "call",
 			"operations": ["Math.log"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.log(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.log(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.log\",\"<construct>\"]",
@@ -80354,7 +80963,28 @@
 			"kind": "call",
 			"operations": ["Math.log10"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.log10(Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.log10(Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.log10\",\"<construct>\"]",
@@ -80374,7 +81004,28 @@
 			"kind": "call",
 			"operations": ["Math.log1p"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.log1p(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.log1p(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.log1p\",\"<construct>\"]",
@@ -80394,7 +81045,28 @@
 			"kind": "call",
 			"operations": ["Math.log2"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.log2(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.log2(-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.log2\",\"<construct>\"]",
@@ -80414,7 +81086,28 @@
 			"kind": "call",
 			"operations": ["Math.max"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.max(-0,0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.max(-0,0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.max\",\"<construct>\"]",
@@ -80434,7 +81127,28 @@
 			"kind": "call",
 			"operations": ["Math.min"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.min(0,-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.min(0,-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.min\",\"<construct>\"]",
@@ -80454,7 +81168,28 @@
 			"kind": "call",
 			"operations": ["Math.pow"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.pow(NaN,0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.pow(NaN,0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.pow\",\"<construct>\"]",
@@ -80494,7 +81229,28 @@
 			"kind": "call",
 			"operations": ["Math.round"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.round(-0.5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.round(-0.5)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.round\",\"<construct>\"]",
@@ -80514,7 +81270,28 @@
 			"kind": "call",
 			"operations": ["Math.sign"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.sign(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.sign(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.sign\",\"<construct>\"]",
@@ -80534,7 +81311,28 @@
 			"kind": "call",
 			"operations": ["Math.sin"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.sin(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.sin(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.sin\",\"<construct>\"]",
@@ -80554,7 +81352,28 @@
 			"kind": "call",
 			"operations": ["Math.sinh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.sinh(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.sinh(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.sinh\",\"<construct>\"]",
@@ -80574,7 +81393,28 @@
 			"kind": "call",
 			"operations": ["Math.sqrt"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.sqrt(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.sqrt(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.sqrt\",\"<construct>\"]",
@@ -80594,7 +81434,28 @@
 			"kind": "call",
 			"operations": ["Math.sumPrecise"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.sumPrecise([1e20,1,-1e20])"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.sumPrecise([1e20,1,-1e20])"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.sumPrecise\",\"<construct>\"]",
@@ -80614,7 +81475,28 @@
 			"kind": "call",
 			"operations": ["Math.tan"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.tan(-0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.tan(-0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.tan\",\"<construct>\"]",
@@ -80634,7 +81516,28 @@
 			"kind": "call",
 			"operations": ["Math.tanh"],
 			"task": "F-07",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.tanh(-Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.tanh(-Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.tanh\",\"<construct>\"]",
@@ -80654,7 +81557,28 @@
 			"kind": "call",
 			"operations": ["Math.trunc"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the target-independent Math special case %s",
+						"case": "Math.trunc(-0.5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Math.trunc(-0.5)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.trunc\",\"<construct>\"]",
@@ -80679,7 +81603,28 @@
 			"kind": "call",
 			"operations": ["Number"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number(123n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number(123n)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"<construct>\"]",
@@ -80704,7 +81649,28 @@
 			"kind": "call",
 			"operations": ["Number.isFinite"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.isFinite(Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.isFinite(Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.isFinite\",\"<construct>\"]",
@@ -80724,7 +81690,28 @@
 			"kind": "call",
 			"operations": ["Number.isInteger"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.isInteger(1.5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.isInteger(1.5)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.isInteger\",\"<construct>\"]",
@@ -80744,7 +81731,28 @@
 			"kind": "call",
 			"operations": ["Number.isNaN"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.isNaN(NaN)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.isNaN(NaN)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.isNaN\",\"<construct>\"]",
@@ -80764,7 +81772,28 @@
 			"kind": "call",
 			"operations": ["Number.isSafeInteger"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.isSafeInteger(9007199254740992)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.isSafeInteger(9007199254740992)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.isSafeInteger\",\"<construct>\"]",
@@ -80784,7 +81813,28 @@
 			"kind": "call",
 			"operations": ["Number.prototype.toExponential"],
 			"task": "F-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "(1.25).toExponential(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "(1.25).toExponential(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.prototype.toExponential\",\"<construct>\"]",
@@ -80804,7 +81854,28 @@
 			"kind": "call",
 			"operations": ["Number.prototype.toFixed"],
 			"task": "F-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "(1.25).toFixed(2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "(1.25).toFixed(2)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.prototype.toFixed\",\"<construct>\"]",
@@ -80844,7 +81915,28 @@
 			"kind": "call",
 			"operations": ["Number.prototype.toPrecision"],
 			"task": "F-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "(1.005).toPrecision(3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "(1.005).toPrecision(3)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.prototype.toPrecision\",\"<construct>\"]",
@@ -80864,7 +81956,28 @@
 			"kind": "call",
 			"operations": ["Number.prototype.toString"],
 			"task": "F-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.MIN_VALUE.toString()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.MIN_VALUE.toString()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.prototype.toString\",\"<construct>\"]",
@@ -80884,7 +81997,28 @@
 			"kind": "call",
 			"operations": ["Number.prototype.valueOf"],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.prototype.valueOf.call(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.prototype.valueOf.call(1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Number.prototype.valueOf\",\"<construct>\"]",
@@ -83739,7 +84873,28 @@
 			"kind": "call",
 			"operations": ["String"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String(Symbol('x'))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String(Symbol('x'))"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String\",\"<construct>\"]",
@@ -83764,7 +84919,28 @@
 			"kind": "call",
 			"operations": ["String.fromCharCode"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String.fromCharCode(65537,-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String.fromCharCode(65537,-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.fromCharCode\",\"<construct>\"]",
@@ -83784,7 +84960,28 @@
 			"kind": "call",
 			"operations": ["String.fromCodePoint"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String.fromCodePoint(128512,55296)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String.fromCodePoint(128512,55296)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.fromCodePoint\",\"<construct>\"]",
@@ -83804,7 +85001,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.anchor"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.anchor('a\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.anchor('a\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.anchor\",\"<construct>\"]",
@@ -83824,7 +85042,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.at"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.at(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.at(-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.at\",\"<construct>\"]",
@@ -83844,7 +85083,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.big"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.big('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.big('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.big\",\"<construct>\"]",
@@ -83864,7 +85124,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.blink"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.blink('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.blink('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.blink\",\"<construct>\"]",
@@ -83884,7 +85165,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.bold"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.bold()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.bold()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.bold\",\"<construct>\"]",
@@ -83904,7 +85206,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.charAt"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.charAt(Infinity)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.charAt(Infinity)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.charAt\",\"<construct>\"]",
@@ -83924,7 +85247,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.charCodeAt"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.charCodeAt(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.charCodeAt(-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.charCodeAt\",\"<construct>\"]",
@@ -83944,7 +85288,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.codePointAt"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'😀'.codePointAt(0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'😀'.codePointAt(0)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.codePointAt\",\"<construct>\"]",
@@ -83964,7 +85329,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.concat"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'a'.concat('b',null,1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'a'.concat('b',null,1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.concat\",\"<construct>\"]",
@@ -83984,7 +85370,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.endsWith"],
 			"task": "F-09",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.endsWith('b',2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.endsWith('b',2)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.endsWith\",\"<construct>\"]",
@@ -84004,7 +85411,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.fixed"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.fixed('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.fixed('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.fixed\",\"<construct>\"]",
@@ -84024,7 +85452,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.fontcolor"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.fontcolor('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.fontcolor('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.fontcolor\",\"<construct>\"]",
@@ -84044,7 +85493,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.fontsize"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.fontsize('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.fontsize('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.fontsize\",\"<construct>\"]",
@@ -84064,7 +85534,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.includes"],
 			"task": "F-09",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.includes('b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.includes('b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.includes\",\"<construct>\"]",
@@ -84084,7 +85575,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.indexOf"],
 			"task": "F-09",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.indexOf('b',NaN)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.indexOf('b',NaN)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.indexOf\",\"<construct>\"]",
@@ -84104,7 +85616,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.isWellFormed"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'\\ud800x'.isWellFormed()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'\\ud800x'.isWellFormed()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.isWellFormed\",\"<construct>\"]",
@@ -84124,7 +85657,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.italics"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.italics('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.italics('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.italics\",\"<construct>\"]",
@@ -84144,7 +85698,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.lastIndexOf"],
 			"task": "F-09",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'aba'.lastIndexOf('a')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'aba'.lastIndexOf('a')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.lastIndexOf\",\"<construct>\"]",
@@ -84164,7 +85739,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.link"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.link('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.link('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.link\",\"<construct>\"]",
@@ -84244,7 +85840,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.normalize"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'e\\u0301'.normalize()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'e\\u0301'.normalize()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.normalize\",\"<construct>\"]",
@@ -84264,7 +85881,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.padEnd"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'a'.padEnd(4,'xy')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'a'.padEnd(4,'xy')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.padEnd\",\"<construct>\"]",
@@ -84284,7 +85922,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.padStart"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'a'.padStart(4,'xy')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'a'.padStart(4,'xy')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.padStart\",\"<construct>\"]",
@@ -84304,7 +85963,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.repeat"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'ab'.repeat(3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'ab'.repeat(3)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.repeat\",\"<construct>\"]",
@@ -84324,7 +86004,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.replace"],
 			"task": "F-12",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'aba'.replace('a','$$$&')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'aba'.replace('a','$$$&')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.replace\",\"<construct>\"]",
@@ -84344,7 +86045,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.replaceAll"],
 			"task": "F-12",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'aba'.replaceAll('a','x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'aba'.replaceAll('a','x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.replaceAll\",\"<construct>\"]",
@@ -84384,7 +86106,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.slice"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abcdef'.slice(-3,-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abcdef'.slice(-3,-1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.slice\",\"<construct>\"]",
@@ -84404,7 +86147,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.small"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.small('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.small('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.small\",\"<construct>\"]",
@@ -84444,7 +86208,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.startsWith"],
 			"task": "F-09",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abc'.startsWith('b',1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abc'.startsWith('b',1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.startsWith\",\"<construct>\"]",
@@ -84464,7 +86249,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.strike"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.strike('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.strike('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.strike\",\"<construct>\"]",
@@ -84484,7 +86290,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.sub"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.sub('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.sub('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.sub\",\"<construct>\"]",
@@ -84504,7 +86331,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.substr"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abcdef'.substr(-3,2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abcdef'.substr(-3,2)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.substr\",\"<construct>\"]",
@@ -84524,7 +86372,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.substring"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'abcdef'.substring(4,1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'abcdef'.substring(4,1)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.substring\",\"<construct>\"]",
@@ -84544,7 +86413,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.sup"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'x'.sup('a\\\"b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'x'.sup('a\\\"b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.sup\",\"<construct>\"]",
@@ -84604,7 +86494,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.toLowerCase"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'A'.toLowerCase()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'A'.toLowerCase()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toLowerCase\",\"<construct>\"]",
@@ -84624,7 +86535,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.toString"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String.prototype.toString.call('x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String.prototype.toString.call('x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toString\",\"<construct>\"]",
@@ -84644,7 +86576,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.toUpperCase"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'a'.toUpperCase()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'a'.toUpperCase()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toUpperCase\",\"<construct>\"]",
@@ -84664,7 +86617,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.toWellFormed"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'\\ud800x'.toWellFormed()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'\\ud800x'.toWellFormed()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.toWellFormed\",\"<construct>\"]",
@@ -84684,7 +86658,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.trim"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "'\\ufeff a\\u2028'.trim()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "'\\ufeff a\\u2028'.trim()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.trim\",\"<construct>\"]",
@@ -84704,7 +86699,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.trimEnd"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "' a '.trimEnd()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "' a '.trimEnd()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.trimEnd\",\"<construct>\"]",
@@ -84724,7 +86740,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.trimStart"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "' a '.trimStart()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "' a '.trimStart()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.trimStart\",\"<construct>\"]",
@@ -84744,7 +86781,28 @@
 			"kind": "call",
 			"operations": ["String.prototype.toString"],
 			"task": "F-08",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String.prototype.valueOf.call('x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String.prototype.valueOf.call('x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.valueOf\",\"<construct>\"]",
@@ -84784,7 +86842,28 @@
 			"kind": "call",
 			"operations": ["String.raw"],
 			"task": "F-10",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "String.raw({raw:['a','b']},'x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "String.raw({raw:['a','b']},'x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"String.raw\",\"<construct>\"]",
@@ -84884,7 +86963,28 @@
 			"kind": "call",
 			"operations": ["Symbol.keyFor"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Symbol.keyFor(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Symbol.keyFor(Symbol.iterator)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.keyFor\",\"<construct>\"]",
@@ -84904,7 +87004,28 @@
 			"kind": "call",
 			"operations": ["Symbol.prototype.description<get>"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Symbol('x').description"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Symbol('x').description"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.prototype.description<get>\",\"<construct>\"]",
@@ -84924,7 +87045,28 @@
 			"kind": "call",
 			"operations": ["Symbol.prototype.toString"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Symbol().toString()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Symbol().toString()"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.prototype.toString\",\"<construct>\"]",
@@ -84944,7 +87086,28 @@
 			"kind": "call",
 			"operations": ["Symbol.prototype.valueOf"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Symbol.prototype.valueOf.call(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Symbol.prototype.valueOf.call(Symbol.iterator)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.prototype.valueOf\",\"<construct>\"]",
@@ -84964,7 +87127,28 @@
 			"kind": "call",
 			"operations": ["Symbol.prototype.valueOf"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive].call(Symbol.iterator,'string')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive].call(Symbol.iterator,'string')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.prototype[%Symbol.toPrimitive%]\",\"<construct>\"]",
@@ -90308,7 +92492,28 @@
 			"kind": "call",
 			"operations": ["decodeURI"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "decodeURI('%20')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "decodeURI('%20')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"decodeURI\",\"<construct>\"]",
@@ -90332,7 +92537,28 @@
 			"kind": "call",
 			"operations": ["decodeURIComponent"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "decodeURIComponent('%F0%9F%98%80')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "decodeURIComponent('%F0%9F%98%80')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"decodeURIComponent\",\"<construct>\"]",
@@ -90356,7 +92582,28 @@
 			"kind": "call",
 			"operations": ["encodeURI"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "encodeURI('a b?x=😀')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "encodeURI('a b?x=😀')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"encodeURI\",\"<construct>\"]",
@@ -90380,7 +92627,28 @@
 			"kind": "call",
 			"operations": ["encodeURIComponent"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "encodeURIComponent('a/b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "encodeURIComponent('a/b')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"encodeURIComponent\",\"<construct>\"]",
@@ -95864,7 +98132,28 @@
 			"kind": "call",
 			"operations": ["globalThis.escape"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "escape('😀')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "escape('😀')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"globalThis.escape\",\"<construct>\"]",
@@ -96648,7 +98937,28 @@
 			"kind": "call",
 			"operations": ["globalThis.unescape"],
 			"task": "F-13",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "unescape('%uD800')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "unescape('%uD800')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"globalThis.unescape\",\"<construct>\"]",
@@ -96668,7 +98978,28 @@
 			"kind": "call",
 			"operations": ["isFinite"],
 			"task": "F-14",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "isFinite(null)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "isFinite(null)"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"isFinite\",\"<construct>\"]",
@@ -96688,7 +99019,28 @@
 			"kind": "call",
 			"operations": ["isNaN"],
 			"task": "F-14",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "isNaN('x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "isNaN('x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"isNaN\",\"<construct>\"]",
@@ -96713,7 +99065,28 @@
 			"kind": "call",
 			"operations": ["parseFloat"],
 			"task": "F-14",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "Number.parseFloat('1.25e+2x')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "Number.parseFloat('1.25e+2x')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"parseFloat\",\"<construct>\"]",
@@ -96743,7 +99116,28 @@
 			"kind": "call",
 			"operations": ["parseInt"],
 			"task": "F-14",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "D", "T", "F", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "folds the observable result of %s",
+						"case": "parseInt('  -0xfz')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for the constant witness %s",
+						"case": "parseInt('  -0xfz')"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"parseInt\",\"<construct>\"]",

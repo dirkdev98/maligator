@@ -36,11 +36,13 @@ export const staticValueProfiles = [
 export interface CoverageWitness {
 	readonly file: string;
 	readonly test: string;
+	readonly case?: string;
 }
 export interface CoverageDecision {
-	readonly profile: string;
-	readonly axis: string;
+	readonly profiles: ReadonlyArray<string>;
+	readonly axes: ReadonlyArray<string>;
 	readonly state: "implemented" | "not-applicable";
+	readonly implementation?: { readonly file: string; readonly symbol: string };
 	readonly reason?: string;
 	readonly positive?: CoverageWitness;
 	readonly negative: CoverageWitness;
@@ -66,7 +68,7 @@ export interface StaticValueCoverageRow {
 	readonly decisions: ReadonlyArray<CoverageDecision>;
 }
 export interface StaticValueCoverage {
-	readonly schema: 1;
+	readonly schema: 2;
 	readonly defaultObligation: "pending-specialized-witnesses";
 	readonly axes: ReadonlyArray<string>;
 	readonly profiles: ReadonlyArray<string>;
@@ -105,15 +107,25 @@ export function validateStaticValueCoverage(
 	catalog: PrimordialCatalog,
 	options: {
 		readonly closure?: boolean;
+		readonly tasks?: ReadonlyArray<string>;
 		readonly witnessExists?: (witness: CoverageWitness) => boolean;
+		readonly implementationExists?: (
+			implementation: NonNullable<CoverageDecision["implementation"]>,
+		) => boolean;
 	} = {},
 ): void {
 	if (
+		coverage.schema !== 2 ||
 		coverage.defaultObligation !== "pending-specialized-witnesses" ||
 		JSON.stringify(coverage.axes) !== JSON.stringify(staticValueAxes) ||
 		JSON.stringify(coverage.profiles) !== JSON.stringify(staticValueProfiles)
 	)
 		throw new Error("Coverage must retain every axis and profile");
+	if (
+		options.tasks?.length === 0 ||
+		options.tasks?.some((task) => !coverage.rows.some((row) => row.task === task))
+	)
+		throw new Error("Unknown coverage closure task");
 	const expected = new Set(
 		catalog.nodes.flatMap((node) => [
 			...node[4].map((property) =>
@@ -149,14 +161,22 @@ export function validateStaticValueCoverage(
 			throw new Error(`Uncovered owner paths: ${row.id}`);
 		const cells = new Set<string>();
 		for (const decision of row.decisions) {
-			const cell = `${decision.profile}/${decision.axis}`;
-			if (
-				!coverage.profiles.includes(decision.profile) ||
-				!coverage.axes.includes(decision.axis) ||
-				cells.has(cell)
-			)
-				throw new Error(`Invalid coverage cell ${row.id}/${cell}`);
-			cells.add(cell);
+			if (decision.state !== "implemented" && decision.state !== "not-applicable")
+				throw new Error(`Invalid coverage state ${row.id}`);
+			if (decision.profiles.length === 0 || decision.axes.length === 0)
+				throw new Error(`Empty coverage decision ${row.id}`);
+			for (const profile of decision.profiles)
+				for (const axis of decision.axes) {
+					const cell = `${profile}/${axis}`;
+					if (
+						!coverage.profiles.includes(profile) ||
+						!coverage.axes.includes(axis) ||
+						cells.has(cell)
+					)
+						throw new Error(`Invalid coverage cell ${row.id}/${cell}`);
+					cells.add(cell);
+				}
+			const cell = `${decision.profiles.join(",")}/${decision.axes.join(",")}`;
 			if (
 				!decision.negative.file ||
 				!decision.negative.test ||
@@ -182,20 +202,86 @@ export function validateStaticValueCoverage(
 				)
 					throw new Error(`Missing positive witness ${row.id}/${cell}`);
 				if (
-					["A", "V", "U"].includes(decision.axis) &&
+					decision.axes.some((axis) => ["A", "V", "U"].includes(axis)) &&
 					["resolved", "direct", "materialized"].includes(decision.lowering)
 				)
 					throw new Error(
 						`Direct dispatch does not discharge virtualization: ${row.id}/${cell}`,
 					);
+				if (
+					!decision.implementation?.file ||
+					!decision.implementation.symbol ||
+					options.implementationExists?.(decision.implementation) === false
+				)
+					throw new Error(`Missing implementation path ${row.id}/${cell}`);
 			}
 		}
-		if (options.closure && cells.size !== coverage.axes.length * coverage.profiles.length)
+		if (
+			options.closure &&
+			(options.tasks === undefined || options.tasks.includes(row.task)) &&
+			cells.size !== coverage.axes.length * coverage.profiles.length
+		)
 			throw new Error(`Pending optimization obligations: ${row.id}`);
 	}
 	for (const id of expected)
 		if (!actual.has(id))
 			throw new Error(`Installed descriptor has no coverage record: ${id}`);
-	if (options.closure && coverage.seeds.some((seed) => seed.state !== "reconciled"))
+	if (
+		options.closure &&
+		coverage.seeds.some(
+			(seed) =>
+				(options.tasks === undefined || options.tasks.includes(seed.task)) &&
+				seed.state !== "reconciled",
+		)
+	)
 		throw new Error("Unreconciled seed obligations remain");
+	if (
+		options.closure &&
+		(options.witnessExists === undefined || options.implementationExists === undefined)
+	)
+		throw new Error("Coverage closure requires witness and implementation validation");
+}
+
+export function summarizeStaticValueCoverage(
+	coverage: StaticValueCoverage,
+	tasks?: ReadonlyArray<string>,
+) {
+	const summary = new Map<
+		string,
+		{
+			task: string;
+			exposures: number;
+			implemented: number;
+			notApplicable: number;
+			pending: number;
+			unreconciledSeeds: number;
+		}
+	>();
+	for (const row of coverage.rows) {
+		if (tasks !== undefined && !tasks.includes(row.task)) continue;
+		let group = summary.get(row.task);
+		if (group === undefined) {
+			group = {
+				task: row.task,
+				exposures: 0,
+				implemented: 0,
+				notApplicable: 0,
+				pending: 0,
+				unreconciledSeeds: coverage.seeds.filter(
+					(seed) => seed.task === row.task && seed.state !== "reconciled",
+				).length,
+			};
+			summary.set(row.task, group);
+		}
+		group.exposures++;
+		let decided = 0;
+		for (const decision of row.decisions) {
+			const cells = decision.profiles.length * decision.axes.length;
+			decided += cells;
+			if (decision.state === "implemented") group.implemented += cells;
+			else group.notApplicable += cells;
+		}
+		group.pending += coverage.axes.length * coverage.profiles.length - decided;
+	}
+	return [...summary.values()].sort((a, b) => a.task.localeCompare(b.task));
 }
