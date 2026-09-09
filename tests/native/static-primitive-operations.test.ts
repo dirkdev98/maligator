@@ -13,6 +13,31 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves primitive slots and own-property state at materialization with %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/primitive-wrapper-state.mjs";
+			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-primitive-wrapper-state-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "primitive-wrapper-state",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: false },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"releases discarded Boolean inputs across suspension with %s primordials",
 		(primordials) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-boolean-wrapper-lifetime-"));

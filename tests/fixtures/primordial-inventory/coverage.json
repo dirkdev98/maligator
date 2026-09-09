@@ -85074,6 +85074,44 @@
 						"test": "retains the required wrapper or Symbol conversion for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["U"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "retains inherited setters and nonconfigurable wrapper properties"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "materializes the current own state and primitive slot of %s at escape",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "retains inherited setters and nonconfigurable wrapper properties"
+					},
+					"lowering": "materialized"
 				}
 			]
 		},
@@ -96597,6 +96635,46 @@
 						"case": "new Number(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["U"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Number(+x)"
+					},
+					"negative": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "retains conversion, exotic state or newTarget behavior in %s",
+						"case": "new Number(x)"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "materializes the current own state and primitive slot of %s at escape",
+						"case": "new Number(+x)"
+					},
+					"negative": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "retains conversion, exotic state or newTarget behavior in %s",
+						"case": "new Number(x)"
+					},
+					"lowering": "materialized"
 				}
 			]
 		},

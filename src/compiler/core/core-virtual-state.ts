@@ -31,7 +31,12 @@ const valueCell = (value: CoreValueId): Cell => ({ opcode: "move", inputs: [valu
 export const materializeVirtualState: CoreFunctionPass = {
 	name: "materialize-virtual-state",
 	stage: "memory",
-	requiredFunctionOpcodesAny: ["createArray", "createObject", "createObjectShaped"],
+	requiredFunctionOpcodesAny: [
+		"createArray",
+		"createObject",
+		"createObjectShaped",
+		"callKnown",
+	],
 	admission: {
 		predicate: "bounded fresh aggregate with local state observations in a locked world",
 		hasOpportunity({ compilationContext }) {
@@ -59,8 +64,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 			if (fn.instructionKind(root) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(root),
 				attributes = fn.instructionAttributes(root);
+			const wrapper =
+				opcode === "callKnown" &&
+				attributes.argumentMode === undefined &&
+				(attributes.operation === "Object" ||
+					(attributes.construct &&
+						["Boolean", "Number"].includes(attributes.operation as string)));
 			if (
-				!["createArray", "createObject", "createObjectShaped"].includes(opcode) ||
+				(!wrapper &&
+					!["createArray", "createObject", "createObjectShaped"].includes(opcode)) ||
 				attributes[MATERIALIZED]
 			)
 				continue;
@@ -72,6 +84,18 @@ export const materializeVirtualState: CoreFunctionPass = {
 				continue;
 			const fact = analysis.query(value);
 			if (fact.kind !== "known") continue;
+			if (wrapper) {
+				if (
+					fact.construction?.instruction !== root ||
+					!["Boolean", "Number", "BigInt", "Symbol"].includes(fact.exactBrand ?? "")
+				)
+					continue;
+				const input = fact.construction.arguments[0];
+				if (attributes.operation === "Number" && input !== undefined) {
+					const payload = analysis.queryAt(input, root);
+					if (payload.kind !== "known" || payload.brand !== "number") continue;
+				}
+			}
 			const array = opcode === "createArray";
 			let length = array ? (attributes.length as number) : 0;
 			if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) continue;
@@ -371,9 +395,14 @@ export const materializeVirtualState: CoreFunctionPass = {
 				if (alias !== value) editor.replaceValueUses(alias, value);
 			for (const instruction of removals) editor.removeInstruction(instruction);
 			if (escapes) {
-				editor.replaceInstruction(root, array ? "createArray" : "createObject", [], {
-					attributes: { ...(array ? { length } : {}), [MATERIALIZED]: true },
-				});
+				if (wrapper)
+					editor.replaceInstruction(root, "callKnown", argsOf(root), {
+						attributes: { ...attributes, [MATERIALIZED]: true },
+					});
+				else
+					editor.replaceInstruction(root, array ? "createArray" : "createObject", [], {
+						attributes: { ...(array ? { length } : {}), [MATERIALIZED]: true },
+					});
 				editor.moveInstruction(root, block, boundary);
 				for (const [key, cell] of cells) {
 					const keyIndex = program.stringConstants.findIndex(

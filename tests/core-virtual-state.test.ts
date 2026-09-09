@@ -2,6 +2,102 @@ import { describe, expect, it } from "vitest";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("virtual local state", () => {
+	it.each([
+		"new Boolean(x)",
+		"new Number(+x)",
+		"Object(!!x)",
+		"Object(+x)",
+		"Object(BigInt(x))",
+		"Object(Symbol.for(x))",
+	])("eliminates private own-property transitions on %s", (producer) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(x) {
+				const box = ${producer};
+				const alias = box;
+				box.note = x;
+				alias.note = 7;
+				delete box.note;
+				box.other = x;
+				return (box.note === undefined) + alias.other;
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(
+			inspected.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					(op.attributes.construct || op.attributes.operation === "Object"),
+			),
+		).toBe(false);
+		expect(
+			inspected.core.some((op) =>
+				["storePropertyStatic", "loadPropertyStatic", "deleteProperty"].includes(
+					op.opcode,
+				),
+			),
+		).toBe(false);
+	});
+	it.each(["new Boolean(x)", "new Number(+x)", "Object(BigInt(x))"])(
+		"materializes the current own state and primitive slot of %s at escape",
+		(producer) => {
+			const inspected = inspectStaticValueFunction(
+				`function probe(x) {
+					const box = ${producer};
+					box.note = x;
+					delete box.note;
+					box.other = x;
+					return box;
+				} globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(
+				inspected.core.filter(
+					(op) =>
+						op.opcode === "callKnown" &&
+						(op.attributes.construct || op.attributes.operation === "Object"),
+				),
+			).toHaveLength(1);
+			expect(inspected.core.filter((op) => op.opcode === "defineProperty")).toHaveLength(
+				1,
+			);
+			expect(inspected.core.some((op) => op.opcode === "deleteProperty")).toBe(false);
+		},
+	);
+	it.each([
+		"new Number(x)",
+		"new String(x)",
+		"Object(x)",
+		"Object(String(x))",
+		"Reflect.construct(Boolean, [x], globalThis.Target)",
+	])("retains conversion, exotic state or newTarget behavior in %s", (producer) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(x) { const box = ${producer}; box.note = x; return box.note; }
+			globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(inspected.core.some((op) => op.opcode === "storePropertyStatic")).toBe(true);
+	});
+	it("retains inherited setters and nonconfigurable wrapper properties", () => {
+		for (const body of [
+			"box.__proto__ = x; return box.__proto__;",
+			"Object.defineProperty(box, 'note', {value:x}); delete box.note; return 0;",
+		]) {
+			const inspected = inspectStaticValueFunction(
+				`function probe(x) { const box = new Boolean(x); ${body} } globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(inspected.core.some((op) => op.attributes.construct)).toBe(true);
+		}
+	});
+	it("retains mutable prototype observations during wrapper state updates", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(x) { const box = new Boolean(x); box.note = x; return box.note; } globalThis.probe = probe;",
+			"probe",
+			{ locked: false },
+		);
+		expect(inspected.core.some((op) => op.opcode === "construct")).toBe(true);
+		expect(inspected.core.some((op) => op.opcode === "storePropertyStatic")).toBe(true);
+	});
 	it.each(["[x()]", "({value:x()})", "({[x()]:1})"])(
 		"discards private initializer storage after preserving effects in %s",
 		(expression) => {
