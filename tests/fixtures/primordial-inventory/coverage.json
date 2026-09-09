@@ -85270,6 +85270,25 @@
 						"test": "preserves custom property-key conversion and its receiver"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.getPrototypeOf(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -96990,6 +97009,25 @@
 						"test": "preserves custom property-key conversion and its receiver"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.getPrototypeOf(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -99213,7 +99251,27 @@
 			"kind": "call",
 			"operations": ["Object"],
 			"task": "H-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object(value).valueOf()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains writes observed through an Object alias"
+					},
+					"lowering": "eliminated"
+				}
+			]
 		},
 		{
 			"id": "[\"Object\",\"<construct>\"]",
@@ -99228,7 +99286,27 @@
 			"kind": "construct",
 			"operations": ["Object"],
 			"task": "H-03",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "new Object(value).valueOf()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains writes observed through an Object alias"
+					},
+					"lowering": "eliminated"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.assign\",\"<call>\"]",
@@ -99458,7 +99536,27 @@
 			"kind": "call",
 			"operations": ["Object.getPrototypeOf"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.getPrototypeOf(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.getPrototypeOf\",\"<construct>\"]",
@@ -99558,7 +99656,27 @@
 			"kind": "call",
 			"operations": ["Object.isExtensible"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.isExtensible(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.isExtensible\",\"<construct>\"]",
@@ -99578,7 +99696,27 @@
 			"kind": "call",
 			"operations": ["Object.isFrozen"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.isFrozen(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.isFrozen\",\"<construct>\"]",
@@ -99598,7 +99736,27 @@
 			"kind": "call",
 			"operations": ["Object.isSealed"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.isSealed(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.isSealed\",\"<construct>\"]",
@@ -99738,7 +99896,27 @@
 			"kind": "call",
 			"operations": ["Object.prototype.__proto__<get>"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "value.__proto__"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.prototype.__proto__<get>\",\"<construct>\"]",
@@ -99798,7 +99976,27 @@
 			"kind": "call",
 			"operations": ["Object.prototype.isPrototypeOf"],
 			"task": "H-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.prototype.isPrototypeOf.call(Object.prototype, value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.prototype.isPrototypeOf\",\"<construct>\"]",
@@ -99937,6 +100135,25 @@
 						"case": "null"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Object.prototype.valueOf.call(Object(value)).valueOf()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains writes observed through an Object alias"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -100548,7 +100765,27 @@
 			"kind": "call",
 			"operations": ["Reflect.getPrototypeOf"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Reflect.getPrototypeOf(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Reflect.getPrototypeOf\",\"<construct>\"]",
@@ -100588,7 +100825,27 @@
 			"kind": "call",
 			"operations": ["Reflect.isExtensible"],
 			"task": "H-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "eliminates loop-carried wrapper observations in %s",
+						"case": "Reflect.isExtensible(value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves escaped wrapper state before %s"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Reflect.isExtensible\",\"<construct>\"]",

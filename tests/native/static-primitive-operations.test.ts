@@ -13,7 +13,7 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
-		"preserves wrapper property keys and identity observations with %s primordials",
+		"preserves wrapper property keys, identity, and object observations with %s primordials",
 		(primordials) => {
 			const fixture = "tests/local/primitive-wrapper-observations.mjs";
 			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });

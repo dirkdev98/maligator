@@ -246,3 +246,61 @@ describe("primitive data joins", () => {
 		},
 	);
 });
+
+for (const [family, allocation, another] of wrappers) {
+	describe(`${family} wrapper object observations`, () => {
+		it.each([
+			"Object(value).valueOf()",
+			"new Object(value).valueOf()",
+			"Object.prototype.valueOf.call(Object(value)).valueOf()",
+			"Object.getPrototypeOf(value)",
+			"Reflect.getPrototypeOf(value)",
+			"value.__proto__",
+			"value.constructor",
+			"value.hasOwnProperty",
+			"value.absentWrapperProperty",
+			"Object.isExtensible(value)",
+			"Reflect.isExtensible(value)",
+			"Object.isFrozen(value)",
+			"Object.isSealed(value)",
+			"Object.prototype.isPrototypeOf.call(Object.prototype, value)",
+			`${family}.prototype.isPrototypeOf(value)`,
+		])("eliminates loop-carried wrapper observations in %s", (consumer) => {
+			const result = inspect(
+				`let value = ${allocation}; for (let i = 0; i < y; i++) { value = ${another}; } return ${consumer};`,
+			);
+			expect(constructors(result)).toEqual([]);
+		});
+
+		it.each([
+			"Object.getPrototypeOf(value)",
+			"Reflect.getPrototypeOf(value)",
+			"value.__proto__",
+			"value.constructor",
+			"value.absentWrapperProperty",
+			"Object.isExtensible(value)",
+			"Object.isFrozen(value)",
+			"Object.isSealed(value)",
+			"Object.prototype.isPrototypeOf.call(Object.prototype, value)",
+		])("preserves escaped wrapper state before %s", (consumer) => {
+			const result = inspect(
+				`const value = ${allocation}; y(value); return ${consumer};`,
+			);
+			expect(constructors(result).length).toBeGreaterThan(0);
+		});
+
+		it("retains an unknown receiver for isPrototypeOf", () => {
+			const result = inspect(
+				`const value = ${allocation}; return Object.prototype.isPrototypeOf.call(y, value);`,
+			);
+			expect(constructors(result).length).toBeGreaterThan(0);
+		});
+
+		it("retains writes observed through an Object alias", () => {
+			const result = inspect(
+				`const value = ${allocation}; const alias = Object(value); y(alias); return Object.getPrototypeOf(value);`,
+			);
+			expect(constructors(result).length).toBeGreaterThan(0);
+		});
+	});
+}

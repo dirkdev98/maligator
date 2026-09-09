@@ -411,6 +411,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			if (
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
 				![
+					"Object",
 					"Object.prototype.toString",
 					"Object.prototype.toLocaleString",
 					"Object.prototype.valueOf",
@@ -435,6 +436,22 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index),
 			);
 			const numericOperation = fn.instructionOpcodeName(instruction) !== "callKnown";
+			if (operation === "Object" && inputs[1] !== undefined) {
+				const fact = analysis.queryAt(inputs[1], instruction);
+				const target = attributes.construct
+					? analysis.queryAt(inputs[0]!, instruction)
+					: undefined;
+				if (
+					fact.kind === "known" &&
+					["object", "array", "function"].includes(fact.brand) &&
+					(!attributes.construct ||
+						(target?.kind === "known" && target.canonical === "Object"))
+				) {
+					analysis.verify(fact, instruction);
+					plans.push({ instruction, operation: { opcode: "move", inputs: [inputs[1]] } });
+				}
+				continue;
+			}
 			if (attributes.construct) {
 				const target = analysis.queryAt(inputs[0]!, instruction);
 				if (
@@ -1199,7 +1216,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 
 type WrapperPropertyRead =
 	| { kind: "value"; nodeIndex: number; target: string }
-	| { kind: "getter"; target: string };
+	| { kind: "getter"; target: string }
+	| { kind: "undefined" };
 
 function primitiveWrapperAllocation(
 	fn: CoreFunctionStore,
@@ -1331,6 +1349,19 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				stringCoercions = new Set<CoreInstructionId>(),
 				truthyBranches = new Set<CoreInstructionId>(),
 				propertyReads = new Map<CoreInstructionId, WrapperPropertyRead>();
+			const wrapperPrototype = (): WrapperPropertyRead | undefined => {
+				if (!lockedCoercions) return undefined;
+				const resolution = provePrimordialAccess(
+					context.compilationContext.facts.world,
+					{ kind: "intrinsic", id: wrapper, realm: "current" },
+					"prototype",
+				)?.resolution;
+				const nodeIndex = resolution?.descriptor[2],
+					target = resolution?.value?.[0];
+				return typeof nodeIndex === "number" && target !== undefined
+					? { kind: "value", nodeIndex, target }
+					: undefined;
+			};
 			const wrapperPropertyRead = (
 				instruction: CoreInstructionId,
 				receiver: CoreValueId,
@@ -1345,15 +1376,27 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				const property = analysis.string(
 					fn.instructionAttributes(instruction).stringIndex as number,
 				);
-				const resolution = provePrimordialAccess(
+				// String wrappers have own length and indexed properties ahead of their prototype.
+				if (
+					wrapper === "String" &&
+					(property === "length" || /^(0|[1-9][0-9]*)$/.test(property))
+				)
+					return undefined;
+				const proof = provePrimordialAccess(
 					context.compilationContext.facts.world,
 					{ kind: "intrinsic", id: `${wrapper}.prototype`, realm: "current" },
 					property,
-				)?.resolution;
+				);
+				if (proof?.kind === "absent") return { kind: "undefined" };
+				const resolution = proof?.resolution;
 				const target = resolution?.getter?.[0] ?? resolution?.value?.[0];
-				if (target === undefined || !target.startsWith(`${wrapper}.prototype.`))
-					return undefined;
-				if (resolution?.getter !== undefined) return { kind: "getter", target };
+				if (target === undefined) return undefined;
+				if (resolution?.getter !== undefined) {
+					if (target === "Object.prototype.__proto__<get>") return wrapperPrototype();
+					return target.startsWith(`${wrapper}.prototype.`)
+						? { kind: "getter", target }
+						: undefined;
+				}
 				const nodeIndex = resolution?.descriptor[2];
 				if (typeof nodeIndex !== "number") return undefined;
 				return { kind: "value", nodeIndex, target };
@@ -1443,6 +1486,53 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					let consumerAttributes = fn.instructionAttributes(consumer);
 					let argumentOffset = 0;
 					const propertyRead = wrapperPropertyRead(consumer, value);
+					if (
+						opcode === "callKnown" &&
+						!consumerAttributes.construct &&
+						consumerAttributes.argumentMode === undefined &&
+						lockedCoercions
+					) {
+						const operation = consumerAttributes.operation as string;
+						const operand = fn.kernel.useOperand(use);
+						if (
+							(operand === 1 &&
+								["Object.getPrototypeOf", "Reflect.getPrototypeOf"].includes(
+									operation,
+								)) ||
+							(operand === 0 && operation === "Object.prototype.__proto__<get>")
+						) {
+							const prototype = wrapperPrototype();
+							if (prototype !== undefined) {
+								propertyReads.set(consumer, prototype);
+								continue;
+							}
+						}
+						if (operand === 1 && operation === "Object.prototype.isPrototypeOf") {
+							const receiver = analysis.query(
+								fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer)),
+							);
+							if (
+								receiver.kind === "known" &&
+								(receiver.canonical === "Object.prototype" ||
+									receiver.canonical === `${wrapper}.prototype`)
+							) {
+								constantConsumers.set(consumer, true);
+								continue;
+							}
+						}
+						if (
+							operand === 1 &&
+							[
+								"Object.isExtensible",
+								"Reflect.isExtensible",
+								"Object.isFrozen",
+								"Object.isSealed",
+							].includes(operation)
+						) {
+							constantConsumers.set(consumer, operation.endsWith("isExtensible"));
+							continue;
+						}
+					}
 					if (propertyRead !== undefined) {
 						propertyReads.set(consumer, propertyRead);
 						continue;
@@ -1693,6 +1783,10 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				continue;
 			const editor = CoreEditor.open(program, fn.id);
 			for (const [lookup, read] of propertyReads) {
+				if (read.kind === "undefined") {
+					editor.replaceInstruction(lookup, "createUndefined", []);
+					continue;
+				}
 				const worldAssumptions = {
 					...builtinWorldAssumptions(read.target, "exact-builtin-proof", true),
 				};

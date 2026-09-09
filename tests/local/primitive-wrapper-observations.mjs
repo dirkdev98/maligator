@@ -653,4 +653,191 @@ assert(globalThis.mixedKey(true, mixedValue, joinedTarget) === 31);
 for (const count of [0, 1, 4, 9])
 	capture("loop index:" + count, () => globalThis.loopIndex("a😀b", count));
 
+function booleanObjectObservations(x, count, z) {
+	let value = new Boolean(x);
+	for (let i = 0; i < count; i++) value = new Boolean(z);
+	return [
+		Object(value).valueOf() === value.valueOf(),
+		Object.is(new Object(value).valueOf(), value.valueOf()),
+		Object.getPrototypeOf(value) === Boolean.prototype,
+		Reflect.getPrototypeOf(value) === Boolean.prototype,
+		value.__proto__ === Boolean.prototype,
+		value.constructor === Boolean,
+		value.hasOwnProperty === Object.prototype.hasOwnProperty,
+		value.absentWrapperProperty === undefined,
+		Object.isExtensible(value),
+		Reflect.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+		Object.prototype.isPrototypeOf.call(Object.prototype, value),
+		Boolean.prototype.isPrototypeOf(value),
+	];
+}
+globalThis.booleanObjectObservations = booleanObjectObservations;
+function numberObjectObservations(x, count, z) {
+	let value = new Number(x);
+	for (let i = 0; i < count; i++) value = new Number(z);
+	return [
+		Object(value).valueOf() === value.valueOf(),
+		Object.is(new Object(value).valueOf(), value.valueOf()),
+		Object.getPrototypeOf(value) === Number.prototype,
+		Reflect.getPrototypeOf(value) === Number.prototype,
+		value.__proto__ === Number.prototype,
+		value.constructor === Number,
+		value.hasOwnProperty === Object.prototype.hasOwnProperty,
+		value.absentWrapperProperty === undefined,
+		Object.isExtensible(value),
+		Reflect.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+		Object.prototype.isPrototypeOf.call(Object.prototype, value),
+		Number.prototype.isPrototypeOf(value),
+	];
+}
+globalThis.numberObjectObservations = numberObjectObservations;
+function stringObjectObservations(x, count, z) {
+	let value = new String(x);
+	for (let i = 0; i < count; i++) value = new String(z);
+	return [
+		Object(value).valueOf() === value.valueOf(),
+		Object.is(new Object(value).valueOf(), value.valueOf()),
+		Object.getPrototypeOf(value) === String.prototype,
+		Reflect.getPrototypeOf(value) === String.prototype,
+		value.__proto__ === String.prototype,
+		value.constructor === String,
+		value.hasOwnProperty === Object.prototype.hasOwnProperty,
+		value.absentWrapperProperty === undefined,
+		Object.isExtensible(value),
+		Reflect.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+		Object.prototype.isPrototypeOf.call(Object.prototype, value),
+		String.prototype.isPrototypeOf(value),
+	];
+}
+globalThis.stringObjectObservations = stringObjectObservations;
+function bigintObjectObservations(x, count, z) {
+	let value = Object(BigInt(x));
+	for (let i = 0; i < count; i++) value = Object(BigInt(z));
+	return [
+		Object(value).valueOf() === value.valueOf(),
+		Object.is(new Object(value).valueOf(), value.valueOf()),
+		Object.getPrototypeOf(value) === BigInt.prototype,
+		Reflect.getPrototypeOf(value) === BigInt.prototype,
+		value.__proto__ === BigInt.prototype,
+		value.constructor === BigInt,
+		value.hasOwnProperty === Object.prototype.hasOwnProperty,
+		value.absentWrapperProperty === undefined,
+		Object.isExtensible(value),
+		Reflect.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+		Object.prototype.isPrototypeOf.call(Object.prototype, value),
+		BigInt.prototype.isPrototypeOf(value),
+	];
+}
+globalThis.bigintObjectObservations = bigintObjectObservations;
+function symbolObjectObservations(x, count, z) {
+	let value = Object(Symbol.for(x));
+	for (let i = 0; i < count; i++) value = Object(Symbol.for(z));
+	return [
+		Object(value).valueOf() === value.valueOf(),
+		Object.is(new Object(value).valueOf(), value.valueOf()),
+		Object.getPrototypeOf(value) === Symbol.prototype,
+		Reflect.getPrototypeOf(value) === Symbol.prototype,
+		value.__proto__ === Symbol.prototype,
+		value.constructor === Symbol,
+		value.hasOwnProperty === Object.prototype.hasOwnProperty,
+		value.absentWrapperProperty === undefined,
+		Object.isExtensible(value),
+		Reflect.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+		Object.prototype.isPrototypeOf.call(Object.prototype, value),
+		Symbol.prototype.isPrototypeOf(value),
+	];
+}
+globalThis.symbolObjectObservations = symbolObjectObservations;
+
+for (const family of ["boolean", "number", "string", "bigint", "symbol"]) {
+	for (const count of [0, 1, 3]) {
+		capture("object observations:" + family + ":" + count, () =>
+			globalThis[family + "ObjectObservations"]("17", count, "23"),
+		);
+	}
+	const input = {
+		[Symbol.toPrimitive](hint) {
+			events.push("observations:" + family + ":" + hint);
+			return "17";
+		},
+	};
+	capture("object observations coercion:" + family, () =>
+		globalThis[family + "ObjectObservations"](input, 2, input),
+	);
+	const throwing = {
+		[Symbol.toPrimitive]() {
+			events.push("observations throw:" + family);
+			throw new RangeError("conversion");
+		},
+	};
+	capture("object observations throw:" + family, () =>
+		globalThis[family + "ObjectObservations"](throwing, 0, "23"),
+	);
+}
+for (const value of [NaN, -0, Infinity, -Infinity])
+	capture("number object observations:" + String(value), () =>
+		globalThis.numberObjectObservations(value, 0, 0),
+	);
+for (const value of ["", "😀", "\ud800", Symbol.iterator])
+	capture("string object observations:" + String(value), () =>
+		globalThis.stringObjectObservations(value, 0, "a"),
+	);
+
+function objectAliasState(value, mutate) {
+	const alias = Object(value);
+	mutate(alias);
+	return [
+		alias === value,
+		Object.getPrototypeOf(value),
+		Object.isExtensible(value),
+		Object.isFrozen(value),
+		Object.isSealed(value),
+	];
+}
+function customObjectConstruction(value, target) {
+	return Reflect.construct(Object, [value], target);
+}
+function wrapperUnknownPrototype(x, receiver) {
+	return Object.prototype.isPrototypeOf.call(receiver, new Number(x));
+}
+globalThis.objectAliasState = objectAliasState;
+globalThis.customObjectConstruction = customObjectConstruction;
+globalThis.wrapperUnknownPrototype = wrapperUnknownPrototype;
+for (const make of [
+	() => new Boolean(false),
+	() => new Number(0),
+	() => new String("😀"),
+	() => Object(17n),
+	() => Object(Symbol.iterator),
+]) {
+	const value = make(),
+		prototype = {};
+	const state = globalThis.objectAliasState(value, (alias) => {
+		Object.setPrototypeOf(alias, prototype);
+		Object.freeze(alias);
+	});
+	assert(state[0] && state[1] === prototype && !state[2] && state[3] && state[4]);
+}
+function CustomObject() {}
+const boxed = new Number(17);
+const constructed = globalThis.customObjectConstruction(boxed, CustomObject);
+assert(
+	constructed !== boxed && Object.getPrototypeOf(constructed) === CustomObject.prototype,
+);
+assert(globalThis.customObjectConstruction(boxed, Object) === boxed);
+for (const receiver of [null, undefined, 1, "x", {}, Number.prototype, Object.prototype])
+	capture("unknown prototype:" + String(receiver), () =>
+		globalThis.wrapperUnknownPrototype(17, receiver),
+	);
+
 console.log(JSON.stringify({ results, events }));
