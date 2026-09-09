@@ -119,6 +119,7 @@ export const BYTECODE_OPERATIONS = [
 	"SELECT_SHAPE_CASE",
 	"LOAD_PROPERTY_STATIC_SHAPE_CASE",
 	"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+	"BUILTIN_ERROR",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

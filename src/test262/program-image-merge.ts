@@ -423,6 +423,7 @@ function cloneInstruction(
 		case "CONSTRUCT_SUPER":
 		case "CONSTRUCT_SUPER_EXPLICIT":
 		case "SET_THIS":
+		case "BUILTIN_ERROR":
 		case "THROW":
 		case "CATCH":
 		case "TRY_BEGIN":

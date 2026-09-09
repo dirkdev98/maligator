@@ -9,6 +9,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
+import { knownBuiltinErrorNames } from "../../src/compiler/shared/known-builtin-errors.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_OPCODES,
@@ -118,6 +119,46 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr).toBe(0);
 	}
+	it("validates builtin error identities and destination registers before execution", () => {
+		const errorImage: RuntimeImage = {
+			...definition,
+			functionCount: 2,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [{ opcode: "BUILTIN_ERROR", dst: 0, error: "uri" }],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(errorImage, { debugInfo: false });
+		acceptsWire("builtin-error", wire);
+		const payload = Buffer.from([
+			WIRE_OPCODES.indexOf("BUILTIN_ERROR"),
+			0,
+			knownBuiltinErrorNames.indexOf("uri"),
+		]);
+		const offset = Buffer.from(wire).indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(Buffer.from(wire).indexOf(payload, offset + payload.length)).toBe(-1);
+		for (const [name, operand, value] of [
+			["error-id", 2, 255],
+			["negative-error-destination", 1, 1],
+			["large-error-destination", 1, 2],
+		] as const) {
+			const malformed = wire.slice();
+			malformed[offset + operand] = value;
+			rejectsWire(name, malformed);
+		}
+	});
 
 	it("validates static-query kinds, registers and primitive payloads", () => {
 		const queryDefinition: RuntimeImage = {

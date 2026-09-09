@@ -2928,6 +2928,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_REQUIRE_COERCIBLE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_require_coercible(frame, instruction));
                 break;
+            case MAL_OP_BUILTIN_ERROR:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_builtin_error(frame, instruction));
+                break;
             case MAL_OP_CHECK_SUPER_CLASS:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_check_super_class(frame, instruction));
                 break;

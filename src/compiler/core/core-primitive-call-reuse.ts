@@ -225,7 +225,6 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 				if (
 					attributes.construct ||
 					attributes.argumentMode !== undefined ||
-					attributes.knownBuiltinError !== undefined ||
 					!candidate(operation)
 				)
 					continue;
@@ -284,7 +283,6 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 				if (
 					attributes.construct ||
 					attributes.argumentMode !== undefined ||
-					attributes.knownBuiltinError !== undefined ||
 					!candidate(operation)
 				)
 					continue;

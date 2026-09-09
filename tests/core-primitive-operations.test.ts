@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { evaluateConstantBuiltin } from "../src/compiler/shared/constant-builtins.ts";
+import { knownBuiltinErrorNames } from "../src/compiler/shared/known-builtin-errors.ts";
+import { BYTECODE_OPERATIONS } from "../src/compiler/target/bytecode-operation-spec.ts";
 import {
 	serializeCompilerArtifact,
 	deserializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const fixedPrimitiveExpressions = [
@@ -214,9 +217,6 @@ describe("primitive operation results", () => {
 	it.each([
 		"x",
 		"[x]",
-		"[1,,2]",
-		"[1,'2']",
-		"[NaN,'2']",
 		"[+x,1,2]",
 		"Array(65).fill(1)",
 		"Object.assign([1],{[Symbol.iterator]:x})",
@@ -227,6 +227,34 @@ describe("primitive operation results", () => {
 			),
 		).toBe(true);
 	});
+	it.each([
+		"[1,'2']",
+		"[NaN,'2']",
+		"[+x,false]",
+		"[1,{}]",
+		"[Symbol.iterator]",
+		"[1n]",
+		"[1,,2]",
+	])(
+		"rejects a proved non-Number sum element without input materialization in %s",
+		(array) => {
+			const output = inspect(`Math.sumPrecise(${array})`);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+			expect(output.core).toContainEqual(
+				expect.objectContaining({
+					opcode: "builtinError",
+					inputs: [],
+					attributes: { error: "sumNumber" },
+				}),
+			);
+			expect(
+				inspect(`Math.sumPrecise(${array})`, false).structure.genericCalls,
+			).toBeGreaterThan(0);
+		},
+	);
 	it("retains mutable-world sum lookup and iteration", () => {
 		const output = inspect("Math.sumPrecise([1,2])", false);
 		expect(output.c.source).not.toContain("mal_math_sum_precise");
@@ -474,14 +502,18 @@ describe("primitive operation results", () => {
 		expect(output.c.source).toContain("mal_vm_throw_error(");
 		expect(output.c.source).not.toContain("mal_vm_call_known_native(");
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
-		expect(restored.native.functions.flatMap((fn) => fn.instructions)).toContainEqual({
-			kind: "known-builtin-error",
-			error: expression.startsWith("new BigInt")
+		expect(
+			restored.runtime.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((instruction) => instruction.opcode === "BUILTIN_ERROR")
+				.map((instruction) => instruction.error),
+		).toEqual([
+			expression.startsWith("new BigInt")
 				? "bigintConstructor"
 				: expression.startsWith("new Symbol")
 					? "symbolConstructor"
 					: "notConstructor",
-		});
+		]);
 		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
 	});
 	it.each([
@@ -536,17 +568,17 @@ describe("primitive operation results", () => {
 		["encodeURI('\\ud800')", "uri"],
 	])("residualizes the known failure at %s", (expression, error) => {
 		const output = inspect(expression);
-		const plans = output.image.native.functions
+		const plans = output.image.runtime.functions
 			.flatMap((fn) => fn.instructions)
-			.filter((plan) => plan?.kind === "known-builtin-error");
-		expect(plans).toContainEqual({ kind: "known-builtin-error", error });
+			.filter((plan) => plan.opcode === "BUILTIN_ERROR");
+		expect(plans.map((plan) => plan.error)).toEqual([error]);
 		expect(output.c.source).toContain("mal_vm_throw_error(");
 		expect(output.c.source).not.toContain("mal_vm_call_known_native(");
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
 		expect(
-			restored.native.functions
+			restored.runtime.functions
 				.flatMap((fn) => fn.instructions)
-				.filter((plan) => plan?.kind === "known-builtin-error"),
+				.filter((plan) => plan.opcode === "BUILTIN_ERROR"),
 		).toEqual(plans);
 		expect(inspect(expression, false).c.source).not.toContain("mal_vm_throw_error(");
 	});
@@ -566,8 +598,8 @@ describe("primitive operation results", () => {
 		(expression) => {
 			expect(
 				inspect(expression)
-					.image.native.functions.flatMap((fn) => fn.instructions)
-					.some((plan) => plan?.kind === "known-builtin-error"),
+					.image.runtime.functions.flatMap((fn) => fn.instructions)
+					.some((plan) => plan.opcode === "BUILTIN_ERROR"),
 			).toBe(false);
 		},
 	);
@@ -583,11 +615,41 @@ describe("primitive operation results", () => {
 		const output = inspect("'a'.normalize('invalid')");
 		const wire = serializeCompilerArtifact(output.image);
 		const bytes = Buffer.from(wire);
-		const offset = bytes.indexOf("normalization");
+		const error = output.fn.instructions.find(
+			(instruction) => instruction.opcode === "BUILTIN_ERROR",
+		)!;
+		const writer = new Writer();
+		writer.u8(BYTECODE_OPERATIONS.indexOf("BUILTIN_ERROR"));
+		writer.i32(error.dst);
+		writer.u8(knownBuiltinErrorNames.indexOf(error.error));
+		const payload = Buffer.from(writer.finish());
+		const offset = bytes.indexOf(payload);
 		expect(offset).toBeGreaterThanOrEqual(0);
-		bytes[offset] = 0;
+		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
+		bytes[offset + payload.length - 1] = 255;
 		expect(() => deserializeCompilerArtifact(bytes)).toThrow(/invalid builtin error/);
 	});
+	it.each([
+		"new Math.abs({value:x()})",
+		"new BigInt([x()])",
+		"new Symbol({[x()]:1})",
+		"(1).toString(1,{value:x()})",
+		"String.fromCodePoint(-1,[x()])",
+		"'a'.repeat(-1,{value:x()})",
+	])(
+		"discards unused error inputs while retaining producer effects in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(
+				output.core.filter((operation) => operation.opcode === "builtinError"),
+			).toHaveLength(1);
+			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+		},
+	);
 	it.each([
 		"Number.prototype.toFixed.call(x,101)",
 		"(1).toFixed(x)",
@@ -603,8 +665,8 @@ describe("primitive operation results", () => {
 		(expression) => {
 			expect(
 				inspect(expression)
-					.image.native.functions.flatMap((fn) => fn.instructions)
-					.filter((plan) => plan?.kind === "known-builtin-error"),
+					.image.runtime.functions.flatMap((fn) => fn.instructions)
+					.filter((plan) => plan.opcode === "BUILTIN_ERROR"),
 			).toEqual([]);
 		},
 	);
@@ -1200,7 +1262,9 @@ describe("primitive operation results", () => {
 		expect(
 			output.core.some(
 				(operation) =>
-					operation.opcode === "callKnown" || operation.opcode === "mathUnaryNumber",
+					operation.opcode === "callKnown" ||
+					operation.opcode === "builtinError" ||
+					operation.opcode === "mathUnaryNumber",
 			),
 		).toBe(true);
 	});

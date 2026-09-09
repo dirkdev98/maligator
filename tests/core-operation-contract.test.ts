@@ -25,6 +25,17 @@ function clonedRegistry(
 }
 
 describe("Core target operation contract", () => {
+	it("keeps builtin failures observable and GC-capable without reading input values", () => {
+		const error = coreOpcodeRegistry.require("builtinError");
+		expect(error.inputs).toEqual(coreArity(0));
+		expect(error.discardable).toBe(false);
+		expect(error.effects).toMatchObject({
+			mayThrow: true,
+			mayGc: true,
+			callsUserCode: false,
+			maySuspend: false,
+		});
+	});
 	it("publishes lowering, representation, and safepoint ownership for every Core opcode", () => {
 		expect([...coreTargetOperationContracts.keys()]).toEqual(CORE_OPCODES);
 		expect(coreTargetOperationContracts.get("createF64")).toMatchObject({

@@ -28,6 +28,13 @@ typedef enum MalOpcode {
     MAL_OP_COUNT,
 } MalOpcode;
 
+typedef enum MalBuiltinError {
+#define MAL_KNOWN_BUILTIN_ERROR(name, prototype, message) MAL_BUILTIN_ERROR_##name,
+#include "generated/known_builtin_errors.inc"
+#undef MAL_KNOWN_BUILTIN_ERROR
+    MAL_BUILTIN_ERROR_COUNT,
+} MalBuiltinError;
+
 /** Exact builtin dispatch order generated from the canonical compiler registry. */
 typedef enum MalDirectBuiltinOp {
 #define MAL_DIRECT_BUILTIN_OP(operation) operation,
@@ -637,6 +644,11 @@ typedef struct MalInstruction {
         struct {
             i32 dst, this_value, data_offset, operation;
         } call_known;
+
+        struct {
+            i32 dst;
+            MalBuiltinError error;
+        } builtin_error;
 
         struct {
             // callee and side data use the same tagged value operands as call.

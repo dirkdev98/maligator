@@ -36,6 +36,10 @@ export const knownBuiltinErrors = {
 		message: "Cannot read properties of null or undefined",
 	},
 	notIterable: { error: "TypeError", message: "Value is not iterable" },
+	sumNumber: {
+		error: "TypeError",
+		message: "Math.sumPrecise expects only Number values",
+	},
 	bigintConstructor: { error: "TypeError", message: "BigInt is not a constructor" },
 	symbolConstructor: { error: "TypeError", message: "Symbol is not a constructor" },
 	notConstructor: { error: "TypeError", message: "Value is not a constructor" },
@@ -93,22 +97,29 @@ export const knownBuiltinErrors = {
 } as const;
 
 export type KnownBuiltinError = keyof typeof knownBuiltinErrors;
+export const knownBuiltinErrorNames: ReadonlyArray<KnownBuiltinError> = Object.keys(
+	knownBuiltinErrors,
+) as Array<KnownBuiltinError>;
+
+export function knownBuiltinErrorPrototype(error: KnownBuiltinError): string {
+	const prototype = {
+		TypeError: "TYPE_ERROR",
+		RangeError: "RANGE_ERROR",
+		SyntaxError: "SYNTAX_ERROR",
+		URIError: "URI_ERROR",
+	}[knownBuiltinErrors[error].error];
+	return `MAL_INTRINSIC_${prototype}_PROTOTYPE`;
+}
+
+export function generateKnownBuiltinErrorInclude(): string {
+	return knownBuiltinErrorNames
+		.map(
+			(name) =>
+				`MAL_KNOWN_BUILTIN_ERROR(${name}, ${knownBuiltinErrorPrototype(name)}, ${JSON.stringify(knownBuiltinErrors[name].message)})\n`,
+		)
+		.join("");
+}
 
 export function isKnownBuiltinError(value: unknown): value is KnownBuiltinError {
 	return typeof value === "string" && Object.hasOwn(knownBuiltinErrors, value);
-}
-
-export function isKnownBuiltinConstructionError(
-	value: unknown,
-): value is KnownBuiltinError {
-	return (
-		typeof value === "string" &&
-		[
-			"notConstructor",
-			"bigintConstructor",
-			"symbolConstructor",
-			"symbolNumber",
-			"symbolString",
-		].includes(value)
-	);
 }

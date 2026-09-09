@@ -7,6 +7,7 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import type { KnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import type { KnownArgumentMode } from "../shared/known-operations.ts";
 import {
 	copyLiteralTemplateData,
@@ -790,6 +791,11 @@ export type BytecodeInstruction =
 			left: number;
 			right: number;
 			operation: VmMathBinaryNumberOperation;
+	  }
+	| {
+			opcode: "BUILTIN_ERROR";
+			dst: number;
+			error: KnownBuiltinError;
 	  }
 	| {
 			opcode: "CALL_KNOWN";
@@ -3171,6 +3177,12 @@ function lowerInstructionToBytecodeInstruction(
 				left: instruction.registers[1],
 				right: instruction.registers[2],
 				operation: vmMathBinaryNumberOperation(instruction.operation),
+			};
+		case "builtinError":
+			return {
+				opcode: "BUILTIN_ERROR",
+				dst: instruction.registers[0],
+				error: instruction.error,
 			};
 		case "callKnown":
 			return {

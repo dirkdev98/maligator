@@ -6584,6 +6584,20 @@ void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instr
     );
 }
 
+void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instruction) {
+    static const struct {
+        MalIntrinsic prototype;
+        const byte *message;
+    } failures[] = {
+#define MAL_KNOWN_BUILTIN_ERROR(name, prototype, message) { prototype, message },
+#include "generated/known_builtin_errors.inc"
+#undef MAL_KNOWN_BUILTIN_ERROR
+    };
+    const MalBuiltinError error = instruction->as.builtin_error.error;
+    callable->registers[instruction->as.builtin_error.dst] = MAL_VALUE_UNDEFINED;
+    mal_vm_throw_error(callable->vm, failures[error].prototype, failures[error].message);
+}
+
 // ClassDefinitionEvaluation heritage check: the superclass must be null, or a
 // constructor whose `prototype` is an object or null. Sets vm->completion on a
 // violation (`extends 42`, `extends Math.abs`, `extends a-function-without-a

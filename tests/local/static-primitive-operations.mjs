@@ -1791,3 +1791,50 @@ function numberConversionNewTarget(target) {
 show(
 	capturedFailure(() => numberConversionNewTarget({})).message.includes("constructor"),
 );
+
+function failureInputs(produce) {
+	return [
+		capturedFailure(() => new Math.abs({ value: produce() })).name,
+		capturedFailure(() => new BigInt([produce()])).name,
+		capturedFailure(() => new Symbol({ [produce()]: 1 })).name,
+		capturedFailure(() => (1).toString(1, { value: produce() })).name,
+		capturedFailure(() => String.fromCodePoint(-1, [produce()])).name,
+		capturedFailure(() => "a".repeat(-1, { value: produce() })).name,
+	];
+}
+let failureInputTrace = "";
+show(
+	failureInputs(() => {
+		failureInputTrace += "v";
+		return {
+			toString() {
+				failureInputTrace += "k";
+				return "x";
+			},
+		};
+	}),
+);
+show(failureInputTrace);
+const producerFailure = new SyntaxError("producer");
+show(
+	failureInputs(() => {
+		throw producerFailure;
+	}),
+);
+const firstBuiltinFailure = capturedFailure(() => (1).toString(1));
+const secondBuiltinFailure = capturedFailure(() => (1).toString(1));
+show(firstBuiltinFailure !== secondBuiltinFailure);
+show(firstBuiltinFailure instanceof RangeError);
+const keyFailure = new URIError("key");
+show(
+	capturedFailure(
+		() =>
+			new Symbol({
+				[{
+					toString() {
+						throw keyFailure;
+					},
+				}]: 1,
+			}),
+	) === keyFailure,
+);

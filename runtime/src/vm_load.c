@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 45u
+#define WIRE_VERSION 46u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -772,6 +772,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.call_known.operation = ((i32) operation << 4) | flags;
             return;
         }
+        case WIRE_BUILTIN_ERROR:
+            o->opcode = MAL_OP_BUILTIN_ERROR;
+            o->as.builtin_error.dst = rd_i32(r);
+            o->as.builtin_error.error = rd_u8(r);
+            if (o->as.builtin_error.error >= MAL_BUILTIN_ERROR_COUNT) r->ok = false;
+            return;
         case WIRE_CONSTRUCT: {
             o->opcode = MAL_OP_CONSTRUCT;
             o->as.construct.dst = rd_i32(r);
@@ -1388,6 +1394,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
         MAL_WRITES_DST(MAL_OP_CALL, call);
         MAL_WRITES_DST(MAL_OP_CALL_KNOWN, call_known);
+        MAL_WRITES_DST(MAL_OP_BUILTIN_ERROR, builtin_error);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
         MAL_WRITES_DST(MAL_OP_CATCH, caught);
         MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
@@ -2362,6 +2369,8 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
+            } else if (instruction->opcode == MAL_OP_BUILTIN_ERROR) {
+                if (instruction->as.builtin_error.dst < 0 || instruction->as.builtin_error.dst >= fn->register_count) r.ok = false;
             } else if ((instruction->opcode == MAL_OP_CALL_KNOWN)) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call_known.data_offset];

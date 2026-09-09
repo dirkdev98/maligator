@@ -2,10 +2,7 @@ import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts"
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
-import {
-	isKnownBuiltinError,
-	isKnownBuiltinConstructionError,
-} from "../shared/known-builtin-errors.ts";
+import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -405,6 +402,9 @@ function verifyInstructionRows(
 				if (node === undefined || (node[2] & 9) === 0)
 					fail("Invalid primordial identity");
 				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, node[0], world);
+			} else if (descriptor.opcode === "builtinError") {
+				if (!isKnownBuiltinError(attributes.error))
+					fail("Invalid builtin error identity");
 			} else if (descriptor.opcode === "callKnown") {
 				if (
 					typeof attributes.operation !== "string" ||
@@ -422,15 +422,6 @@ function verifyInstructionRows(
 						operandCount < 2)
 				)
 					fail("Invalid known-operation argument list");
-				if (
-					attributes.knownBuiltinError !== undefined &&
-					((attributes.construct &&
-						!isKnownBuiltinConstructionError(attributes.knownBuiltinError)) ||
-						attributes.argumentMode !== undefined ||
-						attributes.stringCollationPlan !== undefined ||
-						!isKnownBuiltinError(attributes.knownBuiltinError))
-				)
-					fail("Invalid known builtin error");
 				if (
 					attributes.stringCollationPlan !== undefined &&
 					(attributes.operation !== "String.prototype.localeCompare" ||

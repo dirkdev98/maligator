@@ -44,6 +44,11 @@ export function coreStaticNumberSum(
 		elements: Array<CoreStaticMemberOperation> = [];
 	for (let index = 0; index < array.length; index++) {
 		const property = array.properties.find((property) => property.key === String(index));
+		if (
+			property === undefined &&
+			analysis.inherited(fact, String(index))?.kind === "absent"
+		)
+			return { error: "sumNumber" as const };
 		if (property?.descriptor.kind !== "data") return undefined;
 		const member = property.descriptor.value;
 		const operand = member.kind === "operand" ? fact.operands[member.index] : undefined;
@@ -56,6 +61,22 @@ export function coreStaticNumberSum(
 		if (value?.kind === "number") values.push(value.value);
 		else {
 			const element = operand === undefined ? undefined : analysis.query(operand);
+			if (
+				value !== undefined ||
+				(element?.kind === "known" &&
+					[
+						"undefined",
+						"null",
+						"boolean",
+						"string",
+						"bigint",
+						"symbol",
+						"object",
+						"array",
+						"function",
+					].includes(element.brand))
+			)
+				return { error: "sumNumber" as const };
 			if (element?.kind !== "known" || element.brand !== "number") return undefined;
 		}
 		const operation = coreStaticMemberOperation(program, member, fact.operands);

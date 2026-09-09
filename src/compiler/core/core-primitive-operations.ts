@@ -187,11 +187,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
-			if (
-				attributes.argumentMode !== undefined ||
-				attributes.knownBuiltinError !== undefined
-			)
-				continue;
+			if (attributes.argumentMode !== undefined) continue;
 			const operation = attributes.operation as string;
 			if (
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
@@ -226,9 +222,9 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					plans.push({
 						instruction,
 						operation: {
-							opcode: "callKnown",
-							inputs,
-							attributes: { ...attributes, knownBuiltinError: "notConstructor" },
+							opcode: "builtinError",
+							inputs: [],
+							attributes: { error: "notConstructor" },
 						},
 					});
 				else if (
@@ -239,12 +235,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					plans.push({
 						instruction,
 						operation: {
-							opcode: "callKnown",
-							inputs,
+							opcode: "builtinError",
+							inputs: [],
 							attributes: {
-								...attributes,
-								knownBuiltinError:
-									operation === "BigInt" ? "bigintConstructor" : "symbolConstructor",
+								error: operation === "BigInt" ? "bigintConstructor" : "symbolConstructor",
 							},
 						},
 					});
@@ -254,9 +248,9 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						plans.push({
 							instruction,
 							operation: {
-								opcode: "callKnown",
-								inputs,
-								attributes: { ...attributes, knownBuiltinError: error },
+								opcode: "builtinError",
+								inputs: [],
+								attributes: { error },
 							},
 						});
 				}
@@ -268,9 +262,9 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					plans.push({
 						instruction,
 						operation: {
-							opcode: "callKnown",
-							inputs,
-							attributes: { ...attributes, knownBuiltinError: error },
+							opcode: "builtinError",
+							inputs: [],
+							attributes: { error },
 						},
 					});
 					continue;
@@ -444,7 +438,16 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					instruction,
 					inputs[1],
 				);
-				if (sum?.value !== undefined) plans.push({ instruction, value: sum.value });
+				if (sum?.error !== undefined)
+					plans.push({
+						instruction,
+						operation: {
+							opcode: "builtinError",
+							inputs: [],
+							attributes: { error: sum.error },
+						},
+					});
+				else if (sum?.value !== undefined) plans.push({ instruction, value: sum.value });
 				else if (
 					sum?.elements !== undefined &&
 					plans.length * 4 + sequenceEdits + 8 <= context.remainingEdits
@@ -520,12 +523,9 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				plans.push({
 					instruction,
 					operation: {
-						opcode: "callKnown",
-						inputs,
-						attributes: {
-							...attributes,
-							knownBuiltinError: evaluated.builtinError,
-						},
+						opcode: "builtinError",
+						inputs: [],
+						attributes: { error: evaluated.builtinError },
 					},
 				});
 				continue;

@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+	generateKnownBuiltinErrorInclude,
+	knownBuiltinErrorNames,
+} from "../src/compiler/shared/known-builtin-errors.ts";
+import {
 	BYTECODE_OPERATIONS,
 	generateBytecodeOperationInclude,
 } from "../src/compiler/target/bytecode-operation-spec.ts";
@@ -30,6 +34,12 @@ describe("bytecode operation specification", () => {
 	it("keeps the generated C contract current", () => {
 		expect(readFileSync("runtime/src/generated/bytecode_operations.inc", "utf8")).toBe(
 			generateBytecodeOperationInclude(),
+		);
+	});
+	it("shares builtin error identities with the checked runtime opcode", () => {
+		expect(knownBuiltinErrorNames.length).toBeLessThanOrEqual(256);
+		expect(readFileSync("runtime/src/generated/known_builtin_errors.inc", "utf8")).toBe(
+			generateKnownBuiltinErrorInclude(),
 		);
 	});
 });

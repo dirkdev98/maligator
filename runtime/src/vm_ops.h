@@ -2349,6 +2349,7 @@ void mal_op_store_global_property(MalCallable *callable, const MalInstruction *i
 void mal_op_init_global_vars(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_rest_arguments(MalCallable *callable, const MalInstruction *instruction);

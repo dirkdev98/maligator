@@ -9,7 +9,10 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
-import { knownBuiltinErrors } from "../shared/known-builtin-errors.ts";
+import {
+	knownBuiltinErrors,
+	knownBuiltinErrorPrototype,
+} from "../shared/known-builtin-errors.ts";
 import { knownNativeEntries } from "../shared/known-native-entries.ts";
 import { knownOperationFlags, knownOperations } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
@@ -5298,20 +5301,13 @@ function emitInstruction(
 			);
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
+		case "BUILTIN_ERROR":
+			return [
+				`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+				`mal_vm_throw_error(vm, ${knownBuiltinErrorPrototype(instruction.error)}, ${JSON.stringify(knownBuiltinErrors[instruction.error].message)});`,
+				throwCheck(),
+			];
 		case "CALL_KNOWN": {
-			if (nativePlan?.kind === "known-builtin-error") {
-				const failure = knownBuiltinErrors[nativePlan.error];
-				const prototype = {
-					TypeError: "TYPE_ERROR",
-					RangeError: "RANGE_ERROR",
-					SyntaxError: "SYNTAX_ERROR",
-					URIError: "URI_ERROR",
-				}[failure.error];
-				return [
-					`mal_vm_throw_error(vm, MAL_INTRINSIC_${prototype}_PROTOTYPE, "${failure.message}");`,
-					throwCheck(),
-				];
-			}
 			if (
 				nativePlan?.kind === "string-collation" &&
 				instruction.operation === "String.prototype.localeCompare" &&

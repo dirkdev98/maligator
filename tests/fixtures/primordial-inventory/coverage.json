@@ -74407,6 +74407,26 @@
 						"case": "BigInt('0xff')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -74423,7 +74443,47 @@
 			"kind": "construct",
 			"operations": ["BigInt"],
 			"task": "F-04",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new BigInt(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new BigInt(x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "new BigInt([x()])"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"BigInt.asIntN\",\"<call>\"]",
@@ -74453,6 +74513,46 @@
 						"case": "BigInt.asIntN(8,255n)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asIntN(Symbol.iterator,1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asIntN(Symbol.iterator,1n)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asIntN(-1,x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asIntN(-1,x)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -74494,6 +74594,26 @@
 						"case": "BigInt.asUintN(8,-1n)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asUintN(0,1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.asUintN(0,1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -74555,6 +74675,46 @@
 						"case": "(-255n).toString(16)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.prototype.toString.call(1,x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "BigInt.prototype.toString.call(1,x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1n).toString(37)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1n).toString(37)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -74828,6 +74988,26 @@
 						"test": "retains mutable method lookup for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Boolean.prototype.valueOf.call(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Boolean.prototype.valueOf.call(1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -80192,7 +80372,47 @@
 			"kind": "construct",
 			"operations": ["Math.abs"],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new Math.abs(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new Math.abs(x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "new Math.abs({value:x()})"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"Math.acos\",\"<call>\"]",
@@ -81279,6 +81499,26 @@
 						"case": "hypot"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.hypot(1,Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.hypot(1,Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -81645,6 +81885,26 @@
 						"case": "max"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.max(NaN,1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.max(NaN,1n)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -81970,6 +82230,26 @@
 						"case": "sin"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.sin(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.sin(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82149,6 +82429,64 @@
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains iterator semantics while bypassing sumPrecise dispatch"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.sumPrecise(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Math.sumPrecise(1)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-number-sum.ts",
+						"symbol": "coreStaticNumberSum"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates a proved numeric sum input %s",
+						"case": "[1e20,1,-1e20]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains unproved sum iteration for %s"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-number-sum.ts",
+						"symbol": "coreStaticNumberSum"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates a proved numeric sum input %s",
+						"case": "[+x,+x]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains unproved sum iteration for %s"
 					},
 					"lowering": "specialized"
 				}
@@ -82380,6 +82718,26 @@
 						"case": "Number(123n)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82415,6 +82773,26 @@
 						"test": "retains the required wrapper or Symbol conversion for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "new Number(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "new Number(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82746,6 +83124,26 @@
 						"test": "retains option validation and coercion for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toExponential(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toExponential(-1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82806,6 +83204,26 @@
 						"test": "retains option validation and coercion for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toFixed(1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toFixed(1n)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82886,6 +83304,26 @@
 						"test": "retains option validation and coercion for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toPrecision(0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toPrecision(0)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -82946,6 +83384,65 @@
 						"test": "retains option validation and coercion for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number.prototype.toString.call(true,x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number.prototype.toString.call(true,x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toString(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "(1).toString(1)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "(1).toString(1,{value:x()})"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -83006,6 +83503,26 @@
 						"test": "retains mutable method lookup for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number.prototype.valueOf.call(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Number.prototype.valueOf.call(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -85917,6 +86434,26 @@
 						"test": "retains the required wrapper or Symbol conversion for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "new String(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "new String(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -85968,6 +86505,26 @@
 						"case": "fromCharCode"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCharCode(1,1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCharCode(1,1n)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -86029,6 +86586,65 @@
 						"case": "fromCodePoint"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCodePoint(65,1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCodePoint(65,1n)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCodePoint(-1,x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.fromCodePoint(-1,x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "String.fromCodePoint(-1,[x()])"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -87328,6 +87944,26 @@
 						"case": "normalize"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "'a'.normalize('invalid')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "'a'.normalize('invalid')"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -87511,6 +88147,45 @@
 						"case": "repeat"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "'a'.repeat(-1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "'a'.repeat(-1)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "'a'.repeat(-1,{value:x()})"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -87575,6 +88250,26 @@
 						"case": "replace"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.replace.call(null,x,'')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.replace.call(null,x,'')"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -87639,6 +88334,26 @@
 						"case": "replaceAll"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.replaceAll.call(null,x,'')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.replaceAll.call(null,x,'')"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -87842,6 +88557,26 @@
 						"test": "retains separate fresh split results"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.split.call(null,x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.split.call(null,x)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -88605,6 +89340,26 @@
 						"case": "trim"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.trim.call(null)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.trim.call(null)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -88616,7 +89371,28 @@
 			"kind": "construct",
 			"operations": ["String.prototype.trim"],
 			"task": "F-11",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new String.prototype.trim(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new String.prototype.trim(x)"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"String.prototype.trimEnd\",\"<call>\"]",
@@ -88793,6 +89569,26 @@
 						"test": "retains mutable method lookup for %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.valueOf.call(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.prototype.valueOf.call(1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -88872,6 +89668,26 @@
 						"test": "retains raw template observations for %s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.raw(null)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "String.raw(null)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -88928,7 +89744,28 @@
 			"kind": "call",
 			"operations": ["Symbol"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"<construct>\"]",
@@ -88943,7 +89780,47 @@
 			"kind": "construct",
 			"operations": ["Symbol"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new Symbol(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new Symbol(x)"
+					},
+					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["R", "D", "X", "A", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused error inputs while retaining producer effects in %s",
+						"case": "new Symbol({[x()]:1})"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.for\",\"<call>\"]",
@@ -88953,7 +89830,28 @@
 			"kind": "call",
 			"operations": ["Symbol.for"],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.for(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.for(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol.for\",\"<construct>\"]",
@@ -88993,6 +89891,26 @@
 						"case": "Symbol.keyFor(Symbol.iterator)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.keyFor(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.keyFor(1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -89075,6 +89993,26 @@
 						"case": "Symbol().toString()"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.prototype.toString.call(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.prototype.toString.call(1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -89157,6 +90095,26 @@
 						"case": "Symbol.prototype[Symbol.toPrimitive].call(Symbol.iterator,'string')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive].call(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive].call(1)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -94607,6 +95565,26 @@
 						"case": "decodeURIComponent"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "decodeURIComponent('%xx')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "decodeURIComponent('%xx')"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -94672,6 +95650,26 @@
 						"case": "encodeURI"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "encodeURI(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "encodeURI(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -101215,6 +102213,26 @@
 						"case": "Number.parseFloat('1.25e+2x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "parseFloat(Symbol.iterator)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "parseFloat(Symbol.iterator)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -101266,6 +102284,26 @@
 						"case": "parseInt('  -0xfz')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "parseInt('1',1n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes the known failure at %s",
+						"case": "parseInt('1',1n)"
+					},
+					"lowering": "residual-throw"
 				}
 			]
 		},
@@ -101282,7 +102320,28 @@
 			"kind": "construct",
 			"operations": ["parseInt"],
 			"task": "F-14",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["X"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new parseInt(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "residualizes nonconstructable primitive identity at %s",
+						"case": "new parseInt(x)"
+					},
+					"lowering": "residual-throw"
+				}
+			]
 		},
 		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR\"]",

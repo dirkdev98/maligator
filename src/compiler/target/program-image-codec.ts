@@ -1,4 +1,8 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import {
+	knownBuiltinErrorNames,
+	isKnownBuiltinError,
+} from "../shared/known-builtin-errors.ts";
 import { knownOperationFlags, knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -27,7 +31,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 45;
+export const WIRE_VERSION = 46;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -749,6 +753,12 @@ function opcodeTag(opcode: string): number {
 function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 	w.u8(opcodeTag(i.opcode));
 	switch (i.opcode) {
+		case "BUILTIN_ERROR":
+			if (!isKnownBuiltinError(i.error))
+				throw new RangeError("program-image-codec: invalid builtin error");
+			w.i32(i.dst);
+			w.u8(knownBuiltinErrorNames.indexOf(i.error));
+			return;
 		case "MOVE":
 			w.i32(i.dst);
 			w.i32(i.src);
@@ -2083,6 +2093,13 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, found: r.i32(), value: r.i32(), nameStringIndex: r.i32() };
 		case "IS_EMPTY":
 			return { opcode, dst: r.i32(), src: r.i32() };
+		case "BUILTIN_ERROR": {
+			const dst = r.i32(),
+				error = knownBuiltinErrorNames[r.u8()];
+			if (error === undefined)
+				throw new RangeError("program-image-codec: invalid builtin error");
+			return { opcode, dst, error };
+		}
 		case "REQUIRE_COERCIBLE":
 			return { opcode, src: r.i32() };
 		case "CHECK_SUPER_CLASS":

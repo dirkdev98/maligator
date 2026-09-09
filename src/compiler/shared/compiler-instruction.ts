@@ -401,6 +401,12 @@ export type CompilerInstruction =
 			operation: string;
 	  }
 	| {
+			type: "builtinError";
+			// The unreachable normal result keeps SSA replacement independent of handler CFG edits.
+			registers: [number];
+			error: KnownBuiltinError;
+	  }
+	| {
 			type: "callKnown";
 			registers: [number, number, ...Array<number>];
 			operation: string;
@@ -408,7 +414,6 @@ export type CompilerInstruction =
 			argumentMode?: KnownArgumentMode;
 			specialized?: DirectBuiltinOperationId;
 			stringCollationPlan?: StringCollationPlan;
-			knownBuiltinError?: KnownBuiltinError;
 			knownBuiltinCall: KnownBuiltinCall;
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }

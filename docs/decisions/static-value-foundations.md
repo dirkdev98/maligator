@@ -119,12 +119,20 @@ unchanged primitive results reuse their immutable cell. Valid numeric radix path
 still check the receiver brand. Coercing global `isNaN`/`isFinite` use native predicates
 only for proven or guarded numbers, independently of the noncoercing Number methods.
 
-Certified builtin failures retain the original known call and exception edge in Core
-and the runtime image. Native metadata selects a target error kind and fixed message;
-execution allocates a fresh error at that call site. Earlier unknown coercions prevent
-selection, and all argument expressions still execute before the failure. The compiler
-never throws the JavaScript error during compilation. Compiler artifact version 71
-encodes the failure identity separately from the runtime call.
+Certified builtin failures become a no-input `builtinError` operation at the original
+source position and exception edge. The native and interpreted backends allocate a
+fresh error using a shared checked identity/message table. Argument expressions and
+earlier observable conversions remain; unused input objects can disappear. Earlier
+unknown coercions prevent selection. The compiler never throws the JavaScript error
+during compilation. Runtime wire version 46 and compiler artifact version 72 replace
+the earlier native-only annotation.
+
+The materialization pass discards bounded private initializer writes after proving
+that the aggregate has no content or identity observer. It retains computed-key
+coercions at the original write and rejects array length writes, nonconfigurable
+definitions, handler storage and escaping aliases. A proved non-Number element in a
+private sum array uses the same error operation only after the default iterator and
+absent iterator-return proofs discharge iteration and closing.
 
 Primitive brand proofs also select failed numeric/string conversions and wrong
 receivers. They stop at an earlier unknown coercion, range validation or symbol

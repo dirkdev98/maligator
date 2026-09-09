@@ -75,6 +75,86 @@ export const materializeVirtualState: CoreFunctionPass = {
 			const array = opcode === "createArray";
 			let length = array ? (attributes.length as number) : 0;
 			if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) continue;
+			const initializers = new Set<CoreInstructionId>();
+			const keyConversions = new Set<CoreInstructionId>();
+			const initializationOnly =
+				demand.demands.length <= LIMIT &&
+				demand.demands.every((use) => {
+					if (
+						fn.instructionBlock(use.instruction) !== block ||
+						fn.instructionKind(use.instruction) !== "operation"
+					)
+						return false;
+					const op = fn.instructionOpcodeName(use.instruction);
+					if (op === "move" && use.kind === "alias") {
+						initializers.add(use.instruction);
+						return true;
+					}
+					const attrs = fn.instructionAttributes(use.instruction);
+					if (
+						op !== "defineProperty" ||
+						use.operand !== 0 ||
+						attrs.enumerable !== true ||
+						attrs.writable === false ||
+						attrs.configurable === false
+					)
+						return false;
+					const key = argsOf(use.instruction)[1]!;
+					const constant = analysis.constant(key);
+					if (array) {
+						const index =
+							constant?.kind === "number"
+								? constant.value
+								: constant?.kind === "string" && /^(0|[1-9][0-9]*)$/.test(constant.value)
+									? Number(constant.value)
+									: NaN;
+						if (!Number.isInteger(index) || index < 0 || index >= 0xffffffff)
+							return false;
+					}
+					const keyFact = analysis.query(key);
+					if (
+						keyFact.kind !== "known" ||
+						![
+							"undefined",
+							"null",
+							"boolean",
+							"number",
+							"string",
+							"bigint",
+							"symbol",
+						].includes(keyFact.brand)
+					)
+						keyConversions.add(use.instruction);
+					initializers.add(use.instruction);
+					return true;
+				});
+			if (
+				initializationOnly &&
+				initializers.size + keyConversions.size * 2 + 1 <= context.remainingEdits
+			) {
+				const editor = CoreEditor.open(program, fn.id);
+				// A discarded ordinary object still owes observable computed-key coercions.
+				for (const instruction of keyConversions) {
+					const sourcePosition = fn.instructionSourcePosition(instruction);
+					const coercible = editor.insertInstruction(
+						block,
+						instruction,
+						"createBoolean",
+						[],
+						{ attributes: { value: true }, sourcePosition },
+					).outputs[0]!;
+					editor.insertInstruction(
+						block,
+						instruction,
+						"toPropertyKey",
+						[coercible, argsOf(instruction)[1]!],
+						{ sourcePosition },
+					);
+				}
+				for (const instruction of initializers) editor.removeInstruction(instruction);
+				editor.removeInstruction(root);
+				return editor.commit();
+			}
 			const cells = new Map<string, Cell>();
 			if (opcode === "createObjectShaped") {
 				const keys = attributes.keyStringIndices as ReadonlyArray<number>,

@@ -675,7 +675,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-18)).toEqual([
+		expect(WIRE_OPCODES.slice(-19)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -694,6 +694,7 @@ describe("program-image-codec", () => {
 			"SELECT_SHAPE_CASE",
 			"LOAD_PROPERTY_STATIC_SHAPE_CASE",
 			"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+			"BUILTIN_ERROR",
 		]);
 	});
 

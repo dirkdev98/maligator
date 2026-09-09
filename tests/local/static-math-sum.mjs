@@ -124,6 +124,14 @@ for (const values of [
 for (const [action, message] of [
 	[() => Math.sumPrecise(1), "Value is not iterable"],
 	[() => Math.sumPrecise(), "Cannot read properties of null or undefined"],
+	[() => Math.sumPrecise([1, "2"]), "Math.sumPrecise expects only Number values"],
+	[() => Math.sumPrecise([NaN, "2"]), "Math.sumPrecise expects only Number values"],
+	[
+		() => Math.sumPrecise([Symbol.iterator]),
+		"Math.sumPrecise expects only Number values",
+	],
+	[() => Math.sumPrecise([1n]), "Math.sumPrecise expects only Number values"],
+	[() => Math.sumPrecise([1, , 2]), "Math.sumPrecise expects only Number values"],
 ]) {
 	let first;
 	try {
@@ -138,4 +146,24 @@ for (const [action, message] of [
 	} catch (error) {
 		if (first === error) throw new Error("Sum error identity was reused");
 	}
+}
+events = "";
+function invalidSum(produce) {
+	return Math.sumPrecise([1, "x", produce()]);
+}
+try {
+	invalidSum(() => {
+		events += "v";
+		return 3;
+	});
+} catch (error) {
+	equal(error.message, "Math.sumPrecise expects only Number values");
+}
+equal(events, "v");
+try {
+	invalidSum(() => {
+		throw 13;
+	});
+} catch (error) {
+	equal(error, 13);
 }

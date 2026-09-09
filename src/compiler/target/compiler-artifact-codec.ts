@@ -6,10 +6,6 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
-import {
-	isKnownBuiltinError,
-	isKnownBuiltinConstructionError,
-} from "../shared/known-builtin-errors.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { Reader } from "./program-image-codec.ts";
@@ -44,7 +40,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 71;
+export const COMPILER_ARTIFACT_VERSION = 72;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -925,17 +921,6 @@ function writeCompilerArtifact(
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				w.u8(18);
-			} else if (
-				plan.kind === "known-builtin-error" &&
-				instruction.opcode === "CALL_KNOWN" &&
-				(!instruction.construct || isKnownBuiltinConstructionError(plan.error)) &&
-				instruction.argumentMode === undefined &&
-				isKnownBuiltinError(plan.error)
-			) {
-				w.u8(20);
-				w.u32(plan.error.length);
-				for (let index = 0; index < plan.error.length; index++)
-					w.u8(plan.error.charCodeAt(index));
 			} else if (
 				plan.kind === "string-collation" &&
 				instruction.opcode === "CALL_KNOWN" &&
@@ -3196,25 +3181,6 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-typed-array-element",
 					elementKind: numericTypedArrayKindFromTag(r.u8()),
-				};
-			} else if (
-				tag === 20 &&
-				instruction.opcode === "CALL_KNOWN" &&
-				instruction.argumentMode === undefined
-			) {
-				const length = r.count(1);
-				if (length > 32)
-					throw new RangeError("program-image-codec: invalid builtin error");
-				let error = "";
-				for (let index = 0; index < length; index++) error += String.fromCharCode(r.u8());
-				if (
-					!isKnownBuiltinError(error) ||
-					(instruction.construct && !isKnownBuiltinConstructionError(error))
-				)
-					throw new RangeError("program-image-codec: invalid builtin error");
-				nativeInstructions[instructionIndex] = {
-					kind: "known-builtin-error",
-					error,
 				};
 			} else if (
 				tag === 19 &&

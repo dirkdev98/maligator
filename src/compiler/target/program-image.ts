@@ -15,7 +15,6 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
-import type { KnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
@@ -1235,7 +1234,6 @@ export function validateNativeNumericSortCallback(
 }
 
 export type NativeInstructionPlan =
-	| { readonly kind: "known-builtin-error"; readonly error: KnownBuiltinError }
 	| { readonly kind: "string-collation"; readonly plan: StringCollationPlan }
 	| {
 			readonly kind: "call";
@@ -1634,11 +1632,6 @@ function nativeInstructionPlanFromExecution(
 						length: instruction.freshDenseReserveLength,
 					};
 		case "callKnown":
-			if (instruction.knownBuiltinError !== undefined)
-				return {
-					kind: "known-builtin-error",
-					error: instruction.knownBuiltinError,
-				};
 			return instruction.stringCollationPlan === undefined
 				? undefined
 				: { kind: "string-collation", plan: instruction.stringCollationPlan };
