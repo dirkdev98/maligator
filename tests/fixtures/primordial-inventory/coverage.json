@@ -31841,7 +31841,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.PI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.PI"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.PI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.PI"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.PI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.PI"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.PI yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.PI"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"E\"]",
@@ -31851,7 +31924,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.E"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.E yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.E"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"LN2\"]",
@@ -31861,7 +32007,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LN2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.LN2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.LN2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN2"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.LN2 yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LN2"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"LN10\"]",
@@ -31871,7 +32090,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LN10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN10"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.LN10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN10"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.LN10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LN10"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.LN10 yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LN10"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"LOG2E\"]",
@@ -31881,7 +32173,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LOG2E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG2E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.LOG2E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG2E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.LOG2E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG2E"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.LOG2E yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LOG2E"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"LOG10E\"]",
@@ -31891,7 +32256,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LOG10E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG10E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.LOG10E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG10E"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.LOG10E"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.LOG10E"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.LOG10E yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.LOG10E"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"SQRT2\"]",
@@ -31901,7 +32339,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.SQRT2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.SQRT2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.SQRT2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT2"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.SQRT2 yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.SQRT2"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"SQRT1_2\"]",
@@ -31911,7 +32422,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.SQRT1_2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT1_2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Math.SQRT1_2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT1_2"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Math.SQRT1_2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Math.SQRT1_2"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Math.SQRT1_2 yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Math.SQRT1_2"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Math\",\"abs\"]",
@@ -33091,7 +33675,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.MAX_SAFE_INTEGER yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MAX_SAFE_INTEGER"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"MIN_SAFE_INTEGER\"]",
@@ -33106,7 +33763,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.MIN_SAFE_INTEGER yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MIN_SAFE_INTEGER"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"EPSILON\"]",
@@ -33121,7 +33851,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.EPSILON"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.EPSILON"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.EPSILON"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.EPSILON"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.EPSILON"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.EPSILON"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.EPSILON yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.EPSILON"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"MAX_VALUE\"]",
@@ -33136,7 +33939,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.MAX_VALUE yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MAX_VALUE"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"MIN_VALUE\"]",
@@ -33151,7 +34027,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.MIN_VALUE yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.MIN_VALUE"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"POSITIVE_INFINITY\"]",
@@ -33166,7 +34115,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.POSITIVE_INFINITY yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.POSITIVE_INFINITY"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"NEGATIVE_INFINITY\"]",
@@ -33181,7 +34203,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.NEGATIVE_INFINITY yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.NEGATIVE_INFINITY"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"NaN\"]",
@@ -33196,7 +34291,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-02",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-value-selection.ts",
+						"symbol": "foldStaticPropertyReads"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.NaN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NaN"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Number.NaN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NaN"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Number.NaN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Number.NaN"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Number.NaN yields an immutable Number primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Number.NaN"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Number\",\"isNaN\"]",
@@ -40068,7 +41236,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.iterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.iterator"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.iterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.iterator"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.iterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.iterator"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.iterator yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.iterator"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"asyncIterator\"]",
@@ -40083,7 +41324,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.asyncIterator yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.asyncIterator"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"toStringTag\"]",
@@ -40098,7 +41412,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.toStringTag"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toStringTag"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.toStringTag"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toStringTag"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.toStringTag"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toStringTag"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.toStringTag yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.toStringTag"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"hasInstance\"]",
@@ -40113,7 +41500,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.hasInstance"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.hasInstance"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.hasInstance"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.hasInstance"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.hasInstance"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.hasInstance"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.hasInstance yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.hasInstance"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"toPrimitive\"]",
@@ -40128,7 +41588,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.toPrimitive yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.toPrimitive"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"species\"]",
@@ -40143,7 +41676,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.species"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.species"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.species"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.species"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.species"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.species"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.species yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.species"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"isConcatSpreadable\"]",
@@ -40158,7 +41764,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.isConcatSpreadable yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.isConcatSpreadable"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"match\"]",
@@ -40173,7 +41852,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.match"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.match"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.match"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.match"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.match"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.match"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.match yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.match"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"matchAll\"]",
@@ -40188,7 +41940,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.matchAll"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.matchAll"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.matchAll"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.matchAll"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.matchAll"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.matchAll"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.matchAll yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.matchAll"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"replace\"]",
@@ -40203,7 +42028,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.replace"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.replace"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.replace"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.replace"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.replace"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.replace"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.replace yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.replace"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"search\"]",
@@ -40218,7 +42116,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.search"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.search"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.search"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.search"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.search"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.search"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.search yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.search"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"split\"]",
@@ -40233,7 +42204,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.split"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.split"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.split"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.split"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.split"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.split"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.split yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.split"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"unscopables\"]",
@@ -40248,7 +42292,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.unscopables"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.unscopables"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.unscopables"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.unscopables"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.unscopables"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.unscopables"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.unscopables yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.unscopables"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"dispose\"]",
@@ -40263,7 +42380,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.dispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.dispose"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.dispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.dispose"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.dispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.dispose"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.dispose yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.dispose"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"asyncDispose\"]",
@@ -40278,7 +42468,80 @@
 			"kind": "data",
 			"operations": [],
 			"task": "F-05",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["static-observable"],
+					"axes": ["R", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "shares stable primitive data across an effect for %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "CoreLocalOptimizer"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards unused primitive data while retaining surrounding effects for %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable lookup for primitive data %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["U", "L"],
+					"state": "not-applicable",
+					"reason": "The installed own data descriptor Symbol.asyncDispose yields an immutable well-known Symbol primitive. Reading it has no mutable state transition, callback or iterator protocol. Object wrappers and Symbol registry operations are separate exposures.",
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads certified primitive data without a runtime lookup for %s",
+						"case": "Symbol.asyncDispose"
+					},
+					"lowering": "semantic-boundary"
+				}
+			]
 		},
 		{
 			"id": "[\"Symbol\",\"for\"]",

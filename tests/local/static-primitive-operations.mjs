@@ -1838,3 +1838,47 @@ show(
 			}),
 	) === keyFailure,
 );
+
+const primitiveDataReaders = [
+	() => Math.PI,
+	() => Math.E,
+	() => Math.LN2,
+	() => Math.LN10,
+	() => Math.LOG2E,
+	() => Math.LOG10E,
+	() => Math.SQRT2,
+	() => Math.SQRT1_2,
+	() => Number.MAX_SAFE_INTEGER,
+	() => Number.MIN_SAFE_INTEGER,
+	() => Number.EPSILON,
+	() => Number.MAX_VALUE,
+	() => Number.MIN_VALUE,
+	() => Number.POSITIVE_INFINITY,
+	() => Number.NEGATIVE_INFINITY,
+	() => Number.NaN,
+	() => Symbol.iterator,
+	() => Symbol.asyncIterator,
+	() => Symbol.toStringTag,
+	() => Symbol.hasInstance,
+	() => Symbol.toPrimitive,
+	() => Symbol.species,
+	() => Symbol.isConcatSpreadable,
+	() => Symbol.match,
+	() => Symbol.matchAll,
+	() => Symbol.replace,
+	() => Symbol.search,
+	() => Symbol.split,
+	() => Symbol.unscopables,
+	() => Symbol.dispose,
+	() => Symbol.asyncDispose,
+];
+for (const read of primitiveDataReaders) {
+	const value = read();
+	show(value);
+	show(Object.is(value, read()));
+	const first = Object(value);
+	const second = Object(value);
+	first.marker = "changed";
+	show(first !== second && second.marker === undefined);
+	show(Object.is(first.valueOf(), value) && Object.is(second.valueOf(), read()));
+}

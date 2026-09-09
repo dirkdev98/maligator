@@ -9,6 +9,40 @@ import {
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+const primitiveDataExpressions = [
+	"Math.PI",
+	"Math.E",
+	"Math.LN2",
+	"Math.LN10",
+	"Math.LOG2E",
+	"Math.LOG10E",
+	"Math.SQRT2",
+	"Math.SQRT1_2",
+	"Number.MAX_SAFE_INTEGER",
+	"Number.MIN_SAFE_INTEGER",
+	"Number.EPSILON",
+	"Number.MAX_VALUE",
+	"Number.MIN_VALUE",
+	"Number.POSITIVE_INFINITY",
+	"Number.NEGATIVE_INFINITY",
+	"Number.NaN",
+	"Symbol.iterator",
+	"Symbol.asyncIterator",
+	"Symbol.toStringTag",
+	"Symbol.hasInstance",
+	"Symbol.toPrimitive",
+	"Symbol.species",
+	"Symbol.isConcatSpreadable",
+	"Symbol.match",
+	"Symbol.matchAll",
+	"Symbol.replace",
+	"Symbol.search",
+	"Symbol.split",
+	"Symbol.unscopables",
+	"Symbol.dispose",
+	"Symbol.asyncDispose",
+];
+
 const fixedPrimitiveExpressions = [
 	"'x'.big('a\\\"b')",
 	"'x'.blink('a\\\"b')",
@@ -198,6 +232,59 @@ function onlyConstantResults(output: ReturnType<typeof inspect>) {
 }
 
 describe("primitive operation results", () => {
+	it.each(primitiveDataExpressions)(
+		"reads certified primitive data without a runtime lookup for %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(onlyConstantResults(output)).toBe(true);
+			expect(output.core).toHaveLength(1);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.genericCalls).toBe(0);
+		},
+	);
+	it.each(primitiveDataExpressions)(
+		"retains mutable lookup for primitive data %s",
+		(expression) => {
+			const output = inspect(expression, false);
+			expect(output.structure.genericLookups).toBe(1);
+			expect(onlyConstantResults(output)).toBe(false);
+		},
+	);
+	it.each(primitiveDataExpressions)(
+		"shares stable primitive data across an effect for %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){const before=${expression};x();return before===${expression};}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(
+				output.core
+					.filter((instruction) => instruction.opcode === "createBoolean")
+					.map((instruction) => instruction.attributes.value),
+			).toEqual([expression !== "Number.NaN"]);
+		},
+	);
+	it.each(primitiveDataExpressions)(
+		"discards unused primitive data while retaining surrounding effects for %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){x();${expression};x();return 1;}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(output.structure.genericCalls).toBe(2);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(
+				output.core.some(
+					(instruction) =>
+						instruction.opcode === "loadPrimordial" ||
+						instruction.opcode === "loadIntrinsic",
+				),
+			).toBe(false);
+		},
+	);
 	it.each([...fixedPrimitiveExpressions, ...fixedMathExpressions])(
 		"retains mutable lookup for the constant witness %s",
 		(expression) => {
