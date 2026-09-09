@@ -3350,18 +3350,7 @@ function compileClass(
 		if (key === -1) {
 			key = compileUndefined(fn, cursor);
 		}
-		const coercible = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "createBoolean",
-			registers: [coercible],
-			value: true,
-		});
-		const propertyKey = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "toPropertyKey",
-			registers: [propertyKey, coercible, key],
-		});
-		return propertyKey;
+		return compilePropertyNameValue(fn, cursor, key);
 	};
 
 	const constructorNode = classNode.body.body.find(
@@ -11137,7 +11126,8 @@ function compileObjectExpression(
 			continue;
 		}
 
-		const key = compilePropertyKey(program, fn, cursor, property);
+		let key = compilePropertyKey(program, fn, cursor, property);
+		if (property.computed) key = compilePropertyNameValue(fn, cursor, key);
 
 		if (property.kind === "get" || property.kind === "set") {
 			const accessorNameHint =
@@ -11546,6 +11536,25 @@ function compileSuperObject(
 	});
 
 	return object;
+}
+
+function compilePropertyNameValue(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	key: number,
+): number {
+	const coercible = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createBoolean",
+		registers: [coercible],
+		value: true,
+	});
+	const propertyKey = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "toPropertyKey",
+		registers: [propertyKey, coercible, key],
+	});
+	return propertyKey;
 }
 
 function compilePropertyKey(

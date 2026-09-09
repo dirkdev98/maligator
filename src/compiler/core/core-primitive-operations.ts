@@ -266,7 +266,14 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				const attributes = fn.instructionAttributes(instruction);
 				if (opcode === "mathUnaryNumber" || opcode === "mathBinaryNumber") return true;
 				if (opcode === "unary") return true;
-				if (opcode === "callKnown" && attributes.argumentMode === undefined) return true;
+				if (
+					opcode === "callKnown" &&
+					(attributes.argumentMode === undefined ||
+						(attributes.construct &&
+							(attributes.argumentMode === "array-like" ||
+								attributes.argumentMode === "nullable-array-like")))
+				)
+					return true;
 				if (
 					opcode === "binary" &&
 					["===", "!==", "==", "!="].includes(attributes.operator as string)
@@ -439,7 +446,6 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
-			if (attributes.argumentMode !== undefined) continue;
 			const operation = attributes.operation as string;
 			if (
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
@@ -463,6 +469,25 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				].includes(operation)
 			)
 				continue;
+			if (
+				attributes.construct &&
+				(attributes.argumentMode === undefined ||
+					attributes.argumentMode === "array-like" ||
+					attributes.argumentMode === "nullable-array-like") &&
+				knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable === false
+			) {
+				// Reflect checks constructability before reading its list; source spreads run first.
+				plans.push({
+					instruction,
+					operation: {
+						opcode: "builtinError",
+						inputs: [],
+						attributes: { error: "notConstructor" },
+					},
+				});
+				continue;
+			}
+			if (attributes.argumentMode !== undefined) continue;
 			const inputs = Array.from(
 				{ length: fn.kernel.instructionOperandCount(instruction) },
 				(_, index) =>
@@ -488,17 +513,6 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			if (attributes.construct) {
 				const target = analysis.queryAt(inputs[0]!, instruction);
 				if (
-					knownOperations()[knownOperationIndex(operation) ?? -1]?.constructable === false
-				)
-					plans.push({
-						instruction,
-						operation: {
-							opcode: "builtinError",
-							inputs: [],
-							attributes: { error: "notConstructor" },
-						},
-					});
-				else if (
 					(operation === "BigInt" || operation === "Symbol") &&
 					target.kind === "known" &&
 					target.canonical === operation

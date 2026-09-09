@@ -242,6 +242,10 @@ const rejectedPrimitiveConstructors = [
 	["Symbol", "symbolConstructor"],
 	["Symbol.for", "notConstructor"],
 	["Symbol.keyFor", "notConstructor"],
+	[
+		"Object.getOwnPropertyDescriptor(Symbol.prototype, 'description').get",
+		"notConstructor",
+	],
 	["Symbol.prototype.toString", "notConstructor"],
 	["Symbol.prototype.valueOf", "notConstructor"],
 	["Symbol.prototype[Symbol.toPrimitive]", "notConstructor"],
@@ -651,6 +655,117 @@ describe("primitive operation results", () => {
 			),
 		).toBe(false);
 	});
+	it.each(
+		rejectedPrimitiveConstructors.filter(([, error]) => error === "notConstructor"),
+	)("rejects %s before observing a dynamic Reflect argument list", (expression) => {
+		const result = inspect(`Reflect.construct(${expression}, x, y)`);
+		expect(
+			result.core
+				.filter((op) => op.opcode === "builtinError")
+				.map((op) => op.attributes.error),
+		).toEqual(["notConstructor"]);
+		expect(
+			result.core.some((op) => op.opcode === "callKnown" || op.opcode === "call"),
+		).toBe(false);
+	});
+	it.each(
+		rejectedPrimitiveConstructors.filter(([, error]) => error === "notConstructor"),
+	)(
+		"discards the unobserved Reflect list for %s after evaluating expressions",
+		(expression) => {
+			const result = inspect(
+				`Reflect.construct(${expression}, { get length(){return x();}, [y()]: y() }, y())`,
+			);
+			expect(
+				result.core
+					.filter((op) => op.opcode === "builtinError")
+					.map((op) => op.attributes.error),
+			).toEqual(["notConstructor"]);
+			expect(result.structure.allocations).toBe(0);
+			expect(result.structure.genericCalls).toBe(3);
+			expect(result.structure.coercions).toBe(1);
+		},
+	);
+	it.each(
+		rejectedPrimitiveConstructors.filter(([, error]) => error === "notConstructor"),
+	)("preserves source spread effects before rejecting %s", (expression) => {
+		const result = inspect(`new (${expression})(...x)`);
+		expect(result.core.some((op) => op.opcode === "builtinError")).toBe(false);
+		expect(
+			result.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.construct &&
+					op.attributes.argumentMode !== undefined,
+			),
+		).toBe(true);
+	});
+	it.each(
+		rejectedPrimitiveConstructors.filter(([, error]) => error === "notConstructor"),
+	)("keeps mutable Reflect construction of %s", (expression) => {
+		const result = inspect(`Reflect.construct(${expression}, x, y)`, false);
+		expect(result.core.some((op) => op.opcode === "builtinError")).toBe(false);
+		expect(result.structure.genericCalls).toBeGreaterThan(0);
+	});
+	it.each(
+		rejectedPrimitiveConstructors
+			.filter(([, error]) => error === "notConstructor")
+			.flatMap(([expression]) =>
+				[
+					"alias",
+					"bound-adapter",
+					"conditional",
+					"escaping-callee",
+					"loop",
+					"suspension",
+				].map((profile) => [expression, profile]),
+			),
+	)(
+		"specializes rejected Reflect construction of %s through %s",
+		(expression, profile) => {
+			const body =
+				profile === "alias"
+					? `const invoke = Reflect.construct; return invoke(${expression}, x, y);`
+					: profile === "bound-adapter"
+						? `const invoke = Reflect.construct.bind(null, ${expression}); return invoke(x, y);`
+						: profile === "conditional"
+							? `if(y) return Reflect.construct(${expression}, x); return 17;`
+							: profile === "escaping-callee"
+								? `const target = ${expression}; globalThis.sink(target); return Reflect.construct(target, x, y);`
+								: profile === "loop"
+									? `let result; for(let i=0;i<y;i++){try{Reflect.construct(${expression}, x);}catch(error){result=error;}} return result;`
+									: `yield 17; return Reflect.construct(${expression}, x, y);`;
+			const result = inspectStaticValueFunction(
+				`${profile === "suspension" ? "function*" : "function"} probe(x,y) { ${body} } globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				result.core
+					.filter((op) => op.opcode === "builtinError")
+					.map((op) => op.attributes.error),
+			).toEqual(["notConstructor"]);
+			expect(
+				result.core.some((op) => op.opcode === "callKnown" && op.attributes.construct),
+			).toBe(false);
+		},
+	);
+
+	it.each(["BigInt", "Symbol", "Boolean", "Number", "String"])(
+		"retains argument-list observations for constructable %s",
+		(expression) => {
+			const result = inspect(`Reflect.construct(${expression}, x)`);
+			expect(result.core.some((op) => op.opcode === "builtinError")).toBe(false);
+			expect(
+				result.core.some(
+					(op) =>
+						op.opcode === "callKnown" &&
+						op.attributes.construct &&
+						op.attributes.argumentMode === "array-like",
+				),
+			).toBe(true);
+		},
+	);
+
 	it.each(rejectedPrimitiveConstructors)(
 		"residualizes rejected construction of %s without argument materialization",
 		(expression, error) => {

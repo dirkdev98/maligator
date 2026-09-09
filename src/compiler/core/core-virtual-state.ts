@@ -1,5 +1,6 @@
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreMaterializationPlan } from "./core-materialization-demands.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -116,7 +117,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 					}
 					const attrs = fn.instructionAttributes(use.instruction);
 					if (
-						op !== "defineProperty" ||
+						(op !== "defineProperty" && op !== "defineAccessor") ||
 						use.operand !== 0 ||
 						attrs.enumerable !== true ||
 						attrs.writable === false ||
@@ -124,8 +125,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 					)
 						return false;
 					const key = argsOf(use.instruction)[1]!;
-					const constant = analysis.constant(key);
 					if (array) {
+						const constant = analysis.constant(key);
 						const index =
 							constant?.kind === "number"
 								? constant.value
@@ -134,6 +135,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 									: NaN;
 						if (!Number.isInteger(index) || index < 0 || index >= 0xffffffff)
 							return false;
+					}
+					if (
+						fn.kernel.valueDefinitionKind(key) === 1 &&
+						fn.instructionOpcodeName(
+							coreInstructionId(fn.kernel.valueDefinitionOwner(key)),
+						) === "toPropertyKey"
+					) {
+						initializers.add(use.instruction);
+						return true;
 					}
 					const keyFact = analysis.query(key);
 					if (

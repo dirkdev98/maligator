@@ -151,7 +151,7 @@ export function coreMaterializationPlan(
 					"storeProperty",
 					"storePropertyStatic",
 					"defineProperty",
-					"definePropertyAccessor",
+					"defineAccessor",
 					"deleteProperty",
 					"deletePropertyStatic",
 				].includes(opcode)

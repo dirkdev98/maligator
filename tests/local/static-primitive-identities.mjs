@@ -304,4 +304,459 @@ for (const construct of rejectedConstructors) {
 	}
 	check(effects === 5, "no replay after argument failure");
 }
+globalThis.rejectedArrayLikeConstructors = [
+	(list, target, effect) =>
+		Reflect.construct(BigInt.asIntN, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(BigInt.asUintN, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(BigInt.prototype.toString, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(BigInt.prototype.valueOf, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Boolean.prototype.toString, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Boolean.prototype.valueOf, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.abs, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.acos, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.acosh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.asin, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.asinh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.atan, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.atan2, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.atanh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.cbrt, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.ceil, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.clz32, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.cos, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.cosh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.exp, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.expm1, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Math.f16round, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.floor, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.fround, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.hypot, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.imul, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.log, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.log10, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.log1p, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.log2, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.max, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.min, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.pow, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.random, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.round, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.sign, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.sin, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.sinh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.sqrt, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Math.sumPrecise, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.tan, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.tanh, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Math.trunc, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.isFinite, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.isInteger, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Number.isNaN, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.isSafeInteger, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.prototype.toExponential, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.prototype.toFixed, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.prototype.toPrecision, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.prototype.toString, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Number.prototype.valueOf, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.fromCharCode, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.fromCodePoint, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.anchor, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.at, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.big, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.blink, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.bold, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.charAt, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.charCodeAt, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.codePointAt, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.concat, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.endsWith, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.fixed, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.fontcolor, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.fontsize, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.includes, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.indexOf, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.isWellFormed, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.italics, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.lastIndexOf, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.link, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.localeCompare, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.normalize, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.padEnd, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.padStart, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.repeat, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.replace, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.replaceAll, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.slice, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.small, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.split, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.startsWith, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.strike, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.sub, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.substr, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.substring, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.sup, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toLocaleLowerCase, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toLocaleUpperCase, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toLowerCase, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toString, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toUpperCase, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.toWellFormed, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.trim, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.trimEnd, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.trimStart, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(String.prototype.valueOf, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(String.raw, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(Symbol.for, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Symbol.keyFor, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Symbol.prototype.toString, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Symbol.prototype.valueOf, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(Symbol.prototype[Symbol.toPrimitive], effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(decodeURI, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(decodeURIComponent, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(encodeURI, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(encodeURIComponent, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(globalThis.escape, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(globalThis.unescape, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(isFinite, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(isNaN, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(parseFloat, effect(list), effect(target)),
+	(list, target, effect) => Reflect.construct(parseInt, effect(list), effect(target)),
+	(list, target, effect) =>
+		Reflect.construct(
+			Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get,
+			effect(list),
+			effect(target),
+		),
+];
+
+const ordering = [];
+const unreadList = new Proxy(
+	{},
+	{
+		get() {
+			ordering.push("list read");
+			throw new SyntaxError("list read");
+		},
+	},
+);
+const unreadTarget = new Proxy(function Target() {}, {
+	get() {
+		ordering.push("target read");
+		throw new SyntaxError("target read");
+	},
+});
+for (const reject of globalThis.rejectedArrayLikeConstructors) {
+	let previous;
+	for (const list of [undefined, null, 0, unreadList]) {
+		for (const target of [undefined, null, () => {}, unreadTarget]) {
+			ordering.length = 0;
+			let calls = 0;
+			try {
+				reject(list, target, (value) => {
+					ordering.push(++calls);
+					return value;
+				});
+				throw new Error("Reflect construction must reject");
+			} catch (error) {
+				check(error instanceof TypeError, "Reflect rejection kind");
+				check(error !== previous, "Reflect errors are fresh");
+				previous = error;
+			}
+			check(ordering.join() === "1,2", "only argument expressions precede rejection");
+		}
+	}
+	for (const throwAt of [1, 2]) {
+		let calls = 0;
+		try {
+			reject(unreadList, unreadTarget, (value) => {
+				if (++calls === throwAt) throw new RangeError("argument expression");
+				return value;
+			});
+			throw new Error("argument must reject");
+		} catch (error) {
+			check(error instanceof RangeError, "argument expression rejects first");
+		}
+		check(calls === throwAt, "later arguments are not evaluated after a throw");
+	}
+}
+function spreadReject(input) {
+	return new Math.abs(...input);
+}
+function reflectedSpreadReject(input) {
+	return Reflect.construct(Math.abs, [...input]);
+}
+globalThis.spreadReject = spreadReject;
+globalThis.reflectedSpreadReject = reflectedSpreadReject;
+for (const reject of [globalThis.spreadReject, globalThis.reflectedSpreadReject]) {
+	let visits = 0;
+	const iterable = {
+		*[Symbol.iterator]() {
+			visits++;
+			yield 1;
+			visits++;
+			yield 2;
+			visits++;
+		},
+	};
+	try {
+		reject(iterable);
+		throw new Error("spread must reject");
+	} catch (error) {
+		check(error instanceof TypeError, "spread construction rejection");
+	}
+	check(visits === 3, "spread iterator finishes before constructor rejection");
+	const broken = {
+		get [Symbol.iterator]() {
+			throw new SyntaxError("iterator");
+		},
+	};
+	try {
+		reject(broken);
+		throw new Error("iterator must reject");
+	} catch (error) {
+		check(error instanceof SyntaxError, "iterator fails before constructor rejection");
+	}
+}
+function reflectBigInt(list, target) {
+	return Reflect.construct(BigInt, list, target);
+}
+function reflectSymbol(list, target) {
+	return Reflect.construct(Symbol, list, target);
+}
+globalThis.reflectBigInt = reflectBigInt;
+globalThis.reflectSymbol = reflectSymbol;
+for (const [construct, target] of [
+	[globalThis.reflectBigInt, BigInt],
+	[globalThis.reflectSymbol, Symbol],
+]) {
+	let reads = 0;
+	const list = {
+		get length() {
+			reads++;
+			return 1;
+		},
+		get 0() {
+			reads++;
+			return {
+				[Symbol.toPrimitive]() {
+					throw new Error("body converted input");
+				},
+			};
+		},
+	};
+	try {
+		construct(list, target);
+		throw new Error("constructor body must reject");
+	} catch (error) {
+		check(error instanceof TypeError, "constructor body rejection");
+	}
+	check(reads === 2, "constructable builtin reads its argument list before entry");
+	reads = 0;
+	try {
+		construct(list, null);
+		throw new Error("newTarget must reject");
+	} catch (error) {
+		check(error instanceof TypeError, "newTarget rejection");
+	}
+	check(reads === 0, "invalid newTarget precedes list access");
+}
+function* suspendedRejection(list) {
+	yield 17;
+	return Reflect.construct(Math.abs, list);
+}
+globalThis.suspendedRejection = suspendedRejection;
+const suspended = globalThis.suspendedRejection(unreadList);
+check(suspended.next().value === 17, "rejection stays after suspension");
+try {
+	suspended.next();
+	throw new Error("resumed operation must reject");
+} catch (error) {
+	check(error instanceof TypeError, "resumed rejection");
+}
+check(suspended.next().done, "generator closes after rejection");
+function computedListRejection(key, value, target) {
+	return Reflect.construct(
+		Math.abs,
+		{
+			get length() {
+				throw new Error("list read");
+			},
+			[key]: value(),
+		},
+		target(),
+	);
+}
+function computedObject(key, value) {
+	return { [key]: value() };
+}
+function computedNamedProperties(key) {
+	return {
+		[key]: function () {},
+		get [key]() {
+			return 17;
+		},
+		set [key](value) {},
+	};
+}
+function computedAnonymousFunction(key) {
+	return { [key]: function () {} };
+}
+globalThis.computedListRejection = computedListRejection;
+globalThis.computedObject = computedObject;
+globalThis.computedNamedProperties = computedNamedProperties;
+globalThis.computedAnonymousFunction = computedAnonymousFunction;
+for (const discard of [false, true]) {
+	const events = [];
+	const key = {
+		[Symbol.toPrimitive](hint) {
+			events.push(hint);
+			return "field";
+		},
+	};
+	const value = () => {
+		events.push("value");
+		return 19;
+	};
+	const target = () => {
+		events.push("target");
+		return Number;
+	};
+	if (discard) {
+		try {
+			globalThis.computedListRejection(key, value, target);
+			throw new Error("computed list must reject");
+		} catch (error) {
+			check(error instanceof TypeError, "computed list rejection");
+		}
+	} else {
+		check(globalThis.computedObject(key, value).field === 19, "computed object value");
+	}
+	check(
+		events.join(",") === (discard ? "string,value,target" : "string,value"),
+		"key conversion precedes value and later arguments",
+	);
+	events.length = 0;
+	const throwingKey = {
+		[Symbol.toPrimitive]() {
+			events.push("key");
+			throw new RangeError("key");
+		},
+	};
+	try {
+		if (discard) globalThis.computedListRejection(throwingKey, value, target);
+		else globalThis.computedObject(throwingKey, value);
+		throw new Error("key must reject");
+	} catch (error) {
+		check(error instanceof RangeError, "key conversion error is preserved");
+	}
+	check(events.join(",") === "key", "throwing key prevents value and later arguments");
+}
+const propertySymbol = Symbol("field");
+let keyConversions = 0;
+const namedKey = {
+	[Symbol.toPrimitive]() {
+		keyConversions++;
+		return propertySymbol;
+	},
+};
+const namedObject = globalThis.computedNamedProperties(namedKey);
+const namedDescriptor = Object.getOwnPropertyDescriptor(namedObject, propertySymbol);
+check(keyConversions === 3, "each computed name converts exactly once");
+check(typeof namedDescriptor.get === "function", "symbol getter retained");
+check(typeof namedDescriptor.set === "function", "symbol setter retained");
+check(namedObject[propertySymbol] === 17, "duplicate getter and setter merge");
+const anonymous = globalThis.computedAnonymousFunction(namedKey)[propertySymbol];
+check(keyConversions === 4, "anonymous function naming reuses the converted key");
+check(anonymous.name === "[field]", "computed anonymous function name");
+let escapedGetter;
+function retainHomeObject(escape) {
+	const object = {
+		__proto__: { value: 23 },
+		get value() {
+			return super.value;
+		},
+	};
+	escape(Object.getOwnPropertyDescriptor(object, "value").get);
+	return Reflect.construct(Math.abs, object);
+}
+globalThis.retainHomeObject = retainHomeObject;
+try {
+	globalThis.retainHomeObject((getter) => {
+		escapedGetter = getter;
+	});
+	throw new Error("home object list must reject");
+} catch (error) {
+	check(error instanceof TypeError, "home object rejection");
+}
+check(escapedGetter.call(null) === 23, "escaped getter retains its home object");
 console.log("primitive identities passed");

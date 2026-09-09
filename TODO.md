@@ -375,6 +375,11 @@ only reproducible input.
 
 ## Active correctness clusters
 
+- [ ] Apply computed object-literal accessor names at runtime. For
+      `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's
+      name is currently empty instead of `get [field]`. Reuse the evaluated
+      property key and preserve the getter/setter prefix without repeating coercion.
+
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 
