@@ -22,6 +22,13 @@ import {
 import type { CoreStringPart } from "./core-string-construction.ts";
 import { eliminateSymbolDescription } from "./core-symbol-descriptions.ts";
 
+const noncoercingNumberPredicates = new Set([
+	"Number.isNaN",
+	"Number.isFinite",
+	"Number.isInteger",
+	"Number.isSafeInteger",
+]);
+
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
 	admission: {
@@ -281,12 +288,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 			}
 			if (
-				[
-					"Number.isNaN",
-					"Number.isFinite",
-					"Number.isInteger",
-					"Number.isSafeInteger",
-				].includes(operation) &&
+				noncoercingNumberPredicates.has(operation) &&
 				fn.kernel.valueUseCount(
 					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
 				) === 0 &&
@@ -877,7 +879,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 			}
 			const pending: Array<CoreValueId> = [root],
 				visited = new Set<CoreValueId>(),
-				truthiness = new Set<CoreInstructionId>();
+				constantConsumers = new Map<CoreInstructionId, boolean>();
 			let safe = true;
 			while (pending.length && safe) {
 				const value = pending.pop()!;
@@ -917,8 +919,24 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					if (opcode === "move")
 						pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
 					else if (opcode === "unary" && consumerAttributes.operator === "!")
-						truthiness.add(consumer);
+						constantConsumers.set(consumer, false);
 					else if (
+						opcode === "binary" &&
+						(consumerAttributes.operator === "===" ||
+							consumerAttributes.operator === "!==") &&
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer)) ===
+							fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1)
+					) {
+						// The wrapper is an object even when its primitive payload is NaN.
+						constantConsumers.set(consumer, consumerAttributes.operator === "===");
+					} else if (
+						opcode === "callKnown" &&
+						!consumerAttributes.construct &&
+						consumerAttributes.argumentMode === undefined &&
+						noncoercingNumberPredicates.has(consumerAttributes.operation as string)
+					) {
+						if (fn.kernel.useOperand(use) === 1) constantConsumers.set(consumer, false);
+					} else if (
 						wrapper === "String" &&
 						property !== undefined &&
 						(property === "length" || /^(0|[1-9][0-9]*)$/.test(property))
@@ -970,11 +988,11 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					}
 				}
 			}
-			if (!safe || context.remainingEdits < truthiness.size + 1) continue;
+			if (!safe || context.remainingEdits < constantConsumers.size + 1) continue;
 			const editor = CoreEditor.open(program, fn.id);
-			for (const consumer of truthiness)
+			for (const [consumer, value] of constantConsumers)
 				editor.replaceInstruction(consumer, "createBoolean", [], {
-					attributes: { value: false },
+					attributes: { value },
 				});
 			if (operation === "Object")
 				editor.replaceInstruction(instruction, "move", [args[1]!]);

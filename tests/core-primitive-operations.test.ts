@@ -1924,6 +1924,108 @@ describe("primitive operation results", () => {
 		expect(output.structure.allocations).toBe(0);
 	});
 
+	it.each(
+		["isNaN", "isFinite", "isInteger", "isSafeInteger"].flatMap((predicate) =>
+			[
+				"new Number(x)",
+				"new Boolean(x)",
+				"new String(x)",
+				"Object(1n)",
+				"Object(Symbol.iterator)",
+			].map((wrapper) => `Number.${predicate}(${wrapper})`),
+		),
+	)("discards the contained wrapper for %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Object"),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					typeof operation.attributes.operation === "string" &&
+					operation.attributes.operation.startsWith("Number.is"),
+			),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "createBoolean" && operation.attributes.value === false,
+			),
+		).toBe(true);
+	});
+
+	it.each(["===", "!=="])(
+		"folds a contained wrapper's strict self-comparison %s",
+		(operator) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x) { const wrapper = new Number(x); return wrapper ${operator} wrapper; } globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.opcode === "createBoolean" &&
+						operation.attributes.value === (operator === "==="),
+				),
+			).toBe(true);
+		},
+	);
+
+	it.each([
+		"Number.isFinite.call(new Number(x), 1)",
+		"Number.isInteger(1, new String(x))",
+	])(
+		"discards a wrapper passed through an ignored predicate operand in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.opcode === "createBoolean" && operation.attributes.value === true,
+				),
+			).toBe(true);
+		},
+	);
+
+	it("retains conversion before discarding a Number predicate's wrapper", () => {
+		const output = inspect("Number.isFinite(new Number(x))");
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.attributes.operation === "Number" &&
+					operation.attributes.construct === false,
+			),
+		).toBe(true);
+		const string = inspect("Number.isInteger(new String(x))");
+		expect(
+			string.core.some(
+				(operation) =>
+					operation.opcode === "unary" && operation.attributes.operator === "tostring",
+			),
+		).toBe(true);
+	});
+
+	it("retains a wrapper whose identity escapes beside a predicate consumer", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(x) { const wrapper = new Number(x); globalThis.wrapper = wrapper; return Number.isFinite(wrapper); } globalThis.probe = probe;",
+			"probe",
+		);
+		expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
+	});
+
+	it("retains mutable constructor and predicate lookup around a wrapper", () => {
+		const output = inspect("Number.isFinite(new Number(x))", false);
+		expect(
+			output.core.some(
+				(operation) => operation.opcode === "construct" || operation.attributes.construct,
+			),
+		).toBe(true);
+		expect(output.structure.genericLookups).toBeGreaterThan(0);
+	});
+
 	it("removes a certified String wrapper and noncoercing predicate dispatch", () => {
 		expect(inspect("new String('abc').valueOf()").structure.operations).toEqual([]);
 		expect(

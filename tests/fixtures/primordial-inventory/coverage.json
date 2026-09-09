@@ -95303,6 +95303,24 @@
 						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards the contained wrapper for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -95471,6 +95489,24 @@
 						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards the contained wrapper for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -95600,6 +95636,24 @@
 						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards the contained wrapper for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -95768,6 +95822,24 @@
 						"test": "preserves guarded Number predicates and noncoercing arguments with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "discards the contained wrapper for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a wrapper whose identity escapes beside a predicate consumer"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

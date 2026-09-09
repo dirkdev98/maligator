@@ -11,6 +11,31 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it.each(["locked", "mutable"] as const)(
+		"preserves wrapper predicate consumers and conversion boundaries with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-wrapper-predicates-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/wrapper-predicate-consumers.mjs",
+					name: "wrapper-predicates",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: false },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe("wrapper predicate consumers passed\n");
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
+						"wrapper predicate consumers passed\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 	it("keeps the embedded compiler independent of replaced user globals", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-eval-replaced-globals-"));
 		try {

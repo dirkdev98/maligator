@@ -370,6 +370,16 @@ from another realm. Native numeric operands use the corresponding finite, NaN or
 integer test; boxed operands use the same inline noncoercing kernels. A failed guard calls the captured function with the original receiver
 and full argument list; its result remains unconstrained.
 
+Known noncoercing Number predicates consume contained primitive wrappers without
+materializing them and return false. Strict self-comparisons retain object identity
+semantics even when a Number wrapper contains NaN. The bounded use walk validates
+every consumer before replacing any result; escaping identities and unknown calls
+retain their objects. Constructor conversion stays at its original position, so
+user coercion and exceptions precede later argument evaluation. Ignored predicate
+receivers and extra arguments need no wrapper identity, but their producer effects
+still execute. String construction retains ordinary ToString, including its Symbol
+exception, and exact constructor/newTarget proof excludes subclass construction.
+
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and
 non-configurable; compiler-private operations remain intrinsic. Mutable constructor
