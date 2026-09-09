@@ -37,6 +37,7 @@ import {
 	inspectCoreTerminatorPayload,
 	inspectCoreValueDefinition,
 } from "./helpers/core-inspection.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const context: CoreCompilationContext = {
 	facts: conservativeCompilerProgramFacts(),
@@ -68,15 +69,59 @@ function program(): CoreProgram {
 
 describe("Core local memory, provenance, and escape optimization", () => {
 	it.each([
-		"conditional",
-		"loop",
-		"weak-field",
-		"handler",
-		"source-use",
-		"suspend",
+		["new Boolean(!!x)", "Boolean", "Boolean", true],
+		["new Number((+x) | 0)", "Number", "Number", true],
+		["new Number(+x)", "Number", "Number", true],
+		["new String(String(x))", "String", "String", true],
+		["Object(!!x)", "Object", "Boolean", true],
+		["new Object(+x)", "Object", "Number", true],
+		["Object(String(x))", "Object", "String", true],
+		["new Boolean(x)", "Boolean", "Boolean", false],
+		["new Number(x)", "Number", "Number", false],
+		["new String(x)", "String", "String", false],
 	] as const)(
-		"only sinks conditional allocations without identity or lifetime hazards: %s",
-		(scenario) => {
+		"materializes %s only at its conditional identity consumer when its input is safe",
+		(expression, operation, brand, sinks) => {
+			const result = inspectStaticValueFunction(
+				`function delayed(x, flag) {
+					const box = ${expression};
+					if (flag) globalThis.sink = box;
+					return ${brand}.prototype.valueOf.call(box);
+				} globalThis.run = delayed;`,
+				"delayed",
+			);
+			const allocation = result.core.find(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.operation === operation &&
+					(operation === "Object" || op.attributes.construct),
+			);
+			const escape = result.core.find((op) => op.opcode === "storePropertyStatic");
+			expect(allocation).toBeDefined();
+			expect(escape).toBeDefined();
+			expect(allocation!.block === escape!.block).toBe(sinks);
+		},
+	);
+
+	it.each(
+		["shaped", "Boolean", "Number", "String", "Object", "new Object"].flatMap(
+			(allocation) =>
+				[
+					"conditional",
+					"loop",
+					"weak-field",
+					"handler",
+					"source-use",
+					"suspend",
+					"mutable",
+					"realm",
+					"new-target",
+					"weak-extra",
+				].map((scenario) => ({ allocation, scenario })),
+		),
+	)(
+		"only sinks $allocation without identity or lifetime hazards: $scenario",
+		({ allocation, scenario }) => {
 			const core = new CoreProgram(coreOpcodeRegistry, {
 				globalCount: 1,
 				stringConstants: [[0x78]],
@@ -92,12 +137,43 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			const [seven] = builder.appendInstruction(entry, "createNumber", [], {
 				attributes: { value: 7 },
 			});
-			const [object] = builder.appendInstruction(
-				entry,
-				"createObjectShaped",
-				[scenario === "weak-field" ? flag : seven!],
-				{ attributes: { keyStringIndices: [0] } },
-			);
+			const operation = allocation === "new Object" ? "Object" : allocation;
+			const [target] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+				attributes: { intrinsic: operation === "shaped" ? "Object" : operation },
+			});
+			const [undefinedValue] = builder.appendInstruction(entry, "createUndefined", []);
+			const [text] = builder.appendInstruction(entry, "createString", [], {
+				attributes: { stringIndex: 0 },
+			});
+			const payload =
+				scenario === "weak-field" ? flag : allocation === "String" ? text! : seven!;
+			const [object] =
+				allocation === "shaped"
+					? builder.appendInstruction(entry, "createObjectShaped", [payload], {
+							attributes: { keyStringIndices: [0] },
+						})
+					: builder.appendInstruction(
+							entry,
+							"callKnown",
+							[
+								scenario === "new-target"
+									? flag
+									: allocation === "Object"
+										? undefinedValue!
+										: target!,
+								payload,
+								...(scenario === "weak-extra" ? [flag] : []),
+							],
+							{
+								attributes: {
+									operation,
+									construct: allocation !== "Object",
+									worldAssumptions: {
+										...builtinWorldAssumptions(operation, "exact-builtin-proof"),
+									},
+								},
+							},
+						);
 			if (scenario === "source-use") {
 				builder.appendInstruction(entry, "rootUse", [object!]);
 			}
@@ -135,15 +211,31 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			const definition = inspectCoreValueDefinition(fn, object!);
 			if (definition.kind !== "instruction") throw new Error("Expected allocation");
 			const report = new CoreOptimizationReportBuilder(core);
-			const analyses = new CoreAnalysisManager(core, context, report);
+			const compilationContext = {
+				...context,
+				facts: {
+					...context.facts,
+					world: {
+						...context.facts.world,
+						primordialPolicy:
+							scenario === "mutable" ? ("mutable" as const) : ("locked" as const),
+						realms: scenario === "realm",
+					},
+				},
+			};
+			const analyses = new CoreAnalysisManager(core, compilationContext, report);
 			const pass = CORE_MEMORY_PASSES.find(
 				({ name }) => name === "sink-conditional-object-allocations",
 			)!;
-			new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+			new CoreFunctionPassScheduler(core, compilationContext, analyses, report, fn.id, {
 				verification: "per-pass",
 			}).runComponent("memory", [pass]);
 			expect(fn.instructionBlock(definition.instruction)).toBe(
-				scenario === "conditional" ? used : entry,
+				scenario === "conditional" ||
+					(allocation === "shaped" &&
+						["mutable", "realm", "new-target", "weak-extra"].includes(scenario))
+					? used
+					: entry,
 			);
 		},
 	);

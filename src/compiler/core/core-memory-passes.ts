@@ -73,6 +73,7 @@ import {
 	foldStaticReflections,
 	foldStaticPropertyReads,
 } from "./core-static-value-selection.ts";
+import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreContainedTypedArrayIndexInBounds } from "./core-typed-array-bounds.ts";
 import { materializeVirtualState } from "./core-virtual-state.ts";
@@ -1992,9 +1993,19 @@ function conditionalObjectAllocationDestination(
 ): CoreBlockId | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
-		fn.instructionOpcodeName(instruction) !== "createObjectShaped"
+		!["createObjectShaped", "callKnown"].includes(fn.instructionOpcodeName(instruction))
 	)
 		return undefined;
+	if (fn.instructionOpcodeName(instruction) === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		if (
+			attributes.argumentMode !== undefined ||
+			(attributes.operation !== "Object" &&
+				(!attributes.construct ||
+					!["Boolean", "Number", "String"].includes(attributes.operation as string)))
+		)
+			return undefined;
+	}
 	const source = fn.instructionBlock(instruction);
 	if (
 		fn.kernel.blockHandlerBlock(source) !== undefined ||
@@ -2025,10 +2036,10 @@ function conditionalObjectAllocationDestination(
 const sinkConditionalObjectAllocations: CoreFunctionPass = {
 	name: "sink-conditional-object-allocations",
 	stage: "memory",
-	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS | CORE_FUNCTION_HAS_BRANCHES,
-	requiredFunctionOpcodesAny: ["createObjectShaped"],
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BRANCHES,
+	requiredFunctionOpcodesAny: ["createObjectShaped", "callKnown"],
 	admission: {
-		predicate: "shaped allocation used only in a different block after a branch",
+		predicate: "shaped object or primitive wrapper used only after a branch",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -2038,9 +2049,13 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 			return false;
 		},
 	},
-	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	requiredAnalyses: [
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+		CORE_STATIC_VALUE_ANALYSIS,
+	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
-	changes: { cfg: false, calls: false, facts: false, representations: false },
+	changes: { cfg: false, calls: true, facts: false, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
@@ -2078,8 +2093,33 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 				continue;
 			const operandStart = fn.kernel.instructionOperandStart(instruction);
 			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			let scalarStart = 0;
+			if (fn.instructionOpcodeName(instruction) === "callKnown") {
+				const world = context.compilationContext.facts.world;
+				if (world.primordialPolicy !== "locked" || world.realms || operandCount < 2)
+					continue;
+				const attributes = fn.instructionAttributes(instruction);
+				const operation = attributes.operation;
+				const values = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+				if (attributes.construct) {
+					const target = values.queryAt(fn.kernel.operandAt(operandStart), instruction);
+					if (target.kind !== "known" || target.canonical !== operation) continue;
+					scalarStart = 1;
+				} else {
+					const receiver = values.queryAt(fn.kernel.operandAt(operandStart), instruction);
+					if (receiver.kind !== "known" || receiver.brand !== "undefined") continue;
+					scalarStart = 1;
+				}
+				const payload = kinds.exactScalar(fn.kernel.operandAt(operandStart + 1));
+				if (
+					payload === undefined ||
+					(operation === "Number" && payload !== "number" && payload !== "int32") ||
+					(operation === "String" && payload !== "string")
+				)
+					continue;
+			}
 			// Keeping object or symbol fields live longer can change weak-reference observations.
-			for (let index = 0; index < operandCount; index++) {
+			for (let index = scalarStart; index < operandCount; index++) {
 				if (kinds.exactScalar(fn.kernel.operandAt(operandStart + index)) === undefined) {
 					eligible = false;
 					break;

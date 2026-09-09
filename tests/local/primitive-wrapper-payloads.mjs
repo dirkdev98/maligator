@@ -382,4 +382,52 @@ function fromPhi(x) {
 }
 capture("phi boolean", () => fromPhi(true));
 capture("phi number", () => fromPhi(false));
+function conditionalBoolean(x, flag) {
+	const value = new Boolean(!!x, events.push("boolean argument"));
+	if (flag) globalThis.sink(value);
+	return Boolean.prototype.valueOf.call(value);
+}
+function conditionalNumber(x, flag) {
+	const value = new Number(+x, events.push("number argument"));
+	if (flag) globalThis.sink(value);
+	return Number.prototype.valueOf.call(value);
+}
+function conditionalString(x, flag) {
+	const value = new String(String(x), events.push("string argument"));
+	if (flag) globalThis.sink(value);
+	return String.prototype.valueOf.call(value);
+}
+function conditionalObject(x, flag) {
+	const value = Object(+x, events.push("object argument"));
+	if (flag) globalThis.sink(value);
+	return Number.prototype.valueOf.call(value);
+}
+function conditionalCoercion(x, flag) {
+	const value = new Number(x);
+	if (flag) globalThis.sink(value);
+	return Number.prototype.valueOf.call(value);
+}
+globalThis.conditionalWrappers = [
+	conditionalBoolean,
+	conditionalNumber,
+	conditionalString,
+	conditionalObject,
+	conditionalCoercion,
+];
+for (const flag of [false, true, false, true]) {
+	for (const value of [0, -0, NaN, 1.25, "𝌆\ud800", input]) {
+		for (const [index, fn] of globalThis.conditionalWrappers.entries())
+			capture("conditional " + index + " " + flag, () => fn(value, flag));
+	}
+	const throwingInput = {
+		[Symbol.toPrimitive]() {
+			events.push("conditional coercion throw");
+			throw new RangeError();
+		},
+	};
+	capture("conditional normalized throw", () => conditionalNumber(throwingInput, flag));
+	capture("conditional constructor throw", () =>
+		conditionalCoercion(throwingInput, flag),
+	);
+}
 console.log(JSON.stringify({ results, events }));
