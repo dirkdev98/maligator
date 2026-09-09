@@ -69,19 +69,19 @@ function program(): CoreProgram {
 
 describe("Core local memory, provenance, and escape optimization", () => {
 	it.each([
-		["new Boolean(!!x)", "Boolean", "Boolean", true],
-		["new Number((+x) | 0)", "Number", "Number", true],
-		["new Number(+x)", "Number", "Number", true],
-		["new String(String(x))", "String", "String", true],
-		["Object(!!x)", "Object", "Boolean", true],
-		["new Object(+x)", "Object", "Number", true],
-		["Object(String(x))", "Object", "String", true],
-		["new Boolean(x)", "Boolean", "Boolean", true],
-		["new Number(x)", "Number", "Number", false],
-		["new String(x)", "String", "String", false],
+		["new Boolean(!!x)", "Boolean", "Boolean"],
+		["new Number((+x) | 0)", "Number", "Number"],
+		["new Number(+x)", "Number", "Number"],
+		["new String(String(x))", "String", "String"],
+		["Object(!!x)", "Object", "Boolean"],
+		["new Object(+x)", "Object", "Number"],
+		["Object(String(x))", "Object", "String"],
+		["new Boolean(x)", "Boolean", "Boolean"],
+		["new Number(x)", "Number", "Number"],
+		["new String(x)", "String", "String"],
 	] as const)(
 		"materializes %s only at its conditional identity consumer when its input is safe",
-		(expression, operation, brand, sinks) => {
+		(expression, operation, brand) => {
 			const result = inspectStaticValueFunction(
 				`function delayed(x, flag) {
 					const box = ${expression};
@@ -99,7 +99,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			const escape = result.core.find((op) => op.opcode === "storePropertyStatic");
 			expect(allocation).toBeDefined();
 			expect(escape).toBeDefined();
-			expect(allocation!.block === escape!.block).toBe(sinks);
+			expect(allocation!.block).toBe(escape!.block);
 		},
 	);
 

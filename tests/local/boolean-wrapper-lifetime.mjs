@@ -46,34 +46,100 @@ async function suspendedAsync() {
 }
 globalThis.suspendedGenerator = suspendedGenerator;
 globalThis.suspendedAsync = suspendedAsync;
+function convertedInput() {
+	const input = {
+		[Symbol.toPrimitive]() {
+			return 17;
+		},
+	};
+	globalThis.reference = new WeakRef(input);
+	return input;
+}
+function* suspendedNumberGenerator() {
+	const wrapper = new Number(globalThis.makeInput());
+	globalThis.sink(wrapper);
+	yield 0;
+	return (
+		Number.prototype.toString.call(wrapper) + ":" + Number.prototype.valueOf.call(wrapper)
+	);
+}
+globalThis.suspendedNumberGenerator = suspendedNumberGenerator;
+async function suspendedNumberAsync() {
+	const wrapper = new Number(globalThis.makeInput());
+	globalThis.sink(wrapper);
+	await new Promise((resolve) => {
+		globalThis.resume = resolve;
+	});
+	return (
+		Number.prototype.toString.call(wrapper) + ":" + Number.prototype.valueOf.call(wrapper)
+	);
+}
+globalThis.suspendedNumberAsync = suspendedNumberAsync;
+function* suspendedStringGenerator() {
+	const wrapper = new String(globalThis.makeInput());
+	globalThis.sink(wrapper);
+	yield 0;
+	return (
+		String.prototype.toString.call(wrapper) + ":" + String.prototype.valueOf.call(wrapper)
+	);
+}
+globalThis.suspendedStringGenerator = suspendedStringGenerator;
+async function suspendedStringAsync() {
+	const wrapper = new String(globalThis.makeInput());
+	globalThis.sink(wrapper);
+	await new Promise((resolve) => {
+		globalThis.resume = resolve;
+	});
+	return (
+		String.prototype.toString.call(wrapper) + ":" + String.prototype.valueOf.call(wrapper)
+	);
+}
+globalThis.suspendedStringAsync = suspendedStringAsync;
 let scenario = 0;
 let previous;
 function finish(value) {
-	assert(value === "true:true");
+	assert(value === (scenario < 4 ? "true:true" : "17:17"));
 	assert(globalThis.wrapper !== previous);
 	previous = globalThis.wrapper;
 	scenario++;
 	setTimeout(start, 0);
 }
 function start() {
-	if (scenario === 4) {
+	if (scenario === 8) {
 		console.log("boolean wrapper lifetime PASS");
 		return;
 	}
-	globalThis.makeInput = scenario % 2 === 0 ? objectInput : symbolInput;
-	if (scenario < 2) {
-		globalThis.iterator = globalThis.suspendedGenerator();
+	globalThis.makeInput =
+		scenario < 4 ? (scenario % 2 === 0 ? objectInput : symbolInput) : convertedInput;
+	const generator =
+		scenario < 4
+			? globalThis.suspendedGenerator
+			: scenario < 6
+				? globalThis.suspendedNumberGenerator
+				: globalThis.suspendedStringGenerator;
+	const asyncOperation =
+		scenario < 4
+			? globalThis.suspendedAsync
+			: scenario < 6
+				? globalThis.suspendedNumberAsync
+				: globalThis.suspendedStringAsync;
+	const isGenerator = scenario < 4 ? scenario < 2 : scenario % 2 === 0;
+	if (isGenerator) {
+		globalThis.iterator = generator();
 		assert(globalThis.iterator.next().value === 0);
 	} else {
-		globalThis.pending = globalThis.suspendedAsync();
+		globalThis.pending = asyncOperation();
 		globalThis.pending.then(finish);
 	}
 	setTimeout(() => {
 		// The prior task checkpoint clears WeakRef's kept objects before forced collection.
 		gc();
 		assert(globalThis.reference.deref() === undefined);
-		assert(Boolean.prototype.valueOf.call(globalThis.wrapper) === true);
-		if (scenario < 2) {
+		if (scenario < 4) assert(Boolean.prototype.valueOf.call(globalThis.wrapper) === true);
+		else if (scenario < 6)
+			assert(Number.prototype.valueOf.call(globalThis.wrapper) === 17);
+		else assert(String.prototype.valueOf.call(globalThis.wrapper) === "17");
+		if (isGenerator) {
 			const result = globalThis.iterator.next();
 			assert(result.done);
 			finish(result.value);

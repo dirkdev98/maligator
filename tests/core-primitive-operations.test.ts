@@ -2725,6 +2725,22 @@ describe("immutable escaping primitive wrapper payloads", () => {
 	it.each([
 		["new Boolean(x)", "Boolean.prototype.valueOf.call(value)"],
 		["new Boolean(x)", "Boolean.prototype.toString.call(value)"],
+		["new Boolean()", "Boolean.prototype.valueOf.call(value)"],
+		["new Boolean()", "Boolean.prototype.toString.call(value)"],
+		["new Number(x)", "Number.prototype.valueOf.call(value)"],
+		["new Number(x)", "Number.prototype.toString.call(value)"],
+		["new Number(x)", "Number.prototype.toFixed.call(value)"],
+		["new Number(x)", "Number.prototype.toExponential.call(value)"],
+		["new Number(x)", "Number.prototype.toPrecision.call(value)"],
+		["new Number()", "Number.prototype.valueOf.call(value)"],
+		["new Number()", "Number.prototype.toString.call(value)"],
+		["new Number()", "Number.prototype.toFixed.call(value)"],
+		["new Number()", "Number.prototype.toExponential.call(value)"],
+		["new Number()", "Number.prototype.toPrecision.call(value)"],
+		["new String(x)", "String.prototype.valueOf.call(value)"],
+		["new String(x)", "String.prototype.toString.call(value)"],
+		["new String()", "String.prototype.valueOf.call(value)"],
+		["new String()", "String.prototype.toString.call(value)"],
 		["Object(!!x)", "Boolean.prototype.valueOf.call(value)"],
 		["Object(!!x)", "Boolean.prototype.toString.call(value)"],
 		["new Number(+x)", "Number.prototype.valueOf.call(value)"],
@@ -2773,9 +2789,47 @@ describe("immutable escaping primitive wrapper payloads", () => {
 				.every((o) => o.inputs[0] !== receiver),
 		).toBe(true);
 	});
+	it.each(
+		["Boolean", "Number", "String"].flatMap((brand) =>
+			["yield", "await"].map((suspension) => [brand, suspension]),
+		),
+	)("forwards converted %s slots across %s", (brand, suspension) => {
+		const result = inspectStaticValueFunction(
+			`${suspension === "yield" ? "function*" : "async function"} probe(x) {
+				const wrapper = new ${brand}(x); globalThis.sink(wrapper);
+				${suspension} globalThis.pause();
+				return ${brand}.prototype.toString.call(wrapper) + ${brand}.prototype.valueOf.call(wrapper);
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		const allocation = result.core.find(
+			(op) => op.attributes.operation === brand && op.attributes.construct,
+		);
+		expect(allocation).toBeDefined();
+		expect(
+			result.core.some(
+				(op) => op.opcode === "call" && op.inputs.includes(allocation!.outputs[0]!),
+			),
+		).toBe(true);
+		expect(
+			result.core.some(
+				(op) =>
+					typeof op.attributes.operation === "string" &&
+					op.attributes.operation.startsWith(`${brand}.prototype.`) &&
+					op.inputs[0] === allocation!.outputs[0],
+			),
+		).toBe(false);
+	});
+
 	it.each([
-		["new Number(x)", "Number.prototype.valueOf.call(value)"],
-		["new String(x)", "String.prototype.valueOf.call(value)"],
+		[
+			"Reflect.construct(Number,[x],globalThis.Target)",
+			"Number.prototype.valueOf.call(value)",
+		],
+		[
+			"Reflect.construct(String,[x],globalThis.Target)",
+			"String.prototype.valueOf.call(value)",
+		],
 		["Object(x)", "Boolean.prototype.valueOf.call(value)"],
 		["new String(String(x))", "String.prototype.slice.call(value, 1)"],
 		["new Boolean(x)", "Object.prototype.toString.call(value)"],

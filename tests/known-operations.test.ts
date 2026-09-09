@@ -63,8 +63,8 @@ describe("known-operation dispatch", () => {
 		expect(result.structure.genericLookups).toBe(0);
 		expect(result.c.source).toContain("mal_vm_call_known_native(vm, mal_known_native_");
 	});
-	it.each(["Number", "String"])(
-		"resolves valueOf before a %s wrapper escapes",
+	it.each(["Boolean", "Number", "String"])(
+		"keeps an escaping %s wrapper after eliminating its valueOf observation",
 		(constructor) => {
 			const result = inspectStaticValueFunction(
 				`
@@ -89,22 +89,10 @@ describe("known-operation dispatch", () => {
 				calls.some(
 					(instruction) => instruction.operation === `${constructor}.prototype.valueOf`,
 				),
-			).toBe(true);
+			).toBe(false);
 			expect(result.structure.genericLookups).toBe(0);
 		},
 	);
-	it("keeps the escaping Boolean wrapper after eliminating its valueOf observation", () => {
-		const result = inspectStaticValueFunction(
-			"function probe(input) { const box = new Boolean(input); const value = box.valueOf(); return [box, value]; } globalThis.probe = probe;",
-			"probe",
-		);
-		const calls = result.fn.instructions.filter(
-			(instruction) => instruction.opcode === "CALL_KNOWN",
-		);
-		expect(calls).toHaveLength(1);
-		expect(calls[0]).toMatchObject({ operation: "Boolean", construct: true });
-		expect(result.structure.genericLookups).toBe(0);
-	});
 	it("keeps mutable-world method lookup", () => {
 		const result = inspectStaticValueFunction(
 			"function probe(input) { return new Date(input).getTime(); } globalThis.probe = probe;",

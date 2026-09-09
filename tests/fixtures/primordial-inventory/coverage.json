@@ -85921,6 +85921,46 @@
 						"case": "Boolean.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Boolean()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards converted %s slots across %s",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -86344,6 +86384,46 @@
 						"case": "Boolean.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Boolean()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards converted %s slots across %s",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Boolean,[x],globalThis.Target)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97628,6 +97708,26 @@
 						"test": "preserves escaped wrapper state before %s"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "sinkConditionalObjectAllocations"
+					},
+					"positive": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "materializes %s only at its conditional identity consumer when its input is safe",
+						"case": "new Number(x)"
+					},
+					"negative": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "only sinks $allocation without identity or lifetime hazards: $scenario",
+						"case": "new-target"
+					},
+					"lowering": "materialized"
 				}
 			]
 		},
@@ -98744,6 +98844,26 @@
 						"case": "Number.prototype.toExponential"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Number()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -99229,6 +99349,26 @@
 						"case": "Number.prototype.toFixed"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Number()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -99715,6 +99855,26 @@
 						"case": "Number.prototype.toPrecision"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Number()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -100236,6 +100396,26 @@
 						"case": "Number.prototype.toString"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Number()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
 				}
 			]
 		},
@@ -100640,6 +100820,46 @@
 						"case": "Number.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new Number()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards converted %s slots across %s",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(Number,[x],globalThis.Target)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -104212,6 +104432,46 @@
 						"test": "retains mutable constructor and inherited numeric lookup"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "sinkConditionalObjectAllocations"
+					},
+					"positive": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "materializes %s only at its conditional identity consumer when its input is safe",
+						"case": "new String(x)"
+					},
+					"negative": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "only sinks $allocation without identity or lifetime hazards: $scenario",
+						"case": "new-target"
+					},
+					"lowering": "materialized"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["M"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "sinkConditionalObjectAllocations"
+					},
+					"positive": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "materializes %s only at its conditional identity consumer when its input is safe",
+						"case": "new String(x)"
+					},
+					"negative": {
+						"file": "tests/core-memory-passes.test.ts",
+						"test": "only sinks $allocation without identity or lifetime hazards: $scenario",
+						"case": "new-target"
+					},
+					"lowering": "materialized"
 				}
 			]
 		},
@@ -106038,12 +106298,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"lowering": "constant"
 				},
@@ -106078,12 +106338,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -108567,12 +108827,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -112374,6 +112634,46 @@
 						"case": "String.prototype.toString"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new String()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(String,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards converted %s slots across %s",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(String,[x],globalThis.Target)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -113683,6 +113983,46 @@
 						"case": "String.prototype.valueOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["F"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards the private payload from %s into %s",
+						"case": "new String()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(String,[x],globalThis.Target)"
+					},
+					"lowering": "constant"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "primitiveWrapperPayload"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards converted %s slots across %s",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the receiver outside the payload proof for %s and %s",
+						"case": "Reflect.construct(String,[x],globalThis.Target)"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121550,12 +121890,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
@@ -127369,12 +127709,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},

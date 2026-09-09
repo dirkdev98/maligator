@@ -407,12 +407,18 @@ function conditionalCoercion(x, flag) {
 	if (flag) globalThis.sink(value);
 	return Number.prototype.valueOf.call(value);
 }
+function conditionalStringCoercion(x, flag) {
+	const value = new String(x);
+	if (flag) globalThis.sink(value);
+	return String.prototype.valueOf.call(value);
+}
 globalThis.conditionalWrappers = [
 	conditionalBoolean,
 	conditionalNumber,
 	conditionalString,
 	conditionalObject,
 	conditionalCoercion,
+	conditionalStringCoercion,
 ];
 for (const flag of [false, true, false, true]) {
 	for (const value of [0, -0, NaN, 1.25, "𝌆\ud800", input]) {
@@ -429,5 +435,188 @@ for (const flag of [false, true, false, true]) {
 	capture("conditional constructor throw", () =>
 		conditionalCoercion(throwingInput, flag),
 	);
+}
+
+const convertedCases = [];
+function mutateInput(wrapper, input) {
+	globalThis.sink(wrapper);
+	events.push("escape");
+	if (input !== null && typeof input === "object") {
+		input[Symbol.toPrimitive] = function () {
+			throw new Error("conversion repeated after construction");
+		};
+	}
+}
+globalThis.mutateInput = mutateInput;
+
+function convertedBooleanvalueOf(x, option) {
+	const wrapper = new Boolean(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Boolean.prototype.valueOf.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedBooleanvalueOf = convertedBooleanvalueOf;
+convertedCases.push(globalThis.convertedBooleanvalueOf);
+
+function convertedBooleantoString(x, option) {
+	const wrapper = new Boolean(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Boolean.prototype.toString.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedBooleantoString = convertedBooleantoString;
+convertedCases.push(globalThis.convertedBooleantoString);
+
+function convertedNumbervalueOf(x, option) {
+	const wrapper = new Number(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Number.prototype.valueOf.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedNumbervalueOf = convertedNumbervalueOf;
+convertedCases.push(globalThis.convertedNumbervalueOf);
+
+function convertedNumbertoString(x, option) {
+	const wrapper = new Number(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Number.prototype.toString.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedNumbertoString = convertedNumbertoString;
+convertedCases.push(globalThis.convertedNumbertoString);
+
+function convertedNumbertoFixed(x, option) {
+	const wrapper = new Number(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Number.prototype.toFixed.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedNumbertoFixed = convertedNumbertoFixed;
+convertedCases.push(globalThis.convertedNumbertoFixed);
+
+function convertedNumbertoExponential(x, option) {
+	const wrapper = new Number(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Number.prototype.toExponential.call(
+		wrapper,
+		option,
+		events.push("reader extra"),
+	);
+}
+globalThis.convertedNumbertoExponential = convertedNumbertoExponential;
+convertedCases.push(globalThis.convertedNumbertoExponential);
+
+function convertedNumbertoPrecision(x, option) {
+	const wrapper = new Number(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return Number.prototype.toPrecision.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedNumbertoPrecision = convertedNumbertoPrecision;
+convertedCases.push(globalThis.convertedNumbertoPrecision);
+
+function convertedStringvalueOf(x, option) {
+	const wrapper = new String(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return String.prototype.valueOf.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedStringvalueOf = convertedStringvalueOf;
+convertedCases.push(globalThis.convertedStringvalueOf);
+
+function convertedStringtoString(x, option) {
+	const wrapper = new String(x, events.push("constructor extra"));
+	globalThis.mutateInput(wrapper, x);
+	return String.prototype.toString.call(wrapper, option, events.push("reader extra"));
+}
+globalThis.convertedStringtoString = convertedStringtoString;
+convertedCases.push(globalThis.convertedStringtoString);
+
+function defaultBoolean() {
+	const wrapper = new Boolean();
+	globalThis.sink(wrapper);
+	return Boolean.prototype.valueOf.call(wrapper);
+}
+globalThis.defaultBoolean = defaultBoolean;
+capture("default Boolean", () => globalThis.defaultBoolean());
+
+function defaultNumber() {
+	const wrapper = new Number();
+	globalThis.sink(wrapper);
+	return Number.prototype.valueOf.call(wrapper);
+}
+globalThis.defaultNumber = defaultNumber;
+capture("default Number", () => globalThis.defaultNumber());
+
+function defaultString() {
+	const wrapper = new String();
+	globalThis.sink(wrapper);
+	return String.prototype.valueOf.call(wrapper);
+}
+globalThis.defaultString = defaultString;
+capture("default String", () => globalThis.defaultString());
+
+for (const [index, fn] of convertedCases.entries()) {
+	for (const primitive of [
+		undefined,
+		null,
+		false,
+		true,
+		-0,
+		NaN,
+		Infinity,
+		17,
+		"23",
+		"𝌆\ud800",
+		3n,
+		Symbol("converted"),
+	])
+		capture("converted " + index, () => fn(primitive, 2));
+	for (const mode of ["number", "bigint", "symbol", "throw"]) {
+		const input = {
+			[Symbol.toPrimitive](hint) {
+				events.push("convert " + hint);
+				if (mode === "throw") throw new RangeError("conversion");
+				return mode === "bigint" ? 23n : mode === "symbol" ? Symbol("converted") : 23;
+			},
+		};
+		const option = {
+			valueOf() {
+				events.push("option");
+				return 2;
+			},
+		};
+		capture("converted effect " + index + " " + mode, () => fn(input, option));
+	}
+}
+function customNumberTarget(x, Target) {
+	const wrapper = Reflect.construct(Number, [x], Target);
+	globalThis.sink(wrapper);
+	return Number.prototype.valueOf.call(wrapper);
+}
+function customStringTarget(x, Target) {
+	const wrapper = Reflect.construct(String, [x], Target);
+	globalThis.sink(wrapper);
+	return String.prototype.valueOf.call(wrapper);
+}
+globalThis.customNumberTarget = customNumberTarget;
+globalThis.customStringTarget = customStringTarget;
+for (const construct of [globalThis.customNumberTarget, globalThis.customStringTarget]) {
+	for (const Target of [
+		null,
+		() => {},
+		new Proxy(function () {}, {
+			get(target, key, receiver) {
+				events.push("target " + String(key));
+				if (key === "prototype") throw new SyntaxError("prototype");
+				return Reflect.get(target, key, receiver);
+			},
+		}),
+	]) {
+		capture("custom target", () =>
+			construct(
+				{
+					[Symbol.toPrimitive](hint) {
+						events.push("custom " + hint);
+						return 7;
+					},
+				},
+				Target,
+			),
+		);
+	}
 }
 console.log(JSON.stringify({ results, events }));

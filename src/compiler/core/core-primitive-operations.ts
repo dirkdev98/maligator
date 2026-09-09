@@ -87,12 +87,16 @@ function primitivePrototypePayload(
 	return undefined;
 }
 
+type PrimitiveWrapperPayload =
+	| { kind: "value"; input: CoreValueId }
+	| { kind: "normalize"; constructor: CoreInstructionId; input?: CoreValueId };
+
 function primitiveWrapperPayload(
 	fn: CoreFunctionStore,
 	analysis: CoreStaticValueAnalysis,
 	receiver: CoreValueId,
 	operation: string,
-): { input: CoreValueId; booleanConstructor?: CoreInstructionId } | undefined {
+): PrimitiveWrapperPayload | undefined {
 	if (!wrapperPayloadMethods.has(operation)) return undefined;
 	const brand = operation.slice(0, operation.indexOf(".")).toLowerCase();
 	for (let depth = 0; depth < 64; depth++) {
@@ -108,7 +112,7 @@ function primitiveWrapperPayload(
 		const constructor = attributes.operation as string;
 		if (
 			attributes.argumentMode !== undefined ||
-			fn.kernel.instructionOperandCount(definition) < 2 ||
+			fn.kernel.instructionOperandCount(definition) < 1 ||
 			(constructor !== "Object" &&
 				(!attributes.construct || !["Boolean", "Number", "String"].includes(constructor)))
 		)
@@ -117,17 +121,17 @@ function primitiveWrapperPayload(
 			const target = analysis.queryAt(fn.kernel.operandAt(start), definition);
 			if (target.kind !== "known" || target.canonical !== constructor) return undefined;
 		}
-		const input = fn.kernel.operandAt(start + 1);
-		const fact = analysis.queryAt(input, definition);
 		if (constructor !== "Object" && constructor.toLowerCase() !== brand) return undefined;
+		const input =
+			fn.kernel.instructionOperandCount(definition) > 1
+				? fn.kernel.operandAt(start + 1)
+				: undefined;
+		const fact = input !== undefined ? analysis.queryAt(input, definition) : undefined;
 		// Escaping wrappers keep their identity, but their primitive internal slot cannot change.
-		if (constructor === "Boolean")
-			return {
-				input,
-				booleanConstructor:
-					fact.kind !== "known" || fact.brand !== "boolean" ? definition : undefined,
-			};
-		if (fact.kind === "known" && fact.brand === brand) return { input };
+		if (input !== undefined && fact?.kind === "known" && fact.brand === brand)
+			return { kind: "value", input };
+		if (constructor !== "Object")
+			return { kind: "normalize", constructor: definition, input };
 		return undefined;
 	}
 	return undefined;
@@ -328,8 +332,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			instruction: CoreInstructionId;
 			method: string;
 			inputs: ReadonlyArray<CoreValueId>;
-			input: CoreValueId;
-			booleanConstructor?: CoreInstructionId;
+			payload: PrimitiveWrapperPayload;
 		}> = [];
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
@@ -843,8 +846,8 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					? primitiveWrapperPayload(fn, analysis, inputs[0], operation)
 					: undefined;
 			if (payload !== undefined) {
-				payloadPlans.push({ instruction, method: operation, inputs, ...payload });
-				sequenceEdits += payload.booleanConstructor !== undefined ? 4 : 1;
+				payloadPlans.push({ instruction, method: operation, inputs, payload });
+				sequenceEdits += payload.kind === "normalize" ? 4 : 1;
 				continue;
 			}
 			const prototypePayload =
@@ -995,33 +998,44 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		if (plans.length === 0 && parameterPlans.length === 0 && payloadPlans.length === 0)
 			return undefined;
 		const editor = CoreEditor.open(program, fn.id);
-		const booleanPayloads = new Map<CoreInstructionId, CoreValueId>();
+		const normalizedPayloads = new Map<CoreInstructionId, CoreValueId>();
 		for (const plan of payloadPlans) {
-			let input = plan.input;
-			if (plan.booleanConstructor !== undefined) {
-				const constructor = plan.booleanConstructor;
-				const normalized = booleanPayloads.get(constructor);
+			let input: CoreValueId;
+			if (plan.payload.kind === "value") input = plan.payload.input;
+			else {
+				const { constructor } = plan.payload;
+				const normalized = normalizedPayloads.get(constructor);
 				if (normalized !== undefined) input = normalized;
 				else {
-					// Boolean wrappers discard their input; forwarding must not retain it across suspension.
-					for (let step = 0; step < 2; step++)
+					const attributes = fn.instructionAttributes(constructor);
+					const start = fn.kernel.instructionOperandStart(constructor);
+					const inputs = Array.from(
+						{ length: fn.kernel.instructionOperandCount(constructor) },
+						(_, index) => fn.kernel.operandAt(start + index),
+					);
+					const position = fn.instructionSourcePosition(constructor);
+					// Capture conversion here to avoid repeating effects or retaining discarded objects.
+					if (attributes.operation === "String" && plan.payload.input !== undefined)
 						input = editor.insertInstruction(
 							fn.instructionBlock(constructor),
 							constructor,
 							"unary",
-							[input],
+							[plan.payload.input],
+							{ attributes: { operator: "tostring" }, sourcePosition: position },
+						).outputs[0]!;
+					else
+						input = editor.insertInstruction(
+							fn.instructionBlock(constructor),
+							constructor,
+							"callKnown",
+							inputs.slice(0, 2),
 							{
-								attributes: { operator: "!" },
-								sourcePosition: fn.instructionSourcePosition(constructor),
+								attributes: { ...attributes, construct: false },
+								sourcePosition: position,
 							},
 						).outputs[0]!;
-					const start = fn.kernel.instructionOperandStart(constructor);
-					const inputs = Array.from(
-						{ length: fn.kernel.instructionOperandCount(constructor) },
-						(_, index) => (index === 1 ? input : fn.kernel.operandAt(start + index)),
-					);
-					editor.replaceOperands(constructor, inputs);
-					booleanPayloads.set(constructor, input);
+					editor.replaceOperands(constructor, [inputs[0]!, input, ...inputs.slice(2)]);
+					normalizedPayloads.set(constructor, input);
 				}
 			}
 			if (
