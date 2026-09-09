@@ -98828,6 +98828,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -99543,6 +99597,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -100316,6 +100424,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106084,6 +106228,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106546,6 +106726,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106969,6 +107185,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107392,6 +107644,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107815,6 +108103,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108238,6 +108562,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108694,6 +109054,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109117,6 +109513,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109540,6 +109972,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109963,6 +110431,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -110386,6 +110890,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -110809,6 +111349,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111232,6 +111808,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111655,6 +112267,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -112078,6 +112726,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -112501,6 +113185,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -112924,6 +113644,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -113347,6 +114103,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -113823,6 +114615,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -114246,6 +115074,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -114669,6 +115533,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -115092,6 +115992,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -115515,6 +116451,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -115938,6 +116910,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -116414,6 +117422,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -116870,6 +117914,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -117346,6 +118426,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -118090,6 +119206,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -118513,6 +119665,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -118956,6 +120144,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -119379,6 +120603,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -119802,6 +121062,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -120645,6 +121941,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121068,6 +122400,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121491,6 +122859,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121971,6 +123375,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -122449,6 +123907,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -122913,6 +124407,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -123338,6 +124868,60 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -123802,6 +125386,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -124598,6 +126218,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -125413,6 +127069,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -126229,6 +127921,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -127080,6 +128808,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -127834,6 +129598,42 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "rewriteExactBuiltinCalls"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

@@ -524,6 +524,14 @@ repeated and unused calls, and reflective array arguments in both primordial mod
 These witnesses certify the selected exact inputs, not arbitrary target libm
 evaluation or entropy and registry operations.
 
+Scalar representation changes stay local when a value feeds an ordinary
+control-flow edge, so a Math result can still join an initial undefined or object
+value. Typed Math opcodes keep their numeric operand contract
+when coroutine storage boxes registers; native emission unboxes those operands
+without coercion and stores results in the destination's actual representation.
+Other known numeric calls retain their ordinary path when lowering has not carried
+the numeric proof across suspension.
+
 ## Baseline measurement
 
 ```sh

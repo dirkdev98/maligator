@@ -3447,6 +3447,11 @@ function emitInstruction(
 		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
 	};
 	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
+	// Typed Math operands remain numbers when coroutine storage boxes their registers.
+	const typedNumber = (r: number): string =>
+		reps[r] === "number" || reps[r] === "int32"
+			? num(r)
+			: `mal_ops_number_as_f64(${boxed(r)})`;
 	const exactPrimitiveNumber = (r: number, mask: CompilerValueKindMask): string => {
 		const number = isNumericRep(reps[r]!) ? num(r) : `mal_ops_number_as_f64(${boxed(r)})`;
 		const boolean = reps[r] === "boolean" ? `r${r}` : `mal_value_to_boolean(${boxed(r)})`;
@@ -5298,20 +5303,19 @@ function emitInstruction(
 			return lowered;
 		}
 		case "MATH_UNARY_NUMBER": {
-			if (reps[instruction.src] !== "number") return null;
-			const expression = nativeMathUnaryExpr(instruction.operation, num(instruction.src));
-			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
+			const expression = nativeMathUnaryExpr(
+				instruction.operation,
+				typedNumber(instruction.src),
+			);
+			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
 		case "MATH_BINARY_NUMBER": {
-			if (reps[instruction.left] !== "number" || reps[instruction.right] !== "number") {
-				return null;
-			}
 			const expression = nativeMathBinaryExpr(
 				instruction.operation,
-				num(instruction.left),
-				num(instruction.right),
+				typedNumber(instruction.left),
+				typedNumber(instruction.right),
 			);
-			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
+			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
 		case "PRECISE_NUMBER_SUM": {
 			const values = instruction.arguments.map((register) =>

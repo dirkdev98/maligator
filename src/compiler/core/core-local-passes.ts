@@ -942,7 +942,8 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					sourcePosition: fn.instructionSourcePosition(instruction),
 				});
 				for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");
-				editor.setValueRepresentation(instructionResult(fn, instruction, 0)!, "f64");
+				const result = instructionResult(fn, instruction, 0)!;
+				if (edgeUses[result] === 0) editor.setValueRepresentation(result, "f64");
 				continue;
 			}
 			const existingKnownBuiltinCall =
@@ -1010,28 +1011,13 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				: descriptor.id === "Math.min" || descriptor.id === "Math.max"
 					? "mathBinaryNumber"
 					: undefined;
-			const nativeMathArgument = (value: CoreValueId): boolean => {
-				if (fn.valueRepresentation(value) === "f64") return true;
-				const scalar = (kinds ??= context.analysis(
-					CORE_LOCAL_VALUE_KIND_ANALYSIS,
-				)).exactScalar(value);
-				if (scalar !== "int32" && scalar !== "number") return false;
-				const definition = definingInstruction(fn, value);
-				return (
-					definition !== undefined &&
-					(fn.instructionOpcodeName(definition) === "createNumber" ||
-						fn.instructionOpcodeName(definition) === "createF64" ||
-						(fn.instructionOpcodeName(definition) === "unary" &&
-							fn.instructionAttributes(definition).operator === "+"))
-				);
-			};
 			const numericRewrite =
 				numericOpcode !== undefined &&
 				exactIntrinsicReceiver &&
 				compilerFactIsWorldInvariant(sharedIdentity) &&
 				sharedIdentity.value === descriptor.id &&
 				descriptor.nativeNumberArity === arguments_.length &&
-				arguments_.every(nativeMathArgument) &&
+				arguments_.every(canScalarizeNumber) &&
 				fn.kernel.instructionResultCount(instruction) === 1 &&
 				fn.kernel.instructionResultCount(property) === 1 &&
 				propertyResult !== undefined &&
@@ -1131,7 +1117,8 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					sourcePosition: fn.instructionSourcePosition(instruction),
 				});
 				for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");
-				editor.setValueRepresentation(instructionResult(fn, instruction, 0)!, "f64");
+				const result = instructionResult(fn, instruction, 0)!;
+				if (edgeUses[result] === 0) editor.setValueRepresentation(result, "f64");
 				editor.removeInstruction(property);
 			} else if (exactRewrite === undefined) {
 				editor.replaceInstruction(instruction, "call", inputs, {
