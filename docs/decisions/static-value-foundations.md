@@ -380,6 +380,15 @@ receivers and extra arguments need no wrapper identity, but their producer effec
 still execute. String construction retains ordinary ToString, including its Symbol
 exception, and exact constructor/newTarget proof excludes subclass construction.
 
+Under the locked single-realm contract, contained wrappers also supply primitive
+payloads to arithmetic, relational and numeric update operations, and to exact
+Boolean, Number, String, BigInt and global numeric-predicate conversions. Conversion
+of the original constructor argument still precedes later operand expressions;
+other operands retain their own coercions. Equality and identity-sensitive consumers
+do not use this substitution. Boolean observes the wrapper's truthiness, and String
+on a Symbol wrapper becomes ordinary ToString at the consumer so the Symbol error
+survives. Own coercion overrides, mutable prototypes and escapes retain their objects.
+
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and
 non-configurable; compiler-private operations remain intrinsic. Mutable constructor

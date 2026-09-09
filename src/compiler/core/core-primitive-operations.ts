@@ -28,6 +28,41 @@ const noncoercingNumberPredicates = new Set([
 	"Number.isInteger",
 	"Number.isSafeInteger",
 ]);
+const wrapperCoercingUnaryOperators = new Set([
+	"+",
+	"-",
+	"~",
+	"tonumeric",
+	"tostring",
+	"increment",
+	"decrement",
+]);
+const wrapperCoercingBinaryOperators = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+]);
+const wrapperConversionCalls = new Set([
+	"Boolean",
+	"Number",
+	"String",
+	"BigInt",
+	"isNaN",
+	"isFinite",
+]);
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
@@ -838,6 +873,9 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 		const { program, item } = context,
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		const lockedCoercions =
+			context.compilationContext.facts.world.primordialPolicy === "locked" &&
+			!context.compilationContext.facts.world.realms;
 		for (const instruction of fn.instructionIds()) {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
@@ -879,7 +917,8 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 			}
 			const pending: Array<CoreValueId> = [root],
 				visited = new Set<CoreValueId>(),
-				constantConsumers = new Map<CoreInstructionId, boolean>();
+				constantConsumers = new Map<CoreInstructionId, boolean>(),
+				stringCoercions = new Set<CoreInstructionId>();
 			let safe = true;
 			while (pending.length && safe) {
 				const value = pending.pop()!;
@@ -921,6 +960,16 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					else if (opcode === "unary" && consumerAttributes.operator === "!")
 						constantConsumers.set(consumer, false);
 					else if (
+						lockedCoercions &&
+						((opcode === "unary" &&
+							wrapperCoercingUnaryOperators.has(consumerAttributes.operator as string)) ||
+							(opcode === "binary" &&
+								wrapperCoercingBinaryOperators.has(
+									consumerAttributes.operator as string,
+								)))
+					)
+						continue;
+					else if (
 						opcode === "binary" &&
 						(consumerAttributes.operator === "===" ||
 							consumerAttributes.operator === "!==") &&
@@ -936,6 +985,19 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						noncoercingNumberPredicates.has(consumerAttributes.operation as string)
 					) {
 						if (fn.kernel.useOperand(use) === 1) constantConsumers.set(consumer, false);
+					} else if (
+						lockedCoercions &&
+						opcode === "callKnown" &&
+						!consumerAttributes.construct &&
+						consumerAttributes.argumentMode === undefined &&
+						wrapperConversionCalls.has(consumerAttributes.operation as string)
+					) {
+						if (fn.kernel.useOperand(use) === 1) {
+							if (consumerAttributes.operation === "Boolean")
+								constantConsumers.set(consumer, true);
+							else if (consumerAttributes.operation === "String" && wrapper === "Symbol")
+								stringCoercions.add(consumer);
+						}
 					} else if (
 						wrapper === "String" &&
 						property !== undefined &&
@@ -988,12 +1050,25 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					}
 				}
 			}
-			if (!safe || context.remainingEdits < constantConsumers.size + 1) continue;
+			if (
+				!safe ||
+				context.remainingEdits < constantConsumers.size + stringCoercions.size + 1
+			)
+				continue;
 			const editor = CoreEditor.open(program, fn.id);
 			for (const [consumer, value] of constantConsumers)
 				editor.replaceInstruction(consumer, "createBoolean", [], {
 					attributes: { value },
 				});
+			for (const consumer of stringCoercions) {
+				// String only grants descriptive conversion to a primitive Symbol argument.
+				const input = fn.kernel.operandAt(
+					fn.kernel.instructionOperandStart(consumer) + 1,
+				);
+				editor.replaceInstruction(consumer, "unary", [input], {
+					attributes: { operator: "tostring" },
+				});
+			}
 			if (operation === "Object")
 				editor.replaceInstruction(instruction, "move", [args[1]!]);
 			else if (

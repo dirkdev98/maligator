@@ -83969,6 +83969,24 @@
 						"case": "BigInt(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -84728,6 +84746,24 @@
 						"case": "Boolean(null)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -95155,6 +95191,24 @@
 						"case": "Number(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -99634,6 +99688,24 @@
 						"case": "String(Symbol('x'))"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -119370,6 +119442,24 @@
 						"case": "isFinite(null)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -119476,6 +119566,24 @@
 						"case": "isNaN('x')"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates wrapper input materialization for the exact conversion in %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains wrapper identity when coercion cannot substitute its payload in %s"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

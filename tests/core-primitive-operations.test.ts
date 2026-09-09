@@ -2026,6 +2026,94 @@ describe("primitive operation results", () => {
 		expect(output.structure.genericLookups).toBeGreaterThan(0);
 	});
 
+	it.each(
+		["new Number(x)", "new Boolean(x)", "new String(x)", "Object(BigInt(x))"].flatMap(
+			(wrapper) => [
+				...["+", "-", "~"].map((operator) => `${operator}(${wrapper})`),
+				...[
+					"+",
+					"-",
+					"*",
+					"/",
+					"%",
+					"**",
+					"&",
+					"|",
+					"^",
+					"<<",
+					">>",
+					">>>",
+					"<",
+					"<=",
+					">",
+					">=",
+				].map((operator) => `(${wrapper}) ${operator} x`),
+			],
+		),
+	)("consumes a contained wrapper through primitive coercion in %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Object"),
+		).toBe(false);
+	});
+
+	it.each(
+		["Boolean", "Number", "String", "BigInt", "isNaN", "isFinite"].flatMap((consumer) =>
+			["new Number(x)", "new Boolean(x)", "new String(x)", "Object(BigInt(x))"].map(
+				(wrapper) => `${consumer}(${wrapper})`,
+			),
+		),
+	)(
+		"eliminates wrapper input materialization for the exact conversion in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+			expect(
+				output.core.some((operation) => operation.attributes.operation === "Object"),
+			).toBe(false);
+		},
+	);
+
+	it("retains ordinary ToString when String consumes a Symbol wrapper", () => {
+		const output = inspect("String(Object(Symbol.iterator))");
+		expect(
+			output.core.some((operation) =>
+				["String", "Object"].includes(operation.attributes.operation as string),
+			),
+		).toBe(false);
+		expect(
+			output.core.some(
+				(operation) =>
+					(operation.opcode === "unary" &&
+						operation.attributes.operator === "tostring") ||
+					operation.opcode === "builtinError",
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		"const wrapper=new Number(x);globalThis.wrapper=wrapper;return +wrapper;",
+		"const wrapper=new Number(x);wrapper[Symbol.toPrimitive]=()=>99;return +wrapper;",
+		"const wrapper=new Number(x);return wrapper+x(wrapper);",
+		"const wrapper=new Number(x);return wrapper==x;",
+		"const wrapper=new Number(x);return wrapper===x;",
+	])(
+		"retains wrapper identity when coercion cannot substitute its payload in %s",
+		(body) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){${body}}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
+		},
+	);
+
+	it("retains mutable prototype dispatch for wrapper arithmetic", () => {
+		const output = inspect("+new Number(x)", false);
+		expect(output.core.some((operation) => operation.opcode === "construct")).toBe(true);
+	});
+
 	it("removes a certified String wrapper and noncoercing predicate dispatch", () => {
 		expect(inspect("new String('abc').valueOf()").structure.operations).toEqual([]);
 		expect(
