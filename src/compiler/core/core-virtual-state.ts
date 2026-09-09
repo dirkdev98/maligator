@@ -70,7 +70,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 				attributes.argumentMode === undefined &&
 				(attributes.operation === "Object" ||
 					(attributes.construct &&
-						["Boolean", "Number"].includes(attributes.operation as string)));
+						["Boolean", "Number", "String"].includes(attributes.operation as string)));
 			if (
 				(!wrapper &&
 					!["createArray", "createObject", "createObjectShaped"].includes(opcode)) ||
@@ -85,24 +85,47 @@ export const materializeVirtualState: CoreFunctionPass = {
 				continue;
 			const fact = analysis.query(value);
 			if (fact.kind !== "known") continue;
+			let conversion: Cell | undefined;
 			if (wrapper) {
 				if (
 					fact.construction?.instruction !== root ||
-					!["Boolean", "Number", "BigInt", "Symbol"].includes(fact.exactBrand ?? "")
+					!["Boolean", "Number", "String", "BigInt", "Symbol"].includes(
+						fact.exactBrand ?? "",
+					)
 				)
 					continue;
 				const input = fact.construction.arguments[0];
-				if (attributes.operation === "Number" && input !== undefined) {
+				if (
+					(attributes.operation === "Number" || attributes.operation === "String") &&
+					input !== undefined
+				) {
 					const payload = analysis.queryAt(input, root);
-					if (payload.kind !== "known" || payload.brand !== "number") continue;
+					if (
+						payload.kind !== "known" ||
+						payload.brand !== attributes.operation.toLowerCase()
+					)
+						conversion =
+							attributes.operation === "String"
+								? {
+										opcode: "unary",
+										inputs: [input],
+										attributes: { operator: "tostring" },
+									}
+								: {
+										opcode: "callKnown",
+										inputs: argsOf(root).slice(0, 2),
+										attributes: { ...attributes, construct: false },
+									};
 				}
 			}
+			const stringWrapper = wrapper && fact.exactBrand === "String";
 			const array = opcode === "createArray";
 			let length = array ? (attributes.length as number) : 0;
 			if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) continue;
 			const initializers = new Set<CoreInstructionId>();
 			const keyConversions = new Set<CoreInstructionId>();
 			const initializationOnly =
+				!stringWrapper &&
 				demand.demands.length <= LIMIT &&
 				demand.demands.every((use) => {
 					if (
@@ -164,9 +187,18 @@ export const materializeVirtualState: CoreFunctionPass = {
 				});
 			if (
 				initializationOnly &&
-				initializers.size + keyConversions.size * 2 + 1 <= context.remainingEdits
+				initializers.size +
+					keyConversions.size * 2 +
+					1 +
+					Number(conversion !== undefined) <=
+					context.remainingEdits
 			) {
 				const editor = CoreEditor.open(program, fn.id);
+				if (conversion !== undefined)
+					editor.insertInstruction(block, root, conversion.opcode, conversion.inputs, {
+						attributes: conversion.attributes,
+						sourcePosition: fn.instructionSourcePosition(root),
+					});
 				// A discarded ordinary object still owes observable computed-key coercions.
 				for (const instruction of keyConversions) {
 					const sourcePosition = fn.instructionSourcePosition(instruction);
@@ -295,7 +327,11 @@ export const materializeVirtualState: CoreFunctionPass = {
 						: constant.kind === "undefined"
 							? "undefined"
 							: String(constant.value);
-				if (key === undefined) {
+				// String exotic indexes and length are immutable own properties, not absent cells.
+				if (
+					key === undefined ||
+					(stringWrapper && (key === "length" || /^(0|[1-9][0-9]*)$/.test(key)))
+				) {
 					boundary = instruction;
 					break;
 				}
@@ -380,7 +416,12 @@ export const materializeVirtualState: CoreFunctionPass = {
 			}
 			if (
 				boundary === root ||
-				removals.size + replacements.size + cells.size * 3 + 4 > context.remainingEdits
+				removals.size +
+					replacements.size +
+					cells.size * 3 +
+					4 +
+					Number(conversion !== undefined) >
+					context.remainingEdits
 			)
 				continue;
 			boundary ??= fn.blockTerminator(block);
@@ -397,6 +438,14 @@ export const materializeVirtualState: CoreFunctionPass = {
 			if (transitions === 0 && escapes) continue;
 			analysis.verify(fact);
 			const editor = CoreEditor.open(program, fn.id);
+			// Coercion belongs to construction even when the private shell moves or disappears.
+			const converted =
+				conversion === undefined
+					? undefined
+					: editor.insertInstruction(block, root, conversion.opcode, conversion.inputs, {
+							attributes: conversion.attributes,
+							sourcePosition: fn.instructionSourcePosition(root),
+						}).outputs[0]!;
 			for (const [instruction, cell] of replacements)
 				editor.replaceInstruction(instruction, cell.opcode, cell.inputs, {
 					attributes: cell.attributes,
@@ -405,11 +454,13 @@ export const materializeVirtualState: CoreFunctionPass = {
 				if (alias !== value) editor.replaceValueUses(alias, value);
 			for (const instruction of removals) editor.removeInstruction(instruction);
 			if (escapes) {
-				if (wrapper)
-					editor.replaceInstruction(root, "callKnown", argsOf(root), {
+				if (wrapper) {
+					const inputs = argsOf(root);
+					if (converted !== undefined) inputs[1] = converted;
+					editor.replaceInstruction(root, "callKnown", inputs, {
 						attributes: { ...attributes, [MATERIALIZED]: true },
 					});
-				else
+				} else
 					editor.replaceInstruction(root, array ? "createArray" : "createObject", [], {
 						attributes: { ...(array ? { length } : {}), [MATERIALIZED]: true },
 					});

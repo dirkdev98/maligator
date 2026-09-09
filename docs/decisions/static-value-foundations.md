@@ -369,6 +369,13 @@ constructor as `newTarget` become their residual constructor-body errors. Unknow
 targets and effectful lists retain runtime validation; source spreads still run
 before construction checks.
 
+Private named properties on Number and String wrappers use the shared virtual
+state path. Input conversion remains at construction, independently of whether
+the wrapper disappears or materializes later with its final properties. String
+indexes and `length` remain exotic-property boundaries. Unknown Object inputs,
+alternate `newTarget` values, mutable prototypes and inherited setters retain
+their runtime behavior.
+
 Contained String wrappers also disappear for fixed numeric index reads, including
 negative zero and absent indexes. Conversion remains at construction, and index
 reads use the primitive string. A key coercion that exposes the wrapper, or an

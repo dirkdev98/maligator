@@ -45,6 +45,169 @@ function escapingSymbol(x) {
 }
 globalThis.escapingSymbol = escapingSymbol;
 
+function privateNumber(x) {
+	const box = new Number(x);
+	box.note = 1;
+	box.note = 2;
+	delete box.note;
+	box.other = 13;
+	return (box.note === undefined) + box.other;
+}
+function privateString(x) {
+	const box = new String(x);
+	box.note = 1;
+	box.note = 2;
+	delete box.note;
+	box.other = 13;
+	return (box.note === undefined) + box.other;
+}
+function escapingNumberDynamic(x) {
+	const box = new Number(x);
+	box.note = 1;
+	delete box.note;
+	box.other = 13;
+	return box;
+}
+function escapingString(x) {
+	const box = new String(x);
+	box.note = 1;
+	delete box.note;
+	box.other = 13;
+	return box;
+}
+globalThis.privateNumber = privateNumber;
+globalThis.privateString = privateString;
+globalThis.escapingNumberDynamic = escapingNumberDynamic;
+globalThis.escapingString = escapingString;
+
+for (const [privateState, escapingState, prototype, hint, primitive] of [
+	[
+		globalThis.privateNumber,
+		globalThis.escapingNumberDynamic,
+		Number.prototype,
+		"number",
+		-0,
+	],
+	[
+		globalThis.privateString,
+		globalThis.escapingString,
+		String.prototype,
+		"string",
+		"\ud83d\ude00x",
+	],
+]) {
+	let conversions = 0;
+	const input = {
+		[Symbol.toPrimitive](actualHint) {
+			assert(actualHint === hint);
+			conversions++;
+			return primitive;
+		},
+	};
+	assert(privateState(input) === 14 && conversions === 1);
+	const first = escapingState(input);
+	const second = escapingState(input);
+	assert(conversions === 3 && first !== second);
+	assert(Object.getPrototypeOf(first) === prototype);
+	assert(Object.is(prototype.valueOf.call(first), primitive));
+	assert(first.other === 13 && !Object.hasOwn(first, "note"));
+	const descriptor = Object.getOwnPropertyDescriptor(first, "other");
+	assert(
+		descriptor.value === 13 &&
+			descriptor.writable &&
+			descriptor.enumerable &&
+			descriptor.configurable,
+	);
+	if (hint === "string") {
+		assert(first.length === 3 && first[0] === "\ud83d" && first[1] === "\ude00");
+		assert(Object.keys(first).join() === "0,1,2,other");
+		const index = Object.getOwnPropertyDescriptor(first, "0");
+		assert(
+			index.value === "\ud83d" &&
+				!index.writable &&
+				index.enumerable &&
+				!index.configurable,
+		);
+	}
+	for (const invoke of [privateState, escapingState]) {
+		const sentinel = {};
+		try {
+			invoke({
+				[Symbol.toPrimitive]() {
+					throw sentinel;
+				},
+			});
+			throw new Error("conversion must throw");
+		} catch (error) {
+			assert(error === sentinel);
+		}
+		try {
+			invoke(Symbol.iterator);
+			throw new Error("Symbol conversion must throw");
+		} catch (error) {
+			assert(error instanceof TypeError);
+		}
+	}
+}
+globalThis.protectedStringState = [
+	(x) => {
+		const box = new String(x);
+		box.note = 1;
+		delete box.note;
+		box[0] = "z";
+		return box;
+	},
+	(x) => {
+		const box = new String(x);
+		box.note = 1;
+		delete box.note;
+		box.length = 0;
+		return box;
+	},
+	(x) => {
+		const box = new String(x);
+		box.note = 1;
+		delete box.note;
+		delete box[0];
+		return box;
+	},
+	(x) => {
+		const box = new String(x);
+		box.note = 1;
+		delete box.note;
+		Object.defineProperty(box, "0", { value: "z" });
+		return box;
+	},
+];
+for (const invoke of globalThis.protectedStringState) {
+	try {
+		invoke("abc");
+		throw new Error("String exotic state must reject mutation");
+	} catch (error) {
+		assert(error instanceof TypeError);
+	}
+}
+for (const [prototype, invoke] of [
+	[Number.prototype, globalThis.privateNumber],
+	[String.prototype, globalThis.privateString],
+]) {
+	if (Object.isFrozen(prototype)) continue;
+	Object.defineProperty(prototype, "note", {
+		set(value) {
+			this.captured = value;
+		},
+		get() {
+			return this.captured + 1;
+		},
+		configurable: true,
+	});
+	try {
+		assert(invoke(17) === 13);
+	} finally {
+		delete prototype.note;
+	}
+}
+
 const uncoercible = {
 	[Symbol.toPrimitive]() {
 		throw new Error("Boolean must not coerce objects");

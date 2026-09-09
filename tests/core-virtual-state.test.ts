@@ -4,7 +4,10 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 describe("virtual local state", () => {
 	it.each([
 		"new Boolean(x)",
+		"new Number(x)",
 		"new Number(+x)",
+		"new String(x)",
+		"Object(String(x))",
 		"Object(!!x)",
 		"Object(+x)",
 		"Object(BigInt(x))",
@@ -37,7 +40,14 @@ describe("virtual local state", () => {
 			),
 		).toBe(false);
 	});
-	it.each(["new Boolean(x)", "new Number(+x)", "Object(BigInt(x))"])(
+	it.each([
+		"new Boolean(x)",
+		"new Number(x)",
+		"new Number(+x)",
+		"new String(x)",
+		"Object(String(x))",
+		"Object(BigInt(x))",
+	])(
 		"materializes the current own state and primitive slot of %s at escape",
 		(producer) => {
 			const inspected = inspectStaticValueFunction(
@@ -63,20 +73,57 @@ describe("virtual local state", () => {
 			expect(inspected.core.some((op) => op.opcode === "deleteProperty")).toBe(false);
 		},
 	);
-	it.each([
-		"new Number(x)",
-		"new String(x)",
-		"Object(x)",
-		"Object(String(x))",
-		"Reflect.construct(Boolean, [x], globalThis.Target)",
-	])("retains conversion, exotic state or newTarget behavior in %s", (producer) => {
-		const inspected = inspectStaticValueFunction(
-			`function probe(x) { const box = ${producer}; box.note = x; return box.note; }
+	it.each(["Object(x)", "Reflect.construct(Boolean, [x], globalThis.Target)"])(
+		"retains conversion, exotic state or newTarget behavior in %s",
+		(producer) => {
+			const inspected = inspectStaticValueFunction(
+				`function probe(x) { const box = ${producer}; box.note = x; return box.note; }
 			globalThis.probe = probe;`,
-			"probe",
-		);
-		expect(inspected.core.some((op) => op.opcode === "storePropertyStatic")).toBe(true);
-	});
+				"probe",
+			);
+			expect(inspected.core.some((op) => op.opcode === "storePropertyStatic")).toBe(true);
+		},
+	);
+	it.each(["Number", "String"])(
+		"preserves %s conversion while discarding initializer state",
+		(brand) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x) { const box = new ${brand}(x()); box.note = 17; return 0; } globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(result.structure.allocations).toBe(0);
+			expect(result.core.some((op) => op.attributes.construct)).toBe(false);
+			expect(result.structure.genericCalls).toBe(1);
+			expect(
+				result.core.filter((op) =>
+					brand === "Number"
+						? op.attributes.operation === "Number"
+						: op.attributes.operator === "tostring",
+				),
+			).toHaveLength(1);
+		},
+	);
+	it.each(["new String(x)", "Object(String(x))"])(
+		"retains String exotic state after named writes in %s",
+		(producer) => {
+			for (const observation of [
+				"box[0] = 'z';",
+				"box.length = 0;",
+				"delete box[0];",
+				"Object.defineProperty(box, '0', {value:'z'});",
+			]) {
+				const result = inspectStaticValueFunction(
+					`function probe(x) { const box = ${producer}; box.note = 1; delete box.note; ${observation} return box; } globalThis.probe=probe;`,
+					"probe",
+				);
+				expect(
+					result.core.some(
+						(op) => op.attributes.construct || op.attributes.operation === "Object",
+					),
+				).toBe(true);
+			}
+		},
+	);
 	it("retains inherited setters and nonconfigurable wrapper properties", () => {
 		for (const body of [
 			"box.__proto__ = x; return box.__proto__;",

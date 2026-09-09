@@ -98404,6 +98404,69 @@
 						"case": "Boolean"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "brand-with-unknown-contents"],
+					"axes": ["R", "D", "T", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["V", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "materializes the current own state and primitive slot of %s at escape",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -118462,6 +118525,69 @@
 						"case": "Number"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument", "brand-with-unknown-contents"],
+					"axes": ["R", "D", "T", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Number(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new Number(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["V", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "materializes the current own state and primitive slot of %s at escape",
+						"case": "new Number(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -127045,6 +127171,52 @@
 						"case": "String"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"brand-with-unknown-contents",
+						"known-consumer"
+					],
+					"axes": ["R", "D", "T", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "eliminates private own-property transitions on %s",
+						"case": "new String(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["escaping-identity"],
+					"axes": ["V", "U", "Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-virtual-state.ts",
+						"symbol": "materializeVirtualState"
+					},
+					"reason": "Known named-property writes, replacement and deletion use private scalar cells. Preserve construction-time input conversion; omit contained wrappers and materialize one distinct wrapper with current state when identity escapes. String exotic indexes and length, inherited setters and unknown targets retain native observations.",
+					"positive": {
+						"file": "tests/core-virtual-state.test.ts",
+						"test": "materializes the current own state and primitive slot of %s at escape",
+						"case": "new String(x)"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves primitive slots and own-property state at materialization with %s primordials",
+						"case": "mutable"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
