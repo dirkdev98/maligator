@@ -394,6 +394,11 @@ Every consumed argument retains ToNumber, including Symbol and BigInt exceptions
 ignored arguments retain expression effects. Nonfinite inputs do not skip later
 coercions in variadic methods. Iterator consumers such as sumPrecise remain outside
 this numeric-argument proof.
+Exact parsing, Number and BigInt formatting, BigInt width, Symbol description and
+registry-key, and URI/legacy codec calls use the same contained payload proof.
+Receiver brand checks and ordered argument conversions remain in the consumer;
+Symbol output identity and registry effects also remain. Symbol.keyFor requires a
+primitive Symbol and therefore cannot consume a wrapper through this substitution.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

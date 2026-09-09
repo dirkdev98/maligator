@@ -84177,6 +84177,26 @@
 						"case": "BigInt.asIntN(-1,x)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "BigInt.asIntN(new Number(x),2n)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "BigInt.asIntN(new Number(x),2n)"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -84303,6 +84323,26 @@
 						"case": "BigInt.asUintN(0,1)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "BigInt.asUintN(8,Object(BigInt(x)))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "BigInt.asUintN(8,Object(BigInt(x)))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -84469,6 +84509,26 @@
 						"case": "(1n).toString(37)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "BigInt(x).toString(new Number(10))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "BigInt(x).toString(new Number(10))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -96727,6 +96787,26 @@
 						"test": "preserves guarded number formatting and callee mutations with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "Number(x).toExponential(new Number(2))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "Number(x).toExponential(new Number(2))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -96895,6 +96975,26 @@
 						"test": "preserves guarded number formatting and callee mutations with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "Number(x).toFixed(new Number(2))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "Number(x).toFixed(new Number(2))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -97083,6 +97183,26 @@
 						"test": "preserves guarded number formatting and callee mutations with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "Number(x).toPrecision(new Number(2))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "Number(x).toPrecision(new Number(2))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -97267,6 +97387,26 @@
 						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "Number(x).toString(new Number(10))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "Number(x).toString(new Number(10))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -107078,6 +107218,26 @@
 						"case": "Symbol.for(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "Symbol.for(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "Symbol.for(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -113091,6 +113251,26 @@
 						"case": "decodeURI"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "decodeURI(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "decodeURI(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -113241,6 +113421,26 @@
 						"case": "decodeURIComponent('%xx')"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "decodeURIComponent(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "decodeURIComponent(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -113343,12 +113543,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
@@ -113391,6 +113591,26 @@
 						"case": "encodeURI(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "encodeURI(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "encodeURI(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -113521,6 +113741,26 @@
 						"case": "encodeURIComponent"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "encodeURIComponent(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "encodeURIComponent(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -119083,12 +119323,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
@@ -119111,6 +119351,26 @@
 						"case": "escape"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "escape(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "escape(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -120001,6 +120261,26 @@
 						"case": "unescape"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "unescape(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "unescape(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -120380,6 +120660,26 @@
 						"case": "parseFloat(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "parseFloat(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "parseFloat(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -120516,6 +120816,26 @@
 						"case": "parseInt('1',1n)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained coercion arguments in %s",
+						"case": "parseInt(new String(x),10)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable primitive argument coercions in %s",
+						"case": "parseInt(new String(x),10)"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

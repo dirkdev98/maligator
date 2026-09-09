@@ -12,6 +12,35 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves primitive argument wrapper coercions and effects with %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/wrapper-primitive-arguments-consumers.mjs";
+			const expected = execFileSync(process.execPath, [fixture], {
+				encoding: "utf8",
+			});
+			const outDir = mkdtempSync(
+				path.join(os.tmpdir(), "mal-wrapper-primitive-arguments-"),
+			);
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "wrapper-primitive-arguments",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: false },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves numeric Math wrapper coercions and effects with %s primordials",
 		(primordials) => {
 			const fixture = "tests/local/wrapper-math-consumers.mjs";

@@ -56,15 +56,13 @@ const wrapperCoercingBinaryOperators = new Set([
 	">",
 	">=",
 ]);
-const wrapperConversionCalls = new Set([
+const wrapperCoercingCalls = new Set<string>([
 	"Boolean",
 	"Number",
 	"String",
 	"BigInt",
 	"isNaN",
 	"isFinite",
-]);
-const wrapperNumericMathCalls = new Set<string>([
 	...mathUnaryOperationKeys.map(([operation]) => operation),
 	"Math.atan2",
 	"Math.pow",
@@ -74,6 +72,23 @@ const wrapperNumericMathCalls = new Set<string>([
 	"Math.min",
 	"Math.max",
 	"Math.f16round",
+	"parseInt",
+	"parseFloat",
+	"Number.prototype.toString",
+	"Number.prototype.toFixed",
+	"Number.prototype.toExponential",
+	"Number.prototype.toPrecision",
+	"BigInt.asIntN",
+	"BigInt.asUintN",
+	"BigInt.prototype.toString",
+	"Symbol",
+	"Symbol.for",
+	"encodeURI",
+	"encodeURIComponent",
+	"decodeURI",
+	"decodeURIComponent",
+	"globalThis.escape",
+	"globalThis.unescape",
 ]);
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
@@ -1002,8 +1017,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						opcode === "callKnown" &&
 						!consumerAttributes.construct &&
 						consumerAttributes.argumentMode === undefined &&
-						(wrapperConversionCalls.has(consumerAttributes.operation as string) ||
-							wrapperNumericMathCalls.has(consumerAttributes.operation as string))
+						wrapperCoercingCalls.has(consumerAttributes.operation as string)
 					) {
 						if (fn.kernel.useOperand(use) === 1) {
 							if (consumerAttributes.operation === "Boolean")

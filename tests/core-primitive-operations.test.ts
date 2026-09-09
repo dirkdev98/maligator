@@ -2147,6 +2147,82 @@ describe("primitive operation results", () => {
 		expect(output.structure.genericLookups).toBeGreaterThan(0);
 	});
 
+	it.each([
+		"parseInt(new String(x),10)",
+		"parseFloat(new String(x))",
+		"Number.parseInt(new String(x),10)",
+		"Number.parseFloat(new String(x))",
+		"Number(x).toString(new Number(10))",
+		"Number(x).toFixed(new Number(2))",
+		"Number(x).toExponential(new Number(2))",
+		"Number(x).toPrecision(new Number(2))",
+		"BigInt.asIntN(new Number(x),2n)",
+		"BigInt.asUintN(8,Object(BigInt(x)))",
+		"BigInt(x).toString(new Number(10))",
+		"Symbol(new String(x))",
+		"Symbol.for(new String(x))",
+		"encodeURI(new String(x))",
+		"encodeURIComponent(new String(x))",
+		"decodeURI(new String(x))",
+		"decodeURIComponent(new String(x))",
+		"escape(new String(x))",
+		"unescape(new String(x))",
+	])("eliminates contained coercion arguments in %s", (expression) => {
+		const output = inspect(expression);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.attributes.construct || operation.attributes.operation === "Object",
+			),
+		).toBe(false);
+	});
+
+	it.each(["Symbol.keyFor(Object(Symbol.for(x)))", "parseInt(...[new String(x)])"])(
+		"retains identity-sensitive or spread wrapper inputs in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.attributes.construct || operation.attributes.operation === "Object",
+				),
+			).toBe(true);
+		},
+	);
+
+	it.each([
+		"parseInt(new String(x),10)",
+		"parseFloat(new String(x))",
+		"Number.parseInt(new String(x),10)",
+		"Number.parseFloat(new String(x))",
+		"Number(x).toString(new Number(10))",
+		"Number(x).toFixed(new Number(2))",
+		"Number(x).toExponential(new Number(2))",
+		"Number(x).toPrecision(new Number(2))",
+		"BigInt.asIntN(new Number(x),2n)",
+		"BigInt.asUintN(8,Object(BigInt(x)))",
+		"BigInt(x).toString(new Number(10))",
+		"Symbol(new String(x))",
+		"Symbol.for(new String(x))",
+		"encodeURI(new String(x))",
+		"encodeURIComponent(new String(x))",
+		"decodeURI(new String(x))",
+		"decodeURIComponent(new String(x))",
+		"escape(new String(x))",
+		"unescape(new String(x))",
+	])("retains mutable primitive argument coercions in %s", (expression) => {
+		const output = inspect(expression, false);
+		if (expression.includes("Object(BigInt(x))"))
+			expect(output.structure.genericCalls).toBeGreaterThanOrEqual(3);
+		else
+			expect(output.core.some((operation) => operation.opcode === "construct")).toBe(
+				true,
+			);
+		expect(
+			output.core.some((operation) => operation.opcode === "loadGlobalProperty"),
+		).toBe(true);
+	});
+
 	it("retains ordinary ToString when String consumes a Symbol wrapper", () => {
 		const output = inspect("String(Object(Symbol.iterator))");
 		expect(
