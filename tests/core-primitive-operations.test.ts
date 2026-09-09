@@ -2223,6 +2223,102 @@ describe("primitive operation results", () => {
 		).toBe(true);
 	});
 
+	it.each([
+		"String.fromCharCode(new Number(x))",
+		"String.fromCodePoint(new Number(x))",
+		"'abcdef'.at(new Number(x))",
+		"'abcdef'.charAt(new Number(x))",
+		"'abcdef'.charCodeAt(new Number(x))",
+		"'a😀b'.codePointAt(new Number(x))",
+		"'abcdef'.includes(new String(x))",
+		"'abcdef'.indexOf(new String(x))",
+		"'abcdef'.lastIndexOf(new String(x))",
+		"'abcdef'.startsWith(new String(x))",
+		"'abcdef'.endsWith(new String(x))",
+		"'abcdef'.slice(new Number(x),5)",
+		"'abcdef'.substring(new Number(x),5)",
+		"'abcdef'.substr(new Number(x),3)",
+		"'abcdef'.concat(new String(x))",
+		"'ab'.repeat(new Number(x))",
+		"'ab'.padStart(8,new String(x))",
+		"'ab'.padEnd(8,new String(x))",
+		"String.raw(globalThis.template,new String(x))",
+		"'é'.normalize(new String(x))",
+		"'a,b,c'.split(new String(x))",
+		"'aba'.replace(new String(x),'z')",
+		"'aba'.replaceAll(new String(x),'z')",
+		"'body'.anchor(new String(x))",
+		"'body'.fontcolor(new String(x))",
+		"'body'.fontsize(new String(x))",
+		"'body'.link(new String(x))",
+		'"a,b,c".split(",",new Number(x))',
+		'"aba".replace("a",new String(x))',
+		'"aba".replaceAll("a",new String(x))',
+	])("eliminates contained String arguments in %s", (expression) => {
+		const output = inspect(expression);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.attributes.construct || operation.attributes.operation === "Object",
+			),
+		).toBe(false);
+	});
+
+	it.each([
+		"new String(x).split(pattern)",
+		'new String(x).replace(pattern,"z")',
+		'new String(x).replaceAll(pattern,"z")',
+		'"a,b".split(pattern,new Number(x))',
+		'"aba".replace(pattern,new String(x))',
+		'"aba".replaceAll(pattern,new String(x))',
+		'String.raw(new String(x),"z")',
+		'"abc".localeCompare("def",new String(x))',
+		'"abc".toLocaleLowerCase(new String(x))',
+		"String.fromCharCode(...[new Number(x)])",
+	])(
+		"retains protocol, template, locale or spread wrapper inputs in %s",
+		(expression) => {
+			const output = inspect(expression);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
+		},
+	);
+
+	it.each([
+		"String.fromCharCode(new Number(x))",
+		"String.fromCodePoint(new Number(x))",
+		"'abcdef'.at(new Number(x))",
+		"'abcdef'.charAt(new Number(x))",
+		"'abcdef'.charCodeAt(new Number(x))",
+		"'a😀b'.codePointAt(new Number(x))",
+		"'abcdef'.includes(new String(x))",
+		"'abcdef'.indexOf(new String(x))",
+		"'abcdef'.lastIndexOf(new String(x))",
+		"'abcdef'.startsWith(new String(x))",
+		"'abcdef'.endsWith(new String(x))",
+		"'abcdef'.slice(new Number(x),5)",
+		"'abcdef'.substring(new Number(x),5)",
+		"'abcdef'.substr(new Number(x),3)",
+		"'abcdef'.concat(new String(x))",
+		"'ab'.repeat(new Number(x))",
+		"'ab'.padStart(8,new String(x))",
+		"'ab'.padEnd(8,new String(x))",
+		"String.raw(globalThis.template,new String(x))",
+		"'é'.normalize(new String(x))",
+		"'a,b,c'.split(new String(x))",
+		"'aba'.replace(new String(x),'z')",
+		"'aba'.replaceAll(new String(x),'z')",
+		"'body'.anchor(new String(x))",
+		"'body'.fontcolor(new String(x))",
+		"'body'.fontsize(new String(x))",
+		"'body'.link(new String(x))",
+	])("retains mutable String argument coercions in %s", (expression) => {
+		const output = inspect(expression, false);
+		expect(output.core.some((operation) => operation.opcode === "construct")).toBe(true);
+		expect(
+			output.core.some((operation) => operation.opcode === "loadGlobalProperty"),
+		).toBe(true);
+	});
+
 	it("retains ordinary ToString when String consumes a Symbol wrapper", () => {
 		const output = inspect("String(Object(Symbol.iterator))");
 		expect(

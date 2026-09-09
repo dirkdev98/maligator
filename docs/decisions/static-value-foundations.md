@@ -399,6 +399,12 @@ registry-key, and URI/legacy codec calls use the same contained payload proof.
 Receiver brand checks and ordered argument conversions remain in the consumer;
 Symbol output identity and registry effects also remain. Symbol.keyFor requires a
 primitive Symbol and therefore cannot consume a wrapper through this substitution.
+String character, search, range, construction, normalization and HTML methods can
+also consume contained wrapper arguments. String.raw applies this proof only to
+substitutions. Custom split/replace protocols receive the original limit or
+replacement argument, so those positions require a primitive pattern. Receiver
+identity remains subject to the separate protocol proof. Locale arguments and raw
+template objects retain their object semantics.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

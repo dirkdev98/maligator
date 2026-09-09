@@ -100637,6 +100637,26 @@
 						"case": "String.fromCharCode(1,1n)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "String.fromCharCode(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "String.fromCharCode(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -100822,6 +100842,26 @@
 						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "String.fromCodePoint(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "String.fromCodePoint(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -100948,6 +100988,26 @@
 						"case": "anchor"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'body'.anchor(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'body'.anchor(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101074,6 +101134,26 @@
 						"case": "at"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.at(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.at(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101578,6 +101658,26 @@
 						"case": "charAt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.charAt(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.charAt(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101684,6 +101784,26 @@
 						"case": "'abc'.charCodeAt(-1)"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.charCodeAt(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.charCodeAt(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101810,6 +101930,26 @@
 						"case": "codePointAt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'a😀b'.codePointAt(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'a😀b'.codePointAt(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101934,6 +102074,26 @@
 						"test": "guards primitive concat inputs before its shared builder"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.concat(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.concat(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -102064,6 +102224,26 @@
 						"case": "endsWith"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.endsWith(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.endsWith(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -102316,6 +102496,26 @@
 						"case": "fontcolor"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'body'.fontcolor(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'body'.fontcolor(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -102442,6 +102642,26 @@
 						"case": "fontsize"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'body'.fontsize(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'body'.fontsize(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -102572,6 +102792,26 @@
 						"case": "includes"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.includes(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.includes(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -102702,6 +102942,26 @@
 						"case": "indexOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.indexOf(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.indexOf(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103087,6 +103347,26 @@
 						"case": "lastIndexOf"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.lastIndexOf(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.lastIndexOf(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103213,6 +103493,26 @@
 						"case": "link"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'body'.link(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'body'.link(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103524,6 +103824,26 @@
 						"case": "'a'.normalize('invalid')"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'é'.normalize(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'é'.normalize(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103650,6 +103970,26 @@
 						"case": "padEnd"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'ab'.padEnd(8,new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'ab'.padEnd(8,new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103776,6 +104116,26 @@
 						"case": "padStart"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'ab'.padStart(8,new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'ab'.padStart(8,new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -103941,6 +104301,26 @@
 						"test": "does not skip an earlier effect or invent an ignored conversion in %s"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'ab'.repeat(new Number(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'ab'.repeat(new Number(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -104090,6 +104470,26 @@
 						"case": "String.prototype.replace.call(null,x,'')"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'aba'.replace(new String(x),'z')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'aba'.replace(new String(x),'z')"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -104239,6 +104639,26 @@
 						"case": "String.prototype.replaceAll.call(null,x,'')"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'aba'.replaceAll(new String(x),'z')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'aba'.replaceAll(new String(x),'z')"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -104389,6 +104809,26 @@
 						"case": "slice"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.slice(new Number(x),5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.slice(new Number(x),5)"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -104787,6 +105227,26 @@
 						"case": "startsWith"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.startsWith(new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.startsWith(new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -105169,6 +105629,26 @@
 						"case": "substr"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.substr(new Number(x),3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.substr(new Number(x),3)"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -105299,6 +105779,26 @@
 						"case": "substring"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "'abcdef'.substring(new Number(x),5)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "'abcdef'.substring(new Number(x),5)"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -106872,6 +107372,26 @@
 						"case": "String.raw(null)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained String arguments in %s",
+						"case": "String.raw(globalThis.template,new String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable String argument coercions in %s",
+						"case": "String.raw(globalThis.template,new String(x))"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

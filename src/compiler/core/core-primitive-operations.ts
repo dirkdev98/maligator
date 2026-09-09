@@ -91,6 +91,36 @@ const wrapperCoercingCalls = new Set<string>([
 	"globalThis.unescape",
 ]);
 
+const wrapperCoercingStringArguments = new Set([
+	"String.fromCharCode",
+	"String.fromCodePoint",
+	"String.prototype.at",
+	"String.prototype.charAt",
+	"String.prototype.charCodeAt",
+	"String.prototype.codePointAt",
+	"String.prototype.includes",
+	"String.prototype.indexOf",
+	"String.prototype.lastIndexOf",
+	"String.prototype.startsWith",
+	"String.prototype.endsWith",
+	"String.prototype.slice",
+	"String.prototype.substring",
+	"String.prototype.substr",
+	"String.prototype.concat",
+	"String.prototype.repeat",
+	"String.prototype.padStart",
+	"String.prototype.padEnd",
+	"String.raw",
+	"String.prototype.normalize",
+	"String.prototype.split",
+	"String.prototype.replace",
+	"String.prototype.replaceAll",
+	"String.prototype.anchor",
+	"String.prototype.fontcolor",
+	"String.prototype.fontsize",
+	"String.prototype.link",
+]);
+
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
 	admission: {
@@ -1024,6 +1054,47 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 								constantConsumers.set(consumer, true);
 							else if (consumerAttributes.operation === "String" && wrapper === "Symbol")
 								stringCoercions.add(consumer);
+						}
+					} else if (
+						lockedCoercions &&
+						opcode === "callKnown" &&
+						!consumerAttributes.construct &&
+						consumerAttributes.argumentMode === undefined &&
+						fn.kernel.useOperand(use) > 0 &&
+						wrapperCoercingStringArguments.has(consumerAttributes.operation as string)
+					) {
+						const position = fn.kernel.useOperand(use);
+						if (consumerAttributes.operation === "String.raw" && position === 1) {
+							safe = false;
+							break;
+						}
+						if (
+							position === 2 &&
+							[
+								"String.prototype.split",
+								"String.prototype.replace",
+								"String.prototype.replaceAll",
+							].includes(consumerAttributes.operation as string)
+						) {
+							// Custom symbol protocols receive the original limit or replacement value.
+							const pattern = analysis.query(
+								fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1),
+							);
+							if (
+								pattern.kind !== "known" ||
+								![
+									"undefined",
+									"null",
+									"boolean",
+									"number",
+									"string",
+									"bigint",
+									"symbol",
+								].includes(pattern.brand)
+							) {
+								safe = false;
+								break;
+							}
 						}
 					} else if (
 						wrapper === "String" &&
