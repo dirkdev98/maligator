@@ -20,6 +20,7 @@ import {
 	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
 	nativeStringSwitchHash,
 } from "../shared/native-string-switch.ts";
+import { stringCaseLocale } from "../shared/string-case-locale.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -5748,14 +5749,15 @@ function emitInstruction(
 						const localized = method.includes("Locale");
 						let locale: string | undefined = "MAL_UNICODE_LOCALE_ROOT";
 						if (localized && !absent) {
-							if (parameter === "tr" || parameter === "az")
+							const selected =
+								parameter === undefined ? undefined : stringCaseLocale(parameter);
+							if (selected === "tr")
 								locale =
 									"(MAL_INTL ? MAL_UNICODE_LOCALE_TURKIC : MAL_UNICODE_LOCALE_ROOT)";
-							else if (parameter === "lt")
+							else if (selected === "lt")
 								locale =
 									"(MAL_INTL ? MAL_UNICODE_LOCALE_LITHUANIAN : MAL_UNICODE_LOCALE_ROOT)";
-							else if (parameter !== "en" && parameter !== "en-US" && parameter !== "und")
-								locale = undefined;
+							else if (selected === undefined) locale = undefined;
 						}
 						if (locale !== undefined)
 							expression = `mal_builtin_string_case_known(vm, ${string}, ${method.includes("Upper")}, ${locale})`;

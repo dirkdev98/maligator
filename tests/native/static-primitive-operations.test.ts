@@ -11,12 +11,14 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 import {
+	constantCallProfiles,
+	constantCallProfileSource,
+} from "../helpers/constant-call-profiles.ts";
+import {
 	dynamicNumericCallCases,
 	dynamicNumericCallSource,
 	dynamicNumericProfiles,
 	numericCallCases,
-	numericCallProfiles,
-	numericCallProfileSource,
 } from "../helpers/numeric-call-profiles.ts";
 
 describe("primitive operation differential", () => {
@@ -116,7 +118,7 @@ console.log('async', await awaited(-3), (await asyncIterator.next()).value, (awa
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-numeric-call-profiles-"));
 			try {
 				const cases = numericCallCases.flatMap((entry, index) =>
-					numericCallProfiles.map((profile) => ({
+					constantCallProfiles.map((profile) => ({
 						name: `probe_${index}_${profile}`,
 						entry,
 						profile,
@@ -125,7 +127,7 @@ console.log('async', await awaited(-3), (await asyncIterator.next()).value, (awa
 				const fixture = path.join(outDir, "numeric-call-profiles.mjs");
 				writeFileSync(
 					fixture,
-					`${cases.map(({ entry, profile, name }) => numericCallProfileSource(entry, profile, name)).join("\n")}
+					`${cases.map(({ entry, profile, name }) => constantCallProfileSource(entry, profile, name)).join("\n")}
 function encode(value) {
   if (Object.is(value, -0)) return '-0';
   return typeof value + ':' + String(value);

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+	constantCallProfiles,
+	constantCallProfileSource,
+} from "./helpers/constant-call-profiles.ts";
+import {
 	dynamicNumericCallCases,
 	dynamicNumericCallSource,
 	dynamicNumericProfiles,
 	numericCallCases,
-	numericCallProfiles,
-	numericCallProfileSource,
 } from "./helpers/numeric-call-profiles.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
@@ -86,12 +88,12 @@ describe("partially static numeric call profiles", () => {
 });
 
 describe("certified numeric and symbol call profiles", () => {
-	for (const profile of numericCallProfiles) {
+	for (const profile of constantCallProfiles) {
 		it.each(numericCallCases)(
 			`folds %s through ${profile} while retaining effects`,
 			(...entry) => {
 				const output = inspectStaticValueFunction(
-					numericCallProfileSource(entry, profile),
+					constantCallProfileSource(entry, profile),
 					"probe",
 				);
 				expect(output.structure.genericLookups).toBe(0);
@@ -113,7 +115,7 @@ describe("certified numeric and symbol call profiles", () => {
 		);
 		it.each(numericCallCases)(`retains mutable %s through ${profile}`, (...entry) => {
 			const output = inspectStaticValueFunction(
-				numericCallProfileSource(entry, profile),
+				constantCallProfileSource(entry, profile),
 				"probe",
 				{ locked: false },
 			);

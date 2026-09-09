@@ -586,7 +586,7 @@ function inspect(expression: string, locked = true) {
 	return inspectStaticValueFunction(
 		`function probe(x){return ${expression};} globalThis.probe=probe;`,
 		"probe",
-		{ locked },
+		{ locked, intl: true },
 	);
 }
 

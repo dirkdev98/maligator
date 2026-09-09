@@ -1,13 +1,14 @@
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import { UNICODE_VERSION } from "./unicode-data.ts";
 
-export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-unicode17-v3";
+export const CONSTANT_EVALUATOR_CONTRACT = "mal-binary64-utf16-i128-unicode17-v4";
 
 export interface ConstantEvaluationTarget {
 	readonly contract: string;
 	readonly endianness: "little" | "big" | "unobserved";
 	readonly numbers: "binary64-gradual-underflow" | "uncertified";
 	readonly unicode?: string;
+	readonly intl?: boolean;
 	readonly icu?: string;
 	readonly tzdb?: string;
 	readonly regexp?: string;

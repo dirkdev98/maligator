@@ -15,6 +15,7 @@ export function inspectStaticValueFunction(
 	name: string,
 	options: {
 		locked?: boolean;
+		intl?: boolean;
 		profile?: boolean;
 		counters?: boolean;
 		script?: boolean;
@@ -34,7 +35,10 @@ export function inspectStaticValueFunction(
 		{
 			facts: compilerProgramFactsFromConfig(
 				resolveBuildConfig({
-					engine: { primordials: options.locked === false ? "mutable" : "locked" },
+					engine: {
+						primordials: options.locked === false ? "mutable" : "locked",
+						...(options.intl === undefined ? {} : { intl: { enabled: options.intl } }),
+					},
 				}),
 			),
 			profile: options.profile,

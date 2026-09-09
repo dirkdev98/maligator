@@ -96,8 +96,11 @@ abandons work exceeding its evaluation budget.
 
 The current runtime default locale is `en-US`, recorded in the constant-evaluation
 target. Nonlocale transforms and default-locale case conversions can fold under that
-certificate. Prepared `tr`, `az`, and `lt` case calls select the corresponding mapping
-only when the target enables Intl. Generic locale calls retain full locale-list
+certificate. Constant case calls also fold for certified `tr`, `az`, `lt`, `en`,
+`en-US`, and `und` tags when the target explicitly enables Intl. The evaluator and
+native emission share the tag-to-mapping selection. With Intl disabled, locale case
+calls use root rules and ignore locale values, while retaining argument evaluation.
+Generic locale calls retain full locale-list
 validation and receiver coercion order. Catalog proofs separately check the target's
 feature availability, including the value reached through a protected global binding.
 

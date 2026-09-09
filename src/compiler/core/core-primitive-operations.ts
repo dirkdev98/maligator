@@ -5,6 +5,7 @@ import {
 	evaluateConstantBuiltin,
 	evaluateConstantStringSplit,
 } from "../shared/constant-builtins.ts";
+import { PORTABLE_CONSTANT_TARGET } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
@@ -311,6 +312,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		const { program, item } = context,
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		const constantTarget = {
+			...PORTABLE_CONSTANT_TARGET,
+			intl: context.compilationContext.facts.world.ecmaFeatures.intl,
+		};
 		const plans: Array<
 			| {
 					instruction: CoreInstructionId;
@@ -910,6 +915,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				inputs
 					.slice(numericOperation ? 0 : 1)
 					.map((value) => analysis.constant(value, instruction)),
+				constantTarget,
 			);
 			if (evaluated.kind === "value") {
 				plans.push({ instruction, value: evaluated.value });

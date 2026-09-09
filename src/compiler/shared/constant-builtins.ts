@@ -13,6 +13,7 @@ import {
 } from "./constant-number-format.ts";
 import { knownBuiltinErrors } from "./known-builtin-errors.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
+import { stringCaseLocale } from "./string-case-locale.ts";
 import { UNICODE_VERSION } from "./unicode-data.ts";
 import { normalizeUnicode, transformUnicodeCase } from "./unicode-transform.ts";
 
@@ -876,15 +877,21 @@ export function evaluateConstantBuiltin(
 				return failure("normalization");
 			transformed = normalizeUnicode(source, form, workLimit - work);
 		} else {
-			if (
-				method.includes("Locale") &&
-				(first?.kind !== "undefined" || target.locale !== "en-US")
-			)
-				return unsupported();
+			let locale: "und" | "tr" | "lt" = "und";
+			if (method.includes("Locale") && target.intl !== false) {
+				if (first?.kind === "undefined") {
+					if (target.locale !== "en-US") return unsupported();
+				} else {
+					if (target.intl !== true || first?.kind !== "string") return unsupported();
+					const selected = stringCaseLocale(first.value);
+					if (selected === undefined) return unsupported();
+					locale = selected;
+				}
+			}
 			transformed = transformUnicodeCase(
 				source,
 				method.includes("Upper"),
-				"und",
+				locale,
 				workLimit - work,
 			);
 		}
