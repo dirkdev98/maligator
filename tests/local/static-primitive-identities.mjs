@@ -124,6 +124,115 @@ const functionReads = [
 	[() => globalThis.unescape, globalThis, "unescape"],
 ];
 
+const dataReads = [
+	...functionReads,
+	[() => Math.PI, Math, "PI"],
+	[() => Math.E, Math, "E"],
+	[() => Math.LN2, Math, "LN2"],
+	[() => Math.LN10, Math, "LN10"],
+	[() => Math.LOG2E, Math, "LOG2E"],
+	[() => Math.LOG10E, Math, "LOG10E"],
+	[() => Math.SQRT2, Math, "SQRT2"],
+	[() => Math.SQRT1_2, Math, "SQRT1_2"],
+	[() => Number.MAX_SAFE_INTEGER, Number, "MAX_SAFE_INTEGER"],
+	[() => Number.MIN_SAFE_INTEGER, Number, "MIN_SAFE_INTEGER"],
+	[() => Number.EPSILON, Number, "EPSILON"],
+	[() => Number.MAX_VALUE, Number, "MAX_VALUE"],
+	[() => Number.MIN_VALUE, Number, "MIN_VALUE"],
+	[() => Number.POSITIVE_INFINITY, Number, "POSITIVE_INFINITY"],
+	[() => Number.NEGATIVE_INFINITY, Number, "NEGATIVE_INFINITY"],
+	[() => Number.NaN, Number, "NaN"],
+	[() => Symbol.iterator, Symbol, "iterator"],
+	[() => Symbol.asyncIterator, Symbol, "asyncIterator"],
+	[() => Symbol.toStringTag, Symbol, "toStringTag"],
+	[() => Symbol.hasInstance, Symbol, "hasInstance"],
+	[() => Symbol.toPrimitive, Symbol, "toPrimitive"],
+	[() => Symbol.species, Symbol, "species"],
+	[() => Symbol.isConcatSpreadable, Symbol, "isConcatSpreadable"],
+	[() => Symbol.match, Symbol, "match"],
+	[() => Symbol.matchAll, Symbol, "matchAll"],
+	[() => Symbol.replace, Symbol, "replace"],
+	[() => Symbol.search, Symbol, "search"],
+	[() => Symbol.split, Symbol, "split"],
+	[() => Symbol.unscopables, Symbol, "unscopables"],
+	[() => Symbol.dispose, Symbol, "dispose"],
+	[() => Symbol.asyncDispose, Symbol, "asyncDispose"],
+];
+
+function* suspendedDataRead(read, escape) {
+	const first = read();
+	yield escape(first);
+	if (typeof globalThis.gc === "function") globalThis.gc();
+	return read();
+}
+
+for (const [read, owner, key] of dataReads) {
+	const expected = Object.getOwnPropertyDescriptor(owner, key).value;
+	const retained = [];
+	for (let index = 0; index < 4; index++) retained.push(read());
+	check(
+		retained.every((value) => Object.is(value, expected)),
+		"data read identity across loop",
+	);
+	const suspended = suspendedDataRead(read, (value) => {
+		retained.push(value);
+		return retained.length;
+	});
+	const yielded = suspended.next();
+	check(yielded.value === 5 && !yielded.done, "data read escape before suspension");
+	check(Object.is(retained[4], expected), "data read retains the installed value");
+	const resumed = suspended.next();
+	check(
+		resumed.done && Object.is(resumed.value, expected),
+		"data read identity after suspension",
+	);
+	const events = [];
+	const sentinel = {};
+	const proxy = new Proxy(owner, {
+		get(target, property, receiver) {
+			events.push("get");
+			return Reflect.get(target, property, receiver);
+		},
+	});
+	const effectfulKey = {
+		[Symbol.toPrimitive]() {
+			events.push("key");
+			return key;
+		},
+	};
+	check(Object.is(proxy[effectfulKey], expected), "proxy data read retains its target");
+	check(events.join(",") === "key,get", "key conversion precedes proxy lookup");
+	events.length = 0;
+	const throwing = new Proxy(owner, {
+		get() {
+			events.push("throw");
+			throw sentinel;
+		},
+	});
+	try {
+		throwing[effectfulKey];
+		throw new Error("unused proxy read must throw");
+	} catch (error) {
+		check(error === sentinel, "data read retains proxy exceptions");
+	}
+	check(events.join(",") === "key,throw", "unused read preserves conversion and trap");
+	events.length = 0;
+	try {
+		proxy[
+			{
+				[Symbol.toPrimitive]() {
+					events.push("key-throw");
+					throw sentinel;
+				},
+			}
+		];
+		throw new Error("key conversion must throw");
+	} catch (error) {
+		check(error === sentinel, "data read retains earlier key exceptions");
+	}
+	check(events.join(",") === "key-throw", "earlier key exception suppresses the read");
+}
+
 for (const [read, owner, key] of functionReads) {
 	const first = read();
 	check(typeof first === "function", "function value");

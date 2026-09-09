@@ -605,6 +605,63 @@ function onlyConstantResults(output: ReturnType<typeof inspect>) {
 	);
 }
 
+describe("canonical primitive data read profiles", () => {
+	const expressions = [
+		...primitiveFunctionData.map(([expression]) => expression!),
+		...primitiveDataExpressions,
+	];
+	const profiles = [
+		["effects", (value: string) => `function probe(x){x();return ${value};}`],
+		[
+			"escape",
+			(value: string) => `function probe(x){const value=${value};x(value);return value;}`,
+		],
+		[
+			"loop",
+			(value: string) =>
+				`function probe(x,n){let value;for(let i=0;i<n;i++){x();value=${value};}return value;}`,
+		],
+		[
+			"suspension",
+			(value: string) =>
+				`function* probe(x){const value=${value};yield x(value);return ${value};}`,
+		],
+	] as const;
+	for (const [profile, source] of profiles) {
+		it.each(expressions)(
+			`resolves the own data read through ${profile} for %s`,
+			(value) => {
+				const output = inspectStaticValueFunction(
+					`${source(value)}globalThis.probe=probe;`,
+					"probe",
+				);
+				expect(output.structure.genericLookups).toBe(0);
+				expect(output.structure.genericCalls).toBe(1);
+				expect(output.structure.allocations).toBe(0);
+				expect(output.structure.coercions).toBe(0);
+				expect(output.structure.operations).toEqual([]);
+				expect(output.core.some((operation) => operation.opcode === "builtinError")).toBe(
+					false,
+				);
+			},
+		);
+		it.each(expressions)(
+			`retains mutable data reads through ${profile} for %s`,
+			(value) => {
+				const output = inspectStaticValueFunction(
+					`${source(value)}globalThis.probe=probe;`,
+					"probe",
+					{ locked: false },
+				);
+				expect(output.structure.genericLookups).toBeGreaterThan(0);
+				expect(
+					output.core.some((operation) => operation.opcode === "loadPrimordial"),
+				).toBe(false);
+			},
+		);
+	}
+});
+
 describe("primitive operation results", () => {
 	it.each([3, 8, 16, 32, 64])(
 		"consumes %i dynamic Numbers through the exact sum kernel",

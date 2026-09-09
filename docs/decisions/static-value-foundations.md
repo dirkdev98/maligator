@@ -334,12 +334,17 @@ and escaping/coercion witnesses. They do not add invented installed descriptors 
 the primordial graph. Reconciliation validates the constructor identity, task,
 exposure reference and witnesses; its optimization cells still need closure.
 
-Math and Number constant descriptors and well-known Symbol descriptors have explicit
-constant-read, repeated-read and unused-read witnesses, with mutable lookup boundaries
-and native primitive/wrapper checks. For the all-static read profile, state mutation
-and callback/iteration axes are inapplicable: these own data descriptors yield
-immutable primitives without invoking a protocol. This classification does not apply
-to wrappers, symbol registry operations, or other profiles of these exposures.
+Primitive function-valued descriptors, Math and Number constants, and well-known
+Symbols have own-read witnesses across effects, escape, loops and suspension, with
+mutable lookup and native proxy/coercion boundaries. The proved ordinary data read
+has no invocation, exceptional outcome, fresh input or result allocation, state
+update, callback, iteration or payload preparation. Those axes are inapplicable for
+the static-observable, escaping-identity, large-recursive-loop and
+environment-state-gc-suspension read profiles. Receiver/key producers, caller control
+flow and replaced/proxied descriptors retain their effects and exceptions. Reading
+a function value does not invoke it; wrappers, registry operations and callable
+invocations keep their separate obligations. Constant, repeated and unused reads
+retain their own implementation witnesses.
 
 Contained String wrappers also disappear for fixed numeric index reads, including
 negative zero and absent indexes. Conversion remains at construction, and index
