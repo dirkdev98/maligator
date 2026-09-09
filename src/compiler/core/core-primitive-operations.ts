@@ -149,8 +149,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				if (
 					left.kind === "known" &&
 					right.kind === "known" &&
-					left.brand === "symbol" &&
-					right.brand === "symbol"
+					((left.brand === "symbol" && right.brand === "symbol") ||
+						(left.brand === "function" &&
+							right.brand === "function" &&
+							left.identity?.kind === "intrinsic" &&
+							right.identity?.kind === "intrinsic"))
 				) {
 					const a = left.identity,
 						b = right.identity;

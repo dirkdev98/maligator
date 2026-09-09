@@ -345,6 +345,20 @@ escapes and requires a known input brand excluding undefined; unknown inputs ret
 the constructor's absent-description branch. ToString stays at creation, before
 later effects and observations. Registry operations keep their runtime identity.
 
+Canonical function comparisons use the inventory's object identity, independently
+of native callback sharing. This folds repeated references across effects while
+keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases
+such as trimLeft/trimStart retain their shared identity. Mutable property reads keep
+lookup and observe replacement; escaped method values retain the actual runtime
+function objects.
+
+Rejected primitive construction has explicit per-target witnesses for runtime
+TypeError, preserved argument effects, earlier argument exceptions and fresh thrown
+errors. For the all-static construction profile, ordinary constant results and
+target-owned state updates or callback/iterator execution are inapplicable because
+construction is rejected. This does not classify normal calls, mutable targets,
+argument producers, or error-object materialization as inapplicable.
+
 ## Baseline measurement
 
 ```sh

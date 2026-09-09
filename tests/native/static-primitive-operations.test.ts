@@ -11,6 +11,29 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it.each(["locked", "mutable"] as const)(
+		"preserves primitive function identities and rejected construction with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-identities-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/static-primitive-identities.mjs",
+					name: "identities",
+					config: resolveBuildConfig({ engine: { primordials } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe("primitive identities passed\n");
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						"primitive identities passed\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 	it.each([false, true])(
 		"preserves locale case effects and prepared parameters with Intl=%s",
 		(enabled) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateConstantBuiltin } from "../src/compiler/shared/constant-builtins.ts";
 import { knownBuiltinErrorNames } from "../src/compiler/shared/known-builtin-errors.ts";
+import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import { BYTECODE_OPERATIONS } from "../src/compiler/target/bytecode-operation-spec.ts";
 import {
 	serializeCompilerArtifact,
@@ -8,6 +9,248 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
+
+const rejectedPrimitiveConstructors = [
+	["BigInt", "bigintConstructor"],
+	["BigInt.asIntN", "notConstructor"],
+	["BigInt.asUintN", "notConstructor"],
+	["BigInt.prototype.toString", "notConstructor"],
+	["BigInt.prototype.valueOf", "notConstructor"],
+	["Boolean.prototype.toString", "notConstructor"],
+	["Boolean.prototype.valueOf", "notConstructor"],
+	["Math.abs", "notConstructor"],
+	["Math.acos", "notConstructor"],
+	["Math.acosh", "notConstructor"],
+	["Math.asin", "notConstructor"],
+	["Math.asinh", "notConstructor"],
+	["Math.atan", "notConstructor"],
+	["Math.atan2", "notConstructor"],
+	["Math.atanh", "notConstructor"],
+	["Math.cbrt", "notConstructor"],
+	["Math.ceil", "notConstructor"],
+	["Math.clz32", "notConstructor"],
+	["Math.cos", "notConstructor"],
+	["Math.cosh", "notConstructor"],
+	["Math.exp", "notConstructor"],
+	["Math.expm1", "notConstructor"],
+	["Math.f16round", "notConstructor"],
+	["Math.floor", "notConstructor"],
+	["Math.fround", "notConstructor"],
+	["Math.hypot", "notConstructor"],
+	["Math.imul", "notConstructor"],
+	["Math.log", "notConstructor"],
+	["Math.log10", "notConstructor"],
+	["Math.log1p", "notConstructor"],
+	["Math.log2", "notConstructor"],
+	["Math.max", "notConstructor"],
+	["Math.min", "notConstructor"],
+	["Math.pow", "notConstructor"],
+	["Math.random", "notConstructor"],
+	["Math.round", "notConstructor"],
+	["Math.sign", "notConstructor"],
+	["Math.sin", "notConstructor"],
+	["Math.sinh", "notConstructor"],
+	["Math.sqrt", "notConstructor"],
+	["Math.sumPrecise", "notConstructor"],
+	["Math.tan", "notConstructor"],
+	["Math.tanh", "notConstructor"],
+	["Math.trunc", "notConstructor"],
+	["Number.isFinite", "notConstructor"],
+	["Number.isInteger", "notConstructor"],
+	["Number.isNaN", "notConstructor"],
+	["Number.isSafeInteger", "notConstructor"],
+	["Number.prototype.toExponential", "notConstructor"],
+	["Number.prototype.toFixed", "notConstructor"],
+	["Number.prototype.toPrecision", "notConstructor"],
+	["Number.prototype.toString", "notConstructor"],
+	["Number.prototype.valueOf", "notConstructor"],
+	["String.fromCharCode", "notConstructor"],
+	["String.fromCodePoint", "notConstructor"],
+	["String.prototype.anchor", "notConstructor"],
+	["String.prototype.at", "notConstructor"],
+	["String.prototype.big", "notConstructor"],
+	["String.prototype.blink", "notConstructor"],
+	["String.prototype.bold", "notConstructor"],
+	["String.prototype.charAt", "notConstructor"],
+	["String.prototype.charCodeAt", "notConstructor"],
+	["String.prototype.codePointAt", "notConstructor"],
+	["String.prototype.concat", "notConstructor"],
+	["String.prototype.endsWith", "notConstructor"],
+	["String.prototype.fixed", "notConstructor"],
+	["String.prototype.fontcolor", "notConstructor"],
+	["String.prototype.fontsize", "notConstructor"],
+	["String.prototype.includes", "notConstructor"],
+	["String.prototype.indexOf", "notConstructor"],
+	["String.prototype.isWellFormed", "notConstructor"],
+	["String.prototype.italics", "notConstructor"],
+	["String.prototype.lastIndexOf", "notConstructor"],
+	["String.prototype.link", "notConstructor"],
+	["String.prototype.localeCompare", "notConstructor"],
+	["String.prototype.normalize", "notConstructor"],
+	["String.prototype.padEnd", "notConstructor"],
+	["String.prototype.padStart", "notConstructor"],
+	["String.prototype.repeat", "notConstructor"],
+	["String.prototype.replace", "notConstructor"],
+	["String.prototype.replaceAll", "notConstructor"],
+	["String.prototype.slice", "notConstructor"],
+	["String.prototype.small", "notConstructor"],
+	["String.prototype.split", "notConstructor"],
+	["String.prototype.startsWith", "notConstructor"],
+	["String.prototype.strike", "notConstructor"],
+	["String.prototype.sub", "notConstructor"],
+	["String.prototype.substr", "notConstructor"],
+	["String.prototype.substring", "notConstructor"],
+	["String.prototype.sup", "notConstructor"],
+	["String.prototype.toLocaleLowerCase", "notConstructor"],
+	["String.prototype.toLocaleUpperCase", "notConstructor"],
+	["String.prototype.toLowerCase", "notConstructor"],
+	["String.prototype.toString", "notConstructor"],
+	["String.prototype.toUpperCase", "notConstructor"],
+	["String.prototype.toWellFormed", "notConstructor"],
+	["String.prototype.trim", "notConstructor"],
+	["String.prototype.trimEnd", "notConstructor"],
+	["String.prototype.trimStart", "notConstructor"],
+	["String.prototype.valueOf", "notConstructor"],
+	["String.raw", "notConstructor"],
+	["Symbol", "symbolConstructor"],
+	["Symbol.for", "notConstructor"],
+	["Symbol.keyFor", "notConstructor"],
+	["Symbol.prototype.toString", "notConstructor"],
+	["Symbol.prototype.valueOf", "notConstructor"],
+	["Symbol.prototype[Symbol.toPrimitive]", "notConstructor"],
+	["decodeURI", "notConstructor"],
+	["decodeURIComponent", "notConstructor"],
+	["encodeURI", "notConstructor"],
+	["encodeURIComponent", "notConstructor"],
+	["globalThis.escape", "notConstructor"],
+	["globalThis.unescape", "notConstructor"],
+	["isFinite", "notConstructor"],
+	["isNaN", "notConstructor"],
+	["parseFloat", "notConstructor"],
+	["parseInt", "notConstructor"],
+];
+
+const primitiveFunctionData = [
+	["BigInt.asUintN", "BigInt.asUintN"],
+	["BigInt.asIntN", "BigInt.asIntN"],
+	["BigInt.prototype.toString", "BigInt.prototype.toString"],
+	["BigInt.prototype.valueOf", "BigInt.prototype.valueOf"],
+	["Boolean.prototype.toString", "Boolean.prototype.toString"],
+	["Boolean.prototype.valueOf", "Boolean.prototype.valueOf"],
+	["Math.abs", "Math.abs"],
+	["Math.floor", "Math.floor"],
+	["Math.ceil", "Math.ceil"],
+	["Math.round", "Math.round"],
+	["Math.trunc", "Math.trunc"],
+	["Math.sqrt", "Math.sqrt"],
+	["Math.cbrt", "Math.cbrt"],
+	["Math.sign", "Math.sign"],
+	["Math.log", "Math.log"],
+	["Math.log2", "Math.log2"],
+	["Math.log10", "Math.log10"],
+	["Math.exp", "Math.exp"],
+	["Math.sin", "Math.sin"],
+	["Math.cos", "Math.cos"],
+	["Math.tan", "Math.tan"],
+	["Math.asin", "Math.asin"],
+	["Math.acos", "Math.acos"],
+	["Math.atan", "Math.atan"],
+	["Math.sinh", "Math.sinh"],
+	["Math.cosh", "Math.cosh"],
+	["Math.tanh", "Math.tanh"],
+	["Math.asinh", "Math.asinh"],
+	["Math.acosh", "Math.acosh"],
+	["Math.atanh", "Math.atanh"],
+	["Math.log1p", "Math.log1p"],
+	["Math.expm1", "Math.expm1"],
+	["Math.fround", "Math.fround"],
+	["Math.f16round", "Math.f16round"],
+	["Math.clz32", "Math.clz32"],
+	["Math.imul", "Math.imul"],
+	["Math.atan2", "Math.atan2"],
+	["Math.pow", "Math.pow"],
+	["Math.hypot", "Math.hypot"],
+	["Math.min", "Math.min"],
+	["Math.max", "Math.max"],
+	["Math.sumPrecise", "Math.sumPrecise"],
+	["Math.random", "Math.random"],
+	["Number.isNaN", "Number.isNaN"],
+	["Number.isFinite", "Number.isFinite"],
+	["Number.isInteger", "Number.isInteger"],
+	["Number.isSafeInteger", "Number.isSafeInteger"],
+	["Number.parseInt", "parseInt"],
+	["Number.parseFloat", "parseFloat"],
+	["Number.prototype.toString", "Number.prototype.toString"],
+	["Number.prototype.toFixed", "Number.prototype.toFixed"],
+	["Number.prototype.toExponential", "Number.prototype.toExponential"],
+	["Number.prototype.toPrecision", "Number.prototype.toPrecision"],
+	["Number.prototype.valueOf", "Number.prototype.valueOf"],
+	["String.fromCharCode", "String.fromCharCode"],
+	["String.fromCodePoint", "String.fromCodePoint"],
+	["String.raw", "String.raw"],
+	["String.prototype.charAt", "String.prototype.charAt"],
+	["String.prototype.charCodeAt", "String.prototype.charCodeAt"],
+	["String.prototype.codePointAt", "String.prototype.codePointAt"],
+	["String.prototype.at", "String.prototype.at"],
+	["String.prototype.indexOf", "String.prototype.indexOf"],
+	["String.prototype.lastIndexOf", "String.prototype.lastIndexOf"],
+	["String.prototype.includes", "String.prototype.includes"],
+	["String.prototype.startsWith", "String.prototype.startsWith"],
+	["String.prototype.endsWith", "String.prototype.endsWith"],
+	["String.prototype.slice", "String.prototype.slice"],
+	["String.prototype.substring", "String.prototype.substring"],
+	["String.prototype.substr", "String.prototype.substr"],
+	["String.prototype.anchor", "String.prototype.anchor"],
+	["String.prototype.big", "String.prototype.big"],
+	["String.prototype.blink", "String.prototype.blink"],
+	["String.prototype.bold", "String.prototype.bold"],
+	["String.prototype.fixed", "String.prototype.fixed"],
+	["String.prototype.fontcolor", "String.prototype.fontcolor"],
+	["String.prototype.fontsize", "String.prototype.fontsize"],
+	["String.prototype.italics", "String.prototype.italics"],
+	["String.prototype.link", "String.prototype.link"],
+	["String.prototype.small", "String.prototype.small"],
+	["String.prototype.strike", "String.prototype.strike"],
+	["String.prototype.sub", "String.prototype.sub"],
+	["String.prototype.sup", "String.prototype.sup"],
+	["String.prototype.concat", "String.prototype.concat"],
+	["String.prototype.localeCompare", "String.prototype.localeCompare"],
+	["String.prototype.normalize", "String.prototype.normalize"],
+	["String.prototype.repeat", "String.prototype.repeat"],
+	["String.prototype.trim", "String.prototype.trim"],
+	["String.prototype.trimStart", "String.prototype.trimStart"],
+	["String.prototype.trimEnd", "String.prototype.trimEnd"],
+	["String.prototype.trimLeft", "String.prototype.trimStart"],
+	["String.prototype.trimRight", "String.prototype.trimEnd"],
+	["String.prototype.toUpperCase", "String.prototype.toUpperCase"],
+	["String.prototype.toLowerCase", "String.prototype.toLowerCase"],
+	["String.prototype.toLocaleUpperCase", "String.prototype.toLocaleUpperCase"],
+	["String.prototype.toLocaleLowerCase", "String.prototype.toLocaleLowerCase"],
+	["String.prototype.isWellFormed", "String.prototype.isWellFormed"],
+	["String.prototype.toWellFormed", "String.prototype.toWellFormed"],
+	["String.prototype.split", "String.prototype.split"],
+	["String.prototype.replace", "String.prototype.replace"],
+	["String.prototype.replaceAll", "String.prototype.replaceAll"],
+	["String.prototype.padStart", "String.prototype.padStart"],
+	["String.prototype.padEnd", "String.prototype.padEnd"],
+	["String.prototype.toString", "String.prototype.toString"],
+	["String.prototype.valueOf", "String.prototype.valueOf"],
+	["Symbol.for", "Symbol.for"],
+	["Symbol.keyFor", "Symbol.keyFor"],
+	["Symbol.prototype.toString", "Symbol.prototype.toString"],
+	["Symbol.prototype.valueOf", "Symbol.prototype.valueOf"],
+	["Symbol.prototype[Symbol.toPrimitive]", "Symbol.prototype[%Symbol.toPrimitive%]"],
+	["globalThis.parseInt", "parseInt"],
+	["globalThis.parseFloat", "parseFloat"],
+	["globalThis.isNaN", "isNaN"],
+	["globalThis.isFinite", "isFinite"],
+	["globalThis.decodeURI", "decodeURI"],
+	["globalThis.decodeURIComponent", "decodeURIComponent"],
+	["globalThis.encodeURI", "encodeURI"],
+	["globalThis.encodeURIComponent", "encodeURIComponent"],
+	["globalThis.escape", "globalThis.escape"],
+	["globalThis.unescape", "globalThis.unescape"],
+];
 
 const primitiveDataExpressions = [
 	"Math.PI",
@@ -232,6 +475,130 @@ function onlyConstantResults(output: ReturnType<typeof inspect>) {
 }
 
 describe("primitive operation results", () => {
+	it.each(rejectedPrimitiveConstructors)(
+		"residualizes rejected construction of %s without argument materialization",
+		(expression, error) => {
+			const output = inspect(`new (${expression})([x()],x())`);
+			expect(
+				output.core
+					.filter((operation) => operation.opcode === "builtinError")
+					.map((operation) => operation.attributes.error),
+			).toEqual([error]);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.genericCalls).toBe(2);
+		},
+	);
+	it.each(rejectedPrimitiveConstructors)(
+		"keeps the runtime exception for constant construction of %s",
+		(expression, error) => {
+			const output = inspect(`new (${expression})(1)`);
+			expect(
+				output.core
+					.filter((operation) => operation.opcode === "builtinError")
+					.map((operation) => operation.attributes.error),
+			).toEqual([error]);
+			expect(output.structure.allocations).toBe(0);
+		},
+	);
+	it.each(rejectedPrimitiveConstructors)(
+		"retains a mutable construction target at %s",
+		(expression) => {
+			const output = inspect(`new (${expression})([x()],x())`, false);
+			expect(output.core.some((operation) => operation.opcode === "builtinError")).toBe(
+				false,
+			);
+			expect(output.structure.allocations).toBeGreaterThan(0);
+		},
+	);
+	it.each(primitiveFunctionData)(
+		"reads the exact canonical function at %s",
+		(expression, canonical) => {
+			const output = inspect(expression);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.genericCalls).toBe(0);
+			expect(output.core.map((operation) => operation.opcode)).toEqual([
+				"loadPrimordial",
+			]);
+			expect(
+				getPrimordialCatalog().nodes[output.core[0]!.attributes.nodeIndex as number]?.[0],
+			).toBe(canonical);
+		},
+	);
+	it.each(primitiveFunctionData)(
+		"retains mutable canonical function lookup at %s",
+		(expression) => {
+			const output = inspect(expression, false);
+			expect(output.structure.genericLookups).toBeGreaterThan(0);
+			expect(output.core.some((operation) => operation.opcode === "loadPrimordial")).toBe(
+				false,
+			);
+			const comparison = inspectStaticValueFunction(
+				`function probe(x){const before=${expression};x();return before===${expression};}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false },
+			);
+			expect(
+				comparison.core.some(
+					(operation) =>
+						operation.opcode === "binary" && operation.attributes.operator === "===",
+				),
+			).toBe(true);
+		},
+	);
+	it.each(primitiveFunctionData)(
+		"reuses canonical function identity across effects at %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){const before=${expression};x();return before===${expression};}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.core.some((operation) => operation.opcode === "loadPrimordial")).toBe(
+				false,
+			);
+			expect(
+				output.core
+					.filter((operation) => operation.opcode === "createBoolean")
+					.map((operation) => operation.attributes.value),
+			).toEqual([true]);
+		},
+	);
+	it.each(primitiveFunctionData)(
+		"discards unused canonical function reads at %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x){x();${expression};x();return 1;}globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(output.structure.genericCalls).toBe(2);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(
+				output.core.some((operation) =>
+					["loadPrimordial", "loadIntrinsic"].includes(operation.opcode),
+				),
+			).toBe(false);
+		},
+	);
+	it.each([
+		["String.prototype.trimLeft", "String.prototype.trimStart", true],
+		["String.prototype.trimRight", "String.prototype.trimEnd", true],
+		["Number.parseInt", "parseInt", true],
+		["Number.parseFloat", "parseFloat", true],
+		["String.prototype.toString", "String.prototype.valueOf", false],
+		["Symbol.prototype.valueOf", "Symbol.prototype[Symbol.toPrimitive]", false],
+	] as const)(
+		"distinguishes canonical function identity for %s and %s",
+		(left, right, same) => {
+			for (const operator of ["===", "!==", "==", "!="]) {
+				const output = inspect(`${left}${operator}${right}`);
+				expect(
+					output.core.map((operation) => [operation.opcode, operation.attributes.value]),
+				).toEqual([["createBoolean", operator.startsWith("!") ? !same : same]]);
+			}
+		},
+	);
 	it.each([
 		"Symbol(String(x)).description",
 		"Symbol(+x).description",
