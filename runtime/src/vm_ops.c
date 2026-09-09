@@ -2652,6 +2652,20 @@ bool mal_op_call_guarded_builtin(
         (MAL_MATH_UNARY_ROUND + 1);
     MalValue receiver = mal_op_value_operand(
         callable, instruction->as.call.this_value);
+    if (operation >= MAL_GUARDED_BUILTIN_NUMBER_TO_FIXED &&
+        operation <= MAL_GUARDED_BUILTIN_NUMBER_TO_PRECISION) {
+        if (!mal_ops_is_number(receiver)) return false;
+        MalNumberFormatMethod method = operation == MAL_GUARDED_BUILTIN_NUMBER_TO_FIXED
+            ? MAL_NUMBER_FORMAT_FIXED : operation == MAL_GUARDED_BUILTIN_NUMBER_TO_EXPONENTIAL
+            ? MAL_NUMBER_FORMAT_EXPONENTIAL : MAL_NUMBER_FORMAT_PRECISION;
+        MalValue option = argument_count == 0 ? MAL_VALUE_UNDEFINED
+            : mal_op_value_operand(callable, argument_operands[0]);
+        MalValue result;
+        if (!mal_builtin_number_format_try_direct(vm, method,
+                mal_op_value_operand(callable, instruction->as.call.callee), receiver, option, &result)) return false;
+        callable->registers[instruction->as.call.dst] = result;
+        return true;
+    }
     if (operation == MAL_GUARDED_BUILTIN_ARRAY_PUSH) {
         if (argument_count > 4) {
             MAL_PERF_COUNT(array_push_direct_fallbacks);

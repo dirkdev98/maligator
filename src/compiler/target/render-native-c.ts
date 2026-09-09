@@ -6558,6 +6558,55 @@ function emitInstruction(
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (
+				guardedBuiltinOperation === "Number.prototype.toFixed" ||
+				guardedBuiltinOperation === "Number.prototype.toExponential" ||
+				guardedBuiltinOperation === "Number.prototype.toPrecision"
+			) {
+				const method = {
+					"Number.prototype.toFixed": "MAL_NUMBER_FORMAT_FIXED",
+					"Number.prototype.toExponential": "MAL_NUMBER_FORMAT_EXPONENTIAL",
+					"Number.prototype.toPrecision": "MAL_NUMBER_FORMAT_PRECISION",
+				}[guardedBuiltinOperation];
+				const option = args.length === 0 ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]!);
+				const format = NUMBER_FORMAT_KERNELS[guardedBuiltinOperation]!;
+				const constant =
+					args.length === 0
+						? { kind: "undefined" as const }
+						: decodeVmValueOperand(args[0]!);
+				const digits =
+					constant.kind === "undefined"
+						? format[3]
+						: constant.kind === "number" &&
+							  Number.isInteger(constant.value) &&
+							  constant.value >= format[1] &&
+							  constant.value <= format[2]
+							? constant.value
+							: undefined;
+				const receiver = boxedOperand(instruction.thisValue);
+				const guard =
+					digits === undefined
+						? `mal_builtin_number_format_try_direct(vm, ${method}, ${boxedOperand(instruction.callee)}, ${receiver}, ${option}, &__number_format_${ip})`
+						: `mal_builtin_number_format_callee_matches(vm, ${method}, ${boxedOperand(instruction.callee)})`;
+				return [
+					...(digits === undefined ? [`MalValue __number_format_${ip};`] : []),
+					`if (mal_ops_is_number(${receiver}) && ${guard}) {`,
+					...(digits === undefined
+						? []
+						: [
+								`MalValue __number_format_${ip} = mal_builtin_number_to_${format[0]}_numeric(vm, mal_ops_number_as_f64(${receiver}), ${digits});`,
+							]),
+					throwCheck(),
+					`r${instruction.dst} = __number_format_${ip};`,
+					`} else {`,
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
+			if (
 				nativeBuiltinCollectionCallChainAction?.role === "call" &&
 				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies.length ===
 					1 &&

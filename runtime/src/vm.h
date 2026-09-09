@@ -50,6 +50,9 @@ typedef enum MalGuardedBuiltinCallOp {
     MAL_GUARDED_BUILTIN_SET_HAS,
     MAL_GUARDED_BUILTIN_SET_DELETE,
     MAL_GUARDED_BUILTIN_ARRAY_PUSH,
+    MAL_GUARDED_BUILTIN_NUMBER_TO_FIXED,
+    MAL_GUARDED_BUILTIN_NUMBER_TO_EXPONENTIAL,
+    MAL_GUARDED_BUILTIN_NUMBER_TO_PRECISION,
 } MalGuardedBuiltinCallOp;
 
 /** Packed literal-template tags; mirrored by src/compiler/core/semantic-lowering.ts. */

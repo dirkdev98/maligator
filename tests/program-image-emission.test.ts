@@ -2266,6 +2266,39 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it.each(["toFixed", "toExponential", "toPrecision"])(
+		"preserves lookup and fallback around guarded numeric %s formatting",
+		(method) => {
+			const definition = lower(`
+				function format(value, digits, effect) { return value.${method}(digits, effect()); }
+				globalThis.format = format;
+			`);
+			const calls = definition.runtime.functions.flatMap(({ instructions }) =>
+				instructions.filter(
+					(instruction) =>
+						instruction.opcode === "CALL" &&
+						instruction.guardedBuiltinCall?.operation === `Number.prototype.${method}`,
+				),
+			);
+			expect(calls).toHaveLength(1);
+			expect(calls[0]).toMatchObject({ argumentCount: 2 });
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+				definition,
+			);
+			const output = emitProgramImage(definition);
+			expect(output).toContain("mal_vm_op_load_property_ic");
+			expect(output).toContain("mal_builtin_number_format_try_direct");
+			expect(output).toContain("mal_vm_call_cached");
+			const prepared = emit(`
+				function format(value) { return value.${method}(2); }
+				globalThis.format = format;
+			`);
+			expect(prepared).toContain("mal_vm_op_load_property_ic");
+			expect(prepared).toContain("mal_builtin_number_format_callee_matches");
+			expect(prepared).toContain("mal_vm_call_cached");
+		},
+	);
+
 	it("erases locked Math property Gets only for no-fallback numeric calls", () => {
 		const source = `"use strict"; function calculate() { return Math.floor(1.25); } globalThis.keep = calculate;`;
 		const mutableOutput = emit(source);

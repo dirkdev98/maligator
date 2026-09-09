@@ -715,6 +715,50 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
     return mal_builtin_number_to_precision_numeric(vm, number, (i32) precision);
 }
 
+bool mal_builtin_number_format_callee_matches(
+    MalVm *vm, MalNumberFormatMethod method, MalValue callee
+) {
+    if (!mal_value_is_native_function_object(callee)) return false;
+    MalNativeFunctionCallback expected;
+    switch (method) {
+        case MAL_NUMBER_FORMAT_FIXED: expected = mal_builtin_number_prototype_to_fixed; break;
+        case MAL_NUMBER_FORMAT_EXPONENTIAL: expected = mal_builtin_number_prototype_to_exponential; break;
+        case MAL_NUMBER_FORMAT_PRECISION: expected = mal_builtin_number_prototype_to_precision; break;
+        default: return false;
+    }
+    if (mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected) return false;
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
+#endif
+    return true;
+}
+
+bool mal_builtin_number_format_try_direct(
+    MalVm *vm, MalNumberFormatMethod method, MalValue callee,
+    MalValue receiver, MalValue option, MalValue *result
+) {
+    if (!mal_ops_is_number(receiver) || !mal_builtin_number_format_callee_matches(vm, method, callee)) return false;
+    i32 digits;
+    if (mal_value_is_undefined(option)) {
+        digits = method == MAL_NUMBER_FORMAT_FIXED ? 0 : -1;
+    } else {
+        if (!mal_ops_is_number(option)) return false;
+        f64 raw = mal_ops_number_as_f64(option);
+        if (!isfinite(raw) || raw != trunc(raw) || raw < (method == MAL_NUMBER_FORMAT_PRECISION ? 1 : 0) || raw > 100) return false;
+        digits = (i32) raw;
+    }
+    f64 number = mal_ops_number_as_f64(receiver);
+    switch (method) {
+        case MAL_NUMBER_FORMAT_FIXED: *result = mal_builtin_number_to_fixed_numeric(vm, number, digits); break;
+        case MAL_NUMBER_FORMAT_EXPONENTIAL: *result = mal_builtin_number_to_exponential_numeric(vm, number, digits); break;
+        case MAL_NUMBER_FORMAT_PRECISION: *result = mal_builtin_number_to_precision_numeric(vm, number, digits); break;
+        default: return false;
+    }
+    return true;
+}
+
 static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;

@@ -354,6 +354,15 @@ the getter and uses an empty string inside descriptive text. ToString stays at
 creation, before later effects and observations, with the original exception
 handler. Registry operations keep their runtime identity.
 
+Mutable Number formatting retains the property Get and all argument evaluation.
+Native and interpreted calls guard the captured native callback, current realm,
+primitive Number receiver and valid numeric option before entering the existing
+exact formatter. Native emission validates constant options ahead of time and
+passes their unboxed values to that formatter. A failed guard performs no work
+and the original callee receives the original arguments once. Foreign callees,
+wrappers and coercing or invalid
+options use ordinary dispatch, preserving error realms and coercion order.
+
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
 keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases

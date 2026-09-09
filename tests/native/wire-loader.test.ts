@@ -848,12 +848,13 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("direct-builtin-invalid-string", invalidString);
 	});
 
-	it("loads guarded Math and collection call tags and rejects malformed hints", () => {
+	it("loads guarded Math, collection and number formatting tags and rejects malformed hints", () => {
 		const entrypoint = path.join(directory, "guarded-call-tags.mjs");
 		writeFileSync(
 			entrypoint,
 			`function guardedOperations(map, array, value) {
 				array.push(value);
+				globalThis.formatted = [value.toFixed(), value.toExponential(2), value.toPrecision(2, 0, 0, 0, 0)];
 				return Math.round(value) + Math.max(value, 3) + map.get("answer");
 			}
 			globalThis.guardedOperations = guardedOperations;
@@ -901,6 +902,14 @@ describe("wire loader side-data validation", () => {
 		expect(binary).toBeDefined();
 		expect(collection).toBeDefined();
 		expect(arrayPush).toBeDefined();
+		for (const method of ["toFixed", "toExponential", "toPrecision"])
+			expect(
+				guardedSites.some(
+					(site) =>
+						site.instruction.guardedBuiltinCall?.operation ===
+						`Number.prototype.${method}`,
+				),
+			).toBe(true);
 		if (
 			unary === undefined ||
 			binary === undefined ||

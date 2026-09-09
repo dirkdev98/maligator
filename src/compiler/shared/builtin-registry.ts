@@ -518,6 +518,21 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			lowerings: ["generic", "exact-builtin-call"],
 		}),
 	),
+	...(["toFixed", "toExponential", "toPrecision"] as const).map(
+		(key): BuiltinOperationDescriptor => ({
+			id: `Number.prototype.${key}`,
+			owner: "Number.prototype",
+			key,
+			receiver: "number",
+			arity: { minimum: 0, maximum: 1 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: ["receiver-number-brand", "option-number"],
+			effects: ["coerce", "call-user-code", "allocate", "throw", "safepoint"],
+			result: "string",
+			realm: "realm-object-identity",
+			lowerings: ["generic", "guarded-number-format"],
+		}),
+	),
 	{
 		id: "Number.prototype.valueOf",
 		owner: "Number.prototype",

@@ -1054,7 +1054,7 @@ describe("program-image-codec", () => {
 		});
 	});
 
-	it("round-trips and validates guarded Math call hints", () => {
+	it("round-trips and validates guarded numeric and collection call hints", () => {
 		const calls: Array<BytecodeInstruction> = [
 			{
 				opcode: "CALL",
@@ -1092,6 +1092,25 @@ describe("program-image-codec", () => {
 				argumentCount: 4,
 				arguments: [3, 4, 3, 4],
 			},
+			...(
+				[
+					"Number.prototype.toFixed",
+					"Number.prototype.toExponential",
+					"Number.prototype.toPrecision",
+				] as const
+			).flatMap((operation) =>
+				[0, 1, 5].map(
+					(argumentCount): BytecodeInstruction => ({
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						guardedBuiltinCall: { operation },
+						argumentCount,
+						arguments: Array.from({ length: argumentCount }, () => 3),
+					}),
+				),
+			),
 		];
 		const withCalls = (instructions: Array<BytecodeInstruction>): ProgramImage =>
 			withBytecodeFunctions(definition, [

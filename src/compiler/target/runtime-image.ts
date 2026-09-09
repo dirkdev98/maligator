@@ -247,6 +247,9 @@ export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
 	"Set.prototype.has",
 	"Set.prototype.delete",
 	"Array.prototype.push",
+	"Number.prototype.toFixed",
+	"Number.prototype.toExponential",
+	"Number.prototype.toPrecision",
 ] as const;
 
 export interface VmKnownOwnSlotCandidate {

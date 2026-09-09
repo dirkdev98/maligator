@@ -90,6 +90,9 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.findLast",
 	"Array.prototype.findLastIndex",
 	"Array.prototype.flatMap",
+	"Number.prototype.toFixed",
+	"Number.prototype.toExponential",
+	"Number.prototype.toPrecision",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];

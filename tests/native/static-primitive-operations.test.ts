@@ -11,6 +11,29 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("primitive operation differential", () => {
+	it.each([false, true])(
+		"preserves guarded number formatting and callee mutations with realms=%s",
+		(realms) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-number-guards-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/guarded-number-format.mjs",
+					name: "guards",
+					config: resolveBuildConfig({ engine: { primordials: "mutable", realms } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe("number formatting guards passed\n");
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						"number formatting guards passed\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
 	it.each(["locked", "mutable"] as const)(
 		"preserves primitive function identities and rejected construction with %s primordials",
 		(primordials) => {
