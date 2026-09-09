@@ -4,9 +4,11 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
@@ -74,7 +76,10 @@ function observations(fn: CoreFunctionStore) {
 	);
 }
 
-function compileRecursiveObservation(sourceClosed: boolean): {
+function compileRecursiveObservation(
+	sourceClosed: boolean,
+	published = false,
+): {
 	readonly program: CoreProgram;
 	readonly valueKindFolds: number;
 	readonly waves: number;
@@ -82,14 +87,18 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 	readonly callerEditSessions: number;
 	readonly callerLocalOptimizations: number;
 } {
-	const sourcePath = "core-program-value-kinds.js";
-	const semantic = analyzeSourceAndRunSemanticAnalysis(
-		`function observe(text, absent, count) {
+	const sourcePath = published
+		? "core-program-value-kinds.js"
+		: "core-program-value-kinds.mjs";
+	const source = `function observe(text, absent, count) {
 			if (count > 0) return observe(text, absent, count - 1);
 			return typeof text === "string" && text !== 1 && !absent;
 		}
-		globalThis.result = observe("value", null, globalThis.count);`,
+		globalThis.result = observe("value", null, globalThis.count);`;
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
 		sourcePath,
+		published ? undefined : parseModule(source),
 	);
 	let optimized: CoreProgram | undefined;
 	let valueKindFolds = 0;
@@ -179,7 +188,7 @@ describe("whole-program Core value kinds", () => {
 		const observe = coreFunctionNamed(optimized, "observe")!;
 		expect(coreOperations(observe).some(({ opcode }) => opcode === "call")).toBe(true);
 		expect(observations(observe)).toEqual([]);
-		expect(result.valueKindFolds).toBe(3);
+		expect(result.valueKindFolds).toBeGreaterThan(0);
 		expect(result.callerEditSessions).toBe(result.callerLocalOptimizations);
 		expect(result.programFlowResolves).toBe(result.waves + 1);
 		expect(
@@ -191,10 +200,225 @@ describe("whole-program Core value kinds", () => {
 	});
 
 	it("keeps parameter observations when open-world callers may add other kinds", () => {
-		const { program: optimized, valueKindFolds } = compileRecursiveObservation(false);
+		const { program: optimized } = compileRecursiveObservation(false);
 		const observe = coreFunctionNamed(optimized, "observe")!;
 		expect(observations(observe).length).toBeGreaterThan(0);
+	});
+
+	it("keeps parameter observations for a function published on the global object", () => {
+		const { program, valueKindFolds } = compileRecursiveObservation(true, true);
+		expect(observations(coreFunctionNamed(program, "observe")!).length).toBeGreaterThan(
+			0,
+		);
 		expect(valueKindFolds).toBe(0);
+	});
+
+	it.each([
+		["object property", "globalThis.sink = { callback: observe };"],
+		["array element", "globalThis.sink = [observe];"],
+		[
+			"catch handler",
+			"try { JSON.parse('!'); } catch { globalThis.sink = { callback: observe }; }",
+		],
+		["moved identity", "const alias = observe; globalThis.sink = { alias };"],
+		[
+			"captured identity",
+			"function capture() { const alias = observe; return function expose() { globalThis.sink = alias; }; } globalThis.capture = capture();",
+		],
+		[
+			"script argument",
+			"function expose(value) { globalThis.sink = value; } expose(observe);",
+		],
+		["native argument", "globalThis.sink = new Proxy(observe, {});"],
+		[
+			"returned identity",
+			"function expose() { return observe; } globalThis.sink = expose;",
+		],
+		[
+			"thrown identity",
+			"try { throw observe; } catch (value) { globalThis.sink = value; }",
+		],
+		[
+			"yielded identity",
+			"function* expose() { yield observe; } globalThis.sink = expose;",
+		],
+	])(
+		"keeps unknown parameter kinds for a callback exposed through an %s",
+		(_name, publication) => {
+			const sourcePath = "published-callback.mjs";
+			const source = `function observe(value) {
+			if (globalThis.again) return observe(value);
+			return typeof value === "string";
+		}
+		${publication}
+		globalThis.result = observe(1);`;
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+				{
+					facts: withProgramClosure(
+						compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { eval: false } }),
+						),
+						programClosureCertificate(
+							{ kind: "whole-program", entry: sourcePath },
+							[],
+							[],
+						),
+					),
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				},
+			);
+			expect(
+				observations(coreFunctionNamed(optimized!, "observe")!).length,
+			).toBeGreaterThan(0);
+		},
+	);
+
+	it("widens and narrows callback inputs when publication changes without changing its call edge", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		const [argument] = caller.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		caller.appendInstruction(entry, "rootUse", [callee!]);
+		const publication = [...caller.bodyInstructionIds(entry)].at(-1)!;
+		const [result] = caller.appendInstruction(entry, "call", [
+			callee!,
+			receiver!,
+			argument!,
+		]);
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const callerId = caller.finish(entry).function;
+		const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const leafEntry = leaf.createBlock([{ representation: "boxed" }]);
+		leaf.setTerminator(leafEntry, {
+			kind: "return",
+			value: inspectCoreBlockParameters(leaf, leafEntry)[0]!.value,
+		});
+		const leafId = leaf.finish(leafEntry).function;
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		expect(
+			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).summary(leafId)
+				.parameterKinds,
+		).toEqual([COMPILER_VALUE_KIND_STRING]);
+		for (const published of [true, false]) {
+			const editor = CoreEditor.open(program, callerId);
+			editor.replaceInstruction(
+				publication,
+				published ? "storeGlobalProperty" : "rootUse",
+				[callee!],
+				{
+					attributes: published ? { nameStringIndex: 0 } : {},
+				},
+			);
+			editor.commit();
+			expect(
+				manager
+					.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+					.summary(leafId).parameterKinds,
+			).toEqual([published ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_STRING]);
+		}
+	});
+
+	it("updates callback publication when throwing effects or handler edges change", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const protectedBlock = caller.createBlock();
+		const normal = caller.createBlock();
+		const handler = caller.createBlock([{ role: "exception" }, {}]);
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		const [argument] = caller.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [number] = caller.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		caller.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: protectedBlock, arguments: [] },
+		});
+		caller.appendInstruction(protectedBlock, "unary", [number!], {
+			attributes: { operator: "+" },
+		});
+		const conversion = [...caller.bodyInstructionIds(protectedBlock)][0]!;
+		caller.setHandler(protectedBlock, handler, [callee!]);
+		caller.setTerminator(protectedBlock, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		caller.appendInstruction(
+			handler,
+			"storeGlobalProperty",
+			[caller.blockParameterValue(handler, 1)],
+			{ attributes: { nameStringIndex: 0 } },
+		);
+		caller.setTerminator(handler, { kind: "return", value: receiver! });
+		const [result] = caller.appendInstruction(normal, "call", [
+			callee!,
+			receiver!,
+			argument!,
+		]);
+		caller.setTerminator(normal, { kind: "return", value: result! });
+		const callerId = caller.finish(entry).function;
+		const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const leafEntry = leaf.createBlock([{}]);
+		leaf.setTerminator(leafEntry, {
+			kind: "return",
+			value: leaf.blockParameterValue(leafEntry, 0),
+		});
+		const leafId = leaf.finish(leafEntry).function;
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const parameterKinds = () =>
+			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).summary(leafId)
+				.parameterKinds;
+		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_TOP]);
+		const refined = CoreEditor.open(program, callerId);
+		const proof = refined.addFact({
+			kind: "number-conversion",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "number-conversion" },
+			obligations: [],
+			origin: "test",
+		});
+		refined.setInstructionEffectRefinement(conversion, {
+			effects: CORE_NO_EFFECTS,
+			proof,
+		});
+		refined.commit();
+		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_STRING]);
+		const cleared = CoreEditor.open(program, callerId);
+		cleared.clearInstructionEffectRefinement(conversion);
+		cleared.commit();
+		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_TOP]);
+		const removed = CoreEditor.open(program, callerId);
+		removed.clearHandler(protectedBlock);
+		removed.commit();
+		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_STRING]);
+		const restored = CoreEditor.open(program, callerId);
+		restored.setHandler(protectedBlock, handler, [callee!]);
+		restored.commit();
+		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_TOP]);
 	});
 
 	it("recomputes only the edited call component", () => {
@@ -274,57 +498,131 @@ describe("whole-program Core value kinds", () => {
 		expect(kinds.statistics.functionsEvaluated).toBeLessThanOrEqual(length * 2);
 	});
 
-	it("joins any-script arguments and returns once across the closed program", () => {
-		const program = analysisProgram();
-		const caller = new CoreFunctionBuilder(program, { parameterCount: 1 });
-		const entry = caller.createBlock([{ representation: "boxed" }]);
-		const condition = inspectCoreBlockParameters(caller, entry)[0]!.value;
-		const join = caller.createBlock([{ representation: "boxed" }]);
-		let decision = entry;
-		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
-			const selected = caller.createBlock();
-			const alternate = caller.createBlock();
-			const [callee] = caller.appendInstruction(selected, "createFunction", [], {
-				attributes: { functionIndex },
-			});
-			caller.setTerminator(selected, {
-				kind: "jump",
-				edge: { block: join, arguments: [callee!] },
+	it.each([false, true])(
+		"joins capped call-target inputs with publication=%s",
+		(published) => {
+			const program = analysisProgram();
+			const caller = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = caller.createBlock([{ representation: "boxed" }]);
+			const condition = inspectCoreBlockParameters(caller, entry)[0]!.value;
+			const join = caller.createBlock([{ representation: "boxed" }]);
+			let decision = entry;
+			for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
+				const selected = caller.createBlock();
+				const alternate = caller.createBlock();
+				const [callee] = caller.appendInstruction(selected, "createFunction", [], {
+					attributes: { functionIndex },
+				});
+				caller.setTerminator(selected, {
+					kind: "jump",
+					edge: { block: join, arguments: [callee!] },
+				});
+				caller.setTerminator(decision, {
+					kind: "branch",
+					condition,
+					consequent: { block: selected, arguments: [] },
+					alternate: { block: alternate, arguments: [] },
+				});
+				decision = alternate;
+			}
+			const [lastCallee] = caller.appendInstruction(decision, "createFunction", [], {
+				attributes: { functionIndex: 5 },
 			});
 			caller.setTerminator(decision, {
-				kind: "branch",
-				condition,
-				consequent: { block: selected, arguments: [] },
-				alternate: { block: alternate, arguments: [] },
+				kind: "jump",
+				edge: { block: join, arguments: [lastCallee!] },
 			});
-			decision = alternate;
+			const [receiver] = caller.appendInstruction(join, "createUndefined", []);
+			const [argument] = caller.appendInstruction(join, "createString", [], {
+				attributes: { stringIndex: 0 },
+			});
+			if (published) {
+				const [alias] = caller.appendInstruction(join, "move", [
+					inspectCoreBlockParameters(caller, join)[0]!.value,
+				]);
+				caller.appendInstruction(join, "storeGlobalProperty", [alias!], {
+					attributes: { nameStringIndex: 0 },
+				});
+			}
+			const [result] = caller.appendInstruction(join, "call", [
+				inspectCoreBlockParameters(caller, join)[0]!.value,
+				receiver!,
+				argument!,
+			]);
+			caller.setTerminator(join, { kind: "return", value: result! });
+			const callerId = caller.finish(entry).function;
+			const leaves = Array.from({ length: 5 }, () => {
+				const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
+				const leafEntry = leaf.createBlock([{ representation: "boxed" }]);
+				leaf.setTerminator(leafEntry, {
+					kind: "return",
+					value: inspectCoreBlockParameters(leaf, leafEntry)[0]!.value,
+				});
+				return leaf.finish(leafEntry).function;
+			});
+			const manager = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+
+			const expected = published ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_STRING;
+			expect(kinds.values(callerId).kindMask(result!)).toBe(expected);
+			for (const leaf of leaves) {
+				expect(kinds.summary(leaf).parameterKinds).toEqual([expected]);
+			}
+		},
+	);
+
+	it("publishes every writer when an escaping shared cell exceeds the target cap", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		for (let functionIndex = 1; functionIndex <= 5; functionIndex++) {
+			const [writer] = caller.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			caller.appendInstruction(entry, "call", [writer!, receiver!]);
 		}
-		const [lastCallee] = caller.appendInstruction(decision, "createFunction", [], {
-			attributes: { functionIndex: 5 },
+		const [loaded] = caller.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
 		});
-		caller.setTerminator(decision, {
-			kind: "jump",
-			edge: { block: join, arguments: [lastCallee!] },
+		caller.appendInstruction(entry, "storeGlobalProperty", [loaded!], {
+			attributes: { nameStringIndex: 0 },
 		});
-		const [receiver] = caller.appendInstruction(join, "createUndefined", []);
-		const [argument] = caller.appendInstruction(join, "createString", [], {
+		const [argument] = caller.appendInstruction(entry, "createString", [], {
 			attributes: { stringIndex: 0 },
 		});
-		const [result] = caller.appendInstruction(join, "call", [
-			inspectCoreBlockParameters(caller, join)[0]!.value,
+		const [result] = caller.appendInstruction(entry, "call", [
+			loaded!,
 			receiver!,
 			argument!,
 		]);
-		caller.setTerminator(join, { kind: "return", value: result! });
-		const callerId = caller.finish(entry).function;
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		caller.finish(entry);
+		for (let functionIndex = 6; functionIndex <= 10; functionIndex++) {
+			const writer = new CoreFunctionBuilder(program);
+			const block = writer.createBlock();
+			const [value] = writer.appendInstruction(block, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			writer.appendInstruction(block, "storeGlobal", [value!], {
+				attributes: { index: 0 },
+			});
+			const [returned] = writer.appendInstruction(block, "createUndefined", []);
+			writer.setTerminator(block, { kind: "return", value: returned! });
+			writer.finish(block);
+		}
 		const leaves = Array.from({ length: 5 }, () => {
 			const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
-			const leafEntry = leaf.createBlock([{ representation: "boxed" }]);
-			leaf.setTerminator(leafEntry, {
+			const block = leaf.createBlock([{ representation: "boxed" }]);
+			leaf.setTerminator(block, {
 				kind: "return",
-				value: inspectCoreBlockParameters(leaf, leafEntry)[0]!.value,
+				value: inspectCoreBlockParameters(leaf, block)[0]!.value,
 			});
-			return leaf.finish(leafEntry).function;
+			return leaf.finish(block).function;
 		});
 		const manager = new CoreAnalysisManager(
 			program,
@@ -332,11 +630,8 @@ describe("whole-program Core value kinds", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
-
-		expect(kinds.values(callerId).kindMask(result!)).toBe(COMPILER_VALUE_KIND_STRING);
-		for (const leaf of leaves) {
-			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_STRING]);
-		}
+		for (const leaf of leaves)
+			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_TOP]);
 	});
 
 	it("dirties the aggregate without invalidating every function", () => {

@@ -16,6 +16,7 @@ import {
 	CORE_PROGRAM_FLOW_SUMMARIES,
 	CORE_PROGRAM_FLOW_TARGETS,
 } from "./core-program-flow.ts";
+import { CORE_PROGRAM_FLOW_MEMORY } from "./core-store.ts";
 
 export interface CoreProgramFlowState {
 	readonly flowRevision: number;
@@ -42,7 +43,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 	contextIdentity(context) {
 		return context.facts.closure.sourceClosure.kind;
 	},
-	compute({ context, request, previous, get, programFlow }) {
+	compute({ program, context, request, previous, get, programFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis");
 		const prior = previous as CoreProgramFlowState | undefined;
 		const epoch = programFlow.refresh(CORE_PROGRAM_FLOW_ALL_DIMENSIONS);
@@ -57,7 +58,12 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			);
 		const unjournaledInvalidation =
 			prior !== undefined && epoch.revision === prior.flowRevision;
-		const targetDirty = dirtyFor(CORE_PROGRAM_FLOW_TARGETS);
+		const targetDirty = dirtyFunctions.filter(
+			(functionId) =>
+				(epoch.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_TARGETS) !== 0 ||
+				((epoch.dirtyDomains(functionId) & CORE_PROGRAM_FLOW_MEMORY) !== 0 &&
+					program.function(functionId).handlerBlockCount > 0),
+		);
 		const targets =
 			prior !== undefined && !unjournaledInvalidation && targetDirty.length === 0
 				? prior.targets
@@ -67,7 +73,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 							get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 								scope: "function",
 								function: functionId,
-							}).ordinary(),
+							}).exceptional(),
 						CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS,
 						prior?.targets,
 						context,

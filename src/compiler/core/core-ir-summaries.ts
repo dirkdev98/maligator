@@ -451,6 +451,11 @@ function rootReasons(
 	if (!targets.sourceClosed) {
 		for (const functionId of program.functionIds()) add(functionId, "open-world");
 	}
+	for (const functionId of program.functionIds()) {
+		for (const target of targets.publishedFunctions(functionId)) {
+			add(target, "published-identity");
+		}
+	}
 	const [entry] = program.functionIds();
 	if (entry !== undefined) add(entry, "program-entry");
 	for (const functionId of context.data.cjsModuleFunctionIndices) {

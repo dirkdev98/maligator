@@ -385,10 +385,6 @@ only reproducible input.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
-- [ ] Preserve proxy new-target prototype lookup in known Boolean construction.
-      With locked primordials, `Reflect.construct(Boolean, [false], proxyTarget)`
-      skips a throwing `get` trap for `prototype` on both backends. Reproduced on
-      unchanged `3fcfcc60`; ordinary mutable dispatch preserves the exception.
 - [ ] Preserve Proxy targets and handlers across reentrant trap lookup. The
       `revoke-as-side-effect.js` case crashes in `getPrototypeOf` after the trap
       getter revokes the proxy; audit internal methods that reload those slots

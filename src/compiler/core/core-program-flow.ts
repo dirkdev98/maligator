@@ -68,6 +68,7 @@ export interface CoreProgramFlowTargetIndex {
 	readonly graph: CoreCallGraph;
 	readonly changedCallers: ReadonlySet<CoreFunctionId>;
 	readonly changedEdgeCallers: ReadonlySet<CoreFunctionId>;
+	publishedFunctions(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId>;
 	globalStoreTargets(slot: number): {
 		readonly functions: ReadonlyArray<CoreFunctionId>;
 		readonly anyScript: boolean;
@@ -184,6 +185,7 @@ export interface CoreProgramFlowLocalCallTargets<
 	readonly values: ReadonlyArray<Targets>;
 	readonly returnTargets: Targets;
 	readonly sites: ReadonlyArray<Site>;
+	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
 	readonly cellWrites: ReadonlyMap<number, Targets>;
 	readonly propertyInputs: ReadonlyMap<number, Targets>;
 	readonly globalWrites: ReadonlyMap<number, Targets>;
@@ -1685,6 +1687,9 @@ export class CoreProgramFlowEngine {
 			},
 			returnTargets(functionId: CoreFunctionId) {
 				return local.get(functionId)?.returnTargets ?? semantics.open;
+			},
+			publishedFunctions(functionId: CoreFunctionId) {
+				return local.get(functionId)?.publishedFunctions ?? [];
 			},
 			globalStoreTargets(slot: number) {
 				return globalStores.get(slot) ?? semantics.bottom;

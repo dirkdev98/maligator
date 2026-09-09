@@ -175,10 +175,13 @@ interface CoreLocalCallTargets {
 	readonly function: CoreFunctionId;
 	readonly bodyVersion: number;
 	readonly cfgVersion: number;
+	readonly exceptionFlowVersion: number;
+	readonly memoryEffectsVersion: number;
 	readonly callsVersion: number;
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
+	readonly publishedFunctions: ReadonlyArray<CoreFunctionId>;
 	readonly cellInputs: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly cellWrites: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly propertyInputs: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>;
@@ -200,6 +203,7 @@ export interface CoreCallGraphIndex {
 	readonly graph: CoreCallGraph;
 	targets(functionId: CoreFunctionId, value: CoreValueId): CoreCalleeTargets;
 	returnTargets(functionId: CoreFunctionId): CoreCalleeTargets;
+	publishedFunctions(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId>;
 	globalStoreTargets(slot: number): CoreCalleeTargets;
 	site(
 		functionId: CoreFunctionId,
@@ -217,6 +221,9 @@ function localTargetsAreCurrent(
 		local !== undefined &&
 		local.bodyVersion === fn.version("body") &&
 		local.cfgVersion === fn.version("cfg") &&
+		local.exceptionFlowVersion === fn.version("exceptionFlow") &&
+		(fn.handlerBlockCount === 0 ||
+			local.memoryEffectsVersion === fn.version("memoryEffects")) &&
 		local.callsVersion === fn.version("calls") &&
 		[...local.returnTargetDependencies].every(([functionId, [body, cfg]]) => {
 			const target = program.function(functionId);
@@ -499,7 +506,11 @@ function collectFunctionCellAccesses(
 			opcode === "loadCaptured"
 		) {
 			reads.add(id);
-		} else writes.add(id);
+		} else {
+			writes.add(id);
+			// Publication depends on whether all writers still fit the tracked identity set.
+			if (opcode === "storeGlobal" || opcode === "storeCaptured") reads.add(id);
+		}
 	}
 	return Object.freeze({ reads, writes });
 }
@@ -556,6 +567,14 @@ function analyzeFunctionTargets(
 			}
 			for (const edge of cfg.successors[block] ?? []) enqueue(edge.to);
 		}
+		for (
+			let use = fn.kernel.valueFirstHandlerUse(value);
+			use >= 0;
+			use = fn.kernel.handlerArgumentNextUse(use)
+		) {
+			const handler = fn.kernel.blockHandlerBlock(fn.kernel.handlerArgumentBlock(use));
+			if (handler !== undefined && cfg.reachable.has(handler)) enqueue(handler);
+		}
 		return true;
 	};
 	for (let index = 0; index < fn.parameterCount; index++) {
@@ -567,10 +586,14 @@ function analyzeFunctionTargets(
 		queued[block] = 0;
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const row = parameterStart + index;
+			if (fn.kernel.blockParameterRole(row) === 1)
+				raise(fn.kernel.blockParameterValue(row), CORE_CALLEE_TARGETS_OPEN);
+		}
 		for (const edge of cfg.predecessors[block] ?? []) {
-			if (edge.kind !== "ordinary") continue;
 			for (let index = 0; index < parameterCount; index++) {
-				const argument = edge.arguments[index];
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (argument !== undefined) {
 					raise(fn.kernel.blockParameterValue(parameterStart + index), values[argument]!);
 				}
@@ -712,9 +735,43 @@ function analyzeFunctionTargets(
 	const cellWrites = new Map<CoreCellId, CoreCalleeTargets>();
 	const propertyInputs = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 	const globalWrites = new Map<number, CoreCalleeTargets>();
+	const publishedFunctions = new Set<CoreFunctionId>();
+	const publishedValues = new Uint8Array(fn.valueCapacity);
+	const pendingPublications: Array<CoreValueId> = [];
+	const publish = (value: CoreValueId): void => {
+		if (publishedValues[value] !== 0) return;
+		publishedValues[value] = 1;
+		const targets = values[value];
+		for (const target of targets?.functions ?? []) publishedFunctions.add(target);
+		if (targets?.anyScript === true) pendingPublications.push(value);
+	};
 	for (let index = 0; index < localTransfers.operationCount; index++) {
 		const instruction = localTransfers.operationAt(index);
+		if (!cfg.reachable.has(fn.instructionBlock(instruction))) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		const operator = fn.instructionAttributes(instruction).operator;
+		const observesIdentity =
+			descriptor.observesOperands ||
+			opcode === "guardFunctionIndex" ||
+			(opcode === "unary" && (operator === "typeof" || operator === "!")) ||
+			(opcode === "binary" && (operator === "===" || operator === "!=="));
+		const key = instructionCellId(fn, instruction, trackedCells, identities);
+		const privateStore =
+			(opcode === "storeGlobal" || opcode === "storeCaptured") &&
+			key !== undefined &&
+			cells.get(key)?.anyScript === false;
+		if (!observesIdentity && !privateStore) {
+			const start = fn.kernel.instructionOperandStart(instruction);
+			for (
+				let operand = 0;
+				operand < fn.kernel.instructionOperandCount(instruction);
+				operand++
+			) {
+				if (descriptor.callTransfer?.calleeOperand === operand) continue;
+				publish(fn.kernel.operandAt(start + operand));
+			}
+		}
 		if (opcode === "loadPropertyStatic") {
 			const receiver = instructionOperand(fn, instruction, 0);
 			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
@@ -728,7 +785,6 @@ function analyzeFunctionTargets(
 				}
 			}
 		}
-		const key = instructionCellId(fn, instruction, trackedCells, identities);
 		if (key === undefined) continue;
 		if (
 			opcode === "loadGlobal" ||
@@ -758,14 +814,43 @@ function analyzeFunctionTargets(
 			}
 		}
 	}
+	for (const block of cfg.reachable) {
+		const terminator = fn.blockTerminator(block);
+		const kind = fn.instructionKind(terminator);
+		if (kind === "return" || kind === "throw") {
+			publish(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
+		}
+	}
+	// Recover identities discarded by the finite-target cap only at an escaping use.
+	for (let cursor = 0; cursor < pendingPublications.length; cursor++) {
+		const value = pendingPublications[cursor]!;
+		const kind = fn.kernel.valueDefinitionKind(value);
+		const owner = fn.kernel.valueDefinitionOwner(value);
+		if (kind === 0) {
+			const index = fn.kernel.valueDefinitionIndex(value);
+			for (const edge of cfg.predecessors[owner] ?? []) {
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (argument !== undefined) publish(argument);
+			}
+		} else if (kind === 1) {
+			const definition = coreInstructionId(owner);
+			if (fn.instructionOpcodeName(definition) === "move") {
+				const input = instructionOperand(fn, definition, 0);
+				if (input !== undefined) publish(input);
+			}
+		}
+	}
 	return Object.freeze({
 		function: fn.id,
 		bodyVersion: fn.version("body"),
 		cfgVersion: fn.version("cfg"),
+		exceptionFlowVersion: fn.version("exceptionFlow"),
+		memoryEffectsVersion: fn.version("memoryEffects"),
 		callsVersion: fn.version("calls"),
 		values: Object.freeze(values),
 		returnTargets,
 		sites: Object.freeze(sites),
+		publishedFunctions: Object.freeze([...publishedFunctions]),
 		cellInputs,
 		cellWrites,
 		propertyInputs,

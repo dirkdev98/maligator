@@ -325,6 +325,35 @@ capture("constructor argument throw", () => {
 	globalThis.sink(v);
 	return Boolean.prototype.valueOf.call(v);
 });
+const Target = new Proxy(function () {}, {
+	get(target, key, receiver) {
+		if (key === "prototype") {
+			events.push("newTarget prototype");
+			throw new SyntaxError();
+		}
+		return Reflect.get(target, key, receiver);
+	},
+});
+capture("constructor prototype throw", () =>
+	Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [false], Target)),
+);
+let CatchTarget;
+try {
+	JSON.parse("!");
+} catch {
+	CatchTarget = new Proxy(function () {}, {
+		get(target, key, receiver) {
+			if (key === "prototype") {
+				events.push("catch newTarget prototype");
+				throw new RangeError();
+			}
+			return Reflect.get(target, key, receiver);
+		},
+	});
+}
+capture("constructor catch prototype throw", () =>
+	Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [false], CatchTarget)),
+);
 function numberCoercion(x) {
 	const v = new Number(x);
 	globalThis.sink(v);
