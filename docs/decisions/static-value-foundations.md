@@ -346,6 +346,13 @@ a function value does not invoke it; wrappers, registry operations and callable
 invocations keep their separate obligations. Constant, repeated and unused reads
 retain their own implementation witnesses.
 
+`Reflect.get` shares descriptor resolution when its target is a proved canonical
+object and its key is fixed. Data reads preserve argument evaluation and reuse the
+installed value; accessor calls use the explicit receiver, defaulting to the target
+only when it is absent. Primitive targets, proxies and effectful keys keep runtime
+validation and conversion. The adapted and dynamic-argument data-read profiles have
+the same non-invoking, non-allocating slot semantics as ordinary own reads.
+
 Contained String wrappers also disappear for fixed numeric index reads, including
 negative zero and absent indexes. Conversion remains at construction, and index
 reads use the primitive string. A key coercion that exposes the wrapper, or an

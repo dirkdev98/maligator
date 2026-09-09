@@ -338,12 +338,31 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				continue;
 			}
 			const store = opcode === "storeProperty" || opcode === "storePropertyStatic";
-			if (!store && opcode !== "loadProperty" && opcode !== "loadPropertyStatic")
+			const reflectGet =
+				attributes?.operation === "Reflect.get" &&
+				attributes.construct !== true &&
+				attributes.argumentMode === undefined &&
+				args[2] !== undefined;
+			if (
+				!store &&
+				!reflectGet &&
+				opcode !== "loadProperty" &&
+				opcode !== "loadPropertyStatic"
+			)
 				continue;
-			const key = propertyKey(analysis, fn, instruction, args);
+			const lookupArgs = reflectGet ? args.slice(1) : args;
+			const key = propertyKey(analysis, fn, instruction, lookupArgs);
 			if (key === undefined) continue;
-			const base = analysis.queryAt(args[0]!, instruction);
+			const base = analysis.queryAt(lookupArgs[0]!, instruction);
 			if (base.kind !== "known") continue;
+			if (
+				reflectGet &&
+				(base.canonical === undefined ||
+					(base.brand !== "object" &&
+						base.brand !== "function" &&
+						base.brand !== "array"))
+			)
+				continue;
 			const proof =
 				base.canonical === undefined || base.brand === "symbol"
 					? analysis.inherited(base, key)
@@ -365,7 +384,9 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						true,
 					);
 			} else if (resolution.getter !== undefined) {
-				call(instruction, resolution.getter[0], [args[0]!]);
+				call(instruction, resolution.getter[0], [
+					reflectGet ? (args[3] ?? args[1]!) : args[0]!,
+				]);
 			} else if (resolution.value !== undefined && (resolution.value[2] & 9) !== 0) {
 				const nodeIndex =
 					typeof resolution.descriptor[2] === "number" ? resolution.descriptor[2] : -1;

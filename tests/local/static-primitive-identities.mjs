@@ -868,4 +868,425 @@ try {
 	check(error instanceof TypeError, "home object rejection");
 }
 check(escapedGetter.call(null) === 23, "escaped getter retains its home object");
+const reflectedDataReads = [
+	[(x) => Reflect.get(BigInt, "asUintN", x(), x()), () => BigInt.asUintN],
+	[(x) => Reflect.get(BigInt, "asIntN", x(), x()), () => BigInt.asIntN],
+	[
+		(x) => Reflect.get(BigInt.prototype, "toString", x(), x()),
+		() => BigInt.prototype.toString,
+	],
+	[
+		(x) => Reflect.get(BigInt.prototype, "valueOf", x(), x()),
+		() => BigInt.prototype.valueOf,
+	],
+	[
+		(x) => Reflect.get(Boolean.prototype, "toString", x(), x()),
+		() => Boolean.prototype.toString,
+	],
+	[
+		(x) => Reflect.get(Boolean.prototype, "valueOf", x(), x()),
+		() => Boolean.prototype.valueOf,
+	],
+	[(x) => Reflect.get(Math, "abs", x(), x()), () => Math.abs],
+	[(x) => Reflect.get(Math, "floor", x(), x()), () => Math.floor],
+	[(x) => Reflect.get(Math, "ceil", x(), x()), () => Math.ceil],
+	[(x) => Reflect.get(Math, "round", x(), x()), () => Math.round],
+	[(x) => Reflect.get(Math, "trunc", x(), x()), () => Math.trunc],
+	[(x) => Reflect.get(Math, "sqrt", x(), x()), () => Math.sqrt],
+	[(x) => Reflect.get(Math, "cbrt", x(), x()), () => Math.cbrt],
+	[(x) => Reflect.get(Math, "sign", x(), x()), () => Math.sign],
+	[(x) => Reflect.get(Math, "log", x(), x()), () => Math.log],
+	[(x) => Reflect.get(Math, "log2", x(), x()), () => Math.log2],
+	[(x) => Reflect.get(Math, "log10", x(), x()), () => Math.log10],
+	[(x) => Reflect.get(Math, "exp", x(), x()), () => Math.exp],
+	[(x) => Reflect.get(Math, "sin", x(), x()), () => Math.sin],
+	[(x) => Reflect.get(Math, "cos", x(), x()), () => Math.cos],
+	[(x) => Reflect.get(Math, "tan", x(), x()), () => Math.tan],
+	[(x) => Reflect.get(Math, "asin", x(), x()), () => Math.asin],
+	[(x) => Reflect.get(Math, "acos", x(), x()), () => Math.acos],
+	[(x) => Reflect.get(Math, "atan", x(), x()), () => Math.atan],
+	[(x) => Reflect.get(Math, "sinh", x(), x()), () => Math.sinh],
+	[(x) => Reflect.get(Math, "cosh", x(), x()), () => Math.cosh],
+	[(x) => Reflect.get(Math, "tanh", x(), x()), () => Math.tanh],
+	[(x) => Reflect.get(Math, "asinh", x(), x()), () => Math.asinh],
+	[(x) => Reflect.get(Math, "acosh", x(), x()), () => Math.acosh],
+	[(x) => Reflect.get(Math, "atanh", x(), x()), () => Math.atanh],
+	[(x) => Reflect.get(Math, "log1p", x(), x()), () => Math.log1p],
+	[(x) => Reflect.get(Math, "expm1", x(), x()), () => Math.expm1],
+	[(x) => Reflect.get(Math, "fround", x(), x()), () => Math.fround],
+	[(x) => Reflect.get(Math, "f16round", x(), x()), () => Math.f16round],
+	[(x) => Reflect.get(Math, "clz32", x(), x()), () => Math.clz32],
+	[(x) => Reflect.get(Math, "imul", x(), x()), () => Math.imul],
+	[(x) => Reflect.get(Math, "atan2", x(), x()), () => Math.atan2],
+	[(x) => Reflect.get(Math, "pow", x(), x()), () => Math.pow],
+	[(x) => Reflect.get(Math, "hypot", x(), x()), () => Math.hypot],
+	[(x) => Reflect.get(Math, "min", x(), x()), () => Math.min],
+	[(x) => Reflect.get(Math, "max", x(), x()), () => Math.max],
+	[(x) => Reflect.get(Math, "sumPrecise", x(), x()), () => Math.sumPrecise],
+	[(x) => Reflect.get(Math, "random", x(), x()), () => Math.random],
+	[(x) => Reflect.get(Number, "isNaN", x(), x()), () => Number.isNaN],
+	[(x) => Reflect.get(Number, "isFinite", x(), x()), () => Number.isFinite],
+	[(x) => Reflect.get(Number, "isInteger", x(), x()), () => Number.isInteger],
+	[(x) => Reflect.get(Number, "isSafeInteger", x(), x()), () => Number.isSafeInteger],
+	[(x) => Reflect.get(Number, "parseInt", x(), x()), () => Number.parseInt],
+	[(x) => Reflect.get(Number, "parseFloat", x(), x()), () => Number.parseFloat],
+	[
+		(x) => Reflect.get(Number.prototype, "toString", x(), x()),
+		() => Number.prototype.toString,
+	],
+	[
+		(x) => Reflect.get(Number.prototype, "toFixed", x(), x()),
+		() => Number.prototype.toFixed,
+	],
+	[
+		(x) => Reflect.get(Number.prototype, "toExponential", x(), x()),
+		() => Number.prototype.toExponential,
+	],
+	[
+		(x) => Reflect.get(Number.prototype, "toPrecision", x(), x()),
+		() => Number.prototype.toPrecision,
+	],
+	[
+		(x) => Reflect.get(Number.prototype, "valueOf", x(), x()),
+		() => Number.prototype.valueOf,
+	],
+	[(x) => Reflect.get(String, "fromCharCode", x(), x()), () => String.fromCharCode],
+	[(x) => Reflect.get(String, "fromCodePoint", x(), x()), () => String.fromCodePoint],
+	[(x) => Reflect.get(String, "raw", x(), x()), () => String.raw],
+	[
+		(x) => Reflect.get(String.prototype, "charAt", x(), x()),
+		() => String.prototype.charAt,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "charCodeAt", x(), x()),
+		() => String.prototype.charCodeAt,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "codePointAt", x(), x()),
+		() => String.prototype.codePointAt,
+	],
+	[(x) => Reflect.get(String.prototype, "at", x(), x()), () => String.prototype.at],
+	[
+		(x) => Reflect.get(String.prototype, "indexOf", x(), x()),
+		() => String.prototype.indexOf,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "lastIndexOf", x(), x()),
+		() => String.prototype.lastIndexOf,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "includes", x(), x()),
+		() => String.prototype.includes,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "startsWith", x(), x()),
+		() => String.prototype.startsWith,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "endsWith", x(), x()),
+		() => String.prototype.endsWith,
+	],
+	[(x) => Reflect.get(String.prototype, "slice", x(), x()), () => String.prototype.slice],
+	[
+		(x) => Reflect.get(String.prototype, "substring", x(), x()),
+		() => String.prototype.substring,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "substr", x(), x()),
+		() => String.prototype.substr,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "anchor", x(), x()),
+		() => String.prototype.anchor,
+	],
+	[(x) => Reflect.get(String.prototype, "big", x(), x()), () => String.prototype.big],
+	[(x) => Reflect.get(String.prototype, "blink", x(), x()), () => String.prototype.blink],
+	[(x) => Reflect.get(String.prototype, "bold", x(), x()), () => String.prototype.bold],
+	[(x) => Reflect.get(String.prototype, "fixed", x(), x()), () => String.prototype.fixed],
+	[
+		(x) => Reflect.get(String.prototype, "fontcolor", x(), x()),
+		() => String.prototype.fontcolor,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "fontsize", x(), x()),
+		() => String.prototype.fontsize,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "italics", x(), x()),
+		() => String.prototype.italics,
+	],
+	[(x) => Reflect.get(String.prototype, "link", x(), x()), () => String.prototype.link],
+	[(x) => Reflect.get(String.prototype, "small", x(), x()), () => String.prototype.small],
+	[
+		(x) => Reflect.get(String.prototype, "strike", x(), x()),
+		() => String.prototype.strike,
+	],
+	[(x) => Reflect.get(String.prototype, "sub", x(), x()), () => String.prototype.sub],
+	[(x) => Reflect.get(String.prototype, "sup", x(), x()), () => String.prototype.sup],
+	[
+		(x) => Reflect.get(String.prototype, "concat", x(), x()),
+		() => String.prototype.concat,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "localeCompare", x(), x()),
+		() => String.prototype.localeCompare,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "normalize", x(), x()),
+		() => String.prototype.normalize,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "repeat", x(), x()),
+		() => String.prototype.repeat,
+	],
+	[(x) => Reflect.get(String.prototype, "trim", x(), x()), () => String.prototype.trim],
+	[
+		(x) => Reflect.get(String.prototype, "trimStart", x(), x()),
+		() => String.prototype.trimStart,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "trimEnd", x(), x()),
+		() => String.prototype.trimEnd,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "trimLeft", x(), x()),
+		() => String.prototype.trimLeft,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "trimRight", x(), x()),
+		() => String.prototype.trimRight,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toUpperCase", x(), x()),
+		() => String.prototype.toUpperCase,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toLowerCase", x(), x()),
+		() => String.prototype.toLowerCase,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toLocaleUpperCase", x(), x()),
+		() => String.prototype.toLocaleUpperCase,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toLocaleLowerCase", x(), x()),
+		() => String.prototype.toLocaleLowerCase,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "isWellFormed", x(), x()),
+		() => String.prototype.isWellFormed,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toWellFormed", x(), x()),
+		() => String.prototype.toWellFormed,
+	],
+	[(x) => Reflect.get(String.prototype, "split", x(), x()), () => String.prototype.split],
+	[
+		(x) => Reflect.get(String.prototype, "replace", x(), x()),
+		() => String.prototype.replace,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "replaceAll", x(), x()),
+		() => String.prototype.replaceAll,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "padStart", x(), x()),
+		() => String.prototype.padStart,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "padEnd", x(), x()),
+		() => String.prototype.padEnd,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "toString", x(), x()),
+		() => String.prototype.toString,
+	],
+	[
+		(x) => Reflect.get(String.prototype, "valueOf", x(), x()),
+		() => String.prototype.valueOf,
+	],
+	[(x) => Reflect.get(Symbol, "for", x(), x()), () => Symbol.for],
+	[(x) => Reflect.get(Symbol, "keyFor", x(), x()), () => Symbol.keyFor],
+	[
+		(x) => Reflect.get(Symbol.prototype, "toString", x(), x()),
+		() => Symbol.prototype.toString,
+	],
+	[
+		(x) => Reflect.get(Symbol.prototype, "valueOf", x(), x()),
+		() => Symbol.prototype.valueOf,
+	],
+	[
+		(x) => Reflect.get(Symbol.prototype, Symbol.toPrimitive, x(), x()),
+		() => Symbol.prototype[Symbol.toPrimitive],
+	],
+	[(x) => Reflect.get(globalThis, "parseInt", x(), x()), () => globalThis.parseInt],
+	[(x) => Reflect.get(globalThis, "parseFloat", x(), x()), () => globalThis.parseFloat],
+	[(x) => Reflect.get(globalThis, "isNaN", x(), x()), () => globalThis.isNaN],
+	[(x) => Reflect.get(globalThis, "isFinite", x(), x()), () => globalThis.isFinite],
+	[(x) => Reflect.get(globalThis, "decodeURI", x(), x()), () => globalThis.decodeURI],
+	[
+		(x) => Reflect.get(globalThis, "decodeURIComponent", x(), x()),
+		() => globalThis.decodeURIComponent,
+	],
+	[(x) => Reflect.get(globalThis, "encodeURI", x(), x()), () => globalThis.encodeURI],
+	[
+		(x) => Reflect.get(globalThis, "encodeURIComponent", x(), x()),
+		() => globalThis.encodeURIComponent,
+	],
+	[(x) => Reflect.get(globalThis, "escape", x(), x()), () => globalThis.escape],
+	[(x) => Reflect.get(globalThis, "unescape", x(), x()), () => globalThis.unescape],
+	[(x) => Reflect.get(Math, "PI", x(), x()), () => Math.PI],
+	[(x) => Reflect.get(Math, "E", x(), x()), () => Math.E],
+	[(x) => Reflect.get(Math, "LN2", x(), x()), () => Math.LN2],
+	[(x) => Reflect.get(Math, "LN10", x(), x()), () => Math.LN10],
+	[(x) => Reflect.get(Math, "LOG2E", x(), x()), () => Math.LOG2E],
+	[(x) => Reflect.get(Math, "LOG10E", x(), x()), () => Math.LOG10E],
+	[(x) => Reflect.get(Math, "SQRT2", x(), x()), () => Math.SQRT2],
+	[(x) => Reflect.get(Math, "SQRT1_2", x(), x()), () => Math.SQRT1_2],
+	[
+		(x) => Reflect.get(Number, "MAX_SAFE_INTEGER", x(), x()),
+		() => Number.MAX_SAFE_INTEGER,
+	],
+	[
+		(x) => Reflect.get(Number, "MIN_SAFE_INTEGER", x(), x()),
+		() => Number.MIN_SAFE_INTEGER,
+	],
+	[(x) => Reflect.get(Number, "EPSILON", x(), x()), () => Number.EPSILON],
+	[(x) => Reflect.get(Number, "MAX_VALUE", x(), x()), () => Number.MAX_VALUE],
+	[(x) => Reflect.get(Number, "MIN_VALUE", x(), x()), () => Number.MIN_VALUE],
+	[
+		(x) => Reflect.get(Number, "POSITIVE_INFINITY", x(), x()),
+		() => Number.POSITIVE_INFINITY,
+	],
+	[
+		(x) => Reflect.get(Number, "NEGATIVE_INFINITY", x(), x()),
+		() => Number.NEGATIVE_INFINITY,
+	],
+	[(x) => Reflect.get(Number, "NaN", x(), x()), () => Number.NaN],
+	[(x) => Reflect.get(Symbol, "iterator", x(), x()), () => Symbol.iterator],
+	[(x) => Reflect.get(Symbol, "asyncIterator", x(), x()), () => Symbol.asyncIterator],
+	[(x) => Reflect.get(Symbol, "toStringTag", x(), x()), () => Symbol.toStringTag],
+	[(x) => Reflect.get(Symbol, "hasInstance", x(), x()), () => Symbol.hasInstance],
+	[(x) => Reflect.get(Symbol, "toPrimitive", x(), x()), () => Symbol.toPrimitive],
+	[(x) => Reflect.get(Symbol, "species", x(), x()), () => Symbol.species],
+	[
+		(x) => Reflect.get(Symbol, "isConcatSpreadable", x(), x()),
+		() => Symbol.isConcatSpreadable,
+	],
+	[(x) => Reflect.get(Symbol, "match", x(), x()), () => Symbol.match],
+	[(x) => Reflect.get(Symbol, "matchAll", x(), x()), () => Symbol.matchAll],
+	[(x) => Reflect.get(Symbol, "replace", x(), x()), () => Symbol.replace],
+	[(x) => Reflect.get(Symbol, "search", x(), x()), () => Symbol.search],
+	[(x) => Reflect.get(Symbol, "split", x(), x()), () => Symbol.split],
+	[(x) => Reflect.get(Symbol, "unscopables", x(), x()), () => Symbol.unscopables],
+	[(x) => Reflect.get(Symbol, "dispose", x(), x()), () => Symbol.dispose],
+	[(x) => Reflect.get(Symbol, "asyncDispose", x(), x()), () => Symbol.asyncDispose],
+];
+for (const [read, direct] of reflectedDataReads) {
+	const receiver = new Proxy(
+		{},
+		{
+			get() {
+				throw new Error("data receiver must not be read");
+			},
+		},
+	);
+	let calls = 0;
+	const effect = () => {
+		calls++;
+		return receiver;
+	};
+	check(
+		Object.is(read(effect), direct()),
+		"Reflect.get preserves installed data identity",
+	);
+	check(calls === 2, "receiver and extra arguments run once");
+	const sentinel = {};
+	try {
+		read(() => {
+			throw sentinel;
+		});
+		throw new Error("receiver must throw");
+	} catch (error) {
+		check(error === sentinel, "receiver expression throw retained");
+	}
+}
+function reflectedDescription(receiver) {
+	return Reflect.get(Symbol.prototype, "description", receiver);
+}
+function omittedDescription() {
+	return Reflect.get(Symbol.prototype, "description");
+}
+function invalidReflectTarget(key) {
+	return Reflect.get(Symbol.iterator, key);
+}
+globalThis.reflectedDescription = reflectedDescription;
+globalThis.omittedDescription = omittedDescription;
+globalThis.invalidReflectTarget = invalidReflectTarget;
+for (const symbol of [Symbol.iterator, Symbol(), Symbol(""), Symbol("field")]) {
+	for (const receiver of [symbol, Object(symbol)])
+		check(
+			globalThis.reflectedDescription(receiver) === symbol.description,
+			"Reflect.get getter receiver",
+		);
+}
+let previousReflectionError;
+for (const receiver of [undefined, null, 17, {}, Symbol.prototype]) {
+	try {
+		globalThis.reflectedDescription(receiver);
+		throw new Error("receiver must reject");
+	} catch (error) {
+		check(
+			error instanceof TypeError && error !== previousReflectionError,
+			"fresh reflected getter error",
+		);
+		previousReflectionError = error;
+	}
+}
+try {
+	globalThis.omittedDescription();
+	throw new Error("omitted receiver must reject");
+} catch (error) {
+	check(error instanceof TypeError, "absent receiver defaults to target");
+}
+let reflectedKeyCalls = 0;
+const reflectedKey = {
+	[Symbol.toPrimitive]() {
+		reflectedKeyCalls++;
+		return "description";
+	},
+};
+try {
+	globalThis.invalidReflectTarget(reflectedKey);
+	throw new Error("primitive target must reject");
+} catch (error) {
+	check(error instanceof TypeError, "Reflect.get requires object target");
+}
+check(reflectedKeyCalls === 0, "target validation precedes key coercion");
+const reflectedEvents = [];
+const reflectedReceiver = {};
+const reflectedProxy = new Proxy(Symbol.prototype, {
+	get(target, key, receiver) {
+		reflectedEvents.push("get");
+		check(receiver === reflectedReceiver, "proxy receiver retained");
+		return 37;
+	},
+});
+check(
+	Reflect.get(
+		reflectedProxy,
+		{
+			[Symbol.toPrimitive]() {
+				reflectedEvents.push("key");
+				return "description";
+			},
+		},
+		reflectedReceiver,
+	) === 37,
+	"proxy getter value",
+);
+check(
+	reflectedEvents.join(",") === "key,get",
+	"Reflect.get key conversion precedes proxy trap",
+);
 console.log("primitive identities passed");

@@ -662,6 +662,84 @@ describe("canonical primitive data read profiles", () => {
 	}
 });
 
+describe("Reflect.get primitive descriptors", () => {
+	const expressions = [
+		...primitiveFunctionData.map(([expression]) => expression!),
+		...primitiveDataExpressions,
+	];
+	it.each(expressions)(
+		"resolves the adapted data read for %s after receiver effects",
+		(expression) => {
+			const bracket = expression.indexOf("[");
+			const separator = expression.lastIndexOf(".");
+			const owner =
+				bracket < 0 ? expression.slice(0, separator) : expression.slice(0, bracket);
+			const key =
+				bracket < 0
+					? JSON.stringify(expression.slice(separator + 1))
+					: expression.slice(bracket + 1, -1);
+			const source = `function probe(x){return Reflect.get(${owner},${key},x(),x());}globalThis.probe=probe;`;
+			const output = inspectStaticValueFunction(source, "probe");
+			expect(output.core.filter((operation) => operation.opcode === "callKnown")).toEqual(
+				[],
+			);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.genericCalls).toBe(2);
+			expect(output.structure.allocations).toBe(0);
+			const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
+			expect(mutable.structure.genericLookups).toBeGreaterThan(0);
+		},
+	);
+	it.each([
+		'Reflect.get(Symbol.iterator,"description",x())',
+		'Reflect.get("text","length",x())',
+		"Reflect.get(Math,x())",
+		'Reflect.get(Math,{[Symbol.toPrimitive](){x();return "PI";}})',
+		'Reflect.get(x,"PI")',
+	])("retains target validation and key conversion for %s", (expression) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x){return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "callKnown" &&
+					operation.attributes.operation === "Reflect.get",
+			),
+		).toBe(true);
+	});
+	it.each(["Symbol.iterator", "Object(Symbol.iterator)"])(
+		"folds the description getter with receiver %s",
+		(receiver) => {
+			const output = inspect(`Reflect.get(Symbol.prototype,"description",${receiver})`);
+			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+			expect(
+				output.fn.instructions.some((operation) => operation.opcode === "CREATE_STRING"),
+			).toBe(true);
+		},
+	);
+	it.each(["undefined", "null", "17", "{}"])(
+		"keeps the description getter rejection for receiver %s",
+		(receiver) => {
+			const output = inspect(`Reflect.get(Symbol.prototype,"description",${receiver})`);
+			expect(output.core.some((operation) => operation.opcode === "builtinError")).toBe(
+				true,
+			);
+		},
+	);
+	it("forwards an unknown receiver to the exact description getter", () => {
+		const output = inspect('Reflect.get(Symbol.prototype,"description",x)');
+		expect(
+			output.core
+				.filter((operation) => operation.opcode === "callKnown")
+				.map((operation) => operation.attributes.operation),
+		).toEqual(["Symbol.prototype.description<get>"]);
+	});
+});
+
 describe("primitive operation results", () => {
 	it.each([3, 8, 16, 32, 64])(
 		"consumes %i dynamic Numbers through the exact sum kernel",
