@@ -388,6 +388,12 @@ other operands retain their own coercions. Equality and identity-sensitive consu
 do not use this substitution. Boolean observes the wrapper's truthiness, and String
 on a Symbol wrapper becomes ordinary ToString at the consumer so the Symbol error
 survives. Own coercion overrides, mutable prototypes and escapes retain their objects.
+The same proof permits the shared numeric Math unary operations and exact atan2,
+pow, imul, clz32, hypot, min, max and f16round calls to consume primitive payloads.
+Every consumed argument retains ToNumber, including Symbol and BigInt exceptions;
+ignored arguments retain expression effects. Nonfinite inputs do not skip later
+coercions in variadic methods. Iterator consumers such as sumPrecise remain outside
+this numeric-argument proof.
 
 Public global names use the global environment unless an immutable binding proof
 permits intrinsic loading. NaN and Infinity are permanently non-writable and

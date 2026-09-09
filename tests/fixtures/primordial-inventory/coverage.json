@@ -90393,6 +90393,25 @@
 						"case": "abs"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.abs"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -90558,6 +90577,25 @@
 						"case": "acos"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.acos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -90684,6 +90722,25 @@
 						"case": "acosh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.acosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -90810,6 +90867,25 @@
 						"case": "asin"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.asin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -90936,6 +91012,25 @@
 						"case": "asinh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.asinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91062,6 +91157,25 @@
 						"case": "atan"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.atan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91188,6 +91302,25 @@
 						"case": "atan2"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.atan2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91314,6 +91447,25 @@
 						"case": "atanh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.atanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91440,6 +91592,25 @@
 						"case": "cbrt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.cbrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91566,6 +91737,25 @@
 						"case": "ceil"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.ceil"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91692,6 +91882,25 @@
 						"case": "clz32"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.clz32"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91818,6 +92027,25 @@
 						"case": "cos"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.cos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -91944,6 +92172,25 @@
 						"case": "cosh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.cosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92070,6 +92317,25 @@
 						"case": "exp"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.exp"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92196,6 +92462,25 @@
 						"case": "expm1"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.expm1"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92322,6 +92607,25 @@
 						"case": "f16round"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.f16round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92448,6 +92752,25 @@
 						"case": "floor"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.floor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92574,6 +92897,25 @@
 						"case": "fround"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.fround"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92720,6 +93062,25 @@
 						"case": "Math.hypot(1,Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.hypot"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92846,6 +93207,25 @@
 						"case": "imul"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.imul"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -92972,6 +93352,25 @@
 						"case": "log"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.log"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93098,6 +93497,25 @@
 						"case": "log10"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.log10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93224,6 +93642,25 @@
 						"case": "log1p"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.log1p"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93350,6 +93787,25 @@
 						"case": "log2"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.log2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93496,6 +93952,25 @@
 						"case": "Math.max(NaN,1n)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.max"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93622,6 +94097,25 @@
 						"case": "min"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.min"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93748,6 +94242,25 @@
 						"case": "pow"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.pow"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -93959,6 +94472,25 @@
 						"case": "round"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94085,6 +94617,25 @@
 						"case": "sign"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.sign"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94231,6 +94782,25 @@
 						"case": "Math.sin(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.sin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94357,6 +94927,25 @@
 						"case": "sinh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.sinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94483,6 +95072,25 @@
 						"case": "sqrt"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.sqrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94808,6 +95416,25 @@
 						"case": "tan"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.tan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -94934,6 +95561,25 @@
 						"case": "tanh"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.tanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -95060,6 +95706,25 @@
 						"case": "trunc"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "eliminates contained wrapper inputs to numeric Math calls in %s",
+						"case": "Math.trunc"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable Math and wrapper prototype lookup"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

@@ -1,4 +1,5 @@
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
+import { mathUnaryOperationKeys } from "../shared/builtin-registry.ts";
 import {
 	evaluateConstantBuiltin,
 	evaluateConstantStringSplit,
@@ -62,6 +63,17 @@ const wrapperConversionCalls = new Set([
 	"BigInt",
 	"isNaN",
 	"isFinite",
+]);
+const wrapperNumericMathCalls = new Set<string>([
+	...mathUnaryOperationKeys.map(([operation]) => operation),
+	"Math.atan2",
+	"Math.pow",
+	"Math.imul",
+	"Math.clz32",
+	"Math.hypot",
+	"Math.min",
+	"Math.max",
+	"Math.f16round",
 ]);
 
 export const lowerPrimitiveOperations: CoreFunctionPass = {
@@ -990,7 +1002,8 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						opcode === "callKnown" &&
 						!consumerAttributes.construct &&
 						consumerAttributes.argumentMode === undefined &&
-						wrapperConversionCalls.has(consumerAttributes.operation as string)
+						(wrapperConversionCalls.has(consumerAttributes.operation as string) ||
+							wrapperNumericMathCalls.has(consumerAttributes.operation as string))
 					) {
 						if (fn.kernel.useOperand(use) === 1) {
 							if (consumerAttributes.operation === "Boolean")

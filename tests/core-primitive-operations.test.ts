@@ -2075,6 +2075,78 @@ describe("primitive operation results", () => {
 		},
 	);
 
+	it.each(
+		[
+			"Math.abs",
+			"Math.floor",
+			"Math.ceil",
+			"Math.round",
+			"Math.trunc",
+			"Math.sqrt",
+			"Math.cbrt",
+			"Math.sign",
+			"Math.log",
+			"Math.log2",
+			"Math.log10",
+			"Math.exp",
+			"Math.sin",
+			"Math.cos",
+			"Math.tan",
+			"Math.asin",
+			"Math.acos",
+			"Math.atan",
+			"Math.sinh",
+			"Math.cosh",
+			"Math.tanh",
+			"Math.asinh",
+			"Math.acosh",
+			"Math.atanh",
+			"Math.log1p",
+			"Math.expm1",
+			"Math.fround",
+			"Math.atan2",
+			"Math.pow",
+			"Math.imul",
+			"Math.clz32",
+			"Math.hypot",
+			"Math.min",
+			"Math.max",
+			"Math.f16round",
+		].flatMap((consumer) =>
+			["new Number(x)", "new Boolean(x)", "new String(x)", "Object(BigInt(x))"].map(
+				(wrapper) => `${consumer}(${wrapper}, 2)`,
+			),
+		),
+	)("eliminates contained wrapper inputs to numeric Math calls in %s", (expression) => {
+		const output = inspect(expression);
+		expect(output.core.some((operation) => operation.attributes.construct)).toBe(false);
+		expect(
+			output.core.some((operation) => operation.attributes.operation === "Object"),
+		).toBe(false);
+	});
+
+	it.each([
+		"const wrapper = new Number(x); globalThis.wrapper = wrapper; return Math.abs(wrapper);",
+		"const wrapper = new Number(x); wrapper[Symbol.toPrimitive] = () => 9; return Math.abs(wrapper);",
+		"return Math.min(...[new Number(x)]);",
+		"return Math.sumPrecise(new Number(x));",
+	])(
+		"retains wrapper materialization outside the numeric consumer proof in %s",
+		(body) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x) {${body}} globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(output.core.some((operation) => operation.attributes.construct)).toBe(true);
+		},
+	);
+
+	it("retains mutable Math and wrapper prototype lookup", () => {
+		const output = inspect("Math.abs(new Number(x))", false);
+		expect(output.core.some((operation) => operation.opcode === "construct")).toBe(true);
+		expect(output.structure.genericLookups).toBeGreaterThan(0);
+	});
+
 	it("retains ordinary ToString when String consumes a Symbol wrapper", () => {
 		const output = inspect("String(Object(Symbol.iterator))");
 		expect(
