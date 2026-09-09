@@ -84830,6 +84830,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "Object(BigInt(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -85449,6 +85469,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -98648,6 +98688,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "new Number(+x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -99384,7 +99444,28 @@
 			"kind": "call",
 			"operations": ["Object.prototype.valueOf"],
 			"task": "H-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.prototype.valueOf\",\"<construct>\"]",
@@ -110617,6 +110698,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "new String(String(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -111840,6 +111941,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "forwards %s through Object valueOf into its primitive consumer",
+						"case": "Object(Symbol.for(x))"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains the required runtime ToObject for %s",
+						"case": "null"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},

@@ -2697,3 +2697,73 @@ describe("immutable escaping primitive wrapper payloads", () => {
 		expect(result.core.some((o) => o.opcode === "call")).toBe(true);
 	});
 });
+
+describe("inherited wrapper valueOf", () => {
+	it.each([
+		["new Boolean(x)", "Boolean"],
+		["new Number(+x)", "Number"],
+		["new String(String(x))", "String"],
+		["Object(BigInt(x))", "BigInt"],
+		["Object(Symbol.for(x))", "Symbol"],
+		["!!x", "Boolean"],
+		["+x", "Number"],
+		["String(x)", "String"],
+		["BigInt(x)", "BigInt"],
+		["Symbol.for(x)", "Symbol"],
+	])(
+		"forwards %s through Object valueOf into its primitive consumer",
+		(producer, brand) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x) {
+				return ${brand}.prototype.valueOf.call(Object.prototype.valueOf.call(${producer}));
+			} globalThis.probe = probe;`,
+				"probe",
+			);
+			expect(
+				result.core.some(
+					(op) =>
+						op.opcode === "callKnown" &&
+						(op.attributes.construct ||
+							op.attributes.operation === "Object" ||
+							op.attributes.operation === "Object.prototype.valueOf"),
+				),
+			).toBe(false);
+		},
+	);
+	it.each(["new Boolean(x)", "({note:x})", "[x]", "function(){}"])(
+		"retains the escaping identity and argument effects when valueOf observes %s",
+		(producer) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x) { const value=${producer};globalThis.sink(value);
+				return Object.prototype.valueOf.call(value, globalThis.effect()); } globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				result.core.some((op) => op.attributes.operation === "Object.prototype.valueOf"),
+			).toBe(false);
+			expect(result.core.filter((op) => op.opcode === "call")).toHaveLength(2);
+		},
+	);
+	it.each(["x", "null", "undefined"])(
+		"retains the required runtime ToObject for %s",
+		(receiver) => {
+			const result = inspectStaticValueFunction(
+				`function probe(x) { return Object.prototype.valueOf.call(${receiver}, x()); } globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(
+				result.core.some((op) => op.attributes.operation === "Object.prototype.valueOf"),
+			).toBe(true);
+			expect(result.core.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it("preserves mutable Object valueOf lookup", () => {
+		const result = inspectStaticValueFunction(
+			"function probe(x) { return Object.prototype.valueOf.call(new Boolean(x)); } globalThis.probe=probe;",
+			"probe",
+			{ locked: false },
+		);
+		expect(result.core.some((op) => op.opcode === "call")).toBe(true);
+		expect(result.core.some((op) => op.opcode === "construct")).toBe(true);
+	});
+});
