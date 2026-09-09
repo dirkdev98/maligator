@@ -154243,6 +154243,32 @@
 						"test": "retains mutable dynamic symbol description dispatch"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"static-receiver-dynamic-argument",
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["R", "D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-symbol-descriptions.ts",
+						"symbol": "forwardSymbolDescription"
+					},
+					"positive": {
+						"file": "tests/core-symbol-metadata-profiles.test.ts",
+						"test": "forwards %s(%s) metadata through ${consumer} and ${profile}"
+					},
+					"negative": {
+						"file": "tests/native/symbol-metadata-profiles.test.ts",
+						"test": "preserves symbol keys, coercion and escaped identity across metadata profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

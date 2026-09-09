@@ -36,10 +36,16 @@ export function forwardSymbolDescription(
 		let input = fn.kernel.operandAt(start + 1);
 		const fact = analysis.queryAt(input, producer);
 		const string = fact.kind === "known" && fact.brand === "string";
-		if (!string && attributes.operation === "Symbol") return undefined;
+		if (
+			!string &&
+			attributes.operation === "Symbol" &&
+			(fact.kind !== "known" ||
+				!["number", "boolean", "bigint", "null", "symbol"].includes(fact.brand))
+		)
+			return undefined;
 		const editor = CoreEditor.open(program, fn.id);
 		if (!string) {
-			// Capture the registry key at creation; later metadata reads must not repeat coercion.
+			// Capture text at creation; later metadata reads must not repeat coercion.
 			input = editor.insertInstruction(
 				fn.instructionBlock(producer),
 				producer,

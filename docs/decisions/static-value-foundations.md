@@ -544,8 +544,10 @@ separate obligations.
 Symbol metadata may forward the string used by a known Symbol producer even when
 its identity escapes. Registry keys are converted once at Symbol.for evaluation;
 description and keyFor consumers reuse that string while the registry call stays
-in place. Fresh Symbol descriptions forward only an already-proved String input,
-so the absent-description case and effectful conversion retain their distinction.
+in place. Fresh Symbol descriptions forward a proved String input, or convert a
+proved non-undefined primitive at creation and retain that text. Unknown inputs
+keep the absent-description distinction; argument coercions and their exceptions
+remain before the fresh identity is created.
 Unknown producers, merged Symbols, proxies and mutable descriptor lookup retain
 their ordinary paths.
 

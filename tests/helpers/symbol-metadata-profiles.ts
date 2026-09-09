@@ -2,6 +2,9 @@ export const symbolMetadataCases = [
 	["Symbol", "String(x)"],
 	["Symbol.for", "String(x)"],
 	["Symbol.for", "x"],
+	["Symbol", "+x"],
+	["Symbol", "Boolean(+x)"],
+	["Symbol", "BigInt(x)"],
 ] as const;
 
 export const symbolMetadataConsumers = [
