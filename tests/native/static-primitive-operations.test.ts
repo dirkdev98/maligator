@@ -13,6 +13,33 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves wrapper property keys and identity observations with %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/primitive-wrapper-observations.mjs";
+			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+			const outDir = mkdtempSync(
+				path.join(os.tmpdir(), "mal-primitive-wrapper-observations-"),
+			);
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "primitive-wrapper-observations",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: false },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves primitive wrapper flow and identity with %s primordials",
 		(primordials) => {
 			const fixture = "tests/local/primitive-wrapper-flow.mjs";

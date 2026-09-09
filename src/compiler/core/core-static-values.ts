@@ -887,6 +887,31 @@ export class CoreStaticValueAnalysis {
 				construction,
 				state: first.state === "immutable-value" ? first.state : "joined-allocation",
 			};
+		if (
+			["undefined", "null", "boolean", "number", "string", "bigint", "symbol"].includes(
+				first.brand,
+			)
+		)
+			return {
+				kind: "known",
+				value,
+				discriminator: value,
+				brand: first.brand,
+				identity,
+				prototype: { kind: "unknown" },
+				state: "immutable-value",
+				operands: [],
+				environmentDependencies: [
+					...new Set(facts.flatMap((fact) => fact.environmentDependencies)),
+				],
+				description: this.#program.staticDescriptions.intern({
+					kind: "engine-payload",
+					format: "dynamic-result",
+					targetContract: `primitive-join:${first.brand}`,
+					contentsComplete: false,
+					words: [],
+				}),
+			};
 		const descriptions = facts.map((fact) =>
 			this.#program.staticDescriptions.description(fact.description),
 		);

@@ -1,5 +1,6 @@
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { mathUnaryOperationKeys } from "../shared/builtin-registry.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import {
 	evaluateConstantBuiltin,
 	evaluateConstantStringSplit,
@@ -13,6 +14,8 @@ import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
+import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -115,6 +118,23 @@ const wrapperCoercingUnaryOperators = new Set([
 	"tostring",
 	"increment",
 	"decrement",
+]);
+const wrapperPropertyKeyCalls = new Map([
+	["Object.hasOwn", 2],
+	["Object.defineProperty", 2],
+	["Object.getOwnPropertyDescriptor", 2],
+	["Object.prototype.hasOwnProperty", 1],
+	["Object.prototype.propertyIsEnumerable", 1],
+	["Object.prototype.__defineGetter__", 1],
+	["Object.prototype.__defineSetter__", 1],
+	["Object.prototype.__lookupGetter__", 1],
+	["Object.prototype.__lookupSetter__", 1],
+	["Reflect.get", 2],
+	["Reflect.set", 2],
+	["Reflect.has", 2],
+	["Reflect.deleteProperty", 2],
+	["Reflect.defineProperty", 2],
+	["Reflect.getOwnPropertyDescriptor", 2],
 ]);
 const wrapperCoercingBinaryOperators = new Set([
 	"+",
@@ -1224,6 +1244,41 @@ function primitiveWrapperAllocation(
 	return { instruction, attributes, operation, args, wrapper };
 }
 
+function primitiveWrapperIdentityEqual(
+	fn: CoreFunctionStore,
+	analysis: CoreStaticValueAnalysis,
+	value: CoreValueId,
+	other: CoreValueId | undefined,
+): boolean | undefined {
+	if (value === other) return true;
+	if (other === undefined) return false;
+	const fact = analysis.query(other);
+	if (
+		fact.kind === "known" &&
+		["undefined", "null", "boolean", "number", "string", "bigint", "symbol"].includes(
+			fact.brand,
+		)
+	)
+		return false;
+	// Different allocation sites cannot alias; loop-carried values may select either site.
+	if (
+		fn.kernel.valueDefinitionKind(value) === 1 &&
+		fn.kernel.valueDefinitionKind(other) === 1 &&
+		primitiveWrapperAllocation(
+			fn,
+			analysis,
+			coreInstructionId(fn.kernel.valueDefinitionOwner(value)),
+		) !== undefined &&
+		primitiveWrapperAllocation(
+			fn,
+			analysis,
+			coreInstructionId(fn.kernel.valueDefinitionOwner(other)),
+		) !== undefined
+	)
+		return false;
+	return undefined;
+}
+
 export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 	name: "eliminate-primitive-wrappers",
 	admission: {
@@ -1248,8 +1303,12 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 	},
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["callKnown"],
-	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS, CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "cfg", "memoryEffects", "facts"],
+	requiredAnalyses: [
+		CORE_STATIC_VALUE_ANALYSIS,
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	],
+	wakesOn: ["body", "cfg", "memoryEffects", "facts", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
@@ -1259,6 +1318,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 		const lockedCoercions =
 			context.compilationContext.facts.world.primordialPolicy === "locked" &&
 			!context.compilationContext.facts.world.realms;
+		let kinds: CoreValueKindAnalysis | undefined;
 		for (const instruction of fn.instructionIds()) {
 			const allocation = primitiveWrapperAllocation(fn, analysis, instruction);
 			if (allocation === undefined) continue;
@@ -1409,6 +1469,16 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						opcode === "loadProperty" && consumerOperand === 0
 							? analysis.constant(fn.kernel.operandAt(consumerStart + 1))
 							: undefined;
+					const indexFact =
+						wrapper === "String" && opcode === "loadProperty" && consumerOperand === 0
+							? analysis.query(fn.kernel.operandAt(consumerStart + 1))
+							: undefined;
+					const numericIndex =
+						indexFact !== undefined &&
+						((indexFact.kind === "known" && indexFact.brand === "number") ||
+							(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).kindMask(
+								fn.kernel.operandAt(consumerStart + 1),
+							) === COMPILER_VALUE_KIND_NUMBER);
 					const property =
 						opcode === "loadPropertyStatic"
 							? analysis.string(consumerAttributes.stringIndex as number)
@@ -1423,6 +1493,70 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					else if (opcode === "unary" && consumerAttributes.operator === "!")
 						constantConsumers.set(consumer, false);
 					else if (
+						opcode === "binary" &&
+						["===", "!==", "==", "!="].includes(consumerAttributes.operator as string)
+					) {
+						const operator = consumerAttributes.operator as string;
+						const other = fn.kernel.operandAt(
+							consumerStart + (consumerOperand === 0 ? 1 : 0),
+						);
+						if (operator === "==" || operator === "!=") {
+							const fact = analysis.query(other);
+							if (
+								fact.kind === "known" &&
+								["boolean", "number", "string", "bigint", "symbol"].includes(fact.brand)
+							) {
+								if (lockedCoercions) continue;
+								safe = false;
+								break;
+							}
+						}
+						const equal = primitiveWrapperIdentityEqual(fn, analysis, value, other);
+						if (equal === undefined) {
+							safe = false;
+							break;
+						}
+						constantConsumers.set(consumer, operator.startsWith("!") ? !equal : equal);
+					} else if (
+						opcode === "callKnown" &&
+						!consumerAttributes.construct &&
+						consumerAttributes.argumentMode === undefined &&
+						consumerAttributes.operation === "Object.is"
+					) {
+						if (consumerOperand === 1 || consumerOperand === 2) {
+							const otherIndex = consumerOperand === 1 ? 2 : 1;
+							const other =
+								otherIndex < fn.kernel.instructionOperandCount(consumer) - argumentOffset
+									? fn.kernel.operandAt(consumerStart + otherIndex)
+									: undefined;
+							const equal = primitiveWrapperIdentityEqual(fn, analysis, value, other);
+							if (equal === undefined) {
+								safe = false;
+								break;
+							}
+							constantConsumers.set(consumer, equal);
+						}
+					} else if (
+						lockedCoercions &&
+						((consumerOperand === 1 &&
+							[
+								"loadProperty",
+								"storeProperty",
+								"deleteProperty",
+								"defineProperty",
+								"toPropertyKey",
+							].includes(opcode)) ||
+							(opcode === "binary" &&
+								consumerAttributes.operator === "in" &&
+								consumerOperand === 0) ||
+							(opcode === "callKnown" &&
+								!consumerAttributes.construct &&
+								consumerAttributes.argumentMode === undefined &&
+								wrapperPropertyKeyCalls.get(consumerAttributes.operation as string) ===
+									consumerOperand))
+					)
+						continue;
+					else if (
 						lockedCoercions &&
 						((opcode === "unary" &&
 							wrapperCoercingUnaryOperators.has(consumerAttributes.operator as string)) ||
@@ -1433,14 +1567,6 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					)
 						continue;
 					else if (
-						opcode === "binary" &&
-						(consumerAttributes.operator === "===" ||
-							consumerAttributes.operator === "!==") &&
-						fn.kernel.operandAt(consumerStart) === fn.kernel.operandAt(consumerStart + 1)
-					) {
-						// The wrapper is an object even when its primitive payload is NaN.
-						constantConsumers.set(consumer, consumerAttributes.operator === "===");
-					} else if (
 						opcode === "callKnown" &&
 						!consumerAttributes.construct &&
 						consumerAttributes.argumentMode === undefined &&
@@ -1501,8 +1627,14 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						}
 					} else if (
 						wrapper === "String" &&
-						property !== undefined &&
-						(property === "length" || /^(0|[1-9][0-9]*)$/.test(property))
+						consumerOperand === 0 &&
+						(property === "length" ||
+							(lockedCoercions &&
+								((property !== undefined &&
+									(/^(0|[1-9][0-9]*)$/.test(property) ||
+										property === "-0" ||
+										property === String(Number(property)))) ||
+									numericIndex)))
 					)
 						continue;
 					else if (

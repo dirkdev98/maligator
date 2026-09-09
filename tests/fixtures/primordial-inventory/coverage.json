@@ -84704,6 +84704,26 @@
 						"case": "BigInt"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable key conversion in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -85231,6 +85251,25 @@
 						"case": "Boolean"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "y[key]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves custom property-key conversion and its receiver"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -85401,6 +85440,26 @@
 						"file": "tests/core-primitive-wrapper-flow.test.ts",
 						"test": "preserves mutable method lookup around a %s wrapper loop",
 						"case": "Boolean"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable key conversion in %s",
+						"case": "Reflect.get(y, key)"
 					},
 					"lowering": "virtual"
 				}
@@ -96912,6 +96971,25 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "y[key]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves custom property-key conversion and its receiver"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -98780,6 +98858,26 @@
 						"case": "Number"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable key conversion in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -99420,7 +99518,27 @@
 			"kind": "call",
 			"operations": ["Object.is"],
 			"task": "H-06",
-			"decisions": []
+			"decisions": [
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "F", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "folds object identity at %s without comparing its payload",
+						"case": "Object.is(value, value)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves an unknown identity comparator"
+					},
+					"lowering": "constant"
+				}
+			]
 		},
 		{
 			"id": "[\"Object.is\",\"<construct>\"]",
@@ -102199,6 +102317,44 @@
 						"file": "tests/core-primitive-wrapper-flow.test.ts",
 						"test": "preserves escaping %s wrapper identity",
 						"case": "String"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "y[key]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "preserves custom property-key conversion and its receiver"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "reads the primitive String data at %s",
+						"case": "+y"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable constructor and inherited numeric lookup"
 					},
 					"lowering": "virtual"
 				}
@@ -110183,6 +110339,26 @@
 						"case": "String"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable key conversion in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -112250,6 +112426,25 @@
 						"case": "Symbol"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-values.ts",
+						"symbol": "CoreStaticValueAnalysis"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains the selected Symbol's own description"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "does not assign the Symbol kind to a mixed join with %s",
+						"case": "{}"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -112818,6 +113013,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["adapted-invocation"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "consumes the wrapper as a property key in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-observations.test.ts",
+						"test": "retains mutable key conversion in %s",
+						"case": "Reflect.get(y, key)"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
