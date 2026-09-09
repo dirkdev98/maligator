@@ -1072,6 +1072,17 @@ export class CoreStaticValueAnalysis {
 			environmentDependencies: [],
 		});
 		const intern = program.staticDescriptions;
+		if (opcode === "preparedStringCompare")
+			return primitive(
+				intern.intern({
+					kind: "engine-payload",
+					format: "dynamic-result",
+					targetContract: "String.prototype.localeCompare",
+					contentsComplete: false,
+					words: [],
+				}),
+				"number",
+			);
 		if (
 			opcode === "loadIntrinsic" &&
 			(attributes.intrinsic === "NaN" || attributes.intrinsic === "Infinity")

@@ -15,6 +15,7 @@ import {
 	remapLiteralTemplateConstants,
 	validateStaticQueryTemplate,
 } from "../shared/literal-template-data.ts";
+import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { executionSafepointRootRegisters } from "./execution-liveness.ts";
@@ -791,6 +792,14 @@ export type BytecodeInstruction =
 			left: number;
 			right: number;
 			operation: VmMathBinaryNumberOperation;
+	  }
+	| {
+			opcode: "PREPARED_STRING_COMPARE";
+			dst: number;
+			left: number;
+			right: number;
+			stringIndex: number;
+			options: number;
 	  }
 	| {
 			opcode: "BUILTIN_ERROR";
@@ -1848,6 +1857,27 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmSourcePositions(definition);
 	for (const fn of definition.functions)
 		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "PREPARED_STRING_COMPARE") {
+				const units = definition.stringConstants[instruction.stringIndex];
+				if (
+					units === undefined ||
+					units.length > 128 ||
+					!Number.isInteger(instruction.stringIndex) ||
+					instruction.stringIndex < 0 ||
+					instruction.stringIndex > 0x03ffffff ||
+					units.some((unit) => !Number.isInteger(unit) || unit < 0 || unit > 127) ||
+					!isStringCollationPlan({
+						locale: String.fromCharCode(...units),
+						options: instruction.options,
+					}) ||
+					[instruction.dst, instruction.left, instruction.right].some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					)
+				)
+					throw new RangeError("invalid string collation plan");
+				continue;
+			}
 			if (instruction.opcode !== "QUERY_STATIC_DATA") continue;
 			if (
 				!["includes", "has-own"].includes(instruction.queryKind) ||
@@ -3183,6 +3213,15 @@ function lowerInstructionToBytecodeInstruction(
 				opcode: "BUILTIN_ERROR",
 				dst: instruction.registers[0],
 				error: instruction.error,
+			};
+		case "preparedStringCompare":
+			return {
+				opcode: "PREPARED_STRING_COMPARE",
+				dst: instruction.registers[0],
+				left: instruction.registers[1],
+				right: instruction.registers[2],
+				stringIndex: instruction.stringIndex,
+				options: instruction.options,
 			};
 		case "callKnown":
 			return {

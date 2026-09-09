@@ -5,6 +5,16 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreProgram } from "./core-store.ts";
 
+const observedOptions = new Set([
+	"usage",
+	"localeMatcher",
+	"collation",
+	"ignorePunctuation",
+	"sensitivity",
+	"caseFirst",
+	"numeric",
+]);
+
 export function coreStringCollationPlan(
 	program: CoreProgram,
 	analysis: CoreStaticValueAnalysis,
@@ -57,8 +67,8 @@ export function coreStringCollationPlan(
 		return undefined;
 	const options = new Map<string, ConstantValue>();
 	for (const property of description.properties) {
-		if (typeof property.key !== "string" || property.descriptor.kind !== "data")
-			return undefined;
+		if (typeof property.key !== "string" || !observedOptions.has(property.key)) continue;
+		if (property.descriptor.kind !== "data") return undefined;
 		const member = property.descriptor.value;
 		const constant =
 			member.kind === "constant"

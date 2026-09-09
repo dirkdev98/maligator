@@ -211,4 +211,41 @@ throws(() => invalidPreparedLocale("a", Symbol()), "TypeError");
 if (enabled) throws(() => invalidPreparedLocale("a", "b"), "RangeError");
 else equal(invalidPreparedLocale("a", "b"), -1);
 
+function privateCollationOptions(a, b) {
+	return Object(
+		String(a).localeCompare(
+			String(b),
+			"en-US",
+			{
+				numeric: true,
+				unused: recordCollationEffect("property"),
+			},
+			recordCollationEffect("extra"),
+		),
+	).valueOf();
+}
+function recordCollationEffect(name) {
+	events += name + ";";
+	return 1;
+}
+globalThis.privateCollationOptions = privateCollationOptions;
+events = "";
+equal(privateCollationOptions("10", "2"), enabled ? 1 : -1);
+equal(events, "property;extra;");
+events = "";
+throws(
+	() =>
+		privateCollationOptions(
+			{
+				toString() {
+					events += "throw;";
+					throw new URIError();
+				},
+			},
+			"2",
+		),
+	"URIError",
+);
+equal(events, "throw;");
+
 console.log("locale cases passed");

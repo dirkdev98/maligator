@@ -17,7 +17,6 @@ import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/co
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -1234,7 +1233,6 @@ export function validateNativeNumericSortCallback(
 }
 
 export type NativeInstructionPlan =
-	| { readonly kind: "string-collation"; readonly plan: StringCollationPlan }
 	| {
 			readonly kind: "call";
 			readonly directFunctionIndex?: number;
@@ -1631,10 +1629,6 @@ function nativeInstructionPlanFromExecution(
 						kind: "fresh-dense-reserve",
 						length: instruction.freshDenseReserveLength,
 					};
-		case "callKnown":
-			return instruction.stringCollationPlan === undefined
-				? undefined
-				: { kind: "string-collation", plan: instruction.stringCollationPlan };
 		case "loadPropertyStatic":
 			return instruction.exactOwnSlot !== undefined
 				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }

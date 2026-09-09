@@ -698,27 +698,31 @@ describe("primitive operation results", () => {
 		expect(source).toContain("if (");
 	});
 	it.each([
+		"String(x).localeCompare()",
 		"String(x).localeCompare('a')",
 		"String(x).localeCompare('a','sv')",
 		"String.prototype.localeCompare.call(x,'a','de')",
 		"String(x).localeCompare('a','en-US',{numeric:true,sensitivity:'base',caseFirst:'upper'})",
 		"String(x).localeCompare('a','tr',{sensitivity:'case'})",
 		"String(x).localeCompare('a','en-US',{numeric:1n,caseFirst:'lower'})",
+		"String(x).localeCompare('a','en-US',{numeric:true,unused:x()})",
+		"Object(String(x).localeCompare('a','sv')).valueOf()",
 	])("prepares immutable target collation for %s", (expression) => {
 		const output = inspect(expression);
 		expect(output.c.source).toContain("mal_builtin_string_locale_compare_prepared(");
 		expect(output.c.source).not.toContain(
 			"mal_known_native_mal_builtin_string_prototype_locale_compare",
 		);
-		const plans = output.image.native.functions
+		expect(output.structure.allocations).toBe(0);
+		const plans = output.image.runtime.functions
 			.flatMap((fn) => fn.instructions)
-			.filter((plan) => plan?.kind === "string-collation");
+			.filter((plan) => plan.opcode === "PREPARED_STRING_COMPARE");
 		expect(plans.length).toBeGreaterThan(0);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(output.image));
 		expect(
-			restored.native.functions
+			restored.runtime.functions
 				.flatMap((fn) => fn.instructions)
-				.filter((plan) => plan?.kind === "string-collation"),
+				.filter((plan) => plan.opcode === "PREPARED_STRING_COMPARE"),
 		).toEqual(plans);
 	});
 	it("rejects malformed collation plans in compiler artifacts", () => {
@@ -733,18 +737,48 @@ describe("primitive operation results", () => {
 			const output = inspect("String(x).localeCompare('a','en')");
 			const image = {
 				...output.image,
-				native: {
-					...output.image.native,
-					functions: output.image.native.functions.map((fn) => ({
+				runtime: {
+					...output.image.runtime,
+					stringConstants: [
+						...output.image.runtime.stringConstants,
+						Array.from(plan.locale, (character) => character.charCodeAt(0)),
+					],
+					functions: output.image.runtime.functions.map((fn) => ({
 						...fn,
-						instructions: fn.instructions.map((hint) =>
-							hint?.kind === "string-collation" ? { ...hint, plan } : hint,
+						instructions: fn.instructions.map((instruction) =>
+							instruction.opcode === "PREPARED_STRING_COMPARE"
+								? {
+										...instruction,
+										stringIndex: output.image.runtime.stringConstants.length,
+										options: plan.options,
+									}
+								: instruction,
 						),
 					})),
 				},
 			};
-			expect(() => serializeCompilerArtifact(image)).toThrow(/native instruction plan/);
+			expect(() => serializeCompilerArtifact(image)).toThrow(/string collation plan/);
 		}
+	});
+	it("rejects corrupt prepared collation options while loading an artifact", () => {
+		const output = inspect("String(x).localeCompare('a','sv')");
+		const instruction = output.fn.instructions.find(
+			(instruction) => instruction.opcode === "PREPARED_STRING_COMPARE",
+		)!;
+		const writer = new Writer();
+		writer.u8(BYTECODE_OPERATIONS.indexOf(instruction.opcode));
+		writer.i32(instruction.dst);
+		writer.i32(instruction.left);
+		writer.i32(instruction.right);
+		writer.u32(instruction.stringIndex);
+		writer.u8(instruction.options);
+		const payload = Buffer.from(writer.finish());
+		const bytes = Buffer.from(serializeCompilerArtifact(output.image));
+		const offset = bytes.indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
+		bytes[offset + payload.length - 1] = 255;
+		expect(() => deserializeCompilerArtifact(bytes)).toThrow(/string collation plan/);
 	});
 	it.each([
 		"String(x).localeCompare('a',x)",
@@ -767,6 +801,32 @@ describe("primitive operation results", () => {
 			"probe",
 		);
 		expect(output.c.source).not.toContain("mal_builtin_string_locale_compare_prepared(");
+	});
+	it("consumes private collation options while preserving unused property and extra argument effects", () => {
+		const output = inspect(
+			"String(x).localeCompare('a','en',{numeric:true,unused:x()},x())",
+		);
+		expect(output.structure.allocations).toBe(0);
+		expect(output.structure.genericCalls).toBe(2);
+		expect(
+			output.core.filter((instruction) => instruction.opcode === "preparedStringCompare"),
+		).toHaveLength(1);
+	});
+	it("propagates the prepared comparison's Number result into primitive consumers", () => {
+		const output = inspect("Object(String(x).localeCompare('a','sv')).valueOf()");
+		expect(output.structure.allocations).toBe(0);
+		expect(
+			output.core.some(
+				(instruction) =>
+					instruction.opcode === "callKnown" &&
+					["Object", "Number.prototype.valueOf"].includes(
+						instruction.attributes.operation as string,
+					),
+			),
+		).toBe(false);
+		expect(
+			output.core.filter((instruction) => instruction.opcode === "preparedStringCompare"),
+		).toHaveLength(1);
 	});
 
 	it.each(["replace", "replaceAll"])(

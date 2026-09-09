@@ -25,6 +25,17 @@ function clonedRegistry(
 }
 
 describe("Core target operation contract", () => {
+	it("keeps prepared collation coercions and target setup observable", () => {
+		const operation = coreOpcodeRegistry.require("preparedStringCompare");
+		expect(operation.inputs).toEqual(coreArity(2));
+		expect(operation.discardable).toBe(false);
+		expect(operation.effects).toMatchObject({
+			mayThrow: true,
+			mayGc: true,
+			callsUserCode: true,
+			maySuspend: false,
+		});
+	});
 	it("keeps builtin failures observable and GC-capable without reading input values", () => {
 		const error = coreOpcodeRegistry.require("builtinError");
 		expect(error.inputs).toEqual(coreArity(0));

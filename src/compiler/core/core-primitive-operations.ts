@@ -5,6 +5,7 @@ import {
 } from "../shared/constant-builtins.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
+import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -69,6 +70,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const plans: Array<
+			| {
+					instruction: CoreInstructionId;
+					collation: StringCollationPlan;
+					inputs: ReadonlyArray<CoreValueId>;
+			  }
 			| { instruction: CoreInstructionId; value: ConstantValue }
 			| { instruction: CoreInstructionId; elements: ReadonlyArray<string> }
 			| {
@@ -256,7 +262,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 				continue;
 			}
-			if (!numericOperation && attributes.stringCollationPlan === undefined) {
+			if (!numericOperation) {
 				const error = corePrimitiveBuiltinError(analysis, operation, inputs);
 				if (error !== undefined) {
 					plans.push({
@@ -382,19 +388,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					continue;
 				}
 			}
-			if (
-				operation === "String.prototype.localeCompare" &&
-				attributes.stringCollationPlan === undefined
-			) {
+			if (operation === "String.prototype.localeCompare") {
 				const plan = coreStringCollationPlan(program, analysis, instruction, inputs);
 				if (plan !== undefined)
 					plans.push({
 						instruction,
-						operation: {
-							opcode: "callKnown",
-							inputs,
-							attributes: { ...attributes, stringCollationPlan: { ...plan } },
-						},
+						collation: plan,
+						inputs: inputs.slice(0, 2),
 					});
 				continue;
 			}
@@ -596,6 +596,31 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			return index;
 		};
 		for (const plan of plans) {
+			if ("collation" in plan) {
+				const that =
+					plan.inputs[1] ??
+					editor.insertInstruction(
+						fn.instructionBlock(plan.instruction),
+						plan.instruction,
+						"createUndefined",
+						[],
+						{ sourcePosition: fn.instructionSourcePosition(plan.instruction) },
+					).outputs[0]!;
+				editor.replaceInstruction(
+					plan.instruction,
+					"preparedStringCompare",
+					[plan.inputs[0]!, that],
+					{
+						attributes: {
+							stringIndex: stringIndex(plan.collation.locale),
+							options: plan.collation.options,
+							worldAssumptions: fn.instructionAttributes(plan.instruction)
+								.worldAssumptions,
+						},
+					},
+				);
+				continue;
+			}
 			if ("numberParts" in plan) {
 				const block = fn.instructionBlock(plan.instruction);
 				const sourcePosition = fn.instructionSourcePosition(plan.instruction);

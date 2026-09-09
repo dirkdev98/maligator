@@ -405,6 +405,23 @@ function verifyInstructionRows(
 			} else if (descriptor.opcode === "builtinError") {
 				if (!isKnownBuiltinError(attributes.error))
 					fail("Invalid builtin error identity");
+			} else if (descriptor.opcode === "preparedStringCompare") {
+				const locale = program.stringConstants[attributes.stringIndex as number];
+				if (
+					locale === undefined ||
+					locale.length > 128 ||
+					locale.some((unit) => !Number.isInteger(unit) || unit < 0 || unit > 127) ||
+					!isStringCollationPlan({
+						locale: String.fromCharCode(...locale),
+						options: attributes.options,
+					})
+				)
+					fail("Invalid string collation plan");
+				verifyBuiltinWorldAssumptions(
+					attributes.worldAssumptions,
+					"String.prototype.localeCompare",
+					world,
+				);
 			} else if (descriptor.opcode === "callKnown") {
 				if (
 					typeof attributes.operation !== "string" ||
@@ -422,14 +439,6 @@ function verifyInstructionRows(
 						operandCount < 2)
 				)
 					fail("Invalid known-operation argument list");
-				if (
-					attributes.stringCollationPlan !== undefined &&
-					(attributes.operation !== "String.prototype.localeCompare" ||
-						attributes.construct ||
-						attributes.argumentMode !== undefined ||
-						!isStringCollationPlan(attributes.stringCollationPlan))
-				)
-					fail("Invalid string collation plan");
 				if (
 					attributes.specialized !== undefined &&
 					(attributes.specialized !== attributes.operation ||

@@ -119,6 +119,69 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr).toBe(0);
 	}
+	it("validates prepared collation operands, locale data and option bits", () => {
+		const image: RuntimeImage = {
+			...definition,
+			functionCount: 2,
+			stringConstants: [[101, 110], [233], Array<number>(129).fill(97)],
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						{
+							opcode: "PREPARED_STRING_COMPARE",
+							dst: 0,
+							left: 0,
+							right: 0,
+							stringIndex: 0,
+							options: 2,
+						},
+					],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(image, { debugInfo: false });
+		acceptsWire("prepared-collation", wire);
+		const payload = Buffer.from([
+			WIRE_OPCODES.indexOf("PREPARED_STRING_COMPARE"),
+			0,
+			0,
+			0,
+			0,
+			2,
+		]);
+		const offset = Buffer.from(wire).indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(Buffer.from(wire).indexOf(payload, offset + payload.length)).toBe(-1);
+		for (const [name, operand, value] of [
+			["negative-destination", 1, 1],
+			["large-destination", 1, 2],
+			["negative-left", 2, 1],
+			["large-left", 2, 2],
+			["negative-right", 3, 1],
+			["large-right", 3, 2],
+			["non-ascii-locale", 4, 1],
+			["long-locale", 4, 2],
+			["missing-locale", 4, 3],
+			["invalid-strength", 5, 3],
+			["invalid-case", 5, 5],
+			["invalid-case-first", 5, 48],
+			["invalid-options", 5, 255],
+		] as const) {
+			const malformed = wire.slice();
+			malformed[offset + operand] = value;
+			rejectsWire(`collation-${name}`, malformed);
+		}
+	});
 	it("validates builtin error identities and destination registers before execution", () => {
 		const errorImage: RuntimeImage = {
 			...definition,

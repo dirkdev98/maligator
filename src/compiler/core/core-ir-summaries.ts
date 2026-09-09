@@ -134,6 +134,7 @@ const PRIMITIVE_RESULTS = new Set([
 	"isEmpty",
 	"mathBinaryNumber",
 	"mathUnaryNumber",
+	"preparedStringCompare",
 	"typeofCompare",
 	"unary",
 ]);

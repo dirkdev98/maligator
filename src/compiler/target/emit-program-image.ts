@@ -1804,6 +1804,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "BUILTIN_ERROR":
 			return `{ .opcode = MAL_OP_BUILTIN_ERROR, .as.builtin_error = { .dst = ${instruction.dst}, .error = MAL_BUILTIN_ERROR_${instruction.error} } }`;
+		case "PREPARED_STRING_COMPARE":
+			return `{ .opcode = MAL_OP_PREPARED_STRING_COMPARE, .as.prepared_string_compare = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .locale_options = ${instruction.stringIndex}u * 64u + ${instruction.options}u } }`;
 		case "CALL_KNOWN":
 			return `{ .opcode = MAL_OP_CALL_KNOWN, .as.call_known = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${(knownOperationIndex(instruction.operation)! << 4) | knownOperationFlags(instruction)} } }`;
 		case "MATH_UNARY_NUMBER": {

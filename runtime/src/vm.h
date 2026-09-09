@@ -651,6 +651,12 @@ typedef struct MalInstruction {
         } builtin_error;
 
         struct {
+            i32 dst, left, right;
+            // Six option bits share the locale index word to preserve the 20-byte opcode ABI.
+            u32 locale_options;
+        } prepared_string_compare;
+
+        struct {
             // callee and side data use the same tagged value operands as call.
             i32 dst, callee, data_offset;
         } construct;

@@ -87825,15 +87825,33 @@
 			"decisions": [
 				{
 					"profiles": ["dynamic-receiver-static-parameter"],
-					"axes": ["R", "D", "T", "P"],
+					"axes": ["R", "D", "T", "P", "A"],
 					"state": "implemented",
 					"implementation": {
-						"file": "src/compiler/target/render-native-c.ts",
-						"symbol": "emitCompiledFunction"
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "prepares immutable target collation for %s"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable collation identity and option reentrancy"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["R", "D", "T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "propagates the prepared comparison's Number result into primitive consumers"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",

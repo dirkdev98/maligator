@@ -6598,6 +6598,19 @@ void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instructi
     mal_vm_throw_error(callable->vm, failures[error].prototype, failures[error].message);
 }
 
+void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction) {
+    u32 plan = instruction->as.prepared_string_compare.locale_options;
+    MalString *locale = &callable->vm->runtime_image->string_constants[plan >> 6];
+    usize length = mal_string_length(locale);
+    const c16 *units = mal_string_code_units(locale);
+    byte bytes[128];
+    for (usize i = 0; i < length; i++) bytes[i] = (byte) units[i];
+    callable->registers[instruction->as.prepared_string_compare.dst] = mal_builtin_string_locale_compare_prepared(
+        callable->vm, callable->registers[instruction->as.prepared_string_compare.left],
+        callable->registers[instruction->as.prepared_string_compare.right], bytes, length,
+        (u8) (plan & 63));
+}
+
 // ClassDefinitionEvaluation heritage check: the superclass must be null, or a
 // constructor whose `prototype` is an object or null. Sets vm->completion on a
 // violation (`extends 42`, `extends Math.abs`, `extends a-function-without-a

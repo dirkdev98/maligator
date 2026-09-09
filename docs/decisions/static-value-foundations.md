@@ -102,14 +102,18 @@ validation and receiver coercion order. Catalog proofs separately check the targ
 feature availability, including the value reached through a protected global binding.
 
 String collation plans retain their raw locale tag and flat ICU option bits in the
-compiler artifact. They require a constant locale and complete private option data;
+shared runtime image. They require a constant locale and complete private option data;
 option specialization also requires primitive receiver/argument coercions to exclude
 reentrant mutation. Native code performs those coercions before target-side locale
 validation, then uses a 16-entry thread-local cache of immutable ICU plans. The cache
-owns no VM references and is scoped to the linked ICU data. The runtime image retains
-the original call and option observations. Dynamic options, getters, unsupported
-plans and mutable primordial identities use the generic implementation. Options
-objects may still materialize; the prepared path removes repeated Collator setup.
+owns no VM references and is scoped to the linked ICU data. The shared operation takes
+only the compared values, so private options do not materialize. Ignored property
+initializers and extra argument effects remain. The Number result feeds downstream
+primitive consumers without boxing. Dynamic observed options, getters, unsupported
+plans and mutable primordial identities use the generic implementation. Both backends
+retain receiver/argument coercion before target locale validation. Wire loading checks
+the ASCII locale, option bits and registers; packed option bits preserve the 20-byte
+VM instruction layout.
 
 Primitive-string parsing shares the runtime's UTF-16 parsing kernels. Numeric radices
 and BigInt widths use direct numeric entries, guarded when their registers remain
@@ -124,8 +128,8 @@ source position and exception edge. The native and interpreted backends allocate
 fresh error using a shared checked identity/message table. Argument expressions and
 earlier observable conversions remain; unused input objects can disappear. Earlier
 unknown coercions prevent selection. The compiler never throws the JavaScript error
-during compilation. Runtime wire version 46 and compiler artifact version 72 replace
-the earlier native-only annotation.
+during compilation. Runtime wire version 47 and compiler artifact version 73 encode
+these errors and prepared collation directly, replacing the native-only annotations.
 
 The materialization pass discards bounded private initializer writes after proving
 that the aggregate has no content or identity observer. It retains computed-key

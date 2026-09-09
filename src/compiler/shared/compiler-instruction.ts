@@ -3,7 +3,6 @@ import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
-import type { StringCollationPlan } from "./string-collation-plan.ts";
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
@@ -407,13 +406,18 @@ export type CompilerInstruction =
 			error: KnownBuiltinError;
 	  }
 	| {
+			type: "preparedStringCompare";
+			registers: [number, number, number];
+			stringIndex: number;
+			options: number;
+	  }
+	| {
 			type: "callKnown";
 			registers: [number, number, ...Array<number>];
 			operation: string;
 			construct?: true;
 			argumentMode?: KnownArgumentMode;
 			specialized?: DirectBuiltinOperationId;
-			stringCollationPlan?: StringCollationPlan;
 			knownBuiltinCall: KnownBuiltinCall;
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }

@@ -31,7 +31,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 46;
+export const WIRE_VERSION = 47;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -753,6 +753,13 @@ function opcodeTag(opcode: string): number {
 function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 	w.u8(opcodeTag(i.opcode));
 	switch (i.opcode) {
+		case "PREPARED_STRING_COMPARE":
+			w.i32(i.dst);
+			w.i32(i.left);
+			w.i32(i.right);
+			w.u32(i.stringIndex);
+			w.u8(i.options);
+			return;
 		case "BUILTIN_ERROR":
 			if (!isKnownBuiltinError(i.error))
 				throw new RangeError("program-image-codec: invalid builtin error");
@@ -2100,6 +2107,15 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				throw new RangeError("program-image-codec: invalid builtin error");
 			return { opcode, dst, error };
 		}
+		case "PREPARED_STRING_COMPARE":
+			return {
+				opcode,
+				dst: r.i32(),
+				left: r.i32(),
+				right: r.i32(),
+				stringIndex: r.u32(),
+				options: r.u8(),
+			};
 		case "REQUIRE_COERCIBLE":
 			return { opcode, src: r.i32() };
 		case "CHECK_SUPER_CLASS":

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 46u
+#define WIRE_VERSION 47u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -778,6 +778,17 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.builtin_error.error = rd_u8(r);
             if (o->as.builtin_error.error >= MAL_BUILTIN_ERROR_COUNT) r->ok = false;
             return;
+        case WIRE_PREPARED_STRING_COMPARE: {
+            o->opcode = MAL_OP_PREPARED_STRING_COMPARE;
+            o->as.prepared_string_compare.dst = rd_i32(r);
+            o->as.prepared_string_compare.left = rd_i32(r);
+            o->as.prepared_string_compare.right = rd_i32(r);
+            u32 string_index = rd_u32(r);
+            u8 options = rd_u8(r);
+            o->as.prepared_string_compare.locale_options = (string_index << 6) | options;
+            if (string_index > 0x03ffffffu || options >= 48 || (options & 3) > 2 || ((options & 4) != 0 && (options & 3) != 0)) r->ok = false;
+            return;
+        }
         case WIRE_CONSTRUCT: {
             o->opcode = MAL_OP_CONSTRUCT;
             o->as.construct.dst = rd_i32(r);
@@ -1395,6 +1406,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL, call);
         MAL_WRITES_DST(MAL_OP_CALL_KNOWN, call_known);
         MAL_WRITES_DST(MAL_OP_BUILTIN_ERROR, builtin_error);
+        MAL_WRITES_DST(MAL_OP_PREPARED_STRING_COMPARE, prepared_string_compare);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
         MAL_WRITES_DST(MAL_OP_CATCH, caught);
         MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
@@ -2371,6 +2383,19 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 }
             } else if (instruction->opcode == MAL_OP_BUILTIN_ERROR) {
                 if (instruction->as.builtin_error.dst < 0 || instruction->as.builtin_error.dst >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_PREPARED_STRING_COMPARE) {
+                i32 registers[] = {instruction->as.prepared_string_compare.dst, instruction->as.prepared_string_compare.left, instruction->as.prepared_string_compare.right};
+                for (usize i = 0; i < countof(registers); i++)
+                    if (registers[i] < 0 || registers[i] >= fn->register_count) r.ok = false;
+                u32 locale_index = instruction->as.prepared_string_compare.locale_options >> 6;
+                if (locale_index >= string_count) r.ok = false;
+                else {
+                    MalString *locale = &strings[locale_index];
+                    usize length = mal_string_length(locale);
+                    if (length > 128) r.ok = false;
+                    const c16 *units = mal_string_code_units(locale);
+                    for (usize i = 0; r.ok && i < length; i++) if (units[i] > 127) r.ok = false;
+                }
             } else if ((instruction->opcode == MAL_OP_CALL_KNOWN)) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call_known.data_offset];

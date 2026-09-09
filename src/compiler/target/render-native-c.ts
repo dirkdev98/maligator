@@ -5307,24 +5307,17 @@ function emitInstruction(
 				`mal_vm_throw_error(vm, ${knownBuiltinErrorPrototype(instruction.error)}, ${JSON.stringify(knownBuiltinErrors[instruction.error].message)});`,
 				throwCheck(),
 			];
+		case "PREPARED_STRING_COMPARE": {
+			const bytes = context.stringConstants[instruction.stringIndex]!;
+			const result = `collation_result_${ip}`;
+			return [
+				`MalValue ${result} = mal_builtin_string_locale_compare_prepared(vm, ${boxed(instruction.left)}, ${boxed(instruction.right)}, (const byte[]){ ${bytes.length === 0 ? "0" : bytes.join(", ")} }, ${bytes.length}, ${instruction.options});`,
+				throwCheck(),
+				`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+				poll,
+			];
+		}
 		case "CALL_KNOWN": {
-			if (
-				nativePlan?.kind === "string-collation" &&
-				instruction.operation === "String.prototype.localeCompare" &&
-				!instruction.construct &&
-				instruction.argumentMode === undefined
-			) {
-				const { locale, options } = nativePlan.plan;
-				const bytes = Array.from(locale, (letter) => letter.charCodeAt(0));
-				const that = instruction.arguments[0];
-				const result = `collation_result_${ip}`;
-				return [
-					`MalValue ${result} = mal_builtin_string_locale_compare_prepared(vm, ${boxedOperand(instruction.thisValue)}, ${that === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(that)}, (const byte[]){ ${bytes.length === 0 ? "0" : bytes.join(", ")} }, ${bytes.length}, ${options});`,
-					throwCheck(),
-					`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-					poll,
-				];
-			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
 				if (["isNaN", "isFinite"].includes(instruction.operation)) {
 					const input = instruction.arguments[0];

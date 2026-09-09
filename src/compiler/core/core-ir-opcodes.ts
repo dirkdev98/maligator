@@ -27,6 +27,7 @@ export const CORE_OPCODES = [
 	"await",
 	"binary",
 	"builtinError",
+	"preparedStringCompare",
 	"call",
 	"callKnown",
 	"callSpread",
@@ -224,6 +225,7 @@ const NO_THROW = new Set<CoreOpcode>([
 ]);
 
 const CALLS_USER_CODE = new Set<CoreOpcode>([
+	"preparedStringCompare",
 	"queryStaticData",
 	"arrayRest",
 	"binary",
@@ -557,6 +559,7 @@ const OBSERVES_OPERANDS = new Set<CoreOpcode>([
  * can be held weakly and `loadIntrinsic` therefore cannot join this set.
  */
 const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
+	"preparedStringCompare",
 	"queryStaticData",
 	"binary",
 	"createBigint",
@@ -598,6 +601,7 @@ const INPUT_ARITIES = {
 	await: [1, 1],
 	binary: [2, 2],
 	builtinError: [0, 0],
+	preparedStringCompare: [2, 2],
 	call: [2, 65_535],
 	callKnown: [1, 65_535],
 	callSpread: [3, 3],

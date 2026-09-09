@@ -284,6 +284,8 @@ function cloneInstruction(
 			};
 		case "CREATE_BIGINT":
 			return { ...instruction, bigintIndex: instruction.bigintIndex + base.bigint };
+		case "PREPARED_STRING_COMPARE":
+			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return {
 				...instruction,
