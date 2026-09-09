@@ -84684,6 +84684,26 @@
 						"test": "retains mutable toLocaleString and toString lookup"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves loop-carried %s text observations",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "BigInt"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -84867,6 +84887,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the required runtime ToObject for %s",
 						"case": "null"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "BigInt"
 					},
 					"lowering": "virtual"
 				}
@@ -85171,6 +85211,26 @@
 						"test": "retains inherited setters and nonconfigurable wrapper properties"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves escaping %s wrapper identity",
+						"case": "Boolean"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -85321,6 +85381,26 @@
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable toLocaleString and toString lookup"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves loop-carried %s text observations",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Boolean"
 					},
 					"lowering": "virtual"
 				}
@@ -85566,6 +85646,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Boolean"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -96792,6 +96892,26 @@
 						"case": "new Number(x)"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves escaping %s wrapper identity",
+						"case": "Number"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -97708,6 +97828,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "formats loop-carried Number data with %s",
+						"case": "toExponential(3)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Number"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -97993,6 +98133,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "formats loop-carried Number data with %s",
+						"case": "toFixed(2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Number"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -98279,6 +98439,26 @@
 						"test": "preserves mutable constructor and borrowed-method identities"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "formats loop-carried Number data with %s",
+						"case": "toPrecision(4)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Number"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -98580,6 +98760,26 @@
 						"test": "retains mutable toLocaleString and toString lookup"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves loop-carried %s text observations",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Number"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -98802,6 +99002,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the required runtime ToObject for %s",
 						"case": "null"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "Number"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Number"
 					},
 					"lowering": "virtual"
 				}
@@ -101961,6 +102181,26 @@
 						"case": "new String(Symbol.iterator)"
 					},
 					"lowering": "residual-throw"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["A", "V"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves escaping %s wrapper identity",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -103484,6 +103724,26 @@
 						"test": "preserves typed character kernels, lazy strings, and coercion order with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "charAt(0)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -103767,12 +104027,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "'😀'.codePointAt(0)"
+						"case": "'\ud83d\ude00'.codePointAt(0)"
 					},
 					"lowering": "constant"
 				},
@@ -103807,12 +104067,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'a😀b'.codePointAt(new Number(x))"
+						"case": "'a\ud83d\ude00b'.codePointAt(new Number(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -105204,6 +105464,26 @@
 						"case": "String.prototype.indexOf"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "indexOf('a')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -106276,12 +106556,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "eliminates contained String arguments in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable String argument coercions in %s",
-						"case": "'é'.normalize(new String(x))"
+						"case": "'\u00e9'.normalize(new String(x))"
 					},
 					"lowering": "eliminated"
 				},
@@ -106548,6 +106828,26 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "padEnd(8, '.')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -106997,6 +107297,26 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "repeat(2)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -107206,6 +107526,26 @@
 						"case": "String.prototype.replace"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "replace('a', 'b')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -107644,6 +107984,26 @@
 						"test": "preserves primitive parameter specialization and cell effects with %s primordials"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "slice(1)"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -108008,6 +108368,26 @@
 						"test": "preserves observation-point primitive folds and effects with %s primordials"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "split(',')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -108198,6 +108578,26 @@
 						"case": "String.prototype.startsWith"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "startsWith('a')"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -109763,6 +110163,26 @@
 						"test": "retains mutable toLocaleString and toString lookup"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves loop-carried %s text observations",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -110290,6 +110710,26 @@
 						"case": "String.prototype.trim"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "consumes loop-carried String data in %s",
+						"case": "trim()"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -110870,6 +111310,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the required runtime ToObject for %s",
 						"case": "null"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "String"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "String"
 					},
 					"lowering": "virtual"
 				}
@@ -111771,6 +112231,25 @@
 						"case": "registered/Symbol.prototype.description<get>"
 					},
 					"lowering": "constant"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves the description getter for loop-carried Symbol data"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Symbol"
+					},
+					"lowering": "virtual"
 				}
 			]
 		},
@@ -111947,6 +112426,26 @@
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable toLocaleString and toString lookup"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "resolves loop-carried %s text observations",
+						"case": "Symbol"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Symbol"
 					},
 					"lowering": "virtual"
 				}
@@ -112132,6 +112631,26 @@
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains the required runtime ToObject for %s",
 						"case": "null"
+					},
+					"lowering": "virtual"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["R", "D", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "eliminatePrimitiveWrappers"
+					},
+					"positive": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "keeps loop-carried %s payloads scalar",
+						"case": "Symbol"
+					},
+					"negative": {
+						"file": "tests/core-primitive-wrapper-flow.test.ts",
+						"test": "preserves mutable method lookup around a %s wrapper loop",
+						"case": "Symbol"
 					},
 					"lowering": "virtual"
 				}
@@ -118061,12 +118580,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "encodeURI('a b?x=😀')"
+						"case": "encodeURI('a b?x=\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},
@@ -123880,12 +124399,12 @@
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "folds the observable result of %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
 						"test": "retains mutable lookup for the constant witness %s",
-						"case": "escape('😀')"
+						"case": "escape('\ud83d\ude00')"
 					},
 					"lowering": "constant"
 				},

@@ -6,9 +6,14 @@ import {
 } from "../shared/constant-builtins.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
+import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import type { StringCollationPlan } from "../shared/string-collation-plan.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreTerminatorInput,
+} from "./core-ir-control-flow.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
@@ -1172,6 +1177,53 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 	},
 };
 
+type WrapperPropertyRead =
+	| { kind: "value"; nodeIndex: number; target: string }
+	| { kind: "getter"; target: string };
+
+function primitiveWrapperAllocation(
+	fn: CoreFunctionStore,
+	analysis: CoreStaticValueAnalysis,
+	instruction: CoreInstructionId,
+) {
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "callKnown"
+	)
+		return undefined;
+	const attributes = fn.instructionAttributes(instruction),
+		operation = attributes.operation as string;
+	if (
+		(!attributes.construct && operation !== "Object") ||
+		attributes.argumentMode !== undefined ||
+		!["Boolean", "Number", "String", "Object"].includes(operation)
+	)
+		return undefined;
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const args = Array.from(
+		{ length: fn.kernel.instructionOperandCount(instruction) },
+		(_, index) => fn.kernel.operandAt(start + index),
+	);
+	if (attributes.construct) {
+		const newTarget = analysis.query(args[0]!);
+		if (newTarget.kind !== "known" || newTarget.canonical !== operation) return undefined;
+	}
+	let wrapper = operation;
+	if (operation === "Object") {
+		const input = args[1] === undefined ? undefined : analysis.query(args[1]);
+		if (
+			input?.kind !== "known" ||
+			!["number", "string", "boolean", "bigint", "symbol"].includes(input.brand)
+		)
+			return undefined;
+		wrapper =
+			input.brand === "bigint"
+				? "BigInt"
+				: input.brand[0]!.toUpperCase() + input.brand.slice(1);
+	}
+	return { instruction, attributes, operation, args, wrapper };
+}
+
 export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 	name: "eliminate-primitive-wrappers",
 	admission: {
@@ -1196,9 +1248,9 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 	},
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["callKnown"],
-	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
-	changes: { cfg: false, calls: true, facts: true, representations: false },
+	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS, CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
+	wakesOn: ["body", "cfg", "memoryEffects", "facts"],
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const { program, item } = context,
@@ -1208,48 +1260,44 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 			context.compilationContext.facts.world.primordialPolicy === "locked" &&
 			!context.compilationContext.facts.world.realms;
 		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "callKnown"
-			)
-				continue;
-			const attributes = fn.instructionAttributes(instruction),
-				operation = attributes.operation as string;
-			if (
-				(!attributes.construct && operation !== "Object") ||
-				attributes.argumentMode !== undefined ||
-				!["Boolean", "Number", "String", "Object"].includes(operation)
-			)
-				continue;
-			const start = fn.kernel.instructionOperandStart(instruction);
-			const args = Array.from(
-				{ length: fn.kernel.instructionOperandCount(instruction) },
-				(_, index) => fn.kernel.operandAt(start + index),
-			);
-			const newTarget = analysis.query(args[0]!);
-			if (
-				attributes.construct &&
-				(newTarget.kind !== "known" || newTarget.canonical !== operation)
-			)
-				continue;
+			const allocation = primitiveWrapperAllocation(fn, analysis, instruction);
+			if (allocation === undefined) continue;
+			const { wrapper } = allocation;
 			const root = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-			let wrapper = operation;
-			if (operation === "Object") {
-				const input = args[1] === undefined ? undefined : analysis.query(args[1]);
-				if (
-					input?.kind !== "known" ||
-					!["number", "string", "boolean", "bigint", "symbol"].includes(input.brand)
-				)
-					continue;
-				wrapper =
-					input.brand === "bigint"
-						? "BigInt"
-						: input.brand[0]!.toUpperCase() + input.brand.slice(1);
-			}
+			const allocations = new Map([[instruction, allocation]]);
 			const pending: Array<CoreValueId> = [root],
 				visited = new Set<CoreValueId>(),
 				constantConsumers = new Map<CoreInstructionId, boolean>(),
-				stringCoercions = new Set<CoreInstructionId>();
+				stringCoercions = new Set<CoreInstructionId>(),
+				truthyBranches = new Set<CoreInstructionId>(),
+				propertyReads = new Map<CoreInstructionId, WrapperPropertyRead>();
+			const wrapperPropertyRead = (
+				instruction: CoreInstructionId,
+				receiver: CoreValueId,
+			): WrapperPropertyRead | undefined => {
+				if (
+					!lockedCoercions ||
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.instructionOpcodeName(instruction) !== "loadPropertyStatic" ||
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) !== receiver
+				)
+					return undefined;
+				const property = analysis.string(
+					fn.instructionAttributes(instruction).stringIndex as number,
+				);
+				const resolution = provePrimordialAccess(
+					context.compilationContext.facts.world,
+					{ kind: "intrinsic", id: `${wrapper}.prototype`, realm: "current" },
+					property,
+				)?.resolution;
+				const target = resolution?.getter?.[0] ?? resolution?.value?.[0];
+				if (target === undefined || !target.startsWith(`${wrapper}.prototype.`))
+					return undefined;
+				if (resolution?.getter !== undefined) return { kind: "getter", target };
+				const nodeIndex = resolution?.descriptor[2];
+				if (typeof nodeIndex !== "number") return undefined;
+				return { kind: "value", nodeIndex, target };
+			};
 			let safe = true;
 			while (pending.length && safe) {
 				const value = pending.pop()!;
@@ -1259,6 +1307,38 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					safe = false;
 					break;
 				}
+				if (fn.kernel.valueDefinitionKind(value) === 0) {
+					const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
+					const index = fn.kernel.valueDefinitionIndex(value);
+					const incoming =
+						context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional()
+							.predecessors[block] ?? [];
+					if (
+						block === fn.entry ||
+						incoming.length === 0 ||
+						incoming.some(
+							(edge) => edge.kind !== "ordinary" || edge.arguments[index] === undefined,
+						)
+					) {
+						safe = false;
+						break;
+					}
+					for (const edge of incoming) pending.push(edge.arguments[index]!);
+				} else {
+					const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+					if (fn.instructionOpcodeName(definition) === "move")
+						pending.push(
+							fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)),
+						);
+					else {
+						const source = primitiveWrapperAllocation(fn, analysis, definition);
+						if (source === undefined || source.wrapper !== wrapper) {
+							safe = false;
+							break;
+						}
+						allocations.set(definition, source);
+					}
+				}
 				for (
 					let use = fn.kernel.valueFirstUse(value);
 					use >= 0;
@@ -1266,16 +1346,68 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				) {
 					const consumer = fn.kernel.useInstruction(use);
 					if (fn.instructionKind(consumer) !== "operation") {
+						if (
+							fn.instructionKind(consumer) === "branch" &&
+							fn.kernel.useOperand(use) === 0
+						) {
+							truthyBranches.add(consumer);
+							continue;
+						}
+						const operand =
+							fn.kernel.instructionOperandStart(consumer) + fn.kernel.useOperand(use);
+						const edgeStart = fn.kernel.terminatorEdgeStart(consumer);
+						let forwarded = false;
+						for (
+							let offset = 0;
+							offset < fn.kernel.terminatorEdgeCount(consumer);
+							offset++
+						) {
+							const edge = edgeStart + offset;
+							const index = operand - fn.kernel.terminatorEdgeArgumentStart(edge);
+							if (index < 0 || index >= fn.kernel.terminatorEdgeArgumentCount(edge))
+								continue;
+							const block = fn.kernel.terminatorEdgeBlock(edge);
+							pending.push(
+								fn.kernel.blockParameterValue(
+									fn.kernel.blockParameterStart(block) + index,
+								),
+							);
+							forwarded = true;
+							break;
+						}
+						if (forwarded) continue;
 						safe = false;
 						break;
 					}
-					const opcode = fn.instructionOpcodeName(consumer),
-						consumerAttributes = fn.instructionAttributes(consumer);
+					let opcode = fn.instructionOpcodeName(consumer);
+					let consumerAttributes = fn.instructionAttributes(consumer);
+					let argumentOffset = 0;
+					const propertyRead = wrapperPropertyRead(consumer, value);
+					if (propertyRead !== undefined) {
+						propertyReads.set(consumer, propertyRead);
+						continue;
+					}
+					if (opcode === "call" && fn.kernel.useOperand(use) === 1) {
+						const callee = fn.kernel.operandAt(
+							fn.kernel.instructionOperandStart(consumer),
+						);
+						if (fn.kernel.valueDefinitionKind(callee) === 1) {
+							const lookup = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
+							const method = wrapperPropertyRead(lookup, value);
+							if (method?.kind === "value") {
+								propertyReads.set(lookup, method);
+								opcode = "callKnown";
+								consumerAttributes = { ...consumerAttributes, operation: method.target };
+								argumentOffset = 1;
+							}
+						}
+					}
+					const consumerStart =
+						fn.kernel.instructionOperandStart(consumer) + argumentOffset;
+					const consumerOperand = fn.kernel.useOperand(use) - argumentOffset;
 					const index =
-						opcode === "loadProperty" && fn.kernel.useOperand(use) === 0
-							? analysis.constant(
-									fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1),
-								)
+						opcode === "loadProperty" && consumerOperand === 0
+							? analysis.constant(fn.kernel.operandAt(consumerStart + 1))
 							: undefined;
 					const property =
 						opcode === "loadPropertyStatic"
@@ -1304,8 +1436,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						opcode === "binary" &&
 						(consumerAttributes.operator === "===" ||
 							consumerAttributes.operator === "!==") &&
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer)) ===
-							fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1)
+						fn.kernel.operandAt(consumerStart) === fn.kernel.operandAt(consumerStart + 1)
 					) {
 						// The wrapper is an object even when its primitive payload is NaN.
 						constantConsumers.set(consumer, consumerAttributes.operator === "===");
@@ -1315,7 +1446,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						consumerAttributes.argumentMode === undefined &&
 						noncoercingNumberPredicates.has(consumerAttributes.operation as string)
 					) {
-						if (fn.kernel.useOperand(use) === 1) constantConsumers.set(consumer, false);
+						if (consumerOperand === 1) constantConsumers.set(consumer, false);
 					} else if (
 						lockedCoercions &&
 						opcode === "callKnown" &&
@@ -1323,7 +1454,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						consumerAttributes.argumentMode === undefined &&
 						wrapperCoercingCalls.has(consumerAttributes.operation as string)
 					) {
-						if (fn.kernel.useOperand(use) === 1) {
+						if (consumerOperand === 1) {
 							if (consumerAttributes.operation === "Boolean")
 								constantConsumers.set(consumer, true);
 							else if (consumerAttributes.operation === "String" && wrapper === "Symbol")
@@ -1334,10 +1465,10 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						opcode === "callKnown" &&
 						!consumerAttributes.construct &&
 						consumerAttributes.argumentMode === undefined &&
-						fn.kernel.useOperand(use) > 0 &&
+						consumerOperand > 0 &&
 						wrapperCoercingStringArguments.has(consumerAttributes.operation as string)
 					) {
-						const position = fn.kernel.useOperand(use);
+						const position = consumerOperand;
 						if (consumerAttributes.operation === "String.raw" && position === 1) {
 							safe = false;
 							break;
@@ -1351,9 +1482,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 							].includes(consumerAttributes.operation as string)
 						) {
 							// Custom symbol protocols receive the original limit or replacement value.
-							const pattern = analysis.query(
-								fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1),
-							);
+							const pattern = analysis.query(fn.kernel.operandAt(consumerStart + 1));
 							if (
 								pattern.kind !== "known" ||
 								![
@@ -1378,7 +1507,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						continue;
 					else if (
 						opcode !== "callKnown" ||
-						fn.kernel.useOperand(use) !== 0 ||
+						consumerOperand !== 0 ||
 						consumerAttributes.construct ||
 						consumerAttributes.argumentMode !== undefined ||
 						!(
@@ -1398,12 +1527,10 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						["match", "matchAll", "search", "split", "replace", "replaceAll"].some(
 							(method) => consumerAttributes.operation === `String.prototype.${method}`,
 						) &&
-						fn.kernel.instructionOperandCount(consumer) > 1
+						fn.kernel.instructionOperandCount(consumer) - argumentOffset > 1
 					) {
 						// A symbol protocol receives the original wrapper before receiver ToString.
-						const argument = analysis.query(
-							fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer) + 1),
-						);
+						const argument = analysis.query(fn.kernel.operandAt(consumerStart + 1));
 						if (
 							argument.kind !== "known" ||
 							![
@@ -1424,10 +1551,29 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 			}
 			if (
 				!safe ||
-				context.remainingEdits < constantConsumers.size + stringCoercions.size + 1
+				context.remainingEdits <
+					constantConsumers.size +
+						stringCoercions.size +
+						allocations.size +
+						propertyReads.size +
+						truthyBranches.size
 			)
 				continue;
 			const editor = CoreEditor.open(program, fn.id);
+			for (const [lookup, read] of propertyReads) {
+				const worldAssumptions = {
+					...builtinWorldAssumptions(read.target, "exact-builtin-proof", true),
+				};
+				if (read.kind === "getter") {
+					const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(lookup));
+					editor.replaceInstruction(lookup, "callKnown", [receiver], {
+						attributes: { operation: read.target, worldAssumptions },
+					});
+				} else
+					editor.replaceInstruction(lookup, "loadPrimordial", [], {
+						attributes: { nodeIndex: read.nodeIndex, worldAssumptions },
+					});
+			}
 			for (const [consumer, value] of constantConsumers)
 				editor.replaceInstruction(consumer, "createBoolean", [], {
 					attributes: { value },
@@ -1441,21 +1587,37 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 					attributes: { operator: "tostring" },
 				});
 			}
-			if (operation === "Object")
-				editor.replaceInstruction(instruction, "move", [args[1]!]);
-			else if (
-				operation === "String" &&
-				args[1] !== undefined &&
-				analysis.constant(args[1]) === undefined
-			) {
-				// Unlike String(symbol), construction uses ordinary ToString and must throw.
-				editor.replaceInstruction(instruction, "unary", [args[1]], {
-					attributes: { operator: "tostring" },
+			for (const {
+				instruction: producer,
+				operation,
+				args,
+				attributes,
+			} of allocations.values()) {
+				if (operation === "Object")
+					editor.replaceInstruction(producer, "move", [args[1]!]);
+				else if (
+					operation === "String" &&
+					args[1] !== undefined &&
+					analysis.constant(args[1]) === undefined
+				) {
+					// String construction uses ordinary ToString, including Symbol rejection.
+					editor.replaceInstruction(producer, "unary", [args[1]], {
+						attributes: { operator: "tostring" },
+					});
+				} else
+					editor.replaceInstruction(producer, "callKnown", args, {
+						attributes: { ...attributes, construct: false },
+					});
+			}
+			for (const branch of truthyBranches) {
+				const payload = coreTerminatorInput(fn, branch);
+				if (payload.kind !== "branch")
+					throw new Error("Expected a wrapper truthiness branch");
+				editor.replaceTerminator(fn.instructionBlock(branch), {
+					kind: "jump",
+					edge: payload.consequent,
 				});
-			} else
-				editor.replaceInstruction(instruction, "callKnown", args, {
-					attributes: { ...attributes, construct: false },
-				});
+			}
 			return editor.commit();
 		}
 		return undefined;
