@@ -156,6 +156,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "createF64":
 		case "createNumber":
 		case "preparedStringCompare":
+		case "preciseNumberSum":
 			return COMPILER_VALUE_KIND_NUMBER;
 		case "createString":
 			return COMPILER_VALUE_KIND_STRING;

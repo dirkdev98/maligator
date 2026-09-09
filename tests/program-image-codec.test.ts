@@ -675,7 +675,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-20)).toEqual([
+		expect(WIRE_OPCODES.slice(-21)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -696,9 +696,37 @@ describe("program-image-codec", () => {
 			"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
 			"BUILTIN_ERROR",
 			"PREPARED_STRING_COMPARE",
+			"PRECISE_NUMBER_SUM",
 		]);
 	});
 
+	it("round-trips bounded precise sums and rejects invalid input registers", () => {
+		const sum = { opcode: "PRECISE_NUMBER_SUM", dst: 0, arguments: [0, 1, 2] } as const;
+		const withSum = (replacement: BytecodeInstruction): ProgramImage =>
+			withBytecodeFunctions(definition, [
+				{ ...mainFn, registerCount: 3, positions: [], instructions: [replacement] },
+			]);
+		for (const count of [0, 3, 64]) {
+			const operation: BytecodeInstruction = {
+				...sum,
+				arguments: Array<number>(count).fill(2),
+			};
+			const restored = deserializeCompilerArtifact(
+				serializeCompilerArtifact(withSum(operation), { debugInfo: false }),
+			);
+			expect(restored.runtime.functions[0]!.instructions).toEqual([operation]);
+		}
+		for (const invalid of [
+			{ dst: -1, arguments: [0] },
+			{ dst: 3, arguments: [0] },
+			{ dst: 0, arguments: [-1] },
+			{ dst: 0, arguments: [3] },
+			{ dst: 0, arguments: Array<number>(65).fill(0) },
+		])
+			expect(() =>
+				serializeCompilerArtifact(withSum({ opcode: "PRECISE_NUMBER_SUM", ...invalid })),
+			).toThrow(/invalid precise sum operands/);
+	});
 	it("round-trips and rejects tampered known-own-slot access metadata", () => {
 		const valid = knownOwnSlotDefinition();
 		const wire = serializeCompilerArtifact(valid, { debugInfo: false });

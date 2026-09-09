@@ -4,6 +4,8 @@ import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
 
+export const MAX_PRECISE_NUMBER_SUM_INPUTS = 64;
+
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
 	| "Int8Array"
@@ -410,6 +412,10 @@ export type CompilerInstruction =
 			registers: [number, number, number];
 			stringIndex: number;
 			options: number;
+	  }
+	| {
+			type: "preciseNumberSum";
+			registers: [number, ...Array<number>];
 	  }
 	| {
 			type: "callKnown";

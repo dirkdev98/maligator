@@ -1,4 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
 import {
 	knownBuiltinErrorNames,
 	isKnownBuiltinError,
@@ -31,7 +32,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 47;
+export const WIRE_VERSION = 48;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -912,6 +913,11 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.u8(knownOperationFlags(i));
 			w.u8(i.specialized === undefined ? 0 : directBuiltinTag(i.specialized) + 1);
 			return;
+		case "PRECISE_NUMBER_SUM":
+			w.i32(i.dst);
+			w.i32(i.arguments.length);
+			w.i32Array(i.arguments);
+			return;
 		case "CONSTRUCT":
 			w.i32(i.dst);
 			w.i32(i.callee);
@@ -1745,6 +1751,18 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				right,
 				operation,
 			};
+		}
+		case "PRECISE_NUMBER_SUM": {
+			const dst = r.i32(),
+				count = r.i32(),
+				arguments_ = r.i32Array();
+			if (
+				count !== arguments_.length ||
+				count < 0 ||
+				count > MAX_PRECISE_NUMBER_SUM_INPUTS
+			)
+				throw new RangeError("invalid precise sum operands");
+			return { opcode, dst, arguments: arguments_ };
 		}
 		case "CALL_KNOWN": {
 			const dst = r.i32(),

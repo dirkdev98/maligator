@@ -2351,6 +2351,7 @@ void mal_op_init_global_vars(MalCallable *callable, const MalInstruction *instru
 void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_precise_number_sum(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_rest_arguments(MalCallable *callable, const MalInstruction *instruction);

@@ -6598,6 +6598,15 @@ void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instructi
     mal_vm_throw_error(callable->vm, failures[error].prototype, failures[error].message);
 }
 
+void mal_op_precise_number_sum(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.precise_number_sum.data_offset);
+    f64 values[MAL_PRECISE_NUMBER_SUM_MAX_INPUTS];
+    for (i32 index = 0; index < data[0]; index++)
+        values[index] = mal_ops_number_as_f64(callable->registers[data[index + 1]]);
+    f64 result = mal_builtin_math_sum_precise_numbers(callable->vm, values, (usize) data[0]);
+    callable->registers[instruction->as.precise_number_sum.dst] = mal_ops_number_value(result);
+}
+
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction) {
     u32 plan = instruction->as.prepared_string_compare.locale_options;
     MalString *locale = &callable->vm->runtime_image->string_constants[plan >> 6];

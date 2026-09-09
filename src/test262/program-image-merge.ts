@@ -471,6 +471,7 @@ function cloneInstruction(
 		case "UNARY":
 		case "MATH_UNARY_NUMBER":
 		case "MATH_BINARY_NUMBER":
+		case "PRECISE_NUMBER_SUM":
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
 		case "LOAD_PROPERTY":

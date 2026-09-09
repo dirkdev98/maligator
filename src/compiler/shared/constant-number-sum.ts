@@ -1,3 +1,4 @@
+import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "./compiler-instruction.ts";
 import {
 	evaluateConstantOperation,
 	PORTABLE_CONSTANT_TARGET,
@@ -30,7 +31,7 @@ export function evaluateConstantNumberSum(
 		reason: "work-limit",
 		work,
 	});
-	if (values.length > 64) return limited();
+	if (values.length > MAX_PRECISE_NUMBER_SUM_INPUTS) return limited();
 	let positiveInfinity = false,
 		negativeInfinity = false,
 		allNegativeZero = true;

@@ -58,24 +58,28 @@ describe("primitive operation differential", () => {
 		600_000,
 	);
 
-	it("preserves exact sum and iterator closing through direct dispatch", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-sum-"));
-		try {
-			const pair = buildBackendPairFromOneProgramImage({
-				fixture: "tests/local/static-math-sum.mjs",
-				name: "sum",
-				config: resolveBuildConfig({ engine: { primordials: "locked" } }),
-				outDir,
-			});
-			for (const binary of [pair.compiled, pair.interpreted]) {
-				expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
-					"1\n-0\n-0\nTypeError\ninr\n",
-				);
+	it.each(["locked", "mutable"] as const)(
+		"preserves exact sum and iterator closing with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-sum-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/static-math-sum.mjs",
+					name: "sum",
+					config: resolveBuildConfig({ engine: { primordials } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
+						"1\n-0\n-0\nTypeError\ninr\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
 			}
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
-	}, 600_000);
+		},
+		600_000,
+	);
 
 	it("matches constant radix spellings to the target formatter across all bases and binary64 extremes", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-radix-"));

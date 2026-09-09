@@ -5301,6 +5301,20 @@ function emitInstruction(
 			);
 			return expression === null ? null : [`r${instruction.dst} = ${expression};`];
 		}
+		case "PRECISE_NUMBER_SUM": {
+			const values = instruction.arguments.map((register) =>
+				isNumericRep(reps[register]!)
+					? num(register)
+					: `mal_ops_number_as_f64(${boxed(register)})`,
+			);
+			const result = `sum_result_${ip}`;
+			return [
+				`f64 ${result} = mal_builtin_math_sum_precise_numbers(vm, (const f64[]){ ${values.length ? values.join(", ") : "0.0"} }, ${values.length});`,
+				throwCheck(),
+				storeNumber(instruction.dst, result),
+				poll,
+			];
+		}
 		case "BUILTIN_ERROR":
 			return [
 				`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,

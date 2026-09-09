@@ -105,3 +105,4 @@ f64 mal_builtin_math_hypot_numbers(const f64 *arguments, i32 argument_count);
 f64 mal_builtin_math_min_max_numbers(const f64 *arguments, i32 argument_count, bool is_max);
 f64 mal_builtin_math_random_number(void);
 MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items);
+f64 mal_builtin_math_sum_precise_numbers(MalVm *vm, const f64 *values, usize count);

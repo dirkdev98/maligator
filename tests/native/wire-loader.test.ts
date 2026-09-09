@@ -119,6 +119,72 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr).toBe(0);
 	}
+	it("validates precise sum register bounds and bounded side data", () => {
+		const image: RuntimeImage = {
+			...definition,
+			functionCount: 2,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [{ opcode: "PRECISE_NUMBER_SUM", dst: 0, arguments: [0, 0, 0] }],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(image, { debugInfo: false });
+		acceptsWire("precise-sum", wire);
+		const payload = Buffer.from([
+			WIRE_OPCODES.indexOf("PRECISE_NUMBER_SUM"),
+			0,
+			6,
+			3,
+			0,
+			0,
+			0,
+		]);
+		const offset = Buffer.from(wire).indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(Buffer.from(wire).indexOf(payload, offset + payload.length)).toBe(-1);
+		for (const [name, operand, value] of [
+			["negative-destination", 1, 1],
+			["large-destination", 1, 2],
+			["negative-count", 2, 1],
+			["count-mismatch", 2, 8],
+			["length-mismatch", 3, 4],
+			["negative-input", 4, 1],
+			["large-input", 6, 2],
+		] as const) {
+			const malformed = wire.slice();
+			malformed[offset + operand] = value;
+			rejectsWire(`precise-sum-${name}`, malformed);
+		}
+		image.functions[1]!.instructions = [
+			{ opcode: "PRECISE_NUMBER_SUM", dst: 0, arguments: Array<number>(64).fill(0) },
+		];
+		const maximum = serializeRuntimeImage(image, { debugInfo: false });
+		acceptsWire("precise-sum-maximum", maximum);
+		const maximumOffset = Buffer.from(maximum).indexOf(
+			Buffer.from([
+				WIRE_OPCODES.indexOf("PRECISE_NUMBER_SUM"),
+				0,
+				128,
+				1,
+				64,
+				...Array<number>(64).fill(0),
+			]),
+		);
+		expect(maximumOffset).toBeGreaterThanOrEqual(0);
+		maximum[maximumOffset + 2] = 130;
+		rejectsWire("precise-sum-excess-count", maximum);
+	});
 	it("validates prepared collation operands, locale data and option bits", () => {
 		const image: RuntimeImage = {
 			...definition,

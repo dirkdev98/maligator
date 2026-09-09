@@ -1072,12 +1072,15 @@ export class CoreStaticValueAnalysis {
 			environmentDependencies: [],
 		});
 		const intern = program.staticDescriptions;
-		if (opcode === "preparedStringCompare")
+		if (opcode === "preparedStringCompare" || opcode === "preciseNumberSum")
 			return primitive(
 				intern.intern({
 					kind: "engine-payload",
 					format: "dynamic-result",
-					targetContract: "String.prototype.localeCompare",
+					targetContract:
+						opcode === "preciseNumberSum"
+							? "Math.sumPrecise"
+							: "String.prototype.localeCompare",
 					contentsComplete: false,
 					words: [],
 				}),

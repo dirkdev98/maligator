@@ -646,6 +646,10 @@ typedef struct MalInstruction {
         } call_known;
 
         struct {
+            i32 dst, data_offset;
+        } precise_number_sum;
+
+        struct {
             i32 dst;
             MalBuiltinError error;
         } builtin_error;

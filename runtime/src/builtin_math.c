@@ -712,6 +712,58 @@ static f64 mal_sum_partials_total(MalVm *vm, MalSumPartials *p) {
     return hi;
 }
 
+typedef struct {
+    MalSumPartials partials;
+    bool positive_infinity;
+    bool negative_infinity;
+    bool nan;
+    bool all_negative_zero;
+} MalNumberSum;
+
+static void mal_number_sum_init(MalNumberSum *sum) {
+    *sum = (MalNumberSum) {0};
+    sum->partials.partials = sum->partials.inline_partials;
+    sum->partials.capacity = countof(sum->partials.inline_partials);
+    sum->all_negative_zero = true;
+}
+
+static bool mal_number_sum_add(MalVm *vm, MalNumberSum *sum, f64 value) {
+    if (isnan(value)) {
+        sum->nan = true;
+        return true;
+    }
+    if (isinf(value)) {
+        if (value > 0.0) sum->positive_infinity = true;
+        else sum->negative_infinity = true;
+        return true;
+    }
+    if (value != 0.0 || !signbit(value)) sum->all_negative_zero = false;
+    return value == 0.0 || mal_sum_partials_add(vm, &sum->partials, value);
+}
+
+static f64 mal_number_sum_finish(MalVm *vm, MalNumberSum *sum, bool error) {
+    f64 result = NAN;
+    if (!error && !sum->nan && !(sum->positive_infinity && sum->negative_infinity)) {
+        if (sum->positive_infinity) result = INFINITY;
+        else if (sum->negative_infinity) result = -INFINITY;
+        else if (sum->all_negative_zero) result = -0.0;
+        else {
+            result = mal_sum_partials_total(vm, &sum->partials);
+            if (result == 0.0) result = 0.0;
+        }
+    }
+    if (sum->partials.partials != sum->partials.inline_partials) free(sum->partials.partials);
+    return result;
+}
+
+f64 mal_builtin_math_sum_precise_numbers(MalVm *vm, const f64 *values, usize count) {
+    MalNumberSum sum;
+    mal_number_sum_init(&sum);
+    for (usize index = 0; index < count; index++)
+        if (!mal_number_sum_add(vm, &sum, values[index])) return mal_number_sum_finish(vm, &sum, true);
+    return mal_number_sum_finish(vm, &sum, false);
+}
+
 static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -725,17 +777,8 @@ MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items) {
         return mal_value_new_nan();
     }
 
-    // State: track non-finite contributions; finite values feed the exact
-    // accumulator. -0 only matters when the entire (non-empty) sum is zero.
-    MalSumPartials partials = {0};
-    partials.partials = partials.inline_partials;
-    partials.capacity = countof(partials.inline_partials);
-    bool seen_pos_inf = false;
-    bool seen_neg_inf = false;
-    bool seen_nan = false;
-    bool any_value = false;
-    bool any_nonneg_zero = false; // saw a +0 or a nonzero, forcing +0 over -0
-
+    MalNumberSum sum;
+    mal_number_sum_init(&sum);
     bool error = false;
     while (true) {
         MalValue value;
@@ -748,10 +791,6 @@ MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items) {
             break;
         }
 
-        any_value = true;
-
-        // The element must already be a Number; otherwise TypeError and the
-        // iterator is closed (no coercion is performed).
         if (!mal_ops_is_number(value)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Math.sumPrecise expects only Number values");
             mal_vm_iterator_close(vm, &record);
@@ -759,63 +798,12 @@ MalValue mal_builtin_math_sum_precise_known(MalVm *vm, MalValue items) {
             break;
         }
 
-        f64 n = mal_ops_to_number(value);
-
-        if (isnan(n)) {
-            seen_nan = true;
-            continue;
-        }
-        if (isinf(n)) {
-            if (n > 0.0) {
-                seen_pos_inf = true;
-            } else {
-                seen_neg_inf = true;
-            }
-            continue;
-        }
-        if (n != 0.0 || !signbit(n)) {
-            any_nonneg_zero = true; // a nonzero, or a +0
-        }
-        if (n != 0.0) {
-            if (!mal_sum_partials_add(vm, &partials, n)) {
-                error = true;
-                break;
-            }
+        if (!mal_number_sum_add(vm, &sum, mal_ops_to_number(value))) {
+            error = true;
+            break;
         }
     }
-
-    MalValue result;
-    if (error) {
-        result = mal_value_new_nan();
-    } else if (seen_nan || (seen_pos_inf && seen_neg_inf)) {
-        // NaN if any NaN OR both infinities present.
-        result = mal_value_new_nan();
-    } else if (seen_pos_inf) {
-        result = mal_ops_number_value(INFINITY);
-    } else if (seen_neg_inf) {
-        result = mal_ops_number_value(-INFINITY);
-    } else if (!any_value) {
-        result = mal_value_from_f64(-0.0); // empty list
-    } else {
-        f64 total = mal_sum_partials_total(vm, &partials);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            result = mal_value_new_nan();
-            goto done;
-        }
-        if (total == 0.0) {
-            // All contributions were zero: -0 unless a +0 (or recovered
-            // nonzero) appeared.
-            result = any_nonneg_zero ? mal_ops_number_value(0.0) : mal_value_from_f64(-0.0);
-        } else {
-            result = mal_ops_number_value(total);
-        }
-    }
-
-done:
-    if (partials.partials != partials.inline_partials) {
-        free(partials.partials);
-    }
-    return result;
+    return mal_ops_number_value(mal_number_sum_finish(vm, &sum, error));
 }
 
 /*

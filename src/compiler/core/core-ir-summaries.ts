@@ -135,6 +135,7 @@ const PRIMITIVE_RESULTS = new Set([
 	"mathBinaryNumber",
 	"mathUnaryNumber",
 	"preparedStringCompare",
+	"preciseNumberSum",
 	"typeofCompare",
 	"unary",
 ]);

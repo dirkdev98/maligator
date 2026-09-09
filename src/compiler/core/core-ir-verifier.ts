@@ -422,6 +422,12 @@ function verifyInstructionRows(
 					"String.prototype.localeCompare",
 					world,
 				);
+			} else if (descriptor.opcode === "preciseNumberSum") {
+				verifyBuiltinWorldAssumptions(
+					attributes.worldAssumptions,
+					"Math.sumPrecise",
+					world,
+				);
 			} else if (descriptor.opcode === "callKnown") {
 				if (
 					typeof attributes.operation !== "string" ||

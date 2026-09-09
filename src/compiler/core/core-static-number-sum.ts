@@ -1,4 +1,5 @@
 import type { WorldFacts } from "../shared/compiler-facts.ts";
+import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
 import { evaluateConstantNumberSum } from "../shared/constant-number-sum.ts";
 import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -21,7 +22,7 @@ export function coreStaticNumberSum(
 	if (
 		array.kind !== "array" ||
 		array.length === null ||
-		array.length > 64 ||
+		array.length > MAX_PRECISE_NUMBER_SUM_INPUTS ||
 		array.ownKeysComplete === false ||
 		fact.prototype.kind !== "intrinsic" ||
 		fact.prototype.id !== "Array.prototype" ||
@@ -87,7 +88,6 @@ export function coreStaticNumberSum(
 		const evaluated = evaluateConstantNumberSum(values);
 		if (evaluated.kind === "value") return { value: evaluated.value };
 	}
-	// Two Number inputs have exactly one rounding, including the all-negative-zero case.
-	if (elements.length > 0 && elements.length <= 2) return { elements };
+	if (elements.length > 0) return { elements };
 	return undefined;
 }

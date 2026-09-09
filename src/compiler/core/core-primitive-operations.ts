@@ -463,10 +463,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				else if (sum?.value !== undefined) plans.push({ instruction, value: sum.value });
 				else if (
 					sum?.elements !== undefined &&
-					plans.length * 4 + sequenceEdits + 8 <= context.remainingEdits
+					plans.length * 4 + sequenceEdits + sum.elements.length + 4 <=
+						context.remainingEdits
 				) {
 					plans.push({ instruction, numberParts: sum.elements });
-					sequenceEdits += 4;
+					sequenceEdits += sum.elements.length;
 				}
 				continue;
 			}
@@ -646,9 +647,23 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				);
 				editor.replaceInstruction(
 					plan.instruction,
-					values.length === 1 ? "move" : "binary",
+					values.length === 1
+						? "move"
+						: values.length === 2
+							? "binary"
+							: "preciseNumberSum",
 					values,
-					{ attributes: values.length === 1 ? {} : { operator: "+" } },
+					{
+						attributes:
+							values.length === 1
+								? {}
+								: values.length === 2
+									? { operator: "+" }
+									: {
+											worldAssumptions: fn.instructionAttributes(plan.instruction)
+												.worldAssumptions,
+										},
+					},
 				);
 				continue;
 			}

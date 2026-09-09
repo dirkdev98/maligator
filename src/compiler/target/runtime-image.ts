@@ -3,6 +3,7 @@ import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
+import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
@@ -805,6 +806,11 @@ export type BytecodeInstruction =
 			opcode: "BUILTIN_ERROR";
 			dst: number;
 			error: KnownBuiltinError;
+	  }
+	| {
+			opcode: "PRECISE_NUMBER_SUM";
+			dst: number;
+			arguments: Array<number>;
 	  }
 	| {
 			opcode: "CALL_KNOWN";
@@ -1857,6 +1863,16 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmSourcePositions(definition);
 	for (const fn of definition.functions)
 		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "PRECISE_NUMBER_SUM") {
+				if (
+					instruction.arguments.length > MAX_PRECISE_NUMBER_SUM_INPUTS ||
+					[instruction.dst, ...instruction.arguments].some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					)
+				)
+					throw new RangeError("invalid precise sum operands");
+			}
 			if (instruction.opcode === "PREPARED_STRING_COMPARE") {
 				const units = definition.stringConstants[instruction.stringIndex];
 				if (
@@ -3222,6 +3238,12 @@ function lowerInstructionToBytecodeInstruction(
 				right: instruction.registers[2],
 				stringIndex: instruction.stringIndex,
 				options: instruction.options,
+			};
+		case "preciseNumberSum":
+			return {
+				opcode: "PRECISE_NUMBER_SUM",
+				dst: instruction.registers[0],
+				arguments: instruction.registers.slice(1),
 			};
 		case "callKnown":
 			return {

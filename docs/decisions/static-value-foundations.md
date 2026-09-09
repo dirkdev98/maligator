@@ -172,7 +172,14 @@ establishes the default array iterator and its `next`/`return` behavior. Constan
 inputs use a bounded exact binary accumulator and one ties-to-even rounding, including
 overflow cancellation and signed zero. One or two dynamic Number elements reduce to
 their SSA values and a single addition; their producer effects remain in order.
-Holes, unknown elements, accessors and unproved iterators retain runtime iteration.
+Three through 64 Number elements use a bounded `preciseNumberSum` operation shared by
+native and interpreted execution. Its raw numeric operands feed the runtime's exact
+accumulator without an input JS array. The wire loader validates the operand count
+and every register before accepting side data; accumulator allocation failure remains
+a throwing operation with ordinary GC and exception bookkeeping.
+Unknown elements, accessors, larger arrays and unproved iterators retain runtime
+iteration. Proven non-Number entries, including unshadowed holes, retain argument
+effects before a residual TypeError.
 Primitive type facts with unknown contents retain operand bindings in aggregate
 descriptions rather than becoming constant members.
 

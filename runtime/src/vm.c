@@ -2934,6 +2934,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_PREPARED_STRING_COMPARE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_prepared_string_compare(frame, instruction));
                 break;
+            case MAL_OP_PRECISE_NUMBER_SUM:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_precise_number_sum(frame, instruction));
+                break;
             case MAL_OP_CHECK_SUPER_CLASS:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_check_super_class(frame, instruction));
                 break;

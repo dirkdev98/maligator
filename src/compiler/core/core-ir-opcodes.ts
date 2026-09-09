@@ -1,3 +1,4 @@
+import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
 import {
 	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
@@ -28,6 +29,7 @@ export const CORE_OPCODES = [
 	"binary",
 	"builtinError",
 	"preparedStringCompare",
+	"preciseNumberSum",
 	"call",
 	"callKnown",
 	"callSpread",
@@ -559,6 +561,7 @@ const OBSERVES_OPERANDS = new Set<CoreOpcode>([
  * can be held weakly and `loadIntrinsic` therefore cannot join this set.
  */
 const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
+	"preciseNumberSum",
 	"preparedStringCompare",
 	"queryStaticData",
 	"binary",
@@ -602,6 +605,7 @@ const INPUT_ARITIES = {
 	binary: [2, 2],
 	builtinError: [0, 0],
 	preparedStringCompare: [2, 2],
+	preciseNumberSum: [0, MAX_PRECISE_NUMBER_SUM_INPUTS],
 	call: [2, 65_535],
 	callKnown: [1, 65_535],
 	callSpread: [3, 3],

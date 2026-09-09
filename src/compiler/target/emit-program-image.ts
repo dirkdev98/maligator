@@ -377,6 +377,9 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 			case "CALL_KNOWN":
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
+			case "PRECISE_NUMBER_SUM":
+				single(index, instruction.arguments, instruction.arguments.length);
+				break;
 			case "CONSTRUCT":
 				if (instruction.argumentCount !== instruction.arguments.length) {
 					throw new Error("instruction side-data count mismatch");
@@ -1804,6 +1807,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "BUILTIN_ERROR":
 			return `{ .opcode = MAL_OP_BUILTIN_ERROR, .as.builtin_error = { .dst = ${instruction.dst}, .error = MAL_BUILTIN_ERROR_${instruction.error} } }`;
+		case "PRECISE_NUMBER_SUM":
+			return `{ .opcode = MAL_OP_PRECISE_NUMBER_SUM, .as.precise_number_sum = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
 		case "PREPARED_STRING_COMPARE":
 			return `{ .opcode = MAL_OP_PREPARED_STRING_COMPARE, .as.prepared_string_compare = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .locale_options = ${instruction.stringIndex}u * 64u + ${instruction.options}u } }`;
 		case "CALL_KNOWN":

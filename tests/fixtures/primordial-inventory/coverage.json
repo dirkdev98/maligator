@@ -94613,7 +94613,7 @@
 				},
 				{
 					"profiles": ["static-receiver-dynamic-argument"],
-					"axes": ["A"],
+					"axes": ["T", "A", "L"],
 					"state": "implemented",
 					"implementation": {
 						"file": "src/compiler/core/core-static-number-sum.ts",
@@ -94621,8 +94621,25 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "eliminates a proved numeric sum input %s",
-						"case": "[+x,+x]"
+						"test": "consumes %i dynamic Numbers through the exact sum kernel"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a sum input beyond the numeric kernel's bounded operand list"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["T", "A"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-static-number-sum.ts",
+						"symbol": "coreStaticNumberSum"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "propagates an exact sum result into primitive wrapper consumers"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",

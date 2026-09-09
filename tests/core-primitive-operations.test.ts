@@ -475,6 +475,55 @@ function onlyConstantResults(output: ReturnType<typeof inspect>) {
 }
 
 describe("primitive operation results", () => {
+	it.each([3, 8, 16, 32, 64])(
+		"consumes %i dynamic Numbers through the exact sum kernel",
+		(count) => {
+			const output = inspect(`Math.sumPrecise([${Array(count).fill("+x").join(",")}])`);
+			expect(output.structure.allocations).toBe(0);
+			expect(
+				output.core
+					.filter((operation) => operation.opcode === "preciseNumberSum")
+					.map((operation) => operation.inputs.length),
+			).toEqual([count]);
+			expect(
+				output.core.some(
+					(operation) => operation.attributes.operation === "Math.sumPrecise",
+				),
+			).toBe(false);
+			expect(output.c.source).toContain("mal_builtin_math_sum_precise_numbers(");
+			expect(output.c.source).not.toContain("mal_builtin_math_sum_precise_known(");
+			const restored = deserializeCompilerArtifact(
+				serializeCompilerArtifact(output.image),
+			);
+			expect(
+				restored.runtime.functions
+					.flatMap((fn) => fn.instructions)
+					.filter((instruction) => instruction.opcode === "PRECISE_NUMBER_SUM")
+					.map((instruction) => instruction.arguments.length),
+			).toEqual([count]);
+		},
+	);
+	it("retains a sum input beyond the numeric kernel's bounded operand list", () => {
+		const output = inspect(`Math.sumPrecise([${Array(65).fill("+x").join(",")}])`);
+		expect(output.structure.allocations).toBeGreaterThan(0);
+		expect(output.core.some((operation) => operation.opcode === "preciseNumberSum")).toBe(
+			false,
+		);
+	});
+	it("propagates an exact sum result into primitive wrapper consumers", () => {
+		const output = inspect("Object(Math.sumPrecise([1e20,+x,-1e20])).valueOf()");
+		expect(output.structure.allocations).toBe(0);
+		expect(output.core.some((operation) => operation.opcode === "preciseNumberSum")).toBe(
+			true,
+		);
+		expect(
+			output.core.some((operation) =>
+				["Object", "Number.prototype.valueOf"].includes(
+					operation.attributes.operation as string,
+				),
+			),
+		).toBe(false);
+	});
 	it.each(rejectedPrimitiveConstructors)(
 		"residualizes rejected construction of %s without argument materialization",
 		(expression, error) => {
@@ -701,7 +750,7 @@ describe("primitive operation results", () => {
 			expect(onlyConstantResults(inspect(expression, false))).toBe(false);
 		},
 	);
-	it.each(["[1e20,1,-1e20]", "[]", "[-0,-0]", "[+x]", "[+x,1]", "[+x,+x]"])(
+	it.each(["[1e20,1,-1e20]", "[]", "[-0,-0]", "[+x]", "[+x,1]", "[+x,+x]", "[+x,1,2]"])(
 		"eliminates a proved numeric sum input %s",
 		(array) => {
 			const output = inspect(`Math.sumPrecise(${array})`);
@@ -714,7 +763,7 @@ describe("primitive operation results", () => {
 	it.each([
 		"x",
 		"[x]",
-		"[+x,1,2]",
+		"[x,1,2]",
 		"Array(65).fill(1)",
 		"Object.assign([1],{[Symbol.iterator]:x})",
 	])("retains unproved sum iteration for %s", (array) => {
@@ -1256,6 +1305,26 @@ describe("primitive operation results", () => {
 			};
 			expect(() => serializeCompilerArtifact(image)).toThrow(/string collation plan/);
 		}
+	});
+	it("rejects corrupt precise sum side data while loading an artifact", () => {
+		const output = inspect("Math.sumPrecise([1e20,+x,-1e20])");
+		const instruction = output.fn.instructions.find(
+			(instruction) => instruction.opcode === "PRECISE_NUMBER_SUM",
+		)!;
+		const writer = new Writer();
+		writer.u8(BYTECODE_OPERATIONS.indexOf(instruction.opcode));
+		writer.i32(instruction.dst);
+		writer.i32(instruction.arguments.length);
+		writer.i32Array(instruction.arguments);
+		const payload = Buffer.from(writer.finish());
+		const bytes = Buffer.from(serializeCompilerArtifact(output.image));
+		const offset = bytes.indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
+		bytes[offset + payload.length - 1] = 1;
+		expect(() => deserializeCompilerArtifact(bytes)).toThrow(
+			/invalid precise sum operands/,
+		);
 	});
 	it("rejects corrupt prepared collation options while loading an artifact", () => {
 		const output = inspect("String(x).localeCompare('a','sv')");
