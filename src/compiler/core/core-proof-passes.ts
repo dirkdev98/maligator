@@ -788,6 +788,11 @@ const materializeFlowScalars: CoreFunctionPass = {
 			}
 		}
 		const visited = new Set<CoreValueId>();
+		const conversions: Array<{
+			values: ReadonlyArray<CoreValueId>;
+			representation: CoreRepresentation;
+		}> = [];
+		let conversionCount = 0;
 		for (const seed of neighbors.keys()) {
 			if (visited.has(seed)) continue;
 			const component: Array<CoreValueId> = [];
@@ -837,12 +842,16 @@ const materializeFlowScalars: CoreFunctionPass = {
 				(value) => fn.valueRepresentation(value) === "boxed",
 			);
 			if (candidates.length === 0) continue;
-			const editor = CoreEditor.open(program, item.function);
-			for (const value of candidates)
-				editor.setValueRepresentation(value, representation);
-			return editor.commit();
+			conversions.push({ values: candidates, representation });
+			conversionCount += candidates.length;
+			// A flow component must change representation atomically.
+			if (conversionCount >= context.remainingEdits) break;
 		}
-		return undefined;
+		if (conversions.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		for (const { values, representation } of conversions)
+			for (const value of values) editor.setValueRepresentation(value, representation);
+		return editor.commit();
 	},
 };
 

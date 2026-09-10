@@ -397,6 +397,68 @@ describe("Core local proofs and representations", () => {
 		expect(fn.valueRepresentation(remainder!)).toBe("f64");
 	});
 
+	it("converts independent scalar flows while preserving a component with a boxed consumer", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const merge = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [number] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [boolean] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		const [escaping] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: merge, arguments: [number!, boolean!, escaping!] },
+		});
+		const [joinedNumber, joinedBoolean, joinedEscaping] = inspectCoreBlockParameters(
+			builder,
+			merge,
+		).map(({ value }) => value);
+		const [sum] = builder.appendInstruction(
+			merge,
+			"binary",
+			[joinedNumber!, joinedNumber!],
+			{
+				attributes: { operator: "+" },
+			},
+		);
+		const [negated] = builder.appendInstruction(merge, "unary", [joinedBoolean!], {
+			attributes: { operator: "!" },
+		});
+		builder.appendInstruction(merge, "rootUse", [negated!], { outputCount: 0 });
+		builder.appendInstruction(merge, "storeGlobal", [joinedEscaping!], {
+			attributes: { index: 0 },
+			outputCount: 0,
+		});
+		builder.setTerminator(merge, { kind: "return", value: sum! });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
+		for (const value of [number!, joinedNumber!, sum!])
+			expect(fn.valueRepresentation(value)).toBe("f64");
+		for (const value of [boolean!, joinedBoolean!, negated!])
+			expect(fn.valueRepresentation(value)).toBe("boolean");
+		for (const value of [escaping!, joinedEscaping!])
+			expect(fn.valueRepresentation(value)).toBe("boxed");
+	});
+
 	it("refreshes primitive effect proofs after operand kinds narrow", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
