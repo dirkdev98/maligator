@@ -246,22 +246,6 @@ function copyTerminatorEdge(
 	};
 }
 
-function copyTerminatorEdgesTo(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-	target: CoreBlockId,
-): Array<CoreEdge> {
-	const edges = new Array<CoreEdge>();
-	const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
-	const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
-	for (let offset = 0; offset < edgeCount; offset++) {
-		if (fn.kernel.terminatorEdgeBlock(edgeStart + offset) === target) {
-			edges.push(copyTerminatorEdge(fn, instruction, offset));
-		}
-	}
-	return edges;
-}
-
 function terminatorInputForEdit(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -461,7 +445,10 @@ function rewriteEdges(
 			return {
 				kind: "switch",
 				discriminant: payload.discriminant,
-				cases: payload.cases.map(({ value, edge }) => ({ value, edge: rewrite(edge) })),
+				cases: payload.cases.map(({ value, edge }) => ({
+					value,
+					edge: rewrite(edge),
+				})),
 				default: rewrite(payload.default),
 			};
 		case "return":
@@ -676,7 +663,10 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 				"yield",
 				copyInstructionOperands(fn, instruction),
 				{
-					attributes: { ...fn.instructionAttributes(instruction), terminal: true },
+					attributes: {
+						...fn.instructionAttributes(instruction),
+						terminal: true,
+					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 				},
 			);
@@ -2118,15 +2108,17 @@ const simplifyBlockParameters: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+		const bundle = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS);
+		const control = bundle.structural;
 		let editor: CoreEditor | undefined;
 		for (const block of fn.blockIds()) {
+			const parameterCount = fn.kernel.blockParameterCount(block);
+			if (parameterCount === 0) continue;
 			const incoming = control.predecessors[block] ?? [];
 			if (incoming.length === 0 || incoming.some(({ kind }) => kind === "exceptional")) {
 				continue;
 			}
 			const parameterStart = fn.kernel.blockParameterStart(block);
-			const parameterCount = fn.kernel.blockParameterCount(block);
 			const parameters = Array.from({ length: parameterCount }, (_, index) => {
 				const row = parameterStart + index;
 				const value = fn.kernel.blockParameterValue(row);
@@ -2137,9 +2129,9 @@ const simplifyBlockParameters: CoreFunctionPass = {
 				} as const;
 			});
 			const predecessors = [...new Set(incoming.map(({ from }) => from))];
-			const currentIncoming = predecessors.flatMap((source) =>
-				copyTerminatorEdgesTo(fn, fn.blockTerminator(source), block),
-			);
+			let argumentRows:
+				| Array<{ readonly start: number; readonly count: number }>
+				| undefined;
 			const removable: Array<{
 				readonly index: number;
 				readonly parameter: (typeof parameters)[number];
@@ -2150,48 +2142,68 @@ const simplifyBlockParameters: CoreFunctionPass = {
 			}> = [];
 			for (let index = parameters.length - 1; index >= 0; index--) {
 				if (parameters[index]!.role !== "value") continue;
-				const arguments_ = currentIncoming.map((edge) => edge.arguments[index]);
+				const unused = !valueHasUses(fn, parameters[index]!.value);
+				if (unused) {
+					removable.push({
+						index,
+						parameter: parameters[index]!,
+						replacement: undefined,
+						replacementConstant: undefined,
+						sameValue: false,
+						unused,
+					});
+					continue;
+				}
+				if (argumentRows === undefined) {
+					argumentRows = [];
+					for (const source of predecessors) {
+						const terminator = fn.blockTerminator(source);
+						const start = fn.kernel.terminatorEdgeStart(terminator);
+						const count = fn.kernel.terminatorEdgeCount(terminator);
+						for (let offset = 0; offset < count; offset++) {
+							const edge = start + offset;
+							if (fn.kernel.terminatorEdgeBlock(edge) !== block) continue;
+							argumentRows.push({
+								start: fn.kernel.terminatorEdgeArgumentStart(edge),
+								count: fn.kernel.terminatorEdgeArgumentCount(edge),
+							});
+						}
+					}
+				}
+				const arguments_ = argumentRows.map(({ start, count }) =>
+					index < count ? fn.kernel.operandAt(start + index) : undefined,
+				);
 				const replacement = arguments_[0];
-				const replacementConstant =
-					replacement === undefined ? undefined : constantForValue(fn, replacement);
-				const equivalentConstants =
-					replacementConstant !== undefined &&
-					arguments_.every((argument) => {
+				if (replacement === undefined || replacement === parameters[index]!.value)
+					continue;
+				const sameValue = arguments_.every((argument) => argument === replacement);
+				const replacementConstant = sameValue
+					? undefined
+					: constantForValue(fn, replacement);
+				if (sameValue) {
+					const dominance = bundle.exceptional();
+					const kind = fn.kernel.valueDefinitionKind(replacement);
+					const owner = fn.kernel.valueDefinitionOwner(replacement);
+					const dominates =
+						kind === 0
+							? dominance.dominates(coreBlockId(owner), block)
+							: kind === 1 &&
+								dominance.instructionDominatesBlock(
+									fn.instructionBlock(coreInstructionId(owner)),
+									block,
+								);
+					if (!dominates) continue;
+				} else if (
+					replacementConstant === undefined ||
+					fn.kernel.valueHandlerUseCount(parameters[index]!.value) !== 0 ||
+					!arguments_.every((argument) => {
 						if (argument === undefined) return false;
 						const constant = constantForValue(fn, argument);
 						return (
 							constant !== undefined &&
 							constantsAreInterchangeable(program, replacementConstant, constant)
 						);
-					});
-				const sameValue = arguments_.every((argument) => argument === replacement);
-				const unused = !valueHasUses(fn, parameters[index]!.value);
-				const replacementDefinitionKind =
-					replacement === undefined
-						? undefined
-						: fn.kernel.valueDefinitionKind(replacement);
-				const replacementDefinitionOwner =
-					replacement === undefined
-						? undefined
-						: fn.kernel.valueDefinitionOwner(replacement);
-				const replacementDominates =
-					replacementDefinitionKind === 0
-						? control.dominates(coreBlockId(replacementDefinitionOwner!), block)
-						: replacementDefinitionKind === 1
-							? control.instructionDominatesBlock(
-									fn.instructionBlock(coreInstructionId(replacementDefinitionOwner!)),
-									block,
-								)
-							: false;
-				const replacementIsAvailable = sameValue
-					? replacementDominates
-					: equivalentConstants &&
-						fn.kernel.valueHandlerUseCount(parameters[index]!.value) === 0;
-				if (
-					!unused &&
-					(replacement === undefined ||
-						replacement === parameters[index]!.value ||
-						!replacementIsAvailable)
+					})
 				)
 					continue;
 				removable.push({
