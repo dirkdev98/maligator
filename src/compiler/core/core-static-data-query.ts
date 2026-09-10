@@ -2,6 +2,16 @@ import type { CoreInstructionId } from "./core-ir.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
+// Pool snapshots are immutable and replaced on append, so weak keys also bound index lifetime.
+const stringPoolSlots = new WeakMap<
+	CoreProgram["stringConstants"],
+	ReadonlyMap<string, number>
+>();
+const bigintPoolSlots = new WeakMap<
+	CoreProgram["bigintConstants"],
+	ReadonlyMap<string, number>
+>();
+
 export function coreStaticDataQueryPlan(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -64,7 +74,8 @@ export function coreStaticDataQueryPlan(
 	const properties = new Map(
 		description.properties.map((property) => [property.key, property]),
 	);
-	let strings: Map<string, number> | undefined, bigints: Map<string, number> | undefined;
+	let strings: ReadonlyMap<string, number> | undefined,
+		bigints: ReadonlyMap<string, number> | undefined;
 	for (let index = 0; index < description.length; index++) {
 		const property = properties.get(String(index));
 		if (property === undefined) {
@@ -105,18 +116,28 @@ export function coreStaticDataQueryPlan(
 				break;
 			}
 			case "string": {
-				strings ??= new Map(
-					program.stringConstants.map((units, index) => [units.join(","), index]),
-				);
+				if (strings === undefined) {
+					const pool = program.stringConstants;
+					strings = stringPoolSlots.get(pool);
+					if (strings === undefined) {
+						strings = new Map(pool.map((units, index) => [units.join(","), index]));
+						stringPoolSlots.set(pool, strings);
+					}
+				}
 				const slot = strings.get(value.codeUnits.join(","));
 				if (slot === undefined) return undefined;
 				words.push(5, slot);
 				break;
 			}
 			case "bigint": {
-				bigints ??= new Map(
-					program.bigintConstants.map((value, index) => [String(value), index]),
-				);
+				if (bigints === undefined) {
+					const pool = program.bigintConstants;
+					bigints = bigintPoolSlots.get(pool);
+					if (bigints === undefined) {
+						bigints = new Map(pool.map((value, index) => [String(value), index]));
+						bigintPoolSlots.set(pool, bigints);
+					}
+				}
 				const slot = bigints.get(value.decimal);
 				if (slot === undefined) return undefined;
 				words.push(6, slot);

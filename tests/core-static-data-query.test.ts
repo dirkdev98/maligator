@@ -1,4 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { coreStaticDataQueryPlan } from "../src/compiler/core/core-static-data-query.ts";
+import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -15,6 +23,55 @@ function inspect(body: string) {
 }
 
 describe("static-data query representation", () => {
+	it("refreshes pooled payload references after immutable pool replacement", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[120]],
+			bigintConstants: [5n],
+		});
+		const builder = new CoreFunctionBuilder(program),
+			entry = builder.createBlock();
+		const [text] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [bigint] = builder.appendInstruction(entry, "createBigint", [], {
+			attributes: { bigintIndex: 0 },
+		});
+		const [array] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 2 },
+		});
+		for (const [index, value] of [text!, bigint!].entries()) {
+			const [key] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: index },
+			});
+			builder.appendInstruction(entry, "defineProperty", [array!, key!, value], {
+				attributes: { enumerable: true },
+			});
+		}
+		const [result] = builder.appendInstruction(entry, "callKnown", [array!, text!], {
+			attributes: { operation: "Array.prototype.includes" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const id = builder.finish(entry).function;
+		const query = () => {
+			const fn = program.function(id);
+			const analysis = new CoreStaticValueAnalysis(program, fn, () =>
+				buildCoreControlFlow(program, id),
+			);
+			return coreStaticDataQueryPlan(
+				program,
+				fn,
+				analysis,
+				coreInstructionId(fn.kernel.valueDefinitionOwner(result!)),
+			);
+		};
+		expect(query()?.words).toEqual([8, 2, 5, 0, 6, 0]);
+		const editor = CoreEditor.open(program, id);
+		editor.appendStringConstants([[120]]);
+		editor.appendBigintConstants([5n]);
+		editor.commit();
+		expect(query()?.words).toEqual([8, 2, 5, 1, 6, 1]);
+	});
+
 	it.each([32, 4096])("keeps executable code bounded for %s elements", (count) => {
 		const inspected = inspect(
 			`return [${Array.from({ length: count }, (_, index) => index).join(",")}].includes(x, from);`,
