@@ -199,7 +199,7 @@ describe("Core control-flow analyses and passes", () => {
 		).toMatchObject([{ source: entry, handler, thrownValue: thrown }]);
 	});
 
-	it("shares structural edge storage across ordinary and exceptional CFG views", () => {
+	it("preserves structural snapshots across effect refinement", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -214,8 +214,8 @@ describe("Core control-flow analyses and passes", () => {
 		});
 		builder.setTerminator(normal, { kind: "return", value: callee });
 		builder.setTerminator(handler, {
-			kind: "return",
-			value: inspectCoreBlockParameters(builder, handler)[0]!.value,
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
 		});
 		const functionId = builder.finish(entry).function;
 		const report = new CoreOptimizationReportBuilder(program);
@@ -253,6 +253,8 @@ describe("Core control-flow analyses and passes", () => {
 		expect(refinedExceptional).not.toBe(exceptional);
 		expect(refinedExceptional.successors[entry]).toHaveLength(1);
 		expect(refinedExceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
+		expect(exceptional.instructionDominatesBlock(entry, normal)).toBe(false);
+		expect(refinedExceptional.instructionDominatesBlock(entry, normal)).toBe(true);
 	});
 
 	it("does not reuse a protected-block value after an exceptional join", () => {

@@ -642,17 +642,23 @@ function buildFromStructural(
 		immediateDominators(fn.entry, reversePostorder, predecessors, successors, scratch),
 	);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
-	let instructionDominatesBlock = dominates;
-	if (
-		includeExceptions &&
-		successors.some((edges) => edges.some(({ kind }) => kind === "exceptional"))
-	) {
+	// Deferred dominance must use this structural snapshot after the function changes.
+	const entry = fn.entry;
+	let instructionDominatesBlock:
+		| ((dominator: CoreBlockId, block: CoreBlockId) => boolean)
+		| undefined;
+	const buildInstructionDominance = (): typeof dominates => {
+		if (
+			!includeExceptions ||
+			!successors.some((edges) => edges.some(({ kind }) => kind === "exceptional"))
+		)
+			return dominates;
 		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
 		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
-		const splitSuccessors = new Array<Array<CoreControlEdge>>(fn.blockCapacity * 2);
-		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const splitSuccessors = new Array<Array<CoreControlEdge>>(successors.length * 2);
+		for (let blockIndex = 0; blockIndex < successors.length; blockIndex++) {
 			const block = coreBlockId(blockIndex);
-			if (fn.kernel.blockLive(block) === 0) continue;
+			if (successors[block] === undefined) continue;
 			(splitSuccessors[entryNode(block)] ??= []).push({
 				from: entryNode(block),
 				to: exitNode(block),
@@ -675,11 +681,11 @@ function buildFromStructural(
 			for (const edge of outgoing) (splitPredecessors[edge.to] ??= []).push(edge);
 		}
 		const splitTraversal = runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () =>
-			traversal(entryNode(fn.entry), splitSuccessors),
+			traversal(entryNode(entry), splitSuccessors),
 		);
 		const splitParents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
 			immediateDominators(
-				entryNode(fn.entry),
+				entryNode(entry),
 				splitTraversal.reversePostorder,
 				splitPredecessors,
 				splitSuccessors,
@@ -687,13 +693,12 @@ function buildFromStructural(
 			),
 		);
 		const splitDominates = dominatorPredicate(
-			entryNode(fn.entry),
+			entryNode(entry),
 			splitTraversal.reachable,
 			splitParents,
 		);
-		instructionDominatesBlock = (dominator, block) =>
-			splitDominates(exitNode(dominator), entryNode(block));
-	}
+		return (dominator, block) => splitDominates(exitNode(dominator), entryNode(block));
+	};
 	const uniqueEntryEdges = new Map<CoreBlockId, Map<CoreBlockId, boolean>>();
 	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
 		const fromEdges = uniqueEntryEdges.get(from);
@@ -740,7 +745,12 @@ function buildFromStructural(
 		loops: Object.freeze(loopProducts.loops),
 		irreducibleCycles: Object.freeze(irreducibleCycles),
 		dominates,
-		instructionDominatesBlock,
+		instructionDominatesBlock(dominator: CoreBlockId, block: CoreBlockId) {
+			return (instructionDominatesBlock ??= buildInstructionDominance())(
+				dominator,
+				block,
+			);
+		},
 		dominatesEdge: (from: CoreBlockId, to: CoreBlockId, block: CoreBlockId) =>
 			dominates(to, block) && edgeUniquelyEnters(from, to),
 	});
