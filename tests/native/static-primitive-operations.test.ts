@@ -813,6 +813,31 @@ console.log('constructed', Reflect.construct(Number,[-1n]).valueOf());
 		600_000,
 	);
 	it.each(["locked", "mutable"] as const)(
+		"preserves Boolean result profiles with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-boolean-profiles-"));
+			try {
+				const fixture = "tests/local/boolean-result-profiles.mjs";
+				const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "boolean-profiles",
+					config: resolveBuildConfig({ engine: { primordials } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe(expected);
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						expected,
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves primitive function identities and rejected construction with %s primordials",
 		(primordials) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-identities-"));

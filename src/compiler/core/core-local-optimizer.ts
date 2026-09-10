@@ -727,15 +727,21 @@ export class CoreLocalOptimizer {
 				this.#fn.instructionOpcode(instruction),
 			);
 			const effects = descriptor.effects;
+			const unaryOperator =
+				descriptor.opcode === "unary"
+					? this.#fn.instructionAttributes(instruction).operator
+					: undefined;
 			if (
 				this.#fn.kernel.instructionResultCount(instruction) !== 1 ||
-				!descriptor.discardable ||
-				effects.reads.length > 0 ||
-				effects.writes.length > 0 ||
-				effects.mayThrow ||
-				effects.maySuspend ||
-				effects.mayGc ||
-				effects.callsUserCode
+				(unaryOperator !== "typeof" &&
+					unaryOperator !== "!" &&
+					(!descriptor.discardable ||
+						effects.reads.length > 0 ||
+						effects.writes.length > 0 ||
+						effects.mayThrow ||
+						effects.maySuspend ||
+						effects.mayGc ||
+						effects.callsUserCode))
 			) {
 				continue;
 			}
@@ -867,14 +873,10 @@ export class CoreLocalOptimizer {
 		const descriptor = this.#program.registry.byId(
 			this.#fn.instructionOpcode(instruction),
 		);
-		if (
-			!descriptor.discardable &&
-			!(
-				descriptor.opcode === "unary" &&
-				this.#fn.instructionAttributes(instruction).operator === "typeof"
-			)
-		) {
-			return false;
+		if (!descriptor.discardable) {
+			if (descriptor.opcode !== "unary") return false;
+			const operator = this.#fn.instructionAttributes(instruction).operator;
+			if (operator !== "typeof" && operator !== "!") return false;
 		}
 		const resultStart = this.#fn.kernel.instructionResultStart(instruction);
 		const resultCount = this.#fn.kernel.instructionResultCount(instruction);

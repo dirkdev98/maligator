@@ -26,6 +26,29 @@ function moveChainProgram(): CoreProgram {
 }
 
 describe("CoreLocalOptimizer", () => {
+	it.each(["!", "typeof", "+", "-", "~"])(
+		"removes only noncoercing dead %s operators while retaining their producer",
+		(operator) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const callback = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+			const [value] = builder.appendInstruction(entry, "call", [callback, receiver!]);
+			builder.appendInstruction(entry, "unary", [value!], { attributes: { operator } });
+			builder.setTerminator(entry, { kind: "return", value: receiver! });
+			const fn = program.function(builder.finish(entry).function);
+			new CoreLocalOptimizer(program, fn.id).run();
+			const opcodes = [...fn.bodyInstructionIds(entry)].map((instruction) =>
+				fn.instructionOpcodeName(instruction),
+			);
+			expect(opcodes.filter((opcode) => opcode === "call")).toHaveLength(1);
+			expect(opcodes.filter((opcode) => opcode === "unary")).toHaveLength(
+				operator === "!" || operator === "typeof" ? 0 : 1,
+			);
+		},
+	);
+
 	it("propagates rewrite chains and removes newly dead producers in one edit session", () => {
 		const program = moveChainProgram();
 		const fn = program.function(0 as never);

@@ -23411,6 +23411,26 @@
 						"test": "target validation precedes key coercion"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads the exact canonical function at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable canonical function lookup at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"lowering": "constant",
+					"profiles": ["static-observable"],
+					"axes": ["T", "F"]
 				}
 			]
 		},
@@ -23553,6 +23573,26 @@
 						"test": "target validation precedes key coercion"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-known-operations.ts",
+						"symbol": "resolveKnownOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "reads the exact canonical function at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains mutable canonical function lookup at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"lowering": "constant",
+					"profiles": ["static-observable"],
+					"axes": ["T", "F"]
 				}
 			]
 		},
@@ -99826,6 +99866,60 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"state": "not-applicable",
+					"reason": "The captured installed Boolean function applies ToBoolean and returns a scalar boolean. It cannot invoke input conversion hooks, throw from its own conversion, allocate a result identity, mutate target-owned state, traverse a callback or iteration protocol, or prepare an immutable payload. Argument evaluation may still throw or have effects, and suspension belongs to the surrounding program. An overridden or proxied callable is outside this decision.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "truthiness does not coerce objects"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": [
+						"static-observable",
+						"static-receiver-dynamic-argument",
+						"effectful-guard-failure"
+					],
+					"axes": ["X", "V", "M", "U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "The captured installed Boolean function applies ToBoolean and returns a scalar boolean. It cannot invoke input conversion hooks, throw from its own conversion, allocate a result identity, mutate target-owned state, traverse a callback or iteration protocol, or prepare an immutable payload. Argument evaluation may still throw or have effects, and suspension belongs to the surrounding program. An overridden or proxied callable is outside this decision.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "truthiness does not coerce objects"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": [
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["X", "V", "M", "P"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "reuses %s across an intervening callback",
+						"case": "Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable Boolean replacement is called twice"
+					},
+					"lowering": "specialized",
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["C"]
 				}
 			]
 		},
@@ -100041,6 +100135,30 @@
 						"case": "mutable"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "#removeDeadInstruction"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "removes ignored ${profile} conversion %s",
+						"case": "new Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "retains mutable targets for ignored %s",
+						"case": "new Boolean(x)"
+					},
+					"lowering": "eliminated",
+					"profiles": [
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["Z"]
 				}
 			]
 		},
@@ -100615,6 +100733,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"state": "not-applicable",
+					"reason": "A successful call to the captured installed Boolean.prototype.toString returns one of the two primitive strings true and false. The result has no JavaScript object identity or private mutable state to defer and materialize. A Boolean wrapper supplied as input is a separate input-materialization obligation, and a wrong receiver must still throw. Overridden or proxied callees are excluded.",
+					"negative": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "retains brand checks or numeric coercion in ignored %s",
+						"case": "Boolean.prototype.toString.call(x)"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": [
+						"static-observable",
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"effectful-guard-failure",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["V", "M"]
 				}
 			]
 		},
@@ -101596,6 +101738,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"state": "not-applicable",
+					"reason": "A successful call to the captured installed Boolean.prototype.valueOf returns the primitive boolean payload. The result has no JavaScript object identity or private mutable state to defer and materialize. A Boolean wrapper supplied as input is a separate input-materialization obligation, and a wrong receiver must still throw. Overridden or proxied callees are excluded.",
+					"negative": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "retains brand checks or numeric coercion in ignored %s",
+						"case": "Boolean.prototype.valueOf.call(x)"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": [
+						"static-observable",
+						"static-receiver-dynamic-argument",
+						"dynamic-receiver-static-parameter",
+						"brand-with-unknown-contents",
+						"known-consumer",
+						"escaping-identity",
+						"adapted-invocation",
+						"effectful-guard-failure",
+						"unused-result",
+						"large-recursive-loop",
+						"environment-state-gc-suspension"
+					],
+					"axes": ["V", "M"]
 				}
 			]
 		},
