@@ -6,3 +6,4 @@ tests/wasm-embedding.test.ts
 tests/test262-execution.test.ts
 tests/primordial-inventory.test.ts
 tests/bench-quick.test.ts
+tests/compiler-scale-runner.test.ts

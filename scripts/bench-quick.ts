@@ -18,6 +18,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { createCacheLease } from "../src/cache-management.ts";
 
 type Workload = "compiler-app" | "app-batch";
@@ -54,6 +55,11 @@ const compilerWorker = path.join(root, "scripts/bench-quick-compiler.ts");
 const batchFixture = path.join(root, "bench/quick/app-batch.mts");
 const ROWS = 2560;
 const ITERATIONS = 200;
+const APP_CONFIG = {
+	outputName: "app-batch",
+	engine: { eval: false, realms: false, intl: { enabled: false } },
+	surface: { node: true, webPlatform: false, maligator: false },
+} satisfies MaligatorBuildConfig;
 const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
 
   --candidate CHECKOUT       candidate source (default: current repository)
@@ -442,7 +448,7 @@ async function run(value: Options): Promise<void> {
 					copyFileSync(batchFixture, target);
 					writeFileSync(
 						path.join(preparation, "maligator.build.mts"),
-						'export default { name: "app-batch", engine: { eval: false, realms: false, intl: { enabled: false } }, surface: { node: true, webPlatform: false, maligator: false } };\n',
+						`export default ${JSON.stringify(APP_CONFIG)};\n`,
 					);
 					writeFileSync(
 						input,

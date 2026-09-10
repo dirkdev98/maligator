@@ -1181,9 +1181,9 @@ function syntheticScalingSummary(
 				const metricsSample = [result.profile, ...result.warm.samples].find(
 					(sample) => sample !== undefined && sample.optimizer.input.instructions > 0,
 				);
-				if (timingSamples.length === 0 || metricsSample === undefined) {
+				if (timingSamples.length === 0) {
 					throw new Error(
-						`synthetic scaling result ${tier.id}-${scale}x requires timed and instrumented samples`,
+						`synthetic scaling result ${tier.id}-${scale}x requires timed samples`,
 					);
 				}
 				const wallMs = median(timingSamples.map(({ wallMs }) => wallMs));
@@ -1194,8 +1194,8 @@ function syntheticScalingSummary(
 					scale,
 					wallMs,
 					optimizeCoreMs,
-					inputInstructions: metricsSample.optimizer.input.instructions,
-					outputCodeUnits: metricsSample.output.codeUnits,
+					inputInstructions: metricsSample?.optimizer.input.instructions ?? null,
+					outputCodeUnits: timingSamples[0]!.output.codeUnits,
 				};
 			});
 			const base = samples[0]!;
@@ -1207,16 +1207,26 @@ function syntheticScalingSummary(
 						wallMsPerScale: sample.wallMs / sample.scale,
 						optimizeCoreMsPerScale: sample.optimizeCoreMs / sample.scale,
 						wallMsPerThousandInputInstructions:
-							(sample.wallMs * 1_000) / sample.inputInstructions,
+							sample.inputInstructions === null
+								? null
+								: (sample.wallMs * 1_000) / sample.inputInstructions,
 						optimizeCoreMsPerThousandInputInstructions:
-							(sample.optimizeCoreMs * 1_000) / sample.inputInstructions,
-						inputInstructionsPerScale: sample.inputInstructions / sample.scale,
+							sample.inputInstructions === null
+								? null
+								: (sample.optimizeCoreMs * 1_000) / sample.inputInstructions,
+						inputInstructionsPerScale:
+							sample.inputInstructions === null
+								? null
+								: sample.inputInstructions / sample.scale,
 						outputCodeUnitsPerScale: sample.outputCodeUnits / sample.scale,
 					},
 					relativeTo1x: {
 						wall: sample.wallMs / base.wallMs,
 						optimizeCore: sample.optimizeCoreMs / base.optimizeCoreMs,
-						inputInstructions: sample.inputInstructions / base.inputInstructions,
+						inputInstructions:
+							sample.inputInstructions === null || base.inputInstructions === null
+								? null
+								: sample.inputInstructions / base.inputInstructions,
 						outputCodeUnits: sample.outputCodeUnits / base.outputCodeUnits,
 					},
 				})),
@@ -1281,12 +1291,14 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		}),
 	);
 	const saveCheckpoint = (): void => {
+		writeJsonAtomic(options.output, { schemaVersion: 1, complete: false, results });
 		writeJsonAtomic(checkpointPath, {
 			schemaVersion: 1,
 			signature: checkpointSignature,
 			results,
 		});
 	};
+	saveCheckpoint();
 	try {
 		const warmCases = prepareCases(
 			path.join(temporaryRoot, "w000000000000000"),
@@ -1567,6 +1579,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		) as { name: string; version: string };
 		const dirtyState = gitOutput(["status", "--porcelain=v1", "--untracked-files=no"]);
 		const baseline = {
+			complete: true,
 			schemaVersion: options.coreOpt4Start ? 2 : 1,
 			generatedAt: new Date().toISOString(),
 			source: {
@@ -1627,6 +1640,14 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		console.error(
 			`[compiler-scale] wrote ${path.relative(REPOSITORY_ROOT, options.output)}`,
 		);
+	} catch (error) {
+		writeJsonAtomic(options.output, {
+			schemaVersion: 1,
+			complete: false,
+			error: error instanceof Error ? error.message : String(error),
+			results,
+		});
+		throw error;
 	} finally {
 		rmSync(temporaryRoot, { recursive: true, force: true });
 	}
