@@ -243,11 +243,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 						return execute();
 					},
 				});
-				const units = emitProgramTranslationUnits(
-					image,
-					{ debugInfo: false },
-					1024 * 1024,
-				);
+				const units = emitProgramTranslationUnits(image, { debugInfo: false });
 				return units.map((source, index) => {
 					const name = `unit-${String(index).padStart(4, "0")}.c`;
 					const file = path.join(directory, name);
