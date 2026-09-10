@@ -26,6 +26,7 @@ describe("layered artifact store", () => {
 		const destination = path.join(root, "output", "binary");
 		materializeArtifact(artifactOutput(published, "binary"), destination);
 		expect(statSync(destination).mode & 0o777).toBe(0o755);
+		writeFileSync(source, "mutated source");
 		writeFileSync(destination, "mutated output");
 
 		const restored = readArtifactAction(root, "example", producer, action);

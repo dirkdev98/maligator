@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
@@ -8,6 +7,7 @@ import {
 	requirementsForCommand,
 } from "./command-requirements.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
+import { runTestProcess } from "./test-process.ts";
 
 export function sanitizerEnvironment(
 	platform: NodeJS.Platform,
@@ -36,9 +36,11 @@ export function sanitizerEnvironment(
 			};
 }
 
-export function runSanitizerTests(args = process.argv.slice(2)): number {
+export async function runSanitizerTests(args = process.argv.slice(2)): Promise<number> {
 	const selected = sanitizerEnvironment(process.platform);
 	const mode = selected.MAL_UBSAN === "1" ? "UBSan" : "ASan+UBSan";
+	const keepArtifacts = args.includes("--keep-artifacts");
+	const testArguments = args.filter((argument) => argument !== "--keep-artifacts");
 	if (args.includes("--plan=json")) {
 		console.log(
 			JSON.stringify(
@@ -46,13 +48,14 @@ export function runSanitizerTests(args = process.argv.slice(2)): number {
 					...commandEnvironmentPlan(requirementsForCommand("native")),
 					mode,
 					environment: selected,
+					keepArtifacts,
 					invocation: [
 						process.execPath,
 						"node_modules/vitest/vitest.mjs",
 						"run",
 						"--project",
 						"native",
-						...args.filter((argument) => argument !== "--plan=json"),
+						...testArguments.filter((argument) => argument !== "--plan=json"),
 					],
 				},
 				null,
@@ -63,27 +66,26 @@ export function runSanitizerTests(args = process.argv.slice(2)): number {
 	}
 	const progress = new CommandProgress("sanitize");
 	progress.stage(1, 1, `${mode} native tests on ${process.platform}`);
-	const result = spawnSync(
+	const status = await runTestProcess(
 		process.execPath,
-		["node_modules/vitest/vitest.mjs", "run", "--project", "native", ...args],
+		["node_modules/vitest/vitest.mjs", "run", "--project", "native", ...testArguments],
 		{
-			stdio: "inherit",
-			env: cleanTestEnvironment(selected),
+			environment: cleanTestEnvironment(selected),
+			keepArtifacts,
 		},
 	);
-	if (result.error !== undefined) throw result.error;
-	if (result.status === 0) {
+	if (status === 0) {
 		progress.stagePassed(1, 1, `${mode} native tests on ${process.platform}`);
 		progress.complete();
 	} else {
 		progress.stageFailed(1, 1, `${mode} native tests on ${process.platform}`);
 	}
-	return result.status ?? 1;
+	return status;
 }
 
 if (
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-	process.exitCode = runSanitizerTests();
+	process.exitCode = await runSanitizerTests();
 }

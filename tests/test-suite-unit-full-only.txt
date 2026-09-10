@@ -1,5 +1,6 @@
 # Slow pure-TypeScript or subprocess-heavy integration tests run only in full.
 tests/toolchain.test.ts
+tests/test-process.test.ts
 tests/self-compile-experiment.test.ts
 tests/wasm-embedding.test.ts
 tests/test262-execution.test.ts

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
@@ -6,11 +5,15 @@ import {
 	assertLoopbackAvailable,
 	testSelectionRequiresLoopback,
 } from "./test-environment.ts";
+import { runTestProcess } from "./test-process.ts";
 
 const FULL_ONLY_ARGUMENT = "--maligator-unit-full-only";
+const keepArtifacts = process.argv.includes("--keep-artifacts");
 const userArguments = process.argv
 	.slice(2)
-	.filter((argument) => argument !== FULL_ONLY_ARGUMENT);
+	.filter(
+		(argument) => argument !== FULL_ONLY_ARGUMENT && argument !== "--keep-artifacts",
+	);
 const runFullOnlyUnitTests = process.argv.includes(FULL_ONLY_ARGUMENT);
 const loopbackTests = new Set(
 	readFileSync("tests/test-suite-native-loopback.txt", "utf8")
@@ -38,17 +41,19 @@ progress.stage(1, 1, "run tests");
 const environment = { ...process.env };
 if (runFullOnlyUnitTests) environment.MAL_TEST_UNIT_FULL_ONLY = "1";
 else delete environment.MAL_TEST_UNIT_FULL_ONLY;
-const result = spawnSync(path.resolve("node_modules/.bin/vitest"), arguments_, {
-	stdio: "inherit",
-	env: environment,
-});
-if (result.error !== undefined) throw result.error;
-if (result.status === 0) {
+const status = await runTestProcess(
+	process.execPath,
+	[path.resolve("node_modules/vitest/vitest.mjs"), ...arguments_],
+	{
+		environment,
+		keepArtifacts,
+	},
+);
+if (status === 0) {
 	progress.stagePassed(1, 1, "run tests");
 	progress.complete();
 } else {
 	progress.stageFailed(1, 1, "run tests");
 	progress.failed();
-	if (result.signal !== null) process.kill(process.pid, result.signal);
-	process.exitCode = result.status ?? 1;
+	process.exitCode = status;
 }

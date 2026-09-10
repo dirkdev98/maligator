@@ -1,4 +1,5 @@
 import {
+	constants,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
@@ -371,7 +372,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 						linkDirectory,
 						`${String(index).padStart(4, "0")}.o`,
 					);
-					copyFileSync(object.path, destination);
+					copyFileSync(object.path, destination, constants.COPYFILE_FICLONE);
 					return destination;
 				});
 				let archiveIndex = 0;
@@ -381,7 +382,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 						linkDirectory,
 						`${String(archiveIndex++).padStart(4, "0")}.a`,
 					);
-					copyFileSync(argument, destination);
+					copyFileSync(argument, destination, constants.COPYFILE_FICLONE);
 					return destination;
 				});
 				const materializedLinkArguments = toolArguments(context.toolchain.tools.cc, [

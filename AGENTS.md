@@ -132,6 +132,8 @@ validation. Copy a gate report into the current run directory when needed becaus
 
 ## Artifact hygiene
 
+- Leave no disposable files behind in `.cache/` or temp directories; cleanup is part
+  of completing the task.
 - Keep generated profiles, benchmark outputs, logs, captures, and scratch scripts
   out of tracked directories. Use one task-scoped directory under `.cache/` for
   evidence that must survive the command; use an OS temporary directory with

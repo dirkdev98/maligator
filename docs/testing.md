@@ -37,6 +37,11 @@ builds and superseded outputs after review; retain only evidence supporting a re
 or an unresolved failure. Commit reusable fixtures and tools, not raw profiles,
 experiment journals, or historical timing snapshots.
 
+The repository's Vitest and sanitizer wrappers own one temporary directory per
+invocation and remove it on success, failure, or handled interruption. Use `--keep-artifacts` to
+retain generated sources and binaries for diagnosis; the runner prints the path.
+Reports and the shared build cache remain outside that disposable directory.
+
 `bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default;
 `bench:compiler-host-gap` writes `.cache/compiler-host-gap/report.json` and
 `report.md`. Use `--output` (and host-gap's `--markdown`) to retain separate runs.

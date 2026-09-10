@@ -1,6 +1,7 @@
 import { hash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
+	constants,
 	copyFileSync,
 	mkdirSync,
 	readFileSync,
@@ -147,7 +148,7 @@ function publishFileAtomically(source: string, destination: string): void {
 	mkdirSync(directory, { recursive: true });
 	const temporary = path.join(directory, `.publish-${process.pid}-${randomUUID()}`);
 	try {
-		copyFileSync(source, temporary);
+		copyFileSync(source, temporary, constants.COPYFILE_FICLONE);
 		renameSync(temporary, destination);
 	} finally {
 		rmSync(temporary, { force: true });
@@ -281,7 +282,7 @@ export function materializeArtifact(output: ArtifactOutput, destination: string)
 		`.materialize-${process.pid}-${randomUUID()}`,
 	);
 	try {
-		copyFileSync(output.path, temporary);
+		copyFileSync(output.path, temporary, constants.COPYFILE_FICLONE);
 		chmodSync(temporary, output.mode);
 		renameSync(temporary, destination);
 	} finally {
