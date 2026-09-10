@@ -486,3 +486,18 @@ describe("Core plan admission interior proof", () => {
 		).toBe("per-use");
 	});
 });
+
+it("rejects a copied builtin kind certificate without its Core proof", () => {
+	const compilation = compileSource(
+		`function* probe(x){const s=String(x);yield s;return s.trim();}globalThis.probe=probe;`,
+		"locked",
+	);
+	const inputs = compilation.plan.builtinInputs!;
+	expect(inputs.length).toBeGreaterThan(0);
+	expect(() =>
+		verifyCoreOptimizationPlan(compilation.program, {
+			...compilation.plan,
+			builtinInputs: inputs.map((input) => ({ ...input })),
+		}),
+	).toThrow(/builtin inputs have no current kind proof/);
+});

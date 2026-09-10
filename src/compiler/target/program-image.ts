@@ -1272,6 +1272,10 @@ export type NativeInstructionPlan =
 			readonly kind: "exact-operator-input-kinds";
 			readonly inputKindMasks: CompilerOperatorInputKindMasks;
 	  }
+	| {
+			readonly kind: "exact-builtin-input-kinds";
+			readonly inputKindMasks: ReadonlyArray<number>;
+	  }
 	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" };
 
@@ -1678,6 +1682,13 @@ function nativeInstructionPlanFromExecution(
 			return instruction.exactOwnSlot === undefined
 				? undefined
 				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
+		case "callKnown":
+			return instruction.exactInputKindMasks === undefined
+				? undefined
+				: {
+						kind: "exact-builtin-input-kinds",
+						inputKindMasks: instruction.exactInputKindMasks,
+					};
 		case "unary":
 		case "binary":
 			if (instruction.type === "binary" && instruction.unsignedArithmetic)

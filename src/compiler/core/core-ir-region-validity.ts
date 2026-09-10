@@ -37,6 +37,7 @@ import {
 } from "./core-native-entry-analysis.ts";
 import {
 	coreOperatorInputProofIsCurrent,
+	coreBuiltinInputProofIsCurrent,
 	coreUnsignedArithmeticProofIsCurrent,
 } from "./core-native-numeric-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
@@ -1751,6 +1752,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	// These deeply frozen payloads retain proof identities across verified plan copies.
 	const proofPayloads = new Set<object>([
 		...(plan.operatorInputs ?? []),
+		...(plan.builtinInputs ?? []),
 		...(plan.unsignedArithmetic ?? []),
 	]);
 	for (const entry of plan.directEntries) {
@@ -1860,6 +1862,10 @@ export function verifyCoreOptimizationPlan(
 			blockProofs.get(selection.function)!,
 			localCandidates,
 		);
+	}
+	for (const operation of plan.builtinInputs ?? []) {
+		if (!coreBuiltinInputProofIsCurrent(program, operation))
+			fail("builtin inputs have no current kind proof");
 	}
 	for (const operation of plan.operatorInputs ?? []) {
 		if (!coreOperatorInputProofIsCurrent(program, operation))

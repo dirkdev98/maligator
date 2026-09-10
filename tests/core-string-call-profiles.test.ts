@@ -147,7 +147,7 @@ describe("dynamic string call profiles", () => {
 						: op.opcode === "callKnown" && op.attributes.operation === "String",
 				);
 				expect(conversions).toHaveLength(1);
-				if (profile !== "suspension" && callee !== "String.prototype.concat") {
+				if (callee !== "String.prototype.concat") {
 					expect(out.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(
 						expression === "String(x)" ? 1 : 0,
 					);

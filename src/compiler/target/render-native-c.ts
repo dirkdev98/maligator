@@ -2,6 +2,7 @@ import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
@@ -585,6 +586,7 @@ function emitCompiledVariant(
 			debug,
 			linkage,
 			semanticProtectors,
+			stringConstants,
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
@@ -1387,6 +1389,7 @@ function emitResumableFunction(
 	debug: boolean,
 	linkage: "static" | "external",
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): CompiledFunction | null {
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
@@ -1455,6 +1458,14 @@ function emitResumableFunction(
 		undefined,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		stringConstants,
 	);
 	if (body === null) {
 		return null;
@@ -3418,10 +3429,28 @@ function emitInstruction(
 				return null;
 		}
 	};
+	const builtinOperandKind = (operand: number): CompilerValueKindMask | undefined => {
+		if (
+			nativePlan?.kind !== "exact-builtin-input-kinds" ||
+			instruction.opcode !== "CALL_KNOWN"
+		)
+			return undefined;
+		if (operand === instruction.thisValue) return nativePlan.inputKindMasks[0];
+		const index = instruction.arguments.indexOf(operand);
+		return index < 0 ? undefined : nativePlan.inputKindMasks[index + 1];
+	};
+	const operandIsString = (operand: number): boolean =>
+		operandRep(operand) === "string" ||
+		builtinOperandKind(operand) === COMPILER_VALUE_KIND_STRING;
+
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
-			return isNumericRep(reps[decoded.register]!) ? num(decoded.register) : null;
+			return isNumericRep(reps[decoded.register]!)
+				? num(decoded.register)
+				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+					? `mal_ops_number_as_f64(${boxedOperand(operand)})`
+					: null;
 		}
 		return decoded.kind === "number" ? cF64Literal(decoded.value) : null;
 	};
@@ -3439,7 +3468,11 @@ function emitInstruction(
 	const nativeBooleanOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
-			return reps[decoded.register] === "boolean" ? `r${decoded.register}` : null;
+			return reps[decoded.register] === "boolean"
+				? `r${decoded.register}`
+				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
+					? `mal_value_to_boolean(${boxedOperand(operand)})`
+					: null;
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
@@ -5351,7 +5384,7 @@ function emitInstruction(
 		case "CALL_KNOWN": {
 			if (!instruction.construct && instruction.argumentMode === undefined) {
 				const character = STRING_CHARACTER_KERNELS[instruction.operation];
-				if (character !== undefined && operandRep(instruction.thisValue) === "string") {
+				if (character !== undefined && operandIsString(instruction.thisValue)) {
 					const operand = instruction.arguments[0];
 					const position =
 						operand === undefined || decodeVmValueOperand(operand).kind === "undefined"
@@ -5418,7 +5451,7 @@ function emitInstruction(
 					const positionOperand = instruction.arguments[0];
 					const position =
 						positionOperand === undefined ? "0.0" : nativeNumberOperand(positionOperand);
-					if (operandRep(instruction.thisValue) === "string" && position !== null) {
+					if (operandIsString(instruction.thisValue) && position !== null) {
 						return [
 							`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_number(${boxedOperand(instruction.thisValue)}, ${position})`)};`,
 							poll,
@@ -5577,8 +5610,9 @@ function emitInstruction(
 							second === undefined ||
 							decodeVmValueOperand(second).kind === "undefined";
 						const radix = omittedRadix ? "0.0" : nativeNumberOperand(second);
-						const guards =
-							operandRep(first) === "string" ? [] : [`mal_value_is_string(${source})`];
+						const guards = operandIsString(first)
+							? []
+							: [`mal_value_is_string(${source})`];
 						if (radix === null)
 							guards.push(`mal_ops_is_number(${boxedOperand(second!)})`);
 						const number = radix ?? `mal_ops_number_as_f64(${boxedOperand(second!)})`;
@@ -5657,7 +5691,7 @@ function emitInstruction(
 						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 						poll,
 					];
-					if (operandRep(input) === "string") return direct;
+					if (operandIsString(input)) return direct;
 					return [
 						`if (mal_value_is_string(${value})) {`,
 						...direct.map((line) => `  ${line}`),
@@ -5685,10 +5719,10 @@ function emitInstruction(
 						poll,
 					];
 					const guards = [
-						...(operandRep(instruction.thisValue) === "string"
+						...(operandIsString(instruction.thisValue)
 							? []
 							: [`mal_value_is_string(${receiver})`]),
-						...(operandRep(instruction.arguments[0]) === "string"
+						...(operandIsString(instruction.arguments[0])
 							? []
 							: [`mal_value_is_string(${search})`]),
 					];
@@ -5770,7 +5804,7 @@ function emitInstruction(
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 							poll,
 						];
-						if (operandRep(instruction.thisValue) === "string") return direct;
+						if (operandIsString(instruction.thisValue)) return direct;
 						return [
 							`if (mal_value_is_string(${receiver})) {`,
 							...direct.map((line) => `  ${line}`),
@@ -5819,7 +5853,7 @@ function emitInstruction(
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 							poll,
 						];
-						if (operandRep(instruction.thisValue) === "string") return direct;
+						if (operandIsString(instruction.thisValue)) return direct;
 						return [
 							`if (mal_value_is_string(${receiver})) {`,
 							...direct.map((line) => `  ${line}`),
@@ -5858,7 +5892,7 @@ function emitInstruction(
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 							poll,
 						];
-						if (operandRep(instruction.thisValue) === "string") return direct;
+						if (operandIsString(instruction.thisValue)) return direct;
 						return [
 							`if (mal_value_is_string(${receiver})) {`,
 							...direct.map((line) => `  ${line}`),
@@ -5909,8 +5943,8 @@ function emitInstruction(
 					if (position !== null) {
 						const result = `search_result_${ip}`;
 						if (
-							operandRep(instruction.thisValue) === "string" &&
-							operandRep(instruction.arguments[0]) === "string"
+							operandIsString(instruction.thisValue) &&
+							operandIsString(instruction.arguments[0])
 						) {
 							return [
 								`MalValue ${result} = mal_builtin_string_search_strings(mal_value_to_string(${boxedOperand(instruction.thisValue)}), mal_value_to_string(${boxedOperand(instruction.arguments[0])}), ${position}, MAL_STRING_SEARCH_${search[0]});`,

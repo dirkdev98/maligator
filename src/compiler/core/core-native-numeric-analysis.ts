@@ -1,4 +1,9 @@
-import { COMPILER_VALUE_KIND_BOOLEAN } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_TOP,
+} from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
@@ -158,6 +163,80 @@ export function coreOperatorInputPlans(
 				masks: Object.freeze(masks),
 			});
 			operatorProofs.set(plan, { fn, versions: fn.versions });
+			plans.push(plan);
+		}
+	}
+	return Object.freeze(plans);
+}
+
+export interface CoreBuiltinInputPlan {
+	readonly function: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+	readonly masks: ReadonlyArray<number>;
+}
+
+const builtinProofs = new WeakMap<
+	CoreBuiltinInputPlan,
+	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
+>();
+
+export function coreBuiltinInputProofIsCurrent(
+	program: CoreProgram,
+	plan: CoreBuiltinInputPlan,
+): boolean {
+	const proof = builtinProofs.get(plan);
+	return (
+		proof?.fn === program.function(plan.function) &&
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
+	);
+}
+
+export function coreBuiltinInputPlans(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	functions: ReadonlyArray<CoreFunctionId>,
+): ReadonlyArray<CoreBuiltinInputPlan> {
+	const plans: Array<CoreBuiltinInputPlan> = [];
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		if (!fn.isGenerator && !fn.isAsync) continue;
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "callKnown"
+			)
+				continue;
+			const attributes = fn.instructionAttributes(instruction);
+			const count = fn.kernel.instructionOperandCount(instruction);
+			if (
+				attributes.construct ||
+				attributes.argumentMode !== undefined ||
+				count < 1 ||
+				count > 17
+			)
+				continue;
+			const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			});
+			const start = fn.kernel.instructionOperandStart(instruction);
+			const masks = Array.from({ length: count }, (_, index) => {
+				const mask = kinds.kindMask(fn.kernel.operandAt(start + index));
+				return [
+					COMPILER_VALUE_KIND_BOOLEAN,
+					COMPILER_VALUE_KIND_NUMBER,
+					COMPILER_VALUE_KIND_STRING,
+				].includes(mask)
+					? mask
+					: COMPILER_VALUE_KIND_TOP;
+			});
+			if (masks.every((mask) => mask === COMPILER_VALUE_KIND_TOP)) continue;
+			const plan = Object.freeze({
+				function: functionId,
+				instruction,
+				masks: Object.freeze(masks),
+			});
+			builtinProofs.set(plan, { fn, versions: fn.versions });
 			plans.push(plan);
 		}
 	}

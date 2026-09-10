@@ -486,6 +486,12 @@ remain in place. This does not recreate BigInts or identity-bearing Symbols.
 String searches with proved primitive String receiver and needle and a numeric
 position use the shared search kernel directly. Cons strings retain both GC roots
 while flattening before the scan; unknown string operands keep the guarded entry.
+Generator and async builtin calls retain bounded Core input-kind certificates through
+register allocation and the compiler artifact. Number, Boolean and String operands
+can use typed entries even though coroutine slots remain boxed and GC-visible.
+Unknown resume values retain ordinary coercion and brand checks. Resumable emission
+also receives the target string-constant table for certified locale and normalization
+options; it does not infer constants from register writes.
 Callback replacements retain their separate allocation cost model. Character access
 with a proved primitive String and numeric position uses the shared inline UTF-16
 kernel. Lazy string storage can flatten there; unknown receivers and positions retain

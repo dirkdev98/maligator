@@ -10,6 +10,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import type {
+	CoreBuiltinInputPlan,
 	CoreOperatorInputPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
@@ -424,6 +425,7 @@ export interface CoreOptimizationPlan {
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
 	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
+	readonly builtinInputs?: ReadonlyArray<CoreBuiltinInputPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly recipes: CoreSpecializationRecipeTable;
 	readonly statistics: CoreOptimizationPlanStatistics;

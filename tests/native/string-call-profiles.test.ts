@@ -182,6 +182,31 @@ for(let index=0;index<cases.length;index++){
  try{const result=run({[Symbol.toPrimitive](){throw sentinel;}},v=>v,3);if(generator)result.next();}catch(error){caught=error===sentinel;}
  if(!caught)throw new Error('lost conversion exception '+index);
 }
+function* suspendedSearch(x,y,p){const s=String(x),n=String(y),i=+p;yield s;return s.includes(n,i);}
+async function asyncSearch(x,y,p){const s=String(x),n=String(y),i=+p;await s;return s.includes(n,i);}
+function* resumedSearch(x){const s=String(x);const n=yield s;return s.includes(n,0);}
+function* unionSearch(x,y,flag){const s=String(x);const n=flag?String(y):yield s;return s.includes(n,0);}
+for(const size of [1,64,1024]){
+ let rope='';for(let i=0;i<size;i++)rope+='a😀b';
+ const iterator=suspendedSearch(rope,'😀',1);iterator.next();
+ console.log('suspended-rope',size,iterator.next().value,await asyncSearch(rope,'😀',1));
+}
+for(const run of [resumedSearch,unionSearch])for(const needle of ['b',/b/,{[Symbol.match]:false,toString(){return 'b';}}]){
+ const events=[];const iterator=run({toString(){events.push('receiver');return 'abc';}},'',false);
+ const first=iterator.next();
+ try{console.log('resumed',encode(first.value),encode(iterator.next(needle).value),events.join('|'));}catch(error){console.log('resumed-error',error.name,events.join('|'));}
+}
+const sentinel={};
+for(const run of [resumedSearch,unionSearch]){
+ const iterator=run('abc','',false);iterator.next();let caught=false;
+ try{iterator.next({get [Symbol.match](){throw sentinel;}});}catch(error){caught=error===sentinel;}
+ if(!caught)throw new Error('lost resumed regexp check');
+}
+const suspendedOriginal=String.prototype.includes;
+if(Object.getOwnPropertyDescriptor(String.prototype,'includes').writable){
+ const iterator=suspendedSearch('abc','b',0);iterator.next();
+ try{String.prototype.includes=()=> 'changed';if(iterator.next().value!=='changed')throw new Error('lost suspended mutation');}finally{String.prototype.includes=suspendedOriginal;}
+}
 ${methods.map((method) => `function search_${method}(x,y,p){const s=String(x),n=String(y),i=+p;return s.${method}(n,i);}globalThis.search_${method}=search_${method};`).join("\n")}
 for(const method of ${JSON.stringify(methods)}){
  const run=globalThis['search_'+method];

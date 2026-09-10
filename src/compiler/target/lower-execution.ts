@@ -1713,6 +1713,7 @@ function lowerFunctionToTarget(
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
+	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
@@ -2061,6 +2062,15 @@ function lowerFunctionToTarget(
 				if (lowered.type !== "binary")
 					throw new Error("Unsigned arithmetic lost its operation");
 				lowered = { ...lowered, unsignedArithmetic: true };
+			}
+			const builtinMasks = builtinInputs.get(instruction);
+			if (builtinMasks !== undefined) {
+				if (
+					lowered.type !== "callKnown" ||
+					lowered.registers.length !== builtinMasks.length + 1
+				)
+					throw new Error("Builtin input proof lost its operands");
+				lowered = { ...lowered, exactInputKindMasks: builtinMasks };
 			}
 			const inputMasks = operatorInputs.get(instruction);
 			if (lowered.type === "binary" && inputMasks?.length === 2)
@@ -2610,6 +2620,11 @@ export function lowerCoreCompilationToExecutionProgram(
 			),
 			new Map(
 				(compilation.plan.operatorInputs ?? [])
+					.filter((operation) => operation.function === core)
+					.map(({ instruction, masks }) => [instruction, masks]),
+			),
+			new Map(
+				(compilation.plan.builtinInputs ?? [])
 					.filter((operation) => operation.function === core)
 					.map(({ instruction, masks }) => [instruction, masks]),
 			),

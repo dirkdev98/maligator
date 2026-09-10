@@ -25,7 +25,6 @@ describe("partially static numeric call profiles", () => {
 				expect(output.structure.genericLookups).toBe(0);
 				expect(output.structure.allocations).toBe(0);
 				if (
-					profile !== "suspension" &&
 					![
 						"isNaN",
 						"isFinite",

@@ -107,3 +107,22 @@ export function compilerValueKindMaskIsSubset(
 ): boolean {
 	return value !== 0 && (value & ~allowed) === 0;
 }
+
+export function compilerBuiltinInputKindsAreValid(
+	masks: ReadonlyArray<CompilerValueKindMask>,
+	operandCount: number,
+): boolean {
+	return (
+		masks.length === operandCount &&
+		masks.length >= 1 &&
+		masks.length <= 17 &&
+		masks.every((mask) =>
+			[
+				COMPILER_VALUE_KIND_BOOLEAN,
+				COMPILER_VALUE_KIND_NUMBER,
+				COMPILER_VALUE_KIND_STRING,
+				COMPILER_VALUE_KIND_TOP,
+			].includes(mask),
+		)
+	);
+}

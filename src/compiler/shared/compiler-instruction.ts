@@ -419,6 +419,7 @@ export type CompilerInstruction =
 	  }
 	| {
 			type: "callKnown";
+			exactInputKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 			registers: [number, number, ...Array<number>];
 			operation: string;
 			construct?: true;

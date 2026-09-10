@@ -4,7 +4,10 @@ import type {
 	CompilerExactCollectionBrand,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
-import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerBuiltinInputKindsAreValid,
+} from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { Reader } from "./program-image-codec.ts";
@@ -39,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 77;
+export const COMPILER_ARTIFACT_VERSION = 78;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -921,6 +924,21 @@ function writeCompilerArtifact(
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				w.u8(18);
+			} else if (
+				plan.kind === "exact-builtin-input-kinds" &&
+				instruction.opcode === "CALL_KNOWN" &&
+				!instruction.construct &&
+				instruction.argumentMode === undefined
+			) {
+				if (
+					!compilerBuiltinInputKindsAreValid(
+						plan.inputKindMasks,
+						instruction.arguments.length + 1,
+					)
+				)
+					throw new RangeError("program-image-codec: invalid builtin input kind masks");
+				w.u8(19);
+				for (const mask of plan.inputKindMasks) w.u8(mask);
 			} else if (
 				plan.kind === "exact-operator-input-kinds" &&
 				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
@@ -3228,6 +3246,23 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				nativeInstructions[instructionIndex] = { kind: "unsigned-arithmetic" };
+			} else if (
+				tag === 19 &&
+				instruction.opcode === "CALL_KNOWN" &&
+				!instruction.construct &&
+				instruction.argumentMode === undefined
+			) {
+				if (instruction.arguments.length > 16)
+					throw new RangeError("program-image-codec: invalid builtin input count");
+				const masks = Array.from({ length: instruction.arguments.length + 1 }, () =>
+					r.u8(),
+				);
+				if (!compilerBuiltinInputKindsAreValid(masks, instruction.arguments.length + 1))
+					throw new RangeError("program-image-codec: invalid builtin input kind masks");
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-builtin-input-kinds",
+					inputKindMasks: masks,
+				};
 			} else if (
 				tag === 17 &&
 				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
