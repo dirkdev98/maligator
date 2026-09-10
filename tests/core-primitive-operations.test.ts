@@ -870,18 +870,7 @@ describe("rejected primitive construction profiles", () => {
 				}
 				if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
 				if (profile === "separate-errors") expect(output.structure.genericCalls).toBe(2);
-				const descriptorAllocations = output.fn.instructions.filter((operation) => {
-					if (operation.opcode !== "CREATE_OBJECT_SHAPED") return false;
-					const keys = operation.keyStringIndices;
-					return keys.some(
-						(index) =>
-							String.fromCharCode(...output.image.runtime.stringConstants[index]!) ===
-							"get",
-					);
-				}).length;
-				expect(output.structure.allocations - descriptorAllocations).toBe(
-					profile === "escaped-argument" ? 1 : 0,
-				);
+				expect(output.structure.allocations).toBe(profile === "escaped-argument" ? 1 : 0);
 				const mutable = inspectStaticValueFunction(source, "probe", {
 					locked: false,
 				});

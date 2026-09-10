@@ -738,6 +738,32 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		).toBe(true);
 	});
 
+	it.each([
+		["Symbol.prototype", "description", "get"],
+		["Math", "abs", "value"],
+		["globalThis", "Number", "value"],
+	])(
+		"removes private descriptors of rooted %s.%s identities across loop handlers",
+		(owner, key, field) => {
+			const source = (escape: boolean) => `function probe(consume, count) {
+			let result = 0;
+			for (let i = 0; i < count; i++) {
+				try {
+					const descriptor = Object.getOwnPropertyDescriptor(${owner}, '${key}');
+					result += consume(${escape ? "descriptor" : `descriptor.${field}`});
+				} catch (error) { result--; }
+			}
+			return result;
+		} globalThis.probe = probe;`;
+			const contained = inspectStaticValueFunction(source(false), "probe");
+			expect(contained.structure.allocations).toBe(0);
+			expect(contained.structure.genericCalls).toBe(1);
+			const escaped = inspectStaticValueFunction(source(true), "probe");
+			expect(escaped.structure.allocations).toBe(1);
+			expect(escaped.structure.genericCalls).toBe(1);
+		},
+	);
+
 	it("refines a locally contained collection receiver under locked primordials", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);

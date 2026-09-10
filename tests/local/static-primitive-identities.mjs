@@ -1491,4 +1491,51 @@ check(
 	reflectedEvents.join(",") === "key,get",
 	"Reflect.get key conversion precedes proxy trap",
 );
+function consumePrivateDescriptors(consume, count) {
+	let result = 0;
+	for (let i = 0; i < count; i++) {
+		try {
+			const descriptor = Object.getOwnPropertyDescriptor(Symbol.prototype, "description");
+			result += consume(descriptor.get);
+		} catch (error) {
+			result--;
+		}
+	}
+	return result;
+}
+globalThis.consumePrivateDescriptors = consumePrivateDescriptors;
+const rootedGetter = Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get;
+const weakGetter = new WeakRef(rootedGetter);
+const getterKeys = new WeakMap([[rootedGetter, 17]]);
+let descriptorCalls = 0;
+check(
+	globalThis.consumePrivateDescriptors((getter) => {
+		descriptorCalls++;
+		if (typeof globalThis.gc === "function") globalThis.gc();
+		check(weakGetter.deref() === getter, "rooted getter survives descriptor elimination");
+		check(getterKeys.get(getter) === 17, "rooted getter remains a valid weak key");
+		if (descriptorCalls === 2) throw new Error("descriptor consumer");
+		return getter.call(Symbol("probe")).length;
+	}, 3) === 9,
+	"descriptor reads preserve loop exception handling",
+);
+check(descriptorCalls === 3, "descriptor consumer runs once per iteration");
+const escapedDescriptors = [];
+for (let i = 0; i < 3; i++) {
+	const descriptor = Object.getOwnPropertyDescriptor(Symbol.prototype, "description");
+	escapedDescriptors.push(descriptor);
+	descriptor.get = i;
+}
+check(
+	new Set(escapedDescriptors).size === 3,
+	"escaping descriptors have fresh identities",
+);
+check(
+	escapedDescriptors.every((descriptor, index) => descriptor.get === index),
+	"escaping descriptors retain independent mutable state",
+);
+check(
+	Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get === rootedGetter,
+	"descriptor mutation does not change the primordial getter",
+);
 console.log("primitive identities passed");

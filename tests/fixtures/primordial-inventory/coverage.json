@@ -179676,6 +179676,25 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "scalarReplaceContainedAggregates"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Object.getOwnPropertyDescriptor(Symbol.prototype, 'description').get"
+					},
+					"negative": {
+						"file": "tests/local/static-primitive-identities.mjs",
+						"test": "escaping descriptors retain independent mutable state"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

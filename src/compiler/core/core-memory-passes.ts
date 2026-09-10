@@ -2166,10 +2166,19 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
-		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
+		const { provenance, roots } = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
-			provenance.cannotBeHeldWeakly(value) || kinds.exactScalar(value) !== undefined;
+		const lifetimeIndependent = (value: CoreValueId): boolean => {
+			if (provenance.cannotBeHeldWeakly(value) || kinds.exactScalar(value) !== undefined)
+				return true;
+			const root = roots.get(value) ?? value;
+			if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
+			if (fn.instructionKind(definition) !== "operation") return false;
+			const opcode = fn.instructionOpcodeName(definition);
+			// Locked primordial edges root these identities independently of private containers.
+			return opcode === "loadPrimordial";
+		};
 		const replacements = new Map<
 			CoreInstructionId,
 			{
@@ -2221,7 +2230,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		for (const layout of provenance.layouts) {
 			if (provenance.escape(layout.instruction) !== "contained") continue;
 			const initialValues = layout.kind === "named-slots" ? layout.initialValues : [];
-			if (initialValues.some((value) => !cannotBeHeldWeakly(value))) continue;
+			if (initialValues.some((value) => !lifetimeIndependent(value))) continue;
 			let removable = true;
 			const stores: Array<CoreInstructionId> = [];
 			const uses = new Map<
@@ -2277,7 +2286,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 						break;
 					}
 				} else {
-					if (access.value === undefined || !cannotBeHeldWeakly(access.value)) {
+					if (access.value === undefined || !lifetimeIndependent(access.value)) {
 						removable = false;
 						break;
 					}
