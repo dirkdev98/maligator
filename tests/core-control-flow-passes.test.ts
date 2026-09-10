@@ -1364,11 +1364,16 @@ describe("Core control-flow analyses and passes", () => {
 		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [copy] = builder.appendInstruction(entry, "move", [parameter]);
 		const target = builder.createBlock([{ representation: "boxed" }]);
+		const exit = builder.createBlock();
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: target, arguments: [copy!] },
 		});
 		builder.setTerminator(target, {
+			kind: "jump",
+			edge: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, {
 			kind: "return",
 			value: inspectCoreBlockParameters(builder, target)[0]!.value,
 		});
@@ -1382,6 +1387,8 @@ describe("Core control-flow analyses and passes", () => {
 		const ordinary = bundle.ordinary();
 		const first = bundle.exceptional();
 		expect(first).toBe(ordinary);
+		expect(first.successors[entry]![0]!.arguments).toEqual([copy!]);
+		expect(first.successors[target]![0]!.arguments).toEqual([]);
 		expect(
 			analyses
 				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
@@ -1409,6 +1416,8 @@ describe("Core control-flow analyses and passes", () => {
 		expect(second).toBe(first);
 		expect(second.successors[entry]![0]!.arguments).toEqual([parameter]);
 		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
+		expect(second.successors[target]![0]!.arguments).toEqual([]);
+		expect(second.predecessors[exit]![0]!.arguments).toEqual([]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
 			{ analysis: "control-flow-bundle", queries: 3, hits: 2, recomputations: 1 },

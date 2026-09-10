@@ -80,6 +80,7 @@ export interface BuildCoreControlFlowOptions {
 }
 
 const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
+const emptyEdgeArguments: ReadonlyArray<CoreValueId> = Object.freeze([]);
 
 export function coreTerminatorEdges(
 	payload: CoreTerminatorPayload,
@@ -158,24 +159,35 @@ function buildEdges(fn: CoreFunctionStore): {
 			const edge = edgeStart + offset;
 			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
 			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
-			let argumentVersion = -1;
-			let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+			let controlEdge: CoreControlEdge;
+			if (argumentCount === 0) {
+				controlEdge = {
+					from: block,
+					to: fn.kernel.terminatorEdgeBlock(edge),
+					kind: "ordinary",
+					arguments: emptyEdgeArguments,
+				};
+			} else {
+				let argumentVersion = -1;
+				let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+				controlEdge = {
+					from: block,
+					to: fn.kernel.terminatorEdgeBlock(edge),
+					kind: "ordinary",
+					get arguments() {
+						const version = fn.version("body");
+						if (argumentsCache === undefined || version !== argumentVersion) {
+							argumentVersion = version;
+							argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
+								fn.kernel.operandAt(argumentStart + index),
+							);
+						}
+						return argumentsCache;
+					},
+				};
+			}
 			if (successors[block] === empty) successors[block] = [];
-			successors[block].push({
-				from: block,
-				to: fn.kernel.terminatorEdgeBlock(edge),
-				kind: "ordinary",
-				get arguments() {
-					const version = fn.version("body");
-					if (argumentsCache === undefined || version !== argumentVersion) {
-						argumentVersion = version;
-						argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
-							fn.kernel.operandAt(argumentStart + index),
-						);
-					}
-					return argumentsCache;
-				},
-			});
+			successors[block].push(controlEdge);
 		}
 	}
 	for (const outgoing of successors) {
@@ -255,23 +267,33 @@ function buildExceptionalStructural(
 				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
 				const start = fn.kernel.blockHandlerArgumentStart(block);
 				const count = fn.kernel.blockHandlerArgumentCount(block);
-				let argumentVersion = -1;
-				let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-				const edge: CoreControlEdge = {
-					from: block,
-					to: handler,
-					kind: "exceptional",
-					get arguments() {
-						const version = fn.version("body");
-						if (argumentsCache === undefined || version !== argumentVersion) {
-							argumentVersion = version;
-							argumentsCache = Array.from({ length: count }, (_, index) =>
-								fn.kernel.handlerArgumentAt(start + index),
-							);
-						}
-						return argumentsCache;
-					},
-				};
+				let edge: CoreControlEdge;
+				if (count === 0) {
+					edge = {
+						from: block,
+						to: handler,
+						kind: "exceptional",
+						arguments: emptyEdgeArguments,
+					};
+				} else {
+					let argumentVersion = -1;
+					let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
+					edge = {
+						from: block,
+						to: handler,
+						kind: "exceptional",
+						get arguments() {
+							const version = fn.version("body");
+							if (argumentsCache === undefined || version !== argumentVersion) {
+								argumentVersion = version;
+								argumentsCache = Array.from({ length: count }, (_, index) =>
+									fn.kernel.handlerArgumentAt(start + index),
+								);
+							}
+							return argumentsCache;
+						},
+					};
+				}
 				successors[block]!.push(edge);
 				predecessors[handler]!.push(edge);
 			}
