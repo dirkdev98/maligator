@@ -100160,6 +100160,81 @@
 						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": ["static-observable"],
+					"axes": ["A"],
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "eliminates private input materialization in %s",
+						"case": "return Boolean({});"
+					},
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "scalarReplaceContainedAggregates"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable Boolean receives a materialized empty object"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["unused-result"],
+					"axes": ["A"],
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "eliminates private input materialization in %s",
+						"case": "Boolean({},x());return 1;"
+					},
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "scalarReplaceContainedAggregates"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable Boolean receives a materialized empty object"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["large-recursive-loop"],
+					"axes": ["A"],
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "eliminates private input materialization in %s",
+						"case": "for(let i=0;i<x;i++)y(Boolean({}));return 1;"
+					},
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "scalarReplaceContainedAggregates"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable Boolean receives a materialized empty object"
+					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["A"],
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "eliminates empty input across an ignored suspended argument"
+					},
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "scalarReplaceContainedAggregates"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable Boolean receives a materialized empty object"
+					},
+					"lowering": "eliminated"
 				}
 			]
 		},

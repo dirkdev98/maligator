@@ -29,6 +29,57 @@ function inspect(body: string, locked = true, generator = false) {
 	);
 }
 
+describe("empty-object Boolean inputs", () => {
+	it.each([
+		"return Boolean({});",
+		"return Boolean({},x());",
+		"const object={};x();return Boolean(object);",
+		"return Boolean({get value(){return x();}});",
+		"Boolean({},x());return 1;",
+		"for(let i=0;i<x;i++)y(Boolean({}));return 1;",
+	])("eliminates private input materialization in %s", (body) => {
+		const output = inspect(body);
+		expect(output.structure.allocations).toBe(0);
+		expect(inspect(body, false).structure.allocations).toBeGreaterThan(0);
+	});
+	it("preserves ignored argument effects after eliminating an empty input", () => {
+		const output = inspect("return Boolean({},x());");
+		expect(output.structure.genericCalls).toBe(1);
+		expect(output.core.some((operation) => operation.opcode === "createBoolean")).toBe(
+			true,
+		);
+	});
+	it("eliminates empty input across an ignored suspended argument", () => {
+		const body = "return Boolean({},yield x());";
+		const output = inspect(body, true, true);
+		expect(output.structure.allocations).toBe(0);
+		expect(output.structure.genericCalls).toBe(1);
+		expect(output.core.some((operation) => operation.opcode === "yield")).toBe(true);
+		expect(inspect(body, false, true).structure.allocations).toBe(1);
+	});
+	it.each([true, false])(
+		"folds distinct empty-object identities when locked=%s",
+		(locked) => {
+			const output = inspect("return {} === {};", locked);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.core).toHaveLength(1);
+			expect(output.core[0]).toMatchObject({
+				opcode: "createBoolean",
+				attributes: { value: false },
+			});
+		},
+	);
+	it.each([
+		"return {};",
+		"const object={};x(object);return Boolean(object);",
+		"const object={};object.value=x;return object;",
+		"const object={};Object.setPrototypeOf(object,x);return object.value;",
+		"const object={};Object.defineProperty(object,'value',{get:x});return object.value;",
+	])("retains observable object state in %s", (body) => {
+		expect(inspect(body).structure.allocations).toBeGreaterThan(0);
+	});
+});
+
 describe("mutable Boolean call guards", () => {
 	it.each([
 		["Boolean(x,y())", "Boolean"],

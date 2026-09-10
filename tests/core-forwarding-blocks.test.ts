@@ -383,8 +383,9 @@ describe("Core empty forwarding blocks", () => {
 	});
 
 	it("combines long observable linear chains", () => {
-		const { program, builder } = fixture();
-		const entry = builder.createBlock();
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const callee = parameters(builder, entry)[0]!;
 		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
 		let current = entry;
 		for (let index = 0; index < 20; index++) {
@@ -393,7 +394,7 @@ describe("Core empty forwarding blocks", () => {
 				kind: "jump",
 				edge: { block: next, arguments: [] },
 			});
-			builder.appendInstruction(next, "createObject", []);
+			builder.appendInstruction(next, "call", [callee, returned!]);
 			current = next;
 		}
 		builder.setTerminator(current, { kind: "return", value: returned! });
@@ -409,7 +410,7 @@ describe("Core empty forwarding blocks", () => {
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
 			[...result.fn.bodyInstructionIds(result.fn.entry)].filter(
-				(instruction) => result.fn.instructionOpcodeName(instruction) === "createObject",
+				(instruction) => result.fn.instructionOpcodeName(instruction) === "call",
 			),
 		).toHaveLength(20);
 		const merging = optimization.report.passes.find(

@@ -312,6 +312,15 @@ function allocationLayout(
 	const allocation = descriptor.allocation;
 	const result = instructionResult(fn, instruction, 0);
 	if (allocation === undefined || result === undefined) return undefined;
+	if (allocation.kind === "empty-object") {
+		return Object.freeze({
+			kind: "named-slots",
+			instruction,
+			result,
+			keys: Object.freeze([]),
+			initialValues: Object.freeze([]),
+		});
+	}
 	const attributes = fn.instructionAttributes(instruction);
 	if (allocation.kind === "indexed") {
 		const length = attributes[allocation.lengthAttribute];

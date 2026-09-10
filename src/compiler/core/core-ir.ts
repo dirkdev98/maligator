@@ -142,13 +142,12 @@ export interface CoreOpcodeAccess {
 }
 
 /**
- * Layout of a fresh aggregate whose own data slots this opcode initializes. Every
- * declared key is an own writable, enumerable, configurable data property of the
- * new object, and the operands starting at `firstValueOperand` hold their initial
- * values in the same order. Without this metadata an analysis has no way to know
- * a slot exists without consulting the runtime's shape tree.
+ * Declared slots start as own writable, enumerable, configurable data properties.
+ * Only named-slot operands carry initial property values; empty-object operands
+ * may carry allocation guards and do not imply any own properties.
  */
 export type CoreOpcodeAllocation =
+	| { readonly kind: "empty-object" }
 	| {
 			readonly kind: "named-slots";
 			readonly keysAttribute: string;
@@ -410,6 +409,7 @@ function validateAllocation(descriptor: CoreOpcodeDefinition): void {
 	if (descriptor.outputs.minimum < 1) {
 		throw new Error(`${opcode} declares an allocation without producing a reference`);
 	}
+	if (allocation.kind === "empty-object") return;
 	if (allocation.kind === "named-slots") {
 		if (allocation.keysAttribute.length === 0) {
 			throw new Error(`${opcode} declares an allocation with no key attribute`);

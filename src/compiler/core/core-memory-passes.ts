@@ -455,7 +455,15 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
-		if (descriptor.allocation !== undefined) allocation = true;
+		if (descriptor.allocation !== undefined) {
+			allocation = true;
+			const result = instructionResultAt(fn, instruction, 0);
+			if (
+				result !== undefined &&
+				fn.valueUseCount(result) + fn.kernel.valueHandlerUseCount(result) === 0
+			)
+				return true;
+		}
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (CONTAINED_PROPERTY_ACCESS_OPCODES.has(opcode)) propertyConsumer = true;
 		if (
@@ -2150,7 +2158,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	name: "scalar-replace-contained-aggregates",
 	stage: "memory",
 	admission: {
-		predicate: "removable exact read or fresh allocation with a property consumer",
+		predicate: "removable exact read, unused allocation or fresh property consumer",
 		hasOpportunity({ program, function: functionId }) {
 			return hasAggregateScalarReplacementConsumer(program.function(functionId));
 		},

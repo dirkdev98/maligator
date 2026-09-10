@@ -1016,7 +1016,7 @@ describe("Core local canonicalization", () => {
 		).toBe(true);
 	});
 
-	it("eliminates a deep pure graph while retaining unused observable effects", () => {
+	it("eliminates a deep pure graph and private allocation while retaining an unused call", () => {
 		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
@@ -1051,7 +1051,9 @@ describe("Core local canonicalization", () => {
 		const opcodes = [...fn.bodyInstructionIds(fn.entry)].map((instruction) =>
 			fn.instructionOpcodeName(instruction),
 		);
-		expect(opcodes).toEqual(["createUndefined", "createObject", "call"]);
+		expect(opcodes.filter((opcode) => opcode === "call")).toHaveLength(1);
+		expect(opcodes).not.toContain("createObject");
+		expect(opcodes).not.toContain("mathUnaryNumber");
 		expect(fn.isValueLive(dead)).toBe(false);
 	});
 

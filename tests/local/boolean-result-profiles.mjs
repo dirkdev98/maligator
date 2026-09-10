@@ -80,7 +80,55 @@ function methodCalls(value, effect) {
 		Boolean.prototype.toString.call(false, effect()),
 	];
 }
+function emptyInput(effect) {
+	return Boolean({}, effect());
+}
+function emptyState(value, observe) {
+	const object = {};
+	object.value = value;
+	observe(object);
+	const before = object.value;
+	delete object.value;
+	return [Boolean(object), before, Object.hasOwn(object, "value")];
+}
+function privateGetter(effect) {
+	return Boolean(
+		{
+			get value() {
+				return effect();
+			},
+		},
+		effect(),
+	);
+}
+function computedInput(key, value) {
+	return Boolean({ [key]: value() });
+}
+function freshEmpty() {
+	return {};
+}
+function* suspendedEmpty() {
+	const object = {};
+	yield object;
+	return [Boolean(object), object.value];
+}
+function* suspendedEmptyArgument(effect) {
+	return Boolean({}, yield effect());
+}
+function repeatedEmpty(count, effect) {
+	for (let index = 0; index < count; index++) effect(Boolean({}));
+	Boolean({}, effect(13));
+	return 17;
+}
 globalThis.booleanProfiles = {
+	suspendedEmptyArgument,
+	repeatedEmpty,
+	emptyInput,
+	emptyState,
+	privateGetter,
+	computedInput,
+	freshEmpty,
+	suspendedEmpty,
 	ignored,
 	ignoredInputs,
 	reused,
@@ -189,6 +237,121 @@ for (const value of [
 }
 check(calls === 48, "callbacks are evaluated once per source occurrence");
 const events = [];
+check(
+	globalThis.booleanProfiles.emptyInput(() => events.push("argument")),
+	"empty object is truthy",
+);
+check(
+	globalThis.booleanProfiles.privateGetter(() => events.push("getter argument")),
+	"unobserved getter object is truthy",
+);
+check(
+	events.join(",") === "argument,getter argument",
+	"input elimination preserves arguments without invoking getters",
+);
+events.length = 0;
+check(
+	globalThis.booleanProfiles.computedInput(
+		{
+			[Symbol.toPrimitive](hint) {
+				events.push(hint);
+				return "value";
+			},
+		},
+		() => events.push("value"),
+	),
+	"computed input is truthy",
+);
+check(
+	events.join(",") === "string,value",
+	"computed keys retain conversion before value evaluation",
+);
+events.length = 0;
+for (const operation of ["emptyInput", "privateGetter"]) {
+	try {
+		globalThis.booleanProfiles[operation](() => {
+			throw sentinel;
+		});
+		throw new Error("argument must throw");
+	} catch (error) {
+		check(error === sentinel, "input elimination preserves abrupt arguments");
+	}
+}
+const firstEmpty = globalThis.booleanProfiles.freshEmpty();
+const emptyArgumentIterator = globalThis.booleanProfiles.suspendedEmptyArgument(() => 11);
+check(
+	emptyArgumentIterator.next().value === 11,
+	"empty input elimination retains suspension",
+);
+const emptyArgumentCompleted = emptyArgumentIterator.next();
+check(
+	emptyArgumentCompleted.done && emptyArgumentCompleted.value === true,
+	"empty input truthiness survives argument suspension",
+);
+for (const count of [0, 3]) {
+	const values = [];
+	check(
+		globalThis.booleanProfiles.repeatedEmpty(count, (value) => values.push(value)) === 17,
+		"empty input elimination preserves loop result",
+	);
+	check(
+		values.length === count + 1 &&
+			values[count] === 13 &&
+			values.slice(0, count).every((value) => value === true),
+		"empty input elimination preserves iterations and discarded-call effects",
+	);
+}
+const secondEmpty = globalThis.booleanProfiles.freshEmpty();
+check(
+	firstEmpty !== secondEmpty && Object.getPrototypeOf(firstEmpty) === Object.prototype,
+	"escaping empty objects remain fresh with their realm prototype",
+);
+const emptyStateResult = globalThis.booleanProfiles.emptyState(hostile, (object) => {
+	check(object.value === hostile, "empty object retains its added value");
+	Object.defineProperty(object, "value", {
+		get() {
+			return sentinel;
+		},
+		configurable: true,
+	});
+	if (typeof globalThis.gc === "function") globalThis.gc();
+});
+check(
+	emptyStateResult[0] &&
+		emptyStateResult[1] === sentinel &&
+		emptyStateResult[2] === false,
+	"escaped empty input retains accessor replacement and deletion",
+);
+const emptyIterator = globalThis.booleanProfiles.suspendedEmpty();
+const emptyYield = emptyIterator.next();
+emptyYield.value.value = hostile;
+if (typeof globalThis.gc === "function") globalThis.gc();
+const emptyCompleted = emptyIterator.next();
+check(
+	emptyCompleted.done && emptyCompleted.value[0] && emptyCompleted.value[1] === hostile,
+	"empty object survives mutation during suspension",
+);
+if (Object.getOwnPropertyDescriptor(globalThis, "Boolean").writable) {
+	const originalBoolean = Boolean;
+	let replacementInput;
+	try {
+		globalThis.Boolean = (value) => {
+			replacementInput = value;
+			return sentinel;
+		};
+		check(
+			globalThis.booleanProfiles.emptyInput(() => 0) === sentinel,
+			"mutable Boolean retains replacement result",
+		);
+		check(
+			typeof replacementInput === "object" &&
+				Object.getOwnPropertyNames(replacementInput).length === 0,
+			"mutable Boolean receives a materialized empty object",
+		);
+	} finally {
+		globalThis.Boolean = originalBoolean;
+	}
+}
 check(
 	globalThis.booleanProfiles.ignoredInputs(
 		() => {

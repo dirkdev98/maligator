@@ -450,6 +450,7 @@ const OPCODE_ACCESSES = {
  * exists — the property that lets an analysis skip a prototype walk.
  */
 const OPCODE_ALLOCATIONS = {
+	createObject: { kind: "empty-object" },
 	createObjectShaped: {
 		kind: "named-slots",
 		keysAttribute: "keyStringIndices",

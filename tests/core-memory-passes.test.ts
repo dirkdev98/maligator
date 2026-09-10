@@ -68,6 +68,36 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it.each([false, true])(
+		"does not infer own properties from empty-object guard operands: %s",
+		(guarded) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock();
+			const [guard] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObject",
+				guarded ? [guard!] : [],
+			);
+			const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const finished = builder.finish(entry);
+			const provenance = analyzeCoreProvenance(core, finished.function);
+			expect(provenance.allocationOf(object!)).toMatchObject({
+				kind: "named-slots",
+				keys: [],
+				initialValues: [],
+			});
+			expect(
+				provenance.ownCell(object!, { kind: "string-constant", index: 0 }, "read"),
+			).toBeUndefined();
+		},
+	);
 	it.each([
 		["new Boolean(!!x)", "Boolean", "Boolean"],
 		["new Number((+x) | 0)", "Number", "Number"],

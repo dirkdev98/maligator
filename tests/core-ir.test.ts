@@ -356,7 +356,9 @@ describe("Core IR", () => {
 			keysAttribute: "keyStringIndices",
 			firstValueOperand: 0,
 		});
-		expect(coreOpcodeRegistry.require("createObject").allocation).toBeUndefined();
+		expect(coreOpcodeRegistry.require("createObject").allocation).toEqual({
+			kind: "empty-object",
+		});
 		// No JavaScript operator evaluates to an object or a symbol, so an operator
 		// result's reachability is never observable; an intrinsic can be a well-known
 		// symbol, which a registry accepts.
