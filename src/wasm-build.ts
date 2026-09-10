@@ -260,15 +260,13 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 					{ digest, runtimeHash, toolchain: toolchain.fingerprint, flags },
 					(directory) => {
 						const output = path.join(directory, "object.o");
-						run(directory, toolchain.tools.zig.path, [
-							...flags,
-							"-x",
-							"c",
-							"-c",
-							file,
-							"-o",
-							output,
-						]);
+						run(
+							directory,
+							toolchain.tools.zig.path,
+							[...flags, "-x", "c", "-c", file, "-o", output],
+							env,
+							600_000,
+						);
 						return [{ name: "object.o", file: output }];
 					},
 				),
