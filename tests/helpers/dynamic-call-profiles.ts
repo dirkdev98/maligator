@@ -6,6 +6,8 @@ export const dynamicCallProfiles = [
 	"suspension",
 	"apply",
 	"unused",
+	"repeated",
+	"repeatedLoop",
 ] as const;
 
 export function dynamicCallProfileSource(
@@ -34,6 +36,12 @@ export function dynamicCallProfileSource(
 			break;
 		case "apply":
 			body = `return Reflect.apply(${callee},${receiver},[${args}]);`;
+			break;
+		case "repeatedLoop":
+			body = `for(let i=0;i<n;i++){const result=${call};effect(result);if(result!==${call})return false;}return true;`;
+			break;
+		case "repeated":
+			body = `const result=${call};effect(result);return result===${call};`;
 			break;
 		case "unused":
 			body = `${call};return 17;`;

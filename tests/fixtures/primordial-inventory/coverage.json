@@ -96543,6 +96543,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -97020,6 +97044,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106466,6 +106514,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -106984,6 +107056,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107463,6 +107559,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -107942,6 +108062,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108421,6 +108565,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -108900,6 +109068,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109412,6 +109604,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -109891,6 +110107,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -110370,6 +110610,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -110849,6 +111113,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111328,6 +111616,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -111807,6 +112119,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -112286,6 +112622,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -112765,6 +113125,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -113244,6 +113628,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -113723,6 +114131,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -114202,6 +114634,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -114681,6 +115137,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -115213,6 +115693,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -115692,6 +116196,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -116171,6 +116699,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -116650,6 +117202,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -117129,6 +117705,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -117608,6 +118208,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -118140,6 +118764,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -118652,6 +119300,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -119184,6 +119856,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -119984,6 +120680,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -120463,6 +121183,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -120962,6 +121706,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121441,6 +122209,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -121920,6 +122712,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -122819,6 +123635,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -123298,6 +124138,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -123777,6 +124641,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-optimizer.ts",
+						"symbol": "eliminateLocalDuplicates"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -124865,6 +125753,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -125385,6 +126297,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -126404,6 +127340,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -127256,6 +128216,24 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["escaping-identity", "brand-with-unknown-contents"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -128127,6 +129105,24 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["escaping-identity", "brand-with-unknown-contents"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -128999,6 +129995,24 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["escaping-identity", "brand-with-unknown-contents"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -129906,6 +130920,24 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": ["escaping-identity", "brand-with-unknown-contents"],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -135013,6 +136045,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -135583,6 +136638,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -136131,6 +137209,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -136758,6 +137859,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -137286,6 +138411,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -137818,6 +138966,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -138346,6 +139517,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -139012,6 +140206,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -139595,6 +140813,30 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -140222,6 +141464,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -140768,6 +142034,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -141324,6 +142613,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -141852,6 +143165,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -142404,6 +143740,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -142952,6 +144311,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -143506,6 +144888,30 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -144082,6 +145488,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -144595,6 +146025,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -145125,6 +146578,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -145681,6 +147157,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -146229,6 +147729,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -147207,6 +148730,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -147814,6 +149360,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -148399,6 +149968,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -149047,6 +150639,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -149640,6 +151255,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -150211,6 +151849,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -150826,6 +152487,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -151354,6 +153039,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -152350,6 +154058,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -152880,6 +154612,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -153408,6 +155163,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -153983,6 +155761,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -154556,6 +156358,30 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop",
+						"static-receiver-dynamic-argument"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -155086,6 +156912,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -155580,6 +157429,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -156072,6 +157944,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -156587,6 +158482,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -157910,6 +159828,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -158423,6 +160364,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -158980,6 +160944,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -159515,6 +161502,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -160028,6 +162038,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"dynamic-receiver-static-parameter",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -171445,6 +173478,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -171979,6 +174035,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -172516,6 +174595,29 @@
 						"test": "retains mutable %s through ${profile}"
 					},
 					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -173030,6 +175132,29 @@
 					"negative": {
 						"file": "tests/core-string-call-profiles.test.ts",
 						"test": "retains mutable %s through ${profile}"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": [
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
 					},
 					"lowering": "specialized"
 				}
@@ -178844,6 +180969,30 @@
 						"case": "escape(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -179956,6 +182105,30 @@
 						"case": "unescape(new String(x))"
 					},
 					"lowering": "eliminated"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-string-call-profiles.test.ts",
+						"test": "specializes %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/string-call-profiles.test.ts",
+						"test": "preserves dynamic string profiles with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -180378,6 +182551,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -180800,6 +182997,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -181716,6 +183937,30 @@
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
+				},
+				{
+					"profiles": [
+						"known-consumer",
+						"escaping-identity",
+						"brand-with-unknown-contents",
+						"static-receiver-dynamic-argument",
+						"large-recursive-loop"
+					],
+					"axes": ["C"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-call-reuse.ts",
+						"symbol": "reusePrimitiveCallResults"
+					},
+					"positive": {
+						"file": "tests/core-numeric-call-profiles.test.ts",
+						"test": "resolves %s through ${profile} after one conversion"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

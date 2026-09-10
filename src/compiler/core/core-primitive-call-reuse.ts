@@ -1,5 +1,7 @@
 import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
+import { PORTABLE_CONSTANT_TARGET } from "../shared/constant-evaluator.ts";
+import type { ConstantEvaluationTarget } from "../shared/constant-evaluator.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -7,6 +9,11 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
+
+const localeCaseOperations = new Set([
+	"String.prototype.toLocaleLowerCase",
+	"String.prototype.toLocaleUpperCase",
+]);
 
 const primitiveBrands = new Set([
 	"undefined",
@@ -123,7 +130,7 @@ function candidate(operation: string): boolean {
 		operation !== "Math.random" &&
 		operation !== "Math.sumPrecise" &&
 		operation !== "String.raw" &&
-		!operation.includes("toLocale") &&
+		(!operation.includes("toLocale") || localeCaseOperations.has(operation)) &&
 		!operation.endsWith("localeCompare") &&
 		(immutableReceiverMethods.has(operation) ||
 			// A successful registry lookup fixes this primitive key's Symbol identity permanently.
@@ -163,6 +170,7 @@ function canDiscard(
 	brands: ReadonlyArray<string | undefined>,
 	inputs: ReadonlyArray<CoreValueId>,
 	analysis: CoreStaticValueAnalysis,
+	target: ConstantEvaluationTarget,
 ): boolean {
 	if (predicates.has(operation) || operation === "Boolean") return true;
 	if (brands.some((brand) => brand === undefined)) return false;
@@ -196,12 +204,13 @@ function canDiscard(
 		if (receiver !== "string") return false;
 		const method = operation.slice("String.prototype.".length);
 		if (nonthrowingStrings.has(method)) return numeric;
-		if (method !== "normalize") return false;
+		if (method !== "normalize" && !localeCaseOperations.has(operation)) return false;
 		return (
 			evaluateConstantBuiltin(
 				operation,
 				{ kind: "string", value: "" },
 				inputs.map((input) => analysis.constant(input)),
+				target,
 			).kind === "value"
 		);
 	}
@@ -272,6 +281,10 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 	run(context) {
 		const fn = context.program.function(context.item.function),
 			analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		const target = {
+			...PORTABLE_CONSTANT_TARGET,
+			intl: context.compilationContext.facts.world.ecmaFeatures.intl,
+		};
 		const plans: Array<{
 			instruction: CoreInstructionId;
 			replacement?: CoreValueId;
@@ -348,11 +361,17 @@ export const reusePrimitiveCallResults: CoreFunctionPass = {
 						(usesReceiver && !immutableReceiver && receiverBrand === undefined))
 				)
 					continue;
+				if (
+					localeCaseOperations.has(operation) &&
+					(receiverBrand !== "string" ||
+						(target.intl && !["string", "undefined"].includes(brands[0] ?? "undefined")))
+				)
+					continue;
 				const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 				if (
 					fn.kernel.valueUseCount(result) === 0 &&
 					fn.kernel.valueHandlerUseCount(result) === 0 &&
-					canDiscard(operation, receiverBrand, brands, args, analysis)
+					canDiscard(operation, receiverBrand, brands, args, analysis, target)
 				) {
 					plans.push({ instruction });
 					continue;

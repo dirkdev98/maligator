@@ -486,6 +486,10 @@ remain in place. This does not recreate BigInts or identity-bearing Symbols.
 String searches with proved primitive String receiver and needle and a numeric
 position use the shared search kernel directly. Cons strings retain both GC roots
 while flattening before the scan; unknown string operands keep the guarded entry.
+Successful locale case transforms with immutable primitive String receiver and locale
+inputs can reuse their result. The target fixes default-locale behavior; locale-list
+objects retain each property observation. Discarding an unused transform additionally
+requires certified valid options, so an unknown locale String still validates at runtime.
 Generator and async builtin calls retain bounded Core input-kind certificates through
 register allocation and the compiler artifact. Number, Boolean and String operands
 can use typed entries even though coroutine slots remain boxed and GC-visible.

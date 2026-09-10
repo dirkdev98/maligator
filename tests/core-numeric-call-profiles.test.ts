@@ -24,6 +24,10 @@ describe("partially static numeric call profiles", () => {
 				);
 				expect(output.structure.genericLookups).toBe(0);
 				expect(output.structure.allocations).toBe(0);
+				if (profile === "repeated" || profile === "repeatedLoop")
+					expect(
+						output.core.filter((op) => op.attributes.operation === entry[0]).length,
+					).toBeLessThanOrEqual(1);
 				if (
 					![
 						"isNaN",

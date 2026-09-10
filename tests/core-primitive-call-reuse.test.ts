@@ -328,3 +328,82 @@ describe("primitive prototype payloads", () => {
 		expect(result.structure.genericCalls).toBe(1);
 	});
 });
+
+describe("locale case result reuse", () => {
+	for (const method of ["toLocaleLowerCase", "toLocaleUpperCase"]) {
+		for (const intl of [false, true]) {
+			it.each(["'tr'", "'tr-TR'", "String(y)", "undefined"])(
+				`reuses ${method} with immutable locale %s and intl=${intl}`,
+				(locale) => {
+					const result = inspectStaticValueFunction(
+						`function probe(x,y,effect){const value=String(x),locale=${locale};const first=value.${method}(locale);effect(first);return first===value.${method}(locale);}globalThis.probe=probe;`,
+						"probe",
+						{ intl },
+					);
+					expect(
+						result.core.filter(
+							(op) => op.attributes.operation === `String.prototype.${method}`,
+						),
+					).toHaveLength(1);
+					expect(result.structure.genericCalls).toBe(1);
+				},
+			);
+			it(`discards unused ${method} with a certified locale and intl=${intl} after argument effects`, () => {
+				const result = inspectStaticValueFunction(
+					`function probe(x,effect){const value=String(x);value.${method}('tr',effect());return 17;}globalThis.probe=probe;`,
+					"probe",
+					{ intl },
+				);
+				expect(
+					result.core.filter(
+						(op) => op.attributes.operation === `String.prototype.${method}`,
+					),
+				).toHaveLength(0);
+				expect(result.structure.genericCalls).toBe(1);
+				expect(
+					result.core.filter((op) => op.attributes.operation === "String"),
+				).toHaveLength(1);
+			});
+		}
+		it.each(["y", "[y]", "{get length(){effect();return 0;}}", "new String(y)"])(
+			`retains locale object observations in repeated ${method} with %s`,
+			(locale) => {
+				const result = inspectStaticValueFunction(
+					`function probe(x,y,effect){const value=String(x),locale=${locale};const first=value.${method}(locale);effect(locale);return first===value.${method}(locale);}globalThis.probe=probe;`,
+					"probe",
+					{ intl: true },
+				);
+				expect(
+					result.core.filter(
+						(op) => op.attributes.operation === `String.prototype.${method}`,
+					),
+				).toHaveLength(2);
+			},
+		);
+		it(`retains invalid dynamic locale validation in unused ${method}`, () => {
+			const result = inspectStaticValueFunction(
+				`function probe(x,y){const value=String(x),locale=String(y);value.${method}(locale);return 17;}globalThis.probe=probe;`,
+				"probe",
+				{ intl: true },
+			);
+			expect(
+				result.core.filter(
+					(op) => op.attributes.operation === `String.prototype.${method}`,
+				),
+			).toHaveLength(1);
+		});
+		it(`keeps extra argument effects around a reused ${method}`, () => {
+			const result = inspectStaticValueFunction(
+				`function probe(x,effect){const value=String(x);const first=value.${method}('tr',effect());effect(first);return first===value.${method}('tr',effect());}globalThis.probe=probe;`,
+				"probe",
+				{ intl: true },
+			);
+			expect(
+				result.core.filter(
+					(op) => op.attributes.operation === `String.prototype.${method}`,
+				),
+			).toHaveLength(1);
+			expect(result.structure.genericCalls).toBe(3);
+		});
+	}
+});

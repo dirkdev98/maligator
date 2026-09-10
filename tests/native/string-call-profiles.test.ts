@@ -85,7 +85,9 @@ console.log('apply-getters',String.prototype.toLocaleLowerCase.apply('I',{
 }),events.join('|'));
 `,
 				);
-				const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+				const expected = execFileSync(process.execPath, [fixture], {
+					encoding: "utf8",
+				});
 				const pair = buildBackendPairFromOneProgramImage({
 					fixture,
 					name: "string-call-profiles",
@@ -124,6 +126,12 @@ if('I'.toLocaleLowerCase(locale())!=='i'||events.join('|')!=='argument')throw ne
 const sentinel={};let caught=false;
 try{'I'.toLocaleLowerCase((()=>{throw sentinel;})());}catch(error){caught=error===sentinel;}
 if(!caught)throw new Error('lost argument exception');
+function repeatNoIntl(x,y,effect){const value=String(x),locales=String(y);const first=value.toLocaleLowerCase(locales);effect(first);return first===value.toLocaleLowerCase(locales);}
+function unusedNoIntl(x,y){const value=String(x),locales=String(y);value.toLocaleLowerCase(locales);return 17;}
+globalThis.repeatNoIntl=repeatNoIntl;globalThis.unusedNoIntl=unusedNoIntl;
+for(const value of ['Iİ','e\\u0301','\\ud800'])for(const tag of ['tr','bad!']){
+ let observed; if(!globalThis.repeatNoIntl(value,tag,text=>{observed=text;})||observed!==value.toLowerCase()||globalThis.unusedNoIntl(value,tag)!==17)throw new Error('locale-free repetition');
+}
 console.log('root case passed');
 `,
 			);
@@ -181,6 +189,30 @@ for(let index=0;index<cases.length;index++){
  const sentinel={};let caught=false;
  try{const result=run({[Symbol.toPrimitive](){throw sentinel;}},v=>v,3);if(generator)result.next();}catch(error){caught=error===sentinel;}
  if(!caught)throw new Error('lost conversion exception '+index);
+}
+${["toLocaleLowerCase", "toLocaleUpperCase"]
+	.map(
+		(
+			method,
+		) => `function repeated_${method}(x,y,effect){const value=String(x),locale=String(y);const first=value.${method}(locale,effect('extra'));effect(first);return first===value.${method}(locale,effect('extra'));}globalThis.repeated_${method}=repeated_${method};
+function observed_${method}(x,locale,effect){const value=String(x);const first=value.${method}(locale);effect(locale);return first+'|'+value.${method}(locale);}globalThis.observed_${method}=observed_${method};
+function unused_${method}(x,y){const value=String(x),locale=String(y);value.${method}(locale);return 17;}globalThis.unused_${method}=unused_${method};`,
+	)
+	.join("\n")}
+for(const method of ['toLocaleLowerCase','toLocaleUpperCase']){
+ const run=globalThis['repeated_'+method],observed=globalThis['observed_'+method],unused=globalThis['unused_'+method];
+ for(const locale of ['tr','tr-TR','lt','en-US','bad!']){
+  const events=[];
+  try{console.log('repeated-locale',method,locale,run('Iİiı',locale,value=>events.push(value)),events.join('|'));}catch(error){console.log('repeated-locale-error',method,locale,error.name,events.join('|'));}
+  try{console.log('unused-locale',method,locale,unused('Iİiı',locale));}catch(error){console.log('unused-locale-error',method,locale,error.name);}
+ }
+ const events=[];let selected='en-US';
+ const locales={get length(){events.push('length');return 1;},get 0(){events.push('locale');return selected;}};
+ console.log('repeated-getters',method,observed('Ii',locales,()=>{selected='tr';events.push('effect');}),events.join('|'));
+ const original=String.prototype[method];
+ if(Object.getOwnPropertyDescriptor(String.prototype,method).writable){
+  try{if(run('Ii','en-US',value=>{if(value!=='extra')String.prototype[method]=()=> 'changed';})!==false)throw new Error('lost repeated mutation');}finally{String.prototype[method]=original;}
+ }
 }
 function* suspendedSearch(x,y,p){const s=String(x),n=String(y),i=+p;yield s;return s.includes(n,i);}
 async function asyncSearch(x,y,p){const s=String(x),n=String(y),i=+p;await s;return s.includes(n,i);}
