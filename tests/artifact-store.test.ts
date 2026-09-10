@@ -1,7 +1,15 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import type * as fsModule from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	artifactActionKey,
 	artifactOutput,
@@ -11,6 +19,11 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "../src/artifact-store.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof fsModule>();
+	return { ...fs, statSync: vi.fn(fs.statSync) };
+});
 
 describe("layered artifact store", () => {
 	it("publishes immutable blobs and materializes independent outputs", () => {
@@ -36,18 +49,34 @@ describe("layered artifact store", () => {
 		);
 	});
 
-	it("rejects corruption and allows the action to be rebuilt", () => {
-		const root = mkdtempSync(path.join(os.tmpdir(), "maligator-corrupt-"));
-		const source = path.join(root, "source");
-		writeFileSync(source, "good");
-		const producer = artifactProducer("example", 1, "implementation");
-		const action = artifactActionKey(producer, { input: "corrupt" });
-		const published = publishArtifactAction(root, "example", producer, action, [
-			{ name: "object", file: source },
-		]);
-		writeFileSync(artifactOutput(published, "object").path, "evil");
-		expect(readArtifactAction(root, "example", producer, action)).toBeUndefined();
-	});
+	it.each(["observed timestamps", "unchanged timestamps"])(
+		"rejects same-size corruption and rebuilds with %s",
+		(timestamps) => {
+			const root = mkdtempSync(path.join(os.tmpdir(), "maligator-corrupt-"));
+			const source = path.join(root, "source");
+			writeFileSync(source, "good");
+			const producer = artifactProducer("example", 1, "implementation");
+			const action = artifactActionKey(producer, { input: "corrupt" });
+			const published = publishArtifactAction(root, "example", producer, action, [
+				{ name: "object", file: source },
+			]);
+			const blob = artifactOutput(published, "object").path;
+			const beforeCorruption = statSync(blob);
+			writeFileSync(blob, "evil");
+			if (timestamps === "unchanged timestamps") {
+				vi.mocked(statSync).mockReturnValueOnce(beforeCorruption);
+			}
+			expect(readArtifactAction(root, "example", producer, action)).toBeUndefined();
+			expect(existsSync(blob)).toBe(false);
+
+			publishArtifactAction(root, "example", producer, action, [
+				{ name: "object", file: source },
+			]);
+			const rebuilt = readArtifactAction(root, "example", producer, action);
+			expect(rebuilt).toBeDefined();
+			expect(readFileSync(artifactOutput(rebuilt!, "object").path, "utf8")).toBe("good");
+		},
+	);
 
 	it("recovers a stale per-action publication lock", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "maligator-lock-"));

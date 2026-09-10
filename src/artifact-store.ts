@@ -16,7 +16,6 @@ import { processIsAlive } from "./process-state.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
 const ACTION_SCHEMA = 1;
-const validatedBlobs = new Map<string, string>();
 const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 type Json = null | boolean | number | string | Array<Json> | { [key: string]: Json };
@@ -133,11 +132,8 @@ function validBlob(file: string, digest: string, size: number): boolean {
 	try {
 		const stats = statSync(file);
 		if (!stats.isFile() || stats.size !== size) return false;
-		const identity = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
-		if (validatedBlobs.get(file) === identity) return true;
-		if (fileDigest(file) !== digest) return false;
-		validatedBlobs.set(file, identity);
-		return true;
+		// Same-size writes can share timestamps on filesystems with a coarse clock.
+		return fileDigest(file) === digest;
 	} catch {
 		return false;
 	}

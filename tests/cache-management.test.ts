@@ -10,6 +10,10 @@ import {
 } from "../src/cache-management.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 
+const DAY = 24 * 60 * 60 * 1000;
+// Fixture ages must follow the real creation time, which utimes cannot backdate on Linux.
+const pruneNowMs = Date.now() + 30 * DAY;
+
 function cacheRoot(): string {
 	return mkdtempSync(path.join(os.tmpdir(), "mal-cache-management-"));
 }
@@ -24,7 +28,7 @@ function artifact(
 	const directory = path.join(root, family, name);
 	mkdirSync(directory, { recursive: true });
 	writeFileSync(path.join(directory, "artifact"), Buffer.alloc(bytes));
-	const usedAt = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000);
+	const usedAt = new Date(pruneNowMs - ageDays * DAY);
 	utimesSync(directory, usedAt, usedAt);
 	return directory;
 }
@@ -44,7 +48,8 @@ describe("Maligator cache management", () => {
 		const result = pruneMaligatorCache({
 			cacheRoot: root,
 			maxBytes: 650,
-			minAgeMs: 24 * 60 * 60 * 1000,
+			minAgeMs: DAY,
+			nowMs: pruneNowMs,
 		});
 
 		expect(result.removed.map((entry) => entry.path)).toContain(oldest);
@@ -79,6 +84,7 @@ describe("Maligator cache management", () => {
 			cacheRoot: root,
 			maxBytes: 1,
 			minAgeMs: 0,
+			nowMs: pruneNowMs,
 			dryRun: true,
 		});
 		expect(preview.removed.map((entry) => entry.path)).toContain(old);
@@ -88,7 +94,12 @@ describe("Maligator cache management", () => {
 		const lease = createCacheLease("test", root);
 		try {
 			expect(() =>
-				pruneMaligatorCache({ cacheRoot: root, maxBytes: 1, minAgeMs: 0 }),
+				pruneMaligatorCache({
+					cacheRoot: root,
+					maxBytes: 1,
+					minAgeMs: 0,
+					nowMs: pruneNowMs,
+				}),
 			).toThrow("Refusing to prune while 1 Maligator command is active");
 		} finally {
 			lease.release();
@@ -107,6 +118,7 @@ describe("Maligator cache management", () => {
 			cacheRoot: root,
 			maxBytes: 1,
 			minAgeMs: 0,
+			nowMs: pruneNowMs,
 		});
 
 		expect(result.removed.map((entry) => entry.path)).toContain(old);
@@ -126,6 +138,7 @@ describe("Maligator cache management", () => {
 			cacheRoot: root,
 			maxBytes: 1,
 			minAgeMs: 0,
+			nowMs: pruneNowMs,
 		});
 
 		expect(result.removed.map((entry) => entry.path)).toContain(old);
