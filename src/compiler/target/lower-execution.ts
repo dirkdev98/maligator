@@ -2601,6 +2601,39 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryTargets.set(site.caller, targets);
 		}
 	}
+	const unsignedArithmetic = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	for (const operation of compilation.plan.unsignedArithmetic ?? []) {
+		let instructions = unsignedArithmetic.get(operation.function);
+		if (instructions === undefined) {
+			instructions = new Set();
+			unsignedArithmetic.set(operation.function, instructions);
+		}
+		instructions.add(operation.instruction);
+	}
+	const operatorInputs = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, CompilerOperatorInputKindMasks>
+	>();
+	for (const operation of compilation.plan.operatorInputs ?? []) {
+		let instructions = operatorInputs.get(operation.function);
+		if (instructions === undefined) {
+			instructions = new Map();
+			operatorInputs.set(operation.function, instructions);
+		}
+		instructions.set(operation.instruction, operation.masks);
+	}
+	const builtinInputs = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, ReadonlyArray<number>>
+	>();
+	for (const operation of compilation.plan.builtinInputs ?? []) {
+		let instructions = builtinInputs.get(operation.function);
+		if (instructions === undefined) {
+			instructions = new Map();
+			builtinInputs.set(operation.function, instructions);
+		}
+		instructions.set(operation.instruction, operation.masks);
+	}
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const functions = functionMap.executionToCore.map((core, execution) => ({
 		...(specializedOnly.has(core) ? { specializedOnly: true as const } : {}),
@@ -2613,21 +2646,9 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
-			new Set(
-				(compilation.plan.unsignedArithmetic ?? [])
-					.filter((operation) => operation.function === core)
-					.map((operation) => operation.instruction),
-			),
-			new Map(
-				(compilation.plan.operatorInputs ?? [])
-					.filter((operation) => operation.function === core)
-					.map(({ instruction, masks }) => [instruction, masks]),
-			),
-			new Map(
-				(compilation.plan.builtinInputs ?? [])
-					.filter((operation) => operation.function === core)
-					.map(({ instruction, masks }) => [instruction, masks]),
-			),
+			unsignedArithmetic.get(core) ?? new Set(),
+			operatorInputs.get(core) ?? new Map(),
+			builtinInputs.get(core) ?? new Map(),
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],
 			blockOrders.get(core)!,
