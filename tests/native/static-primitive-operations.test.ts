@@ -767,6 +767,31 @@ console.log('constructed', Reflect.construct(Number,[-1n]).valueOf());
 		}
 	}, 600_000);
 	it.each([false, true])(
+		"preserves guarded Boolean calls and callee mutations with realms=%s",
+		(realms) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-boolean-guards-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/guarded-boolean-calls.mjs",
+					name: "guards",
+					config: resolveBuildConfig({
+						engine: { primordials: "mutable", realms },
+					}),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary)).toBe("boolean guards passed\n");
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						"boolean guards passed\n",
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each([false, true])(
 		"preserves guarded Number predicates and noncoercing arguments with realms=%s",
 		(realms) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-predicate-guards-"));

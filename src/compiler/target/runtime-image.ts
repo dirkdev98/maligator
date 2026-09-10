@@ -254,6 +254,9 @@ export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
 	"Number.isFinite",
 	"Number.isInteger",
 	"Number.isSafeInteger",
+	"Boolean",
+	"Boolean.prototype.valueOf",
+	"Boolean.prototype.toString",
 ] as const;
 
 export interface VmKnownOwnSlotCandidate {

@@ -97,6 +97,9 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Number.isFinite",
 	"Number.isInteger",
 	"Number.isSafeInteger",
+	"Boolean",
+	"Boolean.prototype.valueOf",
+	"Boolean.prototype.toString",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];

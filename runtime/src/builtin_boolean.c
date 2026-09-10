@@ -81,6 +81,28 @@ MalValue mal_builtin_boolean_value_of_known(MalValue this_value) {
     return this_value;
 }
 
+const MalNativeFunctionCallback mal_builtin_boolean_callbacks[3] = {
+    mal_builtin_boolean_constructor,
+    mal_builtin_boolean_prototype_value_of,
+    mal_builtin_boolean_prototype_to_string,
+};
+
+bool mal_builtin_boolean_try_direct(
+    MalVm *vm, MalBooleanOperation operation, MalValue callee, MalValue receiver,
+    MalValue argument, MalValue *result
+) {
+    if (!mal_builtin_boolean_callee_matches(operation, callee)) return false;
+    if (operation == MAL_BOOLEAN_CALL) {
+        *result = mal_value_new_boolean(mal_value_is_truthy(argument));
+    } else {
+        if (!mal_value_is_boolean(receiver)) return false;
+        *result = operation == MAL_BOOLEAN_VALUE_OF ? receiver
+            : mal_value_from_string(mal_intrinsic_hot_ascii(vm,
+                mal_value_to_boolean(receiver) ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE));
+    }
+    return true;
+}
+
 void mal_builtin_boolean_install(MalVm *vm) {
     // %Boolean.prototype% is itself a Boolean object with [[BooleanData]] =
     // false, so Boolean.prototype.valueOf()/toString() work on the prototype.

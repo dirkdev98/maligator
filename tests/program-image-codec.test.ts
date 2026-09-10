@@ -1101,6 +1101,9 @@ describe("program-image-codec", () => {
 					"Number.isFinite",
 					"Number.isInteger",
 					"Number.isSafeInteger",
+					"Boolean",
+					"Boolean.prototype.valueOf",
+					"Boolean.prototype.toString",
 				] as const
 			).flatMap((operation) =>
 				[0, 1, 5].map(

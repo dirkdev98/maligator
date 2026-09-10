@@ -6636,6 +6636,43 @@ function emitInstruction(
 				}
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			if (
+				guardedBuiltinOperation === "Boolean" ||
+				guardedBuiltinOperation === "Boolean.prototype.valueOf" ||
+				guardedBuiltinOperation === "Boolean.prototype.toString"
+			) {
+				const operation = {
+					Boolean: "MAL_BOOLEAN_CALL",
+					"Boolean.prototype.valueOf": "MAL_BOOLEAN_VALUE_OF",
+					"Boolean.prototype.toString": "MAL_BOOLEAN_TO_STRING",
+				}[guardedBuiltinOperation];
+				const receiver = boxedOperand(instruction.thisValue);
+				const argument =
+					args.length === 0 ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]!);
+				const primitiveReceiver = nativeBooleanOperand(instruction.thisValue);
+				const receiverGuard =
+					operation === "MAL_BOOLEAN_CALL" || primitiveReceiver !== null
+						? ""
+						: ` && mal_value_is_boolean(${receiver})`;
+				const boolean = primitiveReceiver ?? `mal_value_to_boolean(${receiver})`;
+				const result =
+					operation === "MAL_BOOLEAN_CALL"
+						? storeBoolean(instruction.dst, `mal_value_is_truthy(${argument})`)
+						: operation === "MAL_BOOLEAN_VALUE_OF"
+							? storeBoolean(instruction.dst, boolean)
+							: `r${instruction.dst} = ${callResult(`mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${boolean} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`)};`;
+				return [
+					`if (mal_builtin_boolean_callee_matches(${operation}, ${boxedOperand(instruction.callee)})${receiverGuard}) {`,
+					result,
+					`} else {`,
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${receiver}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
+					poll,
+				];
+			}
 			const numberPredicate = NUMBER_PREDICATES.get(guardedBuiltinOperation ?? "");
 			if (numberPredicate !== undefined) {
 				const argument = args[0];

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const conversions = [
@@ -24,6 +28,67 @@ function inspect(body: string, locked = true, generator = false) {
 		{ locked },
 	);
 }
+
+describe("mutable Boolean call guards", () => {
+	it.each([
+		["Boolean(x,y())", "Boolean"],
+		["globalThis.Boolean(x,y())", "Boolean"],
+		["(!!x).valueOf(y())", "Boolean.prototype.valueOf"],
+		["(!!x).toString(y())", "Boolean.prototype.toString"],
+	])(
+		"guards %s while retaining the original call and argument effects",
+		(expression, operation) => {
+			const output = inspect(`return ${expression};`, false);
+			const calls = output.fn.instructions.filter(
+				(instruction) => instruction.opcode === "CALL",
+			);
+			expect(calls).toHaveLength(2);
+			expect(calls.map((call) => call.guardedBuiltinCall?.operation)).toContain(
+				operation,
+			);
+			expect(output.c.source).toContain("mal_builtin_boolean_callee_matches(");
+			expect(output.c.source).toContain("mal_vm_call_cached(");
+			const restored = deserializeCompilerArtifact(
+				serializeCompilerArtifact(output.image),
+			);
+			expect(restored.runtime.functions).toEqual(output.image.runtime.functions);
+		},
+	);
+	it.each(["Boolean()", "Boolean(x,1,2,3,4)"])(
+		"retains the argument count at %s",
+		(expression) => {
+			const output = inspect(`return ${expression};`, false);
+			const call = output.fn.instructions.find(
+				(instruction) => instruction.opcode === "CALL",
+			);
+			expect(call?.guardedBuiltinCall?.operation).toBe("Boolean");
+			expect(call?.argumentCount).toBe(expression === "Boolean()" ? 0 : 5);
+		},
+	);
+	it.each(["new Boolean(x)", "x.toString(y())", "x.valueOf(y())"])(
+		"keeps %s outside primitive call admission",
+		(expression) => {
+			expect(inspect(`return ${expression};`, false).c.source).not.toContain(
+				"mal_builtin_boolean_callee_matches(",
+			);
+		},
+	);
+	it("does not infer a builtin from a shadowed lexical binding", () => {
+		const output = inspect("const Boolean=y; return Boolean(x);", false);
+		expect(output.c.source).not.toContain("mal_builtin_boolean_callee_matches(");
+	});
+	it("retains a loaded Boolean callee across suspension", () => {
+		const output = inspect("return Boolean(x,yield y());", false, true);
+		expect(
+			output.fn.instructions.some(
+				(instruction) =>
+					instruction.opcode === "CALL" &&
+					instruction.guardedBuiltinCall?.operation === "Boolean",
+			),
+		).toBe(true);
+		expect(output.c.source).toContain("mal_vm_call_cached(");
+	});
+});
 
 describe("Boolean method observation profiles", () => {
 	it.each(["valueOf", "toString"])(

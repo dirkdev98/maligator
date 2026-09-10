@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 50u
+#define WIRE_VERSION 51u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -93,6 +93,9 @@ static const MalGuardedBuiltinCallOp wire_guarded_builtin_call_ops[] = {
     MAL_GUARDED_BUILTIN_NUMBER_IS_FINITE,
     MAL_GUARDED_BUILTIN_NUMBER_IS_INTEGER,
     MAL_GUARDED_BUILTIN_NUMBER_IS_SAFE_INTEGER,
+    MAL_GUARDED_BUILTIN_BOOLEAN_CALL,
+    MAL_GUARDED_BUILTIN_BOOLEAN_VALUE_OF,
+    MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING,
 };
 
 static_assert(
@@ -105,7 +108,7 @@ static_assert(
 );
 static_assert(
     MAL_GUARDED_BUILTIN_MAP_GET == 0 &&
-        MAL_GUARDED_BUILTIN_NUMBER_IS_SAFE_INTEGER + 1 ==
+        MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING + 1 ==
             countof(wire_guarded_builtin_call_ops),
     "guarded builtin call side tags must stay contiguous"
 );
@@ -2380,7 +2383,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 if ((guarded_tag > 0 &&
                      ((guarded_tag <= MAL_MATH_UNARY_ROUND && argument_count != 1) ||
                       guarded_tag > MAL_MATH_UNARY_ROUND + 1 +
-                          MAL_GUARDED_BUILTIN_NUMBER_IS_SAFE_INTEGER ||
+                          MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING ||
                       (guarded_tag == MAL_MATH_UNARY_ROUND + 1 +
                           MAL_GUARDED_BUILTIN_ARRAY_PUSH && argument_count > 4))) ||
                     (guarded_tag < 0 &&

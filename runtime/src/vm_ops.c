@@ -2652,6 +2652,18 @@ bool mal_op_call_guarded_builtin(
         (MAL_MATH_UNARY_ROUND + 1);
     MalValue receiver = mal_op_value_operand(
         callable, instruction->as.call.this_value);
+    if (operation >= MAL_GUARDED_BUILTIN_BOOLEAN_CALL &&
+        operation <= MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING) {
+        MalValue argument = argument_count == 0 ? MAL_VALUE_UNDEFINED
+            : mal_op_value_operand(callable, argument_operands[0]);
+        MalValue result;
+        if (!mal_builtin_boolean_try_direct(vm,
+                (MalBooleanOperation) (operation - MAL_GUARDED_BUILTIN_BOOLEAN_CALL),
+                mal_op_value_operand(callable, instruction->as.call.callee),
+                receiver, argument, &result)) return false;
+        callable->registers[instruction->as.call.dst] = result;
+        return true;
+    }
     if (operation >= MAL_GUARDED_BUILTIN_NUMBER_IS_NAN &&
         operation <= MAL_GUARDED_BUILTIN_NUMBER_IS_SAFE_INTEGER) {
         MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);

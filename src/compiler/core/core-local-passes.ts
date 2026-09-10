@@ -961,19 +961,33 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			const property = definingInstruction(fn, root(callee));
 			if (property === undefined) continue;
 			const propertyReceiver = instructionOperand(fn, property, 0);
+			const globalCall = fn.instructionOpcodeName(property) === "loadGlobalProperty";
 			if (
-				fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
-				propertyReceiver === undefined ||
-				root(propertyReceiver) !== receiverRoot
+				!globalCall &&
+				(fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
+					propertyReceiver === undefined ||
+					root(propertyReceiver) !== receiverRoot)
 			) {
 				continue;
 			}
-			const stringIndex = fn.instructionAttributes(property).stringIndex;
+			const stringIndex =
+				fn.instructionAttributes(property)[
+					globalCall ? "nameStringIndex" : "stringIndex"
+				];
 			if (typeof stringIndex !== "number") continue;
 			const key = decodeString(program, stringIndex);
 			const candidates =
-				key === undefined ? [] : (BUILTIN_OPERATIONS_BY_KEY.get(key) ?? []);
+				key === undefined
+					? []
+					: (BUILTIN_OPERATIONS_BY_KEY.get(key) ?? []).filter(
+							(candidate) => !globalCall || candidate.owner === "globalThis",
+						);
+			const booleanReceiver = () =>
+				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
+					receiverRoot,
+				) === "boolean";
 			const ownerMatches = candidates.filter((candidate) => {
+				if (candidate.receiver === "boolean") return booleanReceiver();
 				const exact = exactBuiltinCallDescriptor(candidate.id);
 				return (
 					(exact !== undefined &&
@@ -1000,6 +1014,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 							? candidates[0]
 							: undefined;
 			if (descriptor === undefined) continue;
+			if (descriptor.receiver === "boolean" && !booleanReceiver()) continue;
 			const exact = exactBuiltinCallDescriptor(descriptor.id);
 			const sharedIdentity = compilationContext.facts.builtinIdentities.get(
 				descriptor.id,

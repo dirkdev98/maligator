@@ -100122,6 +100122,44 @@
 					"lowering": "constant",
 					"profiles": ["known-consumer"],
 					"axes": ["F", "C"]
+				},
+				{
+					"profiles": ["mutable-proxy-realm"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -100978,6 +101016,44 @@
 					"lowering": "constant",
 					"profiles": ["static-receiver-dynamic-argument"],
 					"axes": ["R", "D", "T", "F"]
+				},
+				{
+					"profiles": ["mutable-proxy-realm"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -102021,6 +102097,44 @@
 					"lowering": "constant",
 					"profiles": ["known-consumer"],
 					"axes": ["F"]
+				},
+				{
+					"profiles": ["mutable-proxy-realm"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["effectful-guard-failure"],
+					"axes": ["D", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "runtime/src/builtin_boolean.c",
+						"symbol": "mal_builtin_boolean_try_direct"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "guards %s while retaining the original call and argument effects",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/native/static-primitive-operations.test.ts",
+						"test": "preserves guarded Boolean calls and callee mutations with realms=%s"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
