@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const conversions = [
@@ -23,6 +24,63 @@ function inspect(body: string, locked = true, generator = false) {
 		{ locked },
 	);
 }
+
+describe("Boolean method observation profiles", () => {
+	it.each(["valueOf", "toString"])(
+		"resolves the canonical %s function from a dynamic Boolean receiver",
+		(method) => {
+			const output = inspect(`return (!!x).${method};`);
+			expect(output.core).toHaveLength(1);
+			expect(output.core[0]!.opcode).toBe("loadPrimordial");
+			expect(
+				getPrimordialCatalog().nodes[output.core[0]!.attributes.nodeIndex as number]?.[0],
+			).toBe(`Boolean.prototype.${method}`);
+			const mutable = inspect(`return (!!x).${method};`, false);
+			expect(mutable.structure.genericLookups).toBeGreaterThan(0);
+		},
+	);
+
+	it.each(["valueOf", "toString"])(
+		"folds %s on a static receiver after evaluating an ignored dynamic argument",
+		(method) => {
+			const output = inspect(`return Boolean.prototype.${method}.call(false,x());`);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+			expect(
+				output.core.filter(
+					(operation) =>
+						operation.opcode ===
+						(method === "valueOf" ? "createBoolean" : "createString"),
+				),
+			).toHaveLength(1);
+			const mutable = inspect(
+				`return Boolean.prototype.${method}.call(false,x());`,
+				false,
+			);
+			expect(mutable.structure.genericCalls).toBeGreaterThan(1);
+		},
+	);
+
+	it.each(["valueOf", "toString"])(
+		"specializes dynamic Boolean %s while preserving argument effects",
+		(method) => {
+			const output = inspect(`return (!!x).${method}(y());`);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(output.structure.genericLookups).toBe(0);
+			expect(output.structure.allocations).toBe(0);
+			expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+				false,
+			);
+			const unknown = inspect(`return x.${method}(y());`);
+			expect(unknown.structure.genericCalls).toBe(2);
+			expect(unknown.structure.genericLookups).toBeGreaterThan(0);
+		},
+	);
+});
 
 describe("Boolean dead result profiles", () => {
 	for (const [profile, body] of ignoredProfiles) {
@@ -140,4 +198,123 @@ describe("noncoercing unary reuse", () => {
 		);
 		expect(mutable.structure.genericCalls).toBe(4);
 	});
+});
+
+describe("Boolean constant observations", () => {
+	for (const expression of [
+		"Boolean(x)",
+		"new Boolean(x).valueOf()",
+		"Boolean.prototype.valueOf.call(!!x)",
+		"(!!x).valueOf()",
+	]) {
+		it.each(["===", "!==", "==", "!="])(
+			`folds repeated ${expression} observations with %s`,
+			(operator) => {
+				const output = inspect(
+					`const first=${expression};y();return first${operator}${expression};`,
+				);
+				expect(output.structure.genericCalls).toBe(1);
+				expect(output.structure.allocations).toBe(0);
+				expect(
+					output.core.some((operation) =>
+						["unary", "binary", "callKnown", "construct"].includes(operation.opcode),
+					),
+				).toBe(false);
+				expect(
+					output.core
+						.filter((operation) => operation.opcode === "createBoolean")
+						.map((operation) => operation.attributes.value),
+				).toEqual([operator === "===" || operator === "=="]);
+			},
+		);
+	}
+
+	it.each(["Boolean(x)", "String(x)"])(
+		"retains mutable %s self-comparisons that may observe NaN",
+		(expression) => {
+			const output = inspect(`const value=${expression};return value===value;`, false);
+			expect(output.structure.genericCalls).toBeGreaterThan(0);
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.opcode === "binary" && operation.attributes.operator === "===",
+				),
+			).toBe(true);
+		},
+	);
+
+	it.each(["x", "+x", "Number(x)", "x?true:NaN"])(
+		"retains the possible NaN result of %s",
+		(expression) => {
+			const output = inspect(`const value=${expression};return value===value;`);
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.opcode === "binary" && operation.attributes.operator === "===",
+				),
+			).toBe(true);
+		},
+	);
+
+	it("folds a string self-comparison while retaining its input conversion", () => {
+		const output = inspect("const value=String(x);y();return value===value;");
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "callKnown" && operation.attributes.operation === "String",
+			),
+		).toBe(true);
+		expect(output.structure.genericCalls).toBe(1);
+		expect(output.core.some((operation) => operation.opcode === "binary")).toBe(false);
+	});
+
+	it("folds a Boolean self-comparison across suspension", () => {
+		const output = inspect(
+			"const value=Boolean(x);yield y();return value===value;",
+			true,
+			true,
+		);
+		expect(output.core.some((operation) => operation.opcode === "yield")).toBe(true);
+		expect(output.core.some((operation) => operation.opcode === "unary")).toBe(false);
+		expect(output.structure.genericCalls).toBe(1);
+	});
+
+	it.each([
+		"{value:!!x}",
+		"[!!x]",
+		"{value:x()}",
+		"[x()]",
+		"{first:x(),second:y()}",
+		"[x(),y()]",
+	])("consumes only the truthiness of %s without materialization", (expression) => {
+		const output = inspect(`return Boolean(${expression});`);
+		expect(output.structure.allocations).toBe(0);
+		expect(
+			output.core.some(
+				(operation) => operation.opcode === "unary" || operation.opcode === "callKnown",
+			),
+		).toBe(false);
+		expect(output.structure.genericCalls).toBe(
+			(expression.match(/[xy]\(\)/g) ?? []).length,
+		);
+		expect(
+			output.core
+				.filter((operation) => operation.opcode === "createBoolean")
+				.map((operation) => operation.attributes.value),
+		).toEqual([true]);
+	});
+
+	it.each(["{value:!!x}", "[!!x]"])(
+		"retains escaped %s identity and mutable conversion targets",
+		(expression) => {
+			const escaped = inspect(
+				`const value=${expression};y(value);return Boolean(value);`,
+			);
+			expect(escaped.structure.allocations).toBe(1);
+			expect(escaped.structure.genericCalls).toBe(1);
+			const mutable = inspect(`return Boolean(${expression});`, false);
+			expect(mutable.structure.allocations).toBe(1);
+			expect(mutable.structure.genericCalls).toBe(1);
+		},
+	);
 });

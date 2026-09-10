@@ -36,6 +36,50 @@ function ignoredTdz(value) {
 	!later;
 	let later = value;
 }
+function constantComparisons(value, effect) {
+	const first = Boolean(value);
+	effect();
+	return [
+		first === Boolean(value),
+		first !== Boolean(value),
+		first == Boolean(value),
+		first != Boolean(value),
+	];
+}
+function literalTruthiness(first, second) {
+	return Boolean({ first: first(), second: second() }) && Boolean([first(), second()]);
+}
+function escapedTruthiness(value, observe) {
+	const record = { value };
+	observe(record);
+	return Boolean(record);
+}
+function textSelf(value, effect) {
+	const text = String(value);
+	effect();
+	return text === text;
+}
+function numberSelf(value, effect) {
+	const number = +value;
+	effect();
+	return number === number;
+}
+function* suspendedComparison(value, effect) {
+	const boolean = Boolean(value);
+	yield effect();
+	return boolean === boolean;
+}
+function methodData(value) {
+	return [(!!value).valueOf, (!!value).toString];
+}
+function methodCalls(value, effect) {
+	return [
+		(!!value).valueOf(effect()),
+		(!!value).toString(effect()),
+		Boolean.prototype.valueOf.call(false, effect()),
+		Boolean.prototype.toString.call(false, effect()),
+	];
+}
 globalThis.booleanProfiles = {
 	ignored,
 	ignoredInputs,
@@ -43,6 +87,14 @@ globalThis.booleanProfiles = {
 	coercing,
 	suspended,
 	ignoredTdz,
+	constantComparisons,
+	literalTruthiness,
+	escapedTruthiness,
+	textSelf,
+	numberSelf,
+	suspendedComparison,
+	methodData,
+	methodCalls,
 };
 const sentinel = {};
 const hostile = {
@@ -77,6 +129,25 @@ for (const value of [
 	new Boolean(false),
 	revoked.proxy,
 ]) {
+	const methods = globalThis.booleanProfiles.methodData(value);
+	check(
+		methods[0] === Boolean.prototype.valueOf && methods[1] === Boolean.prototype.toString,
+		"dynamic Boolean method reads preserve canonical function identity",
+	);
+	let argumentsEvaluated = 0;
+	const methodResults = globalThis.booleanProfiles.methodCalls(value, () => {
+		argumentsEvaluated++;
+		if (typeof globalThis.gc === "function") globalThis.gc();
+		return hostile;
+	});
+	check(
+		methodResults[0] === !!value &&
+			methodResults[1] === (value ? "true" : "false") &&
+			methodResults[2] === false &&
+			methodResults[3] === "false" &&
+			argumentsEvaluated === 4,
+		"Boolean method specialization preserves ignored argument effects",
+	);
 	check(
 		globalThis.booleanProfiles.ignored(value, () => calls++) === 17,
 		"ignored truthiness preserves its following callback",
@@ -101,6 +172,20 @@ for (const value of [
 	check(iterator.next().done === false, "ignored truthiness does not remove a yield");
 	const last = iterator.next();
 	check(last.done && last.value === !value, "demanded truthiness survives suspension");
+	const comparisons = globalThis.booleanProfiles.constantComparisons(value, () => {
+		if (typeof globalThis.gc === "function") globalThis.gc();
+	});
+	check(
+		comparisons.join(",") === "true,false,true,false",
+		"Boolean comparisons exclude NaN without coercing their inputs",
+	);
+	const suspended = globalThis.booleanProfiles.suspendedComparison(value, () => 23);
+	check(suspended.next().value === 23, "constant comparison retains suspension");
+	const completed = suspended.next();
+	check(
+		completed.done && completed.value === true,
+		"Boolean identity survives resumption",
+	);
 }
 check(calls === 48, "callbacks are evaluated once per source occurrence");
 const events = [];
@@ -118,6 +203,72 @@ check(
 	"truthiness does not coerce objects",
 );
 check(events.join(",") === "first,second", "ignored Boolean arguments retain order");
+events.length = 0;
+check(
+	globalThis.booleanProfiles.literalTruthiness(
+		() => {
+			events.push("first");
+			return hostile;
+		},
+		() => {
+			events.push("second");
+			if (typeof globalThis.gc === "function") globalThis.gc();
+			return Symbol();
+		},
+	),
+	"private aggregate truthiness does not observe its contents",
+);
+check(
+	events.join(",") === "first,second,first,second",
+	"elided aggregates retain producer order",
+);
+let escaped;
+check(
+	globalThis.booleanProfiles.escapedTruthiness(hostile, (record) => {
+		escaped = record;
+		record.extra = 29;
+		if (typeof globalThis.gc === "function") globalThis.gc();
+	}),
+	"observed aggregate remains truthy",
+);
+check(
+	escaped.value === hostile && escaped.extra === 29,
+	"escaping aggregate identity is retained",
+);
+try {
+	globalThis.booleanProfiles.literalTruthiness(
+		() => {
+			throw sentinel;
+		},
+		() => {
+			throw new Error("unreachable aggregate field");
+		},
+	);
+	throw new Error("aggregate input must throw");
+} catch (error) {
+	check(error === sentinel, "aggregate producer failure precedes folding");
+}
+let observedText = 0;
+check(
+	globalThis.booleanProfiles.textSelf(Symbol("value"), () => observedText++),
+	"text result is reflexive",
+);
+check(observedText === 1, "text observation preserves its callback");
+try {
+	globalThis.booleanProfiles.textSelf(hostile, () => observedText++);
+	throw new Error("text input must throw");
+} catch (error) {
+	check(
+		error === sentinel && observedText === 1,
+		"folding text equality preserves coercion failure",
+	);
+}
+for (const number of [NaN, 0, -0, Infinity, -Infinity, 7]) {
+	check(
+		globalThis.booleanProfiles.numberSelf(number, () => {}) === !Number.isNaN(number),
+		"number self-comparison preserves NaN",
+	);
+}
 try {
 	globalThis.booleanProfiles.ignoredInputs(
 		() => {
@@ -156,6 +307,40 @@ try {
 	);
 }
 const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Boolean");
+const valueOfDescriptor = Object.getOwnPropertyDescriptor(Boolean.prototype, "valueOf");
+if (valueOfDescriptor.configurable) {
+	const order = [];
+	function replacement() {
+		order.push("call");
+		return 23;
+	}
+	try {
+		Object.defineProperty(Boolean.prototype, "valueOf", {
+			configurable: true,
+			get() {
+				order.push("get");
+				return replacement;
+			},
+		});
+		check(
+			globalThis.booleanProfiles.methodData(true)[0] === replacement,
+			"mutable method read returns the accessor result",
+		);
+		order.length = 0;
+		const results = globalThis.booleanProfiles.methodCalls(true, () => {
+			order.push("argument");
+			return hostile;
+		});
+		check(
+			results[0] === 23 &&
+				results[2] === 23 &&
+				order.join(",") === "get,argument,call,argument,get,argument,call,argument",
+			"mutable method lookup precedes argument evaluation and call",
+		);
+	} finally {
+		Object.defineProperty(Boolean.prototype, "valueOf", valueOfDescriptor);
+	}
+}
 if (descriptor.configurable) {
 	let invocations = 0;
 	try {
@@ -169,6 +354,12 @@ if (descriptor.configurable) {
 		check(
 			result[0] === 1 && result[1] === 2 && invocations === 2,
 			"mutable Boolean replacement is called twice",
+		);
+		invocations = 0;
+		const comparisons = globalThis.booleanProfiles.constantComparisons(1, () => {});
+		check(
+			comparisons.join(",") === "false,true,false,true" && invocations === 5,
+			"mutable Boolean comparisons retain every original call",
 		);
 	} finally {
 		Object.defineProperty(globalThis, "Boolean", descriptor);

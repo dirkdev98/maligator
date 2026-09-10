@@ -276,7 +276,7 @@ function hasExactAllocationObservationOpportunity(fn: CoreFunctionStore): boolea
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
-		if (opcode === "unary" && operator === "typeof") {
+		if (opcode === "unary" && (operator === "typeof" || operator === "!")) {
 			const operand = instructionOperandAt(fn, instruction, 0);
 			if (operand !== undefined && mayResolveToAllocation(operand)) return true;
 		} else if (opcode === "binary" && (operator === "===" || operator === "!==")) {
@@ -477,7 +477,7 @@ const foldExactAllocationObservations: CoreFunctionPass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["unary", "binary"],
 	admission: {
-		predicate: "fresh allocation and typeof or strict-identity observation",
+		predicate: "fresh allocation and truthiness, typeof or strict-identity observation",
 		hasOpportunity({ program, function: functionId }) {
 			return hasExactAllocationObservationOpportunity(program.function(functionId));
 		},
@@ -514,15 +514,16 @@ const foldExactAllocationObservations: CoreFunctionPass = {
 				| undefined;
 			if (
 				opcode === "unary" &&
-				operator === "typeof" &&
 				leftOperand !== undefined &&
-				provenance.allocationOf(leftOperand) !== undefined &&
-				objectStringIndex >= 0
+				provenance.allocationOf(leftOperand) !== undefined
 			) {
-				replacement = {
-					opcode: "createString",
-					attributes: { stringIndex: objectStringIndex },
-				};
+				if (operator === "!")
+					replacement = { opcode: "createBoolean", attributes: { value: false } };
+				else if (operator === "typeof" && objectStringIndex >= 0)
+					replacement = {
+						opcode: "createString",
+						attributes: { stringIndex: objectStringIndex },
+					};
 			} else if (
 				opcode === "binary" &&
 				(operator === "===" || operator === "!==") &&

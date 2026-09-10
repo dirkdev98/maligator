@@ -15,6 +15,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
@@ -1195,6 +1196,7 @@ function typeofObservation(
 const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["unary", "binary"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
@@ -1213,14 +1215,22 @@ const foldValueKindObservations: CoreFunctionPass = {
 			let result: boolean | undefined;
 			if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
 				const input = instructionOperand(fn, instruction, 0);
+				if (input === undefined) continue;
+				const mask = kinds.kindMask(input);
 				if (
-					input !== undefined &&
 					compilerValueKindMaskIsSubset(
-						kinds.kindMask(input),
+						mask,
 						COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL,
 					)
 				)
 					result = true;
+				else if (
+					compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+					)
+				)
+					result = false;
 			} else if (
 				opcode === "binary" &&
 				fn.kernel.instructionOperandCount(instruction) === 2
@@ -1228,7 +1238,20 @@ const foldValueKindObservations: CoreFunctionPass = {
 				const left = instructionOperand(fn, instruction, 0)!;
 				const right = instructionOperand(fn, instruction, 1)!;
 				const operator = fn.instructionAttributes(instruction).operator;
-				if (operator === "===" || operator === "!==") {
+				if (
+					left === right &&
+					(operator === "===" ||
+						operator === "!==" ||
+						operator === "==" ||
+						operator === "!=") &&
+					(compilerValueKindMaskIsSubset(
+						kinds.kindMask(left),
+						COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+					) ||
+						kinds.exactScalar(left) === "int32")
+				) {
+					result = operator === "===" || operator === "==";
+				} else if (operator === "===" || operator === "!==") {
 					const typeofResult =
 						typeofObservation(program, fn, left, right, (value) =>
 							kinds.kindMask(value),
@@ -2433,6 +2456,7 @@ export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionP
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
+	foldValueKindObservations,
 	foldRedundantTdzChecks,
 	removeBuiltinErrorContinuations,
 	removeUnreachableBlocks,

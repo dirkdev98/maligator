@@ -23431,6 +23431,88 @@
 					"lowering": "constant",
 					"profiles": ["static-observable"],
 					"axes": ["T", "F"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "resolves the canonical %s function from a dynamic Boolean receiver",
+						"case": "toString"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "resolved",
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "T", "F"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "resolves the canonical %s function from a dynamic Boolean receiver",
+						"case": "toString"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "resolved",
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "T", "F"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["known-consumer"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["unused-result"],
+					"axes": ["U", "L", "P"]
 				}
 			]
 		},
@@ -23593,6 +23675,88 @@
 					"lowering": "constant",
 					"profiles": ["static-observable"],
 					"axes": ["T", "F"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "resolves the canonical %s function from a dynamic Boolean receiver",
+						"case": "valueOf"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "resolved",
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["R", "T", "F"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "resolves the canonical %s function from a dynamic Boolean receiver",
+						"case": "valueOf"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "resolved",
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["R", "T", "F"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["dynamic-receiver-static-parameter"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["brand-with-unknown-contents"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["known-consumer"],
+					"axes": ["U", "L", "P"]
+				},
+				{
+					"state": "not-applicable",
+					"reason": "Reading the installed Boolean prototype data descriptor returns its canonical function identity without invoking it. This read owns no mutable state, callback or iterator protocol, or precomputable payload. Receiver evaluation and downstream invocation keep their separate effects and obligations; mutable descriptors are excluded.",
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "semantic-boundary",
+					"profiles": ["unused-result"],
+					"axes": ["U", "L", "P"]
 				}
 			]
 		},
@@ -99920,6 +100084,44 @@
 					"lowering": "specialized",
 					"profiles": ["static-receiver-dynamic-argument"],
 					"axes": ["C"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-memory-passes.ts",
+						"symbol": "foldExactAllocationObservations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "consumes only the truthiness of %s without materialization",
+						"case": "{value:x()}"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "eliminated",
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["F", "A"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "foldValueKindObservations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "folds repeated ${expression} observations with %s",
+						"case": "Boolean(x)"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "constant",
+					"profiles": ["known-consumer"],
+					"axes": ["F", "C"]
 				}
 			]
 		},
@@ -100757,6 +100959,25 @@
 						"environment-state-gc-suspension"
 					],
 					"axes": ["V", "M"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "folds %s on a static receiver after evaluating an ignored dynamic argument",
+						"case": "toString"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "constant",
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T", "F"]
 				}
 			]
 		},
@@ -101762,6 +101983,44 @@
 						"environment-state-gc-suspension"
 					],
 					"axes": ["V", "M"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "folds %s on a static receiver after evaluating an ignored dynamic argument",
+						"case": "valueOf"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "constant",
+					"profiles": ["static-receiver-dynamic-argument"],
+					"axes": ["R", "D", "T", "F"]
+				},
+				{
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "foldValueKindObservations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "folds repeated ${expression} observations with %s",
+						"case": "Boolean.prototype.valueOf.call(!!x)"
+					},
+					"negative": {
+						"file": "tests/local/boolean-result-profiles.mjs",
+						"test": "mutable method lookup precedes argument evaluation and call"
+					},
+					"lowering": "constant",
+					"profiles": ["known-consumer"],
+					"axes": ["F"]
 				}
 			]
 		},

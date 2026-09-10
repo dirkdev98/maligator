@@ -90,6 +90,37 @@ function optimizedClosedModule(source: string, sourcePath: string): CoreProgram 
 }
 
 describe("Core local canonicalization", () => {
+	for (const representation of ["boolean", "string", "i32", "f64", "boxed"] as const) {
+		it.each(["===", "!==", "==", "!="])(
+			`folds ${representation} self-comparison %s only when NaN is excluded`,
+			(operator) => {
+				const program = new CoreProgram(coreOpcodeRegistry);
+				const builder = new CoreFunctionBuilder(program);
+				const entry = builder.createBlock([{ representation }]);
+				const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
+				const [result] = builder.appendInstruction(entry, "binary", [value, value], {
+					attributes: { operator },
+					outputRepresentations: ["boolean"],
+				});
+				builder.setTerminator(entry, { kind: "return", value: result! });
+				const id = builder.finish(entry).function;
+				const optimized = optimizeCore(
+					{ program, context },
+					{ verification: "per-pass" },
+				).compilation.program.function(id);
+				const returned = returnedOperation(optimized);
+				const folded = representation !== "f64" && representation !== "boxed";
+				expect(optimized.instructionOpcodeName(returned)).toBe(
+					folded ? "createBoolean" : "binary",
+				);
+				if (folded)
+					expect(optimized.instructionAttributes(returned).value).toBe(
+						operator === "===" || operator === "==",
+					);
+			},
+		);
+	}
+
 	it("moves refined instructions across linear block merges without changing identity", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
