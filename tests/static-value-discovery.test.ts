@@ -571,7 +571,7 @@ it.each([
 	expect(result.structure.genericCalls).toBe(2);
 });
 
-it("does not license a primitive read using its own later TDZ check", () => {
+it("defers private initializer proofs until a read passes its TDZ check", () => {
 	const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 	const writer = new CoreFunctionBuilder(program),
 		writeEntry = writer.createBlock();
@@ -582,7 +582,7 @@ it("does not license a primitive read using its own later TDZ check", () => {
 		attributes: { index: 0 },
 	});
 	writer.setTerminator(writeEntry, { kind: "return", value: number! });
-	writer.finish(writeEntry);
+	const writerId = writer.finish(writeEntry).function;
 	const reader = new CoreFunctionBuilder(program),
 		readEntry = reader.createBlock();
 	const [loaded] = reader.appendInstruction(readEntry, "loadGlobal", [], {
@@ -594,11 +594,19 @@ it("does not license a primitive read using its own later TDZ check", () => {
 	});
 	reader.setTerminator(readEntry, { kind: "return", value: formatted! });
 	const fn = program.function(reader.finish(readEntry).function);
-	const analysis = new CoreAnalysisManager(
+	const manager = new CoreAnalysisManager(
 		program,
 		{ ...context, data: { ...context.data, singleAssignmentGlobalSlots: [0] } },
 		new CoreOptimizationReportBuilder(program),
-	).get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id });
+	);
+	const analysis = manager.get(CORE_STATIC_VALUE_ANALYSIS, {
+		scope: "function",
+		function: fn.id,
+	});
+	const initializer = manager.get(CORE_STATIC_VALUE_ANALYSIS, {
+		scope: "function",
+		function: writerId,
+	});
 	expect(analysis.query(loaded!).kind).toBe("unknown");
 	expect(
 		analysis.queryAt(
@@ -606,11 +614,13 @@ it("does not license a primitive read using its own later TDZ check", () => {
 			fn.instructionNext(coreInstructionId(fn.kernel.valueDefinitionOwner(loaded!)))!,
 		).kind,
 	).toBe("unknown");
+	expect(initializer.statistics.queries).toBe(0);
 	const consumer = coreInstructionId(fn.kernel.valueDefinitionOwner(formatted!));
 	expect(analysis.queryAt(loaded!, consumer)).toMatchObject({
 		kind: "known",
 		brand: "number",
 	});
+	expect(initializer.statistics.queries).toBeGreaterThan(0);
 	expect(analysis.query(loaded!).kind).toBe("unknown");
 	expect(analysis.constant(loaded!)).toBeUndefined();
 	expect(analysis.constant(loaded!, consumer)).toEqual({ kind: "number", value: 3 });

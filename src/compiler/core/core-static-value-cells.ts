@@ -33,6 +33,29 @@ function cellKey(
 	return undefined;
 }
 
+function hasInitializationCheck(
+	fn: CoreFunctionStore,
+	load: CoreInstructionId,
+	value: CoreValueId,
+	consumer: CoreInstructionId,
+): boolean {
+	if (load === consumer || fn.instructionBlock(load) !== fn.instructionBlock(consumer))
+		return false;
+	for (
+		let instruction = fn.instructionNext(load);
+		instruction !== undefined && instruction !== consumer;
+		instruction = fn.instructionNext(instruction)
+	) {
+		if (
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "throwIfTdz" &&
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) === value
+		)
+			return true;
+	}
+	return false;
+}
+
 export class CoreStaticCellIndex {
 	readonly #program: CoreProgram;
 	readonly #closed: Set<string>;
@@ -118,10 +141,16 @@ export class CoreStaticCellIndex {
 		if (key === undefined || !this.#closed.has(key)) return undefined;
 		this.#refresh();
 		if (this.#proofWork >= 65536) return undefined;
+		let checkedInitialization: boolean | undefined;
 		if (!this.#facts.has(key)) {
-			this.#facts.set(key, undefined);
 			const accesses = [...(this.#cells.get(key)?.values() ?? [])].flat(),
 				writes = accesses.filter((access) => access.write);
+			if (writes.length === 1 && writes[0]!.function !== fn.id) {
+				checkedInitialization = hasInitializationCheck(fn, load, value, consumer);
+				// A different activation's initializer cannot prove this read has left the TDZ.
+				if (!checkedInitialization) return undefined;
+			}
+			this.#facts.set(key, undefined);
 			if (writes.length === 1) {
 				const write = writes[0]!,
 					analysis = getAnalysis(write.function);
@@ -153,27 +182,9 @@ export class CoreStaticCellIndex {
 					}
 				}
 		}
-		if (
-			!initialized &&
-			load !== consumer &&
-			fn.instructionBlock(load) === fn.instructionBlock(consumer)
-		) {
-			// A different activation's initializer cannot prove this read has left the TDZ.
-			for (
-				let instruction = fn.instructionNext(load);
-				instruction !== undefined && instruction !== consumer;
-				instruction = fn.instructionNext(instruction)
-			) {
-				if (
-					fn.instructionKind(instruction) === "operation" &&
-					fn.instructionOpcodeName(instruction) === "throwIfTdz" &&
-					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) === value
-				) {
-					initialized = true;
-					break;
-				}
-			}
-		}
+		if (!initialized)
+			initialized =
+				checkedInitialization ?? hasInitializationCheck(fn, load, value, consumer);
 		if (!initialized) return undefined;
 		return {
 			...source,
