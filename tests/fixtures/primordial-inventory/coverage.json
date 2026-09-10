@@ -100474,6 +100474,43 @@
 						"environment-state-gc-suspension"
 					],
 					"axes": ["Z"]
+				},
+				{
+					"profiles": ["static-observable", "escaping-identity"],
+					"axes": ["A", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "normalizes %s while retaining the fresh Boolean wrapper",
+						"case": "{}"
+					},
+					"negative": {
+						"file": "tests/local/primitive-constructor-inputs.mjs",
+						"test": "replacement receives original object input"
+					},
+					"lowering": "specialized"
+				},
+				{
+					"profiles": ["environment-state-gc-suspension"],
+					"axes": ["A", "T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-boolean-profiles.test.ts",
+						"test": "eliminates private input across a suspended extra constructor argument"
+					},
+					"negative": {
+						"file": "tests/local/primitive-constructor-inputs.mjs",
+						"test": "replacement receives original object input"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

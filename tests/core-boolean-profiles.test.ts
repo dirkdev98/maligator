@@ -29,6 +29,83 @@ function inspect(body: string, locked = true, generator = false) {
 	);
 }
 
+describe("Boolean constructor input normalization", () => {
+	it.each([
+		["{}", true],
+		["{value:!!x}", true],
+		["[!!x]", true],
+		["function(){}", true],
+		["Symbol.iterator", true],
+		["new Boolean(false)", true],
+		["0", false],
+		["-0", false],
+		["NaN", false],
+		["null", false],
+		["undefined", false],
+		['""', false],
+		['"value"', true],
+		["0n", false],
+		["7n", true],
+	] as const)(
+		"normalizes %s while retaining the fresh Boolean wrapper",
+		(input, value) => {
+			const output = inspect(`return new Boolean(${input});`);
+			expect(output.structure.allocations).toBe(0);
+			const calls = output.core.filter((operation) => operation.opcode === "callKnown");
+			expect(calls).toHaveLength(1);
+			expect(calls[0]!.attributes).toMatchObject({
+				operation: "Boolean",
+				construct: true,
+			});
+			const payload = calls[0]!.inputs[1];
+			expect(
+				output.core.find((operation) => operation.outputs.includes(payload!)),
+			).toMatchObject({
+				opcode: "createBoolean",
+				attributes: { value },
+			});
+		},
+	);
+	it.each([
+		"return new Boolean({},x());",
+		"return new Boolean({[x]:y()});",
+		"return Reflect.construct(Boolean,[{},y()],x);",
+	])("eliminates the private constructor input after effects in %s", (body) => {
+		const output = inspect(body);
+		expect(output.structure.allocations).toBe(0);
+		expect(output.structure.genericCalls).toBe(1);
+		expect(output.core.some((operation) => operation.attributes.construct === true)).toBe(
+			true,
+		);
+		expect(inspect(body, false).structure.allocations).toBeGreaterThan(0);
+	});
+	it("retains escaping constructor input identities", () => {
+		const output = inspect("const input={};x(input);return new Boolean(input);");
+		expect(output.structure.allocations).toBe(1);
+		expect(output.structure.genericCalls).toBe(1);
+		expect(output.core.some((operation) => operation.attributes.construct === true)).toBe(
+			true,
+		);
+	});
+	it("retains unknown constructor input truthiness", () => {
+		const output = inspect("return new Boolean(x);");
+		expect(output.core.some((operation) => operation.opcode === "createBoolean")).toBe(
+			false,
+		);
+		expect(output.core.some((operation) => operation.attributes.construct === true)).toBe(
+			true,
+		);
+	});
+	it("eliminates private input across a suspended extra constructor argument", () => {
+		const output = inspect("return new Boolean({},yield x());", true, true);
+		expect(output.structure.allocations).toBe(0);
+		expect(output.core.some((operation) => operation.opcode === "yield")).toBe(true);
+		expect(output.core.some((operation) => operation.attributes.construct === true)).toBe(
+			true,
+		);
+	});
+});
+
 describe("empty-object Boolean inputs", () => {
 	it.each([
 		"return Boolean({});",

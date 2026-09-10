@@ -535,6 +535,40 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (attributes.construct) {
+				if (operation === "Boolean" && inputs[1] !== undefined) {
+					const input = analysis.queryAt(inputs[1], instruction);
+					if (input.kind === "known" && input.brand !== "boolean") {
+						const evaluated = evaluateConstantBuiltin(
+							"Boolean",
+							undefined,
+							[analysis.constant(inputs[1], instruction)],
+							constantTarget,
+						);
+						const value = ["object", "array", "function", "symbol"].includes(input.brand)
+							? true
+							: evaluated.kind === "value" && evaluated.value.kind === "boolean"
+								? evaluated.value.value
+								: undefined;
+						if (value !== undefined) {
+							analysis.verify(input, instruction);
+							parameterPlans.push({
+								instruction,
+								inputs,
+								parameters: [
+									{
+										index: 1,
+										operation: {
+											opcode: "createBoolean",
+											inputs: [],
+											attributes: { value },
+										},
+									},
+								],
+							});
+							sequenceEdits += 2;
+						}
+					}
+				}
 				const target = newTarget!;
 				if (
 					(operation === "BigInt" || operation === "Symbol") &&

@@ -25,6 +25,30 @@ import {
 
 describe("primitive operation differential", () => {
 	it.each(["locked", "mutable"] as const)(
+		"preserves primitive constructor inputs with %s primordials",
+		(primordials) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-constructor-inputs-"));
+			try {
+				const fixture = "tests/local/primitive-constructor-inputs.mjs";
+				const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture,
+					name: "constructor-inputs",
+					config: resolveBuildConfig({ engine: { primordials } }),
+					outDir,
+				});
+				for (const binary of [pair.compiled, pair.interpreted]) {
+					expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+						expected,
+					);
+				}
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each(["locked", "mutable"] as const)(
 		"preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials",
 		(primordials) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-dynamic-numeric-profiles-"));
