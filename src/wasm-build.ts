@@ -141,6 +141,9 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 		toolchain.zigTarget,
 		"-std=c2x",
 		"-O1",
+		// Zig maps -O1 to ReleaseFast; forward the requested level to Clang.
+		"-Xclang",
+		"-O1",
 		"-D_GNU_SOURCE",
 		"-D_WASI_EMULATED_MMAN",
 		"-D_WASI_EMULATED_SIGNAL",
@@ -243,12 +246,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 						return execute();
 					},
 				});
-				// Compiler-sized Wasm builds exceed 12 GiB with the shared 8 MiB unit budget.
-				const units = emitProgramTranslationUnits(
-					image,
-					{ debugInfo: false },
-					4 * 1024 * 1024,
-				);
+				const units = emitProgramTranslationUnits(image, { debugInfo: false });
 				return units.map((source, index) => {
 					const name = `unit-${String(index).padStart(4, "0")}.c`;
 					const file = path.join(directory, name);
