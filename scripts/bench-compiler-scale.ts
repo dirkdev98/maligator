@@ -718,7 +718,10 @@ async function compileSample(
 	if (report === undefined) throw new Error("optimizer did not publish its report");
 	const emitStartedAt = performance.now();
 	const units = emitProgramTranslationUnits(image, {
-		sourcePath: nativeSourcePath,
+		sourcePath: (file) =>
+			file.startsWith(`${benchmarkCase.sourceRoot}${path.sep}`)
+				? path.relative(benchmarkCase.sourceRoot, file)
+				: nativeSourcePath(file),
 		maligatorSurface: true,
 	});
 	phases.emitMs = performance.now() - emitStartedAt;
