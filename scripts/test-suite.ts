@@ -30,6 +30,7 @@ type Tier = "smoke" | "check" | "full";
 type Policy = "bail" | "complete";
 
 interface Command {
+	kind: CommandKind;
 	name: string;
 	command: string;
 	args: Array<string>;
@@ -72,6 +73,8 @@ Focused lanes:
 
 Options:
   --policy bail|complete  stop at the first failure or finish every stage
+  --exclude-quality       omit type-check/lint and report the excluded coverage
+  --test262-baseline PATH  explicit Test262 comparison input for every standards stage
   --list                  print the exact commands without running them
   --plan=json             print commands and environment requirements as JSON
   -h, --help              show this help
@@ -89,6 +92,8 @@ function parseArguments(): {
 	policy: Policy;
 	list: boolean;
 	jsonPlan: boolean;
+	excludeQuality: boolean;
+	test262Baseline?: string;
 } {
 	let tier: Tier = "check";
 	let tierSeen = false;
@@ -96,6 +101,8 @@ function parseArguments(): {
 	let policySeen = false;
 	let list = false;
 	let jsonPlan = false;
+	let excludeQuality = false;
+	let test262Baseline: string | undefined;
 	for (let index = 2; index < process.argv.length; index++) {
 		const argument = process.argv[index];
 		if (argument === "-h" || argument === "--help") exitWithUsage();
@@ -115,6 +122,19 @@ function parseArguments(): {
 			policySeen = true;
 			continue;
 		}
+		if (argument === "--exclude-quality") {
+			if (excludeQuality) exitWithUsage("--exclude-quality may only be specified once");
+			excludeQuality = true;
+			continue;
+		}
+		if (argument === "--test262-baseline") {
+			const value = process.argv[++index];
+			if (test262Baseline !== undefined || value === undefined || value.startsWith("-")) {
+				exitWithUsage("--test262-baseline requires one file path");
+			}
+			test262Baseline = path.resolve(value);
+			continue;
+		}
 		if (argument === "--list") {
 			if (list) exitWithUsage("--list may only be specified once");
 			list = true;
@@ -128,7 +148,7 @@ function parseArguments(): {
 		exitWithUsage(`unknown argument: ${argument}`);
 	}
 	if (list && jsonPlan) exitWithUsage("--list and --plan=json cannot be combined");
-	return { tier, policy, list, jsonPlan };
+	return { tier, policy, list, jsonPlan, excludeQuality, test262Baseline };
 }
 
 function readManifest(file: string): Array<string> {
@@ -188,6 +208,7 @@ function npm(
 	kind: CommandKind = npmCommandKind(script),
 ): Command {
 	return {
+		kind,
 		name,
 		command: "npm",
 		args: ["run", script, ...(args.length > 0 ? ["--", ...args] : [])],
@@ -210,9 +231,16 @@ function node(
 	kind: CommandKind = script.includes("test262") ? "standards" : "compiler",
 ): Command {
 	return {
+		kind,
 		name,
 		command: process.execPath,
-		args: [script, ...args],
+		args: [
+			script,
+			...args,
+			...(script === "scripts/test262.ts" && test262Baseline !== undefined
+				? ["--baseline", test262Baseline]
+				: []),
+		],
 		requirements: requirementsForCommand(kind),
 	};
 }
@@ -273,7 +301,8 @@ function runCommand(
 	return report;
 }
 
-const { tier, policy, list, jsonPlan } = parseArguments();
+const { tier, policy, list, jsonPlan, excludeQuality, test262Baseline } =
+	parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
@@ -357,7 +386,7 @@ function nativeDimensionCommands(label: string, entries: Array<string>): Array<C
 	];
 }
 
-const smokeCommands: Array<Command> = [
+const allSmokeCommands: Array<Command> = [
 	npm("smoke: TypeScript", "type-check"),
 	npm("smoke: fast unit suite", "test:unit", [
 		"--run",
@@ -536,7 +565,7 @@ const fullCommands: Array<Command> = [
 		: []),
 ];
 
-const laterCommands =
+const allLaterCommands =
 	tier === "smoke"
 		? []
 		: tier === "check"
@@ -557,7 +586,14 @@ function assertUniqueCommands(commands: Array<Command>): void {
 	}
 }
 
-assertUniqueCommands([...smokeCommands, ...laterCommands]);
+assertUniqueCommands([...allSmokeCommands, ...allLaterCommands]);
+const included = (command: Command) => !excludeQuality || command.kind !== "quality";
+const smokeCommands = allSmokeCommands.filter(included);
+const laterCommands = allLaterCommands.filter(included);
+const excludedStages = [...allSmokeCommands, ...allLaterCommands]
+	.filter((command) => !included(command))
+	.map((command) => command.name);
+const scope = { coversEntireTier: excludedStages.length === 0, excludedStages };
 
 if (list) {
 	for (const command of [...smokeCommands, ...laterCommands]) {
@@ -577,7 +613,10 @@ if (jsonPlan) {
 				),
 				tier,
 				policy,
+				scope,
+				test262Baseline,
 				stages: commands.map((command) => ({
+					kind: command.kind,
 					name: command.name,
 					invocation: formatCommand(command),
 					requirements: command.requirements,
@@ -604,9 +643,11 @@ function persistSuiteReport(complete: boolean): void {
 		suiteReportPath,
 		`${JSON.stringify(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				tier,
 				policy,
+				scope,
+				test262Baseline,
 				startedAt: suiteStartedAt.toISOString(),
 				durationMs: Math.round((performance.now() - suiteStartedAtMs) * 1000) / 1000,
 				complete,
@@ -676,7 +717,7 @@ const smokeStarted = Date.now();
 const commands = [...smokeCommands, ...laterCommands];
 const progress = new CommandProgress("test-suite");
 progress.start(
-	`${tier} gate · ${commands.length} stages · ${coldSmokeRun ? "cold" : useColdSmokeBudget ? "completion" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
+	`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} · ${commands.length} stages · ${coldSmokeRun ? "cold" : useColdSmokeBudget ? "completion" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
 );
 let stageIndex = 0;
 for (const command of smokeCommands) {

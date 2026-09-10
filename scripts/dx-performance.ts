@@ -23,7 +23,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const requestedBinary = process.argv[2];
 if (requestedBinary === undefined) {
 	throw new Error(
-		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--only run|test|dev] [--fresh-cache] [--assets]",
+		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--only run|test|dev] [--fresh-cache] [--assets] [--json-out PATH]",
 	);
 }
 const sourceMode = requestedBinary === "--source";
@@ -40,6 +40,21 @@ if (
 ) {
 	throw new Error("--only requires run, test, or dev");
 }
+const outputIndex = options.indexOf("--json-out");
+const output = outputIndex === -1 ? undefined : options[outputIndex + 1];
+if (outputIndex !== -1 && (output === undefined || output.startsWith("--")))
+	throw new Error("--json-out requires a file path");
+const samples: Array<Sample> = [];
+let complete = false;
+let failure: string | undefined;
+const persist = () => {
+	if (output === undefined) return;
+	mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
+	writeFileSync(
+		output,
+		`${JSON.stringify({ schemaVersion: 1, complete, failure, host: { platform: process.platform, arch: process.arch, node: process.version, cpu: os.cpus()[0]?.model }, sourceMode, selectedLane, freshCache: options.includes("--fresh-cache"), measureAssets: options.includes("--assets"), samples }, null, 2)}\n`,
+	);
+};
 const measureAssets = options.includes("--assets");
 const keepFixture = options.includes("--keep");
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-dx-performance-"));
@@ -86,7 +101,10 @@ function invoke(name: string, args: Array<string>): Sample {
 		);
 	}
 	progress.detail(`${name} completed in ${(durationMs / 1000).toFixed(1)}s`);
-	return { name, durationMs, stdout: result.stdout, stderr: result.stderr };
+	const sample = { name, durationMs, stdout: result.stdout, stderr: result.stderr };
+	samples.push(sample);
+	persist();
+	return sample;
 }
 
 function waitFor(
@@ -249,64 +267,60 @@ test("representative graph", () => {
 });\n`,
 	);
 
-	const samples: Array<Sample> = [];
+	persist();
 	if (selectedLane === undefined || selectedLane === "run") {
-		samples.push(
-			invoke("run cold", [
-				"run",
-				"app.mts",
-				"--config",
-				"maligator.build.mts",
-				"--verbose",
-			]),
-			invoke("run hot", [
-				"run",
-				"app.mts",
-				"--config",
-				"maligator.build.mts",
-				"--verbose",
-			]),
-		);
+		invoke("run cold", [
+			"run",
+			"app.mts",
+			"--config",
+			"maligator.build.mts",
+			"--verbose",
+		]);
+		invoke("run hot", ["run", "app.mts", "--config", "maligator.build.mts", "--verbose"]);
 	}
 	if (selectedLane === undefined || selectedLane === "test") {
-		samples.push(
-			invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
-			invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
-		);
+		invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
+		invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
 	}
 	if (selectedLane === undefined || selectedLane === "dev") {
 		for (const sample of await developmentSamples("dev cold ready", false)) {
 			samples.push(sample);
+			persist();
 		}
 		for (const sample of await developmentSamples("dev cached ready", true)) {
 			samples.push(sample);
+			persist();
 		}
 	}
 	if (measureAssets && (selectedLane === undefined || selectedLane === "run")) {
-		samples.push(
-			invoke("assets cold", [
-				"run",
-				"app.mts",
-				"--config",
-				"maligator.assets.build.mts",
-				"--verbose",
-			]),
-			invoke("assets hot", [
-				"run",
-				"app.mts",
-				"--config",
-				"maligator.assets.build.mts",
-				"--verbose",
-			]),
-		);
+		invoke("assets cold", [
+			"run",
+			"app.mts",
+			"--config",
+			"maligator.assets.build.mts",
+			"--verbose",
+		]);
+		invoke("assets hot", [
+			"run",
+			"app.mts",
+			"--config",
+			"maligator.assets.build.mts",
+			"--verbose",
+		]);
 	}
 	for (const sample of samples) report(sample);
+	complete = true;
+	persist();
 	progress.complete();
 
 	if (!measureAssets) {
 		console.log("\nAdd --assets to measure the current native toolchain asset path.");
 	}
+} catch (error) {
+	failure = error instanceof Error ? error.message : String(error);
+	throw error;
 } finally {
+	persist();
 	if (keepFixture) console.log(`\nFixture retained at ${project}`);
 	else rmSync(root, { recursive: true, force: true });
 }

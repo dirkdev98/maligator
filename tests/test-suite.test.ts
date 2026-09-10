@@ -125,6 +125,49 @@ describe("test suite planner", () => {
 		expect(full.approval).toBe("explicit");
 	});
 
+	it.each(["smoke", "check", "full"])(
+		"omits only quality stages from the %s plan and records the missing coverage",
+		(tier) => {
+			const complete = JSON.parse(runSuite(tier, "--plan=json")) as {
+				stages: Array<{ name: string; kind: string; invocation: string }>;
+			};
+			const selected = JSON.parse(runSuite(tier, "--exclude-quality", "--plan=json")) as {
+				scope: { coversEntireTier: boolean; excludedStages: Array<string> };
+				stages: typeof complete.stages;
+			};
+			expect(selected.stages).toEqual(
+				complete.stages.filter((stage) => stage.kind !== "quality"),
+			);
+			expect(selected.scope.coversEntireTier).toBe(false);
+			expect(selected.scope.excludedStages).toContain("smoke: TypeScript");
+			expect(
+				selected.stages.some((stage) =>
+					/npm run (type-check|lint:ci)/.test(stage.invocation),
+				),
+			).toBe(false);
+			expect(
+				selected.stages.some((stage) => stage.invocation.includes("scripts/test262.ts")),
+			).toBe(true);
+		},
+	);
+
+	it("passes an explicit comparison baseline to every Test262 stage in the full plan", () => {
+		const baseline = path.resolve(".cache/explicit-test262-baseline.json");
+		const plan = JSON.parse(
+			runSuite("full", "--test262-baseline", baseline, "--plan=json"),
+		) as {
+			test262Baseline: string;
+			stages: Array<{ invocation: string }>;
+		};
+		expect(plan.test262Baseline).toBe(baseline);
+		const standards = plan.stages.filter((stage) =>
+			stage.invocation.includes("scripts/test262.ts"),
+		);
+		expect(standards.length).toBeGreaterThan(1);
+		for (const stage of standards)
+			expect(stage.invocation).toContain(`--baseline ${baseline}`);
+	});
+
 	it("does not populate build caches while planning", () => {
 		const parent = mkdtempSync(path.join(os.tmpdir(), "maligator-plan-"));
 		try {

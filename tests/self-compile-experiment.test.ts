@@ -49,7 +49,8 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 			writeFileSync(path.join(directory, name), contents);
 		}
 		const manifest = {
-			schema: 3,
+			schema: 4,
+			kind: "native",
 			closure: {
 				scope: { kind: "whole-program", entry: "fixture" },
 				sourceClosure: { kind: "known", value: "closed" },
@@ -288,3 +289,31 @@ it.each(["SIGINT", "SIGTERM"] as const)(
 		await expectProcessStopped(pid);
 	},
 );
+
+it("accepts source-only captures for Node comparisons and rejects native execution before the oracle", () => {
+	const test = fixture();
+	for (const directory of [test.base, test.candidate]) {
+		const manifest = path.join(directory, "capture.json");
+		const capture = JSON.parse(readFileSync(manifest, "utf8")) as {
+			kind: string;
+			files: Record<string, string>;
+			closure?: unknown;
+			build?: unknown;
+		};
+		capture.kind = "node";
+		delete capture.files.compiler;
+		delete capture.closure;
+		delete capture.build;
+		rmSync(path.join(directory, "compiler"));
+		writeFileSync(manifest, JSON.stringify(capture));
+	}
+	const completed = test.run();
+	expect(completed.status, completed.stderr).toBe(0);
+	expect(test.report()).toMatchObject({ complete: true, summary: { pairs: 2 } });
+	rmSync(test.output, { recursive: true });
+	expect(test.run("--host", "native").status).toBe(2);
+	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+		"requires two native compiler captures",
+	);
+	expect(existsSync(path.join(test.output, "node-reference"))).toBe(false);
+});

@@ -16,9 +16,13 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createCacheLease } from "../src/cache-management.ts";
+import type * as LoadedModule3 from "../src/compiler/frontend/compact-type-strip.ts";
+import type * as LoadedModule2 from "../src/compiler/pipeline/compile-program.ts";
 import type { ProgramClosureCertificate } from "../src/compiler/shared/compiler-facts.ts";
+import type * as LoadedModule1 from "../src/test-harness.ts";
 import {
 	digestSelfCompileOutput,
 	prepareSelfCompileSource,
@@ -32,6 +36,7 @@ const HELP = `Usage: npm run bench:self-compile-experiment -- <command> [options
                                     run both captures on the same frozen BASE input
 
 Options:
+  --source-only                     capture Node source without building a native compiler
   --program CAPTURE                 compile an existing capture's frozen source (capture only)
   --host native|node                compiler host (default: native)
   --workload parser|shape|full       frozen input cone (default: parser)
@@ -39,7 +44,8 @@ Options:
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
 
-Capture uses a fresh module frontend and development O2/no-LTO closed native code
+Source-only captures contain no native executable or native closure certificate.
+Native capture uses a fresh module frontend and development O2/no-LTO closed native code
 without instrumentation, keeping portable GC-root trust independent of cache hits.
 Compare runs a BASE Node output oracle and one warmup per compiler before timing.
 Every output must match that oracle exactly. Use --program with the same capture
@@ -66,20 +72,22 @@ interface Options {
 	pairs: number;
 	budgetSeconds: number;
 	plan: boolean;
+	sourceOnly: boolean;
 }
 
 interface Capture {
-	schema: 3;
+	schema: 4;
+	kind: "native" | "node";
 	status: "complete";
 	capturedAt: string;
 	source: { commit: string; digest: string };
 	programSource?: { capturePath: string; captureManifestSha256: string };
-	closure: ProgramClosureCertificate;
+	closure?: ProgramClosureCertificate;
 	files: Record<string, string>;
 	preparation: string;
 	lockfile: string;
 	host: { platform: string; arch: string; node: string; cpu: string };
-	build: { plan: unknown; toolchain: string; milliseconds: number };
+	build?: { plan: unknown; toolchain: string; milliseconds: number };
 }
 
 interface Sample {
@@ -143,7 +151,7 @@ function captureFiles(directory: string): Record<string, string> {
 		}
 	};
 	visit("source");
-	visit("compiler");
+	if (existsSync(path.join(directory, "compiler"))) visit("compiler");
 	return files;
 }
 
@@ -178,11 +186,6 @@ async function captureCompiler(options: Options): Promise<void> {
 						readFileSync(path.join(options.program, "capture.json")),
 					),
 				};
-	const { buildNativeProgramImageResult } = await import("../src/test-harness.ts");
-	const { compileEntrypoint } =
-		await import("../src/compiler/pipeline/compile-program.ts");
-	const { stripCompactTypes } =
-		await import("../src/compiler/frontend/compact-type-strip.ts");
 	const source = sourceIdentity();
 	writeFileSync(path.join(directory, "source.patch"), git(["diff", "--binary", "HEAD"]));
 	console.log("prepare stripped compiler source");
@@ -193,43 +196,67 @@ async function captureCompiler(options: Options): Promise<void> {
 			recursive: true,
 			verbatimSymlinks: true,
 		});
-	const events: Array<unknown> = [];
-	const started = performance.now();
-	console.log("build closed native compiler");
-	let closure: ProgramClosureCertificate | undefined;
-	const image = compileEntrypoint(
-		path.resolve(
-			options.program === undefined
-				? "bench/self-compile.mts"
-				: path.join(options.program, "source/bench/self-compile.mts"),
-		),
-		{
-			buildConfig: SELF_COMPILE_CONFIG,
-			stripTypes: stripCompactTypes,
-			entryGoal: "module",
-			coreInstrumentation: "off",
-			onProgramFacts(facts) {
-				closure = facts.closure;
+	let native: Pick<Capture, "closure" | "build"> = {};
+	if (!options.sourceOnly) {
+		const load = (file: string) => import(pathToFileURL(path.resolve(file)).href);
+		const { buildNativeProgramImageResult } = (await load(
+			"src/test-harness.ts",
+		)) as typeof LoadedModule1;
+		const { compileEntrypoint } = (await load(
+			"src/compiler/pipeline/compile-program.ts",
+		)) as typeof LoadedModule2;
+		const { stripCompactTypes } = (await load(
+			"src/compiler/frontend/compact-type-strip.ts",
+		)) as typeof LoadedModule3;
+		const events: Array<unknown> = [];
+		const started = performance.now();
+		console.log("build closed native compiler");
+		let closure: ProgramClosureCertificate | undefined;
+		const image = compileEntrypoint(
+			path.resolve(
+				options.program === undefined
+					? "bench/self-compile.mts"
+					: path.join(options.program, "source/bench/self-compile.mts"),
+			),
+			{
+				buildConfig: SELF_COMPILE_CONFIG,
+				stripTypes: stripCompactTypes,
+				entryGoal: "module",
+				coreInstrumentation: "off",
+				onProgramFacts(facts) {
+					closure = facts.closure;
+				},
 			},
-		},
-	);
-	if (closure?.scope.kind !== "whole-program" || closure.sourceClosure.kind !== "known") {
-		throw new Error("native compiler source closure was not certified");
+		);
+		if (
+			closure?.scope.kind !== "whole-program" ||
+			closure.sourceClosure.kind !== "known"
+		) {
+			throw new Error("native compiler source closure was not certified");
+		}
+		const built = buildNativeProgramImageResult(image, {
+			name: "self-compile-experiment",
+			config: SELF_COMPILE_CONFIG,
+			compiled: true,
+			translationUnits: true,
+			environment: cleanEnvironment(),
+			onNativeBuildPhase: (event) => {
+				events.push(event);
+				console.log(JSON.stringify(event));
+			},
+		});
+		const milliseconds = performance.now() - started;
+		copyFileSync(built.binaryPath, path.join(directory, "compiler"));
+		writeJson(path.join(directory, "build-events.json"), events);
+		native = {
+			closure,
+			build: {
+				plan: built.context.plan,
+				toolchain: built.context.toolchain.fingerprint,
+				milliseconds,
+			},
+		};
 	}
-	const built = buildNativeProgramImageResult(image, {
-		name: "self-compile-experiment",
-		config: SELF_COMPILE_CONFIG,
-		compiled: true,
-		translationUnits: true,
-		environment: cleanEnvironment(),
-		onNativeBuildPhase: (event) => {
-			events.push(event);
-			console.log(JSON.stringify(event));
-		},
-	});
-	const milliseconds = performance.now() - started;
-	copyFileSync(built.binaryPath, path.join(directory, "compiler"));
-	writeJson(path.join(directory, "build-events.json"), events);
 	if (!isDeepStrictEqual(source, sourceIdentity())) {
 		throw new Error("source changed during capture; discard this capture and retry");
 	}
@@ -242,26 +269,28 @@ async function captureCompiler(options: Options): Promise<void> {
 		throw new Error("program capture changed during build");
 	}
 	const capture: Capture = {
-		schema: 3,
+		schema: 4,
+		kind: options.sourceOnly ? "node" : "native",
 		status: "complete",
 		capturedAt: new Date().toISOString(),
 		source,
 		programSource,
-		closure,
+		...native,
 		files: captureFiles(directory),
 		preparation:
 			program?.preparation ??
 			sha256(
-				readFileSync("scripts/self-compile-workload.ts", "utf8") +
-					readFileSync("src/compiler/frontend/compact-type-strip.ts", "utf8"),
+				readFileSync(path.join(import.meta.dirname, "self-compile-workload.ts"), "utf8") +
+					readFileSync(
+						path.join(
+							import.meta.dirname,
+							"../src/compiler/frontend/compact-type-strip.ts",
+						),
+						"utf8",
+					),
 			),
 		lockfile: sha256(readFileSync("package-lock.json")),
 		host: currentHost(),
-		build: {
-			plan: built.context.plan,
-			toolchain: built.context.toolchain.fingerprint,
-			milliseconds,
-		},
 	};
 	writeJson(path.join(directory, "capture.json"), capture);
 }
@@ -270,12 +299,19 @@ function readCapture(directory: string): Capture {
 	const capture = JSON.parse(
 		readFileSync(path.join(directory, "capture.json"), "utf8"),
 	) as Capture;
-	if (capture.schema !== 3 || capture.status !== "complete") {
+	if (
+		capture.schema !== 4 ||
+		capture.status !== "complete" ||
+		(capture.kind !== "native" && capture.kind !== "node")
+	) {
 		throw new Error(`incomplete or unsupported capture: ${directory}`);
 	}
 	if (
-		capture.closure?.scope.kind !== "whole-program" ||
-		capture.closure.sourceClosure.kind !== "known"
+		capture.kind === "native" &&
+		(capture.closure?.scope.kind !== "whole-program" ||
+			capture.closure.sourceClosure.kind !== "known" ||
+			capture.build === undefined ||
+			!existsSync(path.join(directory, "compiler")))
 	) {
 		throw new Error(`capture lacks certified source closure: ${directory}`);
 	}
@@ -325,11 +361,17 @@ function compareCapturedCompilers(options: Options): void {
 	const candidate = readCapture(candidateDirectory);
 	if (
 		base.preparation !== candidate.preparation ||
-		!isDeepStrictEqual(base.build.plan, candidate.build.plan) ||
-		base.build.toolchain !== candidate.build.toolchain
+		(options.host === "native" &&
+			(!isDeepStrictEqual(base.build?.plan, candidate.build?.plan) ||
+				base.build?.toolchain !== candidate.build?.toolchain))
 	) {
 		throw new Error("capture preparation or native toolchain/build plans differ");
 	}
+	if (
+		options.host === "native" &&
+		(base.kind !== "native" || candidate.kind !== "native")
+	)
+		throw new Error("native comparison requires two native compiler captures");
 	const reportPath = path.join(options.output, "report.json");
 	const target = path.join(baseDirectory, "source", TARGETS[options.workload]);
 	const pairs: Array<readonly [Sample, Sample]> = [];
@@ -471,10 +513,13 @@ function parseOptions(args: Array<string>): Options | undefined {
 		pairs: 5,
 		budgetSeconds: 600,
 		plan: false,
+		sourceOnly: false,
 	};
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") options.plan = true;
+		else if (option === "--source-only" && command === "capture")
+			options.sourceOnly = true;
 		else if (option === "--program" && command === "capture")
 			options.program = path.resolve(take());
 		else if (option === "--output" && command === "compare")
@@ -625,7 +670,9 @@ if (import.meta.main) {
 											options.program === undefined
 												? "prepare stripped Node source"
 												: "verify and reuse frozen program capture",
-											"build and preserve native compiler",
+											...(options.sourceOnly
+												? []
+												: ["build and preserve native compiler"]),
 											"verify source identity",
 										]
 									: [
