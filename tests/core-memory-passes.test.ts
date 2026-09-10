@@ -68,6 +68,58 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("batches repeated reads while preserving a load after a clobber", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const loaded = [0, 0, 0, 1, 1].map(
+			(index) =>
+				builder.appendInstruction(entry, "loadGlobal", [], {
+					attributes: { index },
+				})[0]!,
+		);
+		builder.appendInstruction(entry, "storeGlobal", [replacement!], {
+			attributes: { index: 0 },
+		});
+		const [afterStore] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		for (const value of [...loaded, afterStore!]) {
+			builder.appendInstruction(entry, "storeGlobal", [value], {
+				attributes: { index: 1 },
+			});
+		}
+		builder.setTerminator(entry, { kind: "return", value: afterStore! });
+		const fn = program.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+		new CoreFunctionPassScheduler(program, context, analyses, report, fn.id, {
+			optionalMaxRunsPerWorkItem: 1,
+			verification: "per-pass",
+		}).runComponent("memory", [forwarding]);
+		const stored = [...fn.bodyInstructionIds(entry)]
+			.filter(
+				(instruction) =>
+					fn.instructionOpcodeName(instruction) === "storeGlobal" &&
+					fn.instructionAttributes(instruction).index === 1,
+			)
+			.map((instruction) => inspectCoreInstructionOperands(fn, instruction)[0]);
+		expect(stored).toEqual([
+			loaded[0],
+			loaded[0],
+			loaded[0],
+			loaded[3],
+			loaded[3],
+			afterStore,
+		]);
+	});
+
 	it.each([false, true])(
 		"does not infer own properties from empty-object guard operands: %s",
 		(guarded) => {

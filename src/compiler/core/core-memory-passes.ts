@@ -920,6 +920,9 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 			number,
 			Array<{ readonly instruction: CoreInstructionId; readonly value: CoreValueId }>
 		>();
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		const removed: Array<CoreInstructionId> = [];
+		let estimatedEdits = 0;
 		for (const block of control.reversePostorder) {
 			for (const instruction of fn.bodyInstructionIds(block)) {
 				if (
@@ -950,17 +953,29 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 							)),
 				);
 				if (prior !== undefined) {
-					const editor = CoreEditor.open(program, item.function);
-					editor.replaceValueUses(result, prior.value);
-					removeInstructionAndOwnedProof(editor, fn, instruction);
-					return editor.commit();
+					const edits =
+						fn.kernel.valueUseCount(result) +
+						fn.kernel.valueHandlerUseCount(result) +
+						(fn.instructionEffectRefinement(instruction) === undefined ? 1 : 2);
+					// A single replacement remains atomic even when it exhausts the pass budget.
+					if (removed.length > 0 && estimatedEdits + edits > context.remainingEdits)
+						continue;
+					estimatedEdits += edits;
+					replacements.set(result, prior.value);
+					removed.push(instruction);
+					continue;
 				}
 				const candidates = available.get(readHash) ?? [];
 				candidates.push({ instruction, value: result });
 				available.set(readHash, candidates);
 			}
 		}
-		return undefined;
+		if (removed.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		editor.replaceValueUsesMany(replacements);
+		for (const instruction of removed)
+			removeInstructionAndOwnedProof(editor, fn, instruction);
+		return editor.commit();
 	},
 };
 
