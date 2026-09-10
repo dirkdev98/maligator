@@ -132807,6 +132807,25 @@
 						"case": "mutable"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable", "escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preconverts %s without removing its wrapper",
+						"case": "Number(17n)"
+					},
+					"negative": {
+						"file": "tests/local/primitive-constructor-inputs.mjs",
+						"test": "mutable constructors receive unconverted inputs"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},
@@ -144490,6 +144509,25 @@
 						"case": "mutable"
 					},
 					"lowering": "virtual"
+				},
+				{
+					"profiles": ["static-observable", "escaping-identity"],
+					"axes": ["T"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-primitive-operations.ts",
+						"symbol": "lowerPrimitiveOperations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preconverts %s without removing its wrapper",
+						"case": "String(17)"
+					},
+					"negative": {
+						"file": "tests/local/primitive-constructor-inputs.mjs",
+						"test": "mutable constructors receive unconverted inputs"
+					},
+					"lowering": "specialized"
 				}
 			]
 		},

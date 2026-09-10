@@ -11,6 +11,50 @@ import {
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+describe("primitive constructor parameter conversion", () => {
+	it.each([
+		['Number("12")', "number"],
+		['Number("-0")', "number"],
+		['Number("invalid")', "number"],
+		["Number(17n)", "number"],
+		["Number(undefined)", "number"],
+		["String(17)", "string"],
+		["String(-0)", "string"],
+		["String(NaN)", "string"],
+		["String(17n)", "string"],
+		["String(null)", "string"],
+	] as const)("preconverts %s without removing its wrapper", (expression, kind) => {
+		const result = inspectStaticValueFunction(
+			`function target() { return new ${expression}; } globalThis.target = target;`,
+			"target",
+		);
+		const call = result.core.find(
+			(operation) => operation.attributes.construct === true,
+		)!;
+		expect(call.attributes.operation).toBe(kind === "number" ? "Number" : "String");
+		const input = result.core.find((operation) =>
+			operation.outputs.includes(call.inputs[1]!),
+		)!;
+		expect(
+			kind === "number" ? ["createNumber", "createF64"] : ["createString"],
+		).toContain(input.opcode);
+	});
+	it.each(["Number", "String"])("retains unknown %s input coercion", (constructor) => {
+		const result = inspectStaticValueFunction(
+			`function target(x) { return new ${constructor}(x); } globalThis.target = target;`,
+			"target",
+		);
+		expect(
+			result.core.filter((operation) => operation.attributes.construct === true),
+		).toHaveLength(1);
+		expect(
+			result.core.some((operation) =>
+				["createString", "createNumber", "createF64"].includes(operation.opcode),
+			),
+		).toBe(false);
+	});
+});
+
 describe("inherited wrapper toLocaleString", () => {
 	it.each([
 		"new Boolean(x)",

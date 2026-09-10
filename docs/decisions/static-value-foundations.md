@@ -281,6 +281,12 @@ safepoints. Wire loading validates primitive table payloads and operand bounds;
 merging and adoption relocate template references. Interpreter instructions keep
 the 20-byte ABI by storing query metadata in the instruction side-data pool.
 
+Boolean, Number and String constructors can receive preconverted static inputs
+while retaining their fresh wrappers and original `newTarget`. Boolean conversion
+can discard private aggregate inputs; numeric and text conversion require a
+target-certified primitive constant. Argument effects, mutable callees, effectful
+coercions and prototype lookup retain their original runtime order.
+
 ## Native inventory and coverage
 
 Run the environment probe first. Capture each mode exported by

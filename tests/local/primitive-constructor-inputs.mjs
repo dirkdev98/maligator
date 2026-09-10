@@ -11,6 +11,23 @@ globalThis.constructorInputs = {
 	unknown(value) {
 		return new Boolean(value);
 	},
+	numbers(effect) {
+		return [
+			new Number("-0", effect()),
+			new Number("invalid"),
+			new Number(17n),
+			new Number(null),
+		];
+	},
+	strings(effect) {
+		return [new String(-0, effect()), new String(17n), new String(null), new String(NaN)];
+	},
+	convertNumber(value, target) {
+		return Reflect.construct(Number, [value], target);
+	},
+	convertString(value, target) {
+		return Reflect.construct(String, [value], target);
+	},
 	reflected(target, effect) {
 		return Reflect.construct(Boolean, [{}, effect()], target);
 	},
@@ -47,6 +64,29 @@ for (const value of [
 	check(wrapper.valueOf() === !!value, "unknown input retains ToBoolean semantics");
 }
 const events = [];
+const numberBoxes = operations.numbers(() => events.push("number argument"));
+const stringBoxes = operations.strings(() => events.push("string argument"));
+check(
+	Object.is(numberBoxes[0].valueOf(), -0) &&
+		Number.isNaN(numberBoxes[1].valueOf()) &&
+		numberBoxes[2].valueOf() === 17 &&
+		numberBoxes[3].valueOf() === 0,
+	"constant Number inputs retain payloads",
+);
+check(
+	stringBoxes.map((value) => value.valueOf()).join(",") === "0,17,null,NaN",
+	"constant String inputs retain payloads",
+);
+check(
+	events.join(",") === "number argument,string argument",
+	"preconverted inputs preserve extra arguments",
+);
+check(
+	numberBoxes[0] !== operations.numbers(() => {})[0] &&
+		stringBoxes[0] !== operations.strings(() => {})[0],
+	"Number and String wrappers remain fresh",
+);
+events.length = 0;
 const first = operations.empty(() => events.push("argument"));
 const second = operations.empty(() => events.push("argument"));
 check(
@@ -89,6 +129,42 @@ check(
 	events.join(",") === "argument,prototype",
 	"arguments precede newTarget prototype lookup",
 );
+for (const [name, expected, method] of [
+	["convertNumber", 23, Number.prototype.valueOf],
+	["convertString", "23", String.prototype.valueOf],
+]) {
+	events.length = 0;
+	const box = operations[name](
+		{
+			[Symbol.toPrimitive](hint) {
+				events.push(hint);
+				return 23;
+			},
+		},
+		target,
+	);
+	check(
+		method.call(box) === expected && Object.getPrototypeOf(box) === prototype,
+		"effectful conversion retains wrapper payload and prototype",
+	);
+	check(
+		events.join(",") ===
+			(name === "convertNumber" ? "number,prototype" : "string,prototype"),
+		"input conversion precedes prototype lookup",
+	);
+	try {
+		operations[name](hostile, target);
+		throw new Error("conversion must throw");
+	} catch (error) {
+		check(error === sentinel, "input coercion exception retains identity");
+	}
+	try {
+		operations[name](Symbol.iterator, target);
+		throw new Error("Symbol constructor input must throw");
+	} catch (error) {
+		check(error instanceof TypeError, "constructor rejects Symbol input");
+	}
+}
 try {
 	operations.reflected(
 		new Proxy(function () {}, {
@@ -125,5 +201,26 @@ if (Object.getOwnPropertyDescriptor(globalThis, "Boolean").writable) {
 	}
 } else {
 	check(iterator.next().value.valueOf() === true, "locked constructor resumes correctly");
+}
+for (const [constructor, operation, expected] of [
+	["Number", "numbers", "-0"],
+	["String", "strings", -0],
+]) {
+	const original = globalThis[constructor];
+	if (!Object.getOwnPropertyDescriptor(globalThis, constructor).writable) continue;
+	const received = [];
+	try {
+		globalThis[constructor] = function (value) {
+			received.push(value);
+			return sentinel;
+		};
+		const result = operations[operation](() => {});
+		check(
+			result.every((value) => value === sentinel) && Object.is(received[0], expected),
+			"mutable constructors receive unconverted inputs",
+		);
+	} finally {
+		globalThis[constructor] = original;
+	}
 }
 console.log("primitive constructor inputs passed");

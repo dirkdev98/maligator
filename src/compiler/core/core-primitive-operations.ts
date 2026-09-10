@@ -341,7 +341,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		const parameterPlans: Array<{
 			instruction: CoreInstructionId;
 			inputs: ReadonlyArray<CoreValueId>;
-			parameters: ReadonlyArray<{ index: number; operation: CoreStaticMemberOperation }>;
+			parameters: ReadonlyArray<
+				| { index: number; operation: CoreStaticMemberOperation }
+				| { index: number; string: string }
+			>;
 		}> = [];
 		const payloadPlans: Array<{
 			instruction: CoreInstructionId;
@@ -535,34 +538,50 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (attributes.construct) {
-				if (operation === "Boolean" && inputs[1] !== undefined) {
+				if (
+					["Boolean", "Number", "String"].includes(operation) &&
+					inputs[1] !== undefined
+				) {
 					const input = analysis.queryAt(inputs[1], instruction);
-					if (input.kind === "known" && input.brand !== "boolean") {
+					if (
+						input.kind === "known" &&
+						input.brand !== operation.toLowerCase() &&
+						!(operation === "String" && input.brand === "symbol")
+					) {
 						const evaluated = evaluateConstantBuiltin(
-							"Boolean",
+							operation,
 							undefined,
 							[analysis.constant(inputs[1], instruction)],
 							constantTarget,
 						);
-						const value = ["object", "array", "function", "symbol"].includes(input.brand)
-							? true
-							: evaluated.kind === "value" && evaluated.value.kind === "boolean"
-								? evaluated.value.value
-								: undefined;
-						if (value !== undefined) {
+						const value =
+							operation === "Boolean" &&
+							["object", "array", "function", "symbol"].includes(input.brand)
+								? ({ kind: "boolean", value: true } as const)
+								: evaluated.kind === "value"
+									? evaluated.value
+									: undefined;
+						if (
+							value?.kind === "boolean" ||
+							value?.kind === "number" ||
+							value?.kind === "string"
+						) {
 							analysis.verify(input, instruction);
 							parameterPlans.push({
 								instruction,
 								inputs,
 								parameters: [
-									{
-										index: 1,
-										operation: {
-											opcode: "createBoolean",
-											inputs: [],
-											attributes: { value },
-										},
-									},
+									value.kind === "string"
+										? { index: 1, string: value.value }
+										: {
+												index: 1,
+												operation: {
+													opcode:
+														value.kind === "boolean" ? "createBoolean" : "createF64",
+													inputs: [],
+													attributes: { value: value.value },
+												},
+											},
 								],
 							});
 							sequenceEdits += 2;
@@ -1351,7 +1370,16 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		for (const plan of parameterPlans) {
 			if (replaced.has(plan.instruction)) continue;
 			const inputs = [...plan.inputs];
-			for (const { index, operation } of plan.parameters)
+			for (const parameter of plan.parameters) {
+				const { index } = parameter;
+				const operation =
+					"operation" in parameter
+						? parameter.operation
+						: {
+								opcode: "createString",
+								inputs: [],
+								attributes: { stringIndex: stringIndex(parameter.string) },
+							};
 				inputs[index] = editor.insertInstruction(
 					fn.instructionBlock(plan.instruction),
 					plan.instruction,
@@ -1362,6 +1390,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						sourcePosition: fn.instructionSourcePosition(plan.instruction),
 					},
 				).outputs[0]!;
+			}
 			editor.replaceOperands(plan.instruction, inputs);
 		}
 		return editor.commit();
