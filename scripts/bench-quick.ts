@@ -441,6 +441,10 @@ async function run(value: Options): Promise<void> {
 				} else {
 					copyFileSync(batchFixture, target);
 					writeFileSync(
+						path.join(preparation, "maligator.build.mts"),
+						'export default { name: "app-batch", engine: { eval: false, realms: false, intl: { enabled: false } }, surface: { node: true, webPlatform: false, maligator: false } };\n',
+					);
+					writeFileSync(
 						input,
 						JSON.stringify(
 							Array.from({ length: ROWS }, (_, id) => ({
@@ -463,6 +467,8 @@ async function run(value: Options): Promise<void> {
 								"build",
 								target,
 								"--production",
+								"--config",
+								path.join(preparation, "maligator.build.mts"),
 								"--artifact",
 								artifact,
 							],
