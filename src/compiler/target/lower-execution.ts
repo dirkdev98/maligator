@@ -1638,8 +1638,14 @@ export function coreRegisterClasses(
 			new Map<CoreBlockId, Array<{ start: number; end: number }>>();
 		for (const [block, range] of interval.blockRanges) {
 			const ranges = byBlock.get(block) ?? [];
-			ranges.push({ ...range });
-			ranges.sort((left, right) => left.start - right.start);
+			let low = 0;
+			let high = ranges.length;
+			while (low < high) {
+				const middle = Math.floor((low + high) / 2);
+				if (ranges[middle]!.start <= range.start) low = middle + 1;
+				else high = middle;
+			}
+			ranges.splice(low, 0, range);
 			byBlock.set(block, ranges);
 		}
 		rangesByRegister.set(register, byBlock);
@@ -1655,15 +1661,15 @@ export function coreRegisterClasses(
 		}
 		return false;
 	};
-	const assign = (interval: LiveInterval, register: number): void => {
+	const assign = (interval: LiveInterval, register: number, variantKey: string): void => {
 		registers.set(interval.value, register);
 		registerRepresentations.set(register, fn.valueRepresentation(interval.value));
-		variantClasses.set(register, variantClass(interval.value));
+		variantClasses.set(register, variantKey);
 		addRanges(register, interval);
 	};
 	for (const interval of liveIntervals) {
 		const register = abi.get(interval.value);
-		if (register !== undefined) assign(interval, register);
+		if (register !== undefined) assign(interval, register, variantClass(interval.value));
 	}
 	let nextUniqueRegister = Math.max(-1, ...registers.values()) + 1;
 	const ordered = [...liveIntervals].sort(
@@ -1673,6 +1679,7 @@ export function coreRegisterClasses(
 	for (const interval of ordered) {
 		if (registers.has(interval.value)) continue;
 		const representation = fn.valueRepresentation(interval.value);
+		const variantKey = variantClass(interval.value);
 		let register = nextUniqueRegister;
 		if (reuseRegisters && !shapeCaseValues.has(interval.value)) {
 			register = 0;
@@ -1680,14 +1687,13 @@ export function coreRegisterClasses(
 				reservedAbiColors.has(register) ||
 				(registerRepresentations.has(register) &&
 					registerRepresentations.get(register) !== representation) ||
-				(variantClasses.has(register) &&
-					variantClasses.get(register) !== variantClass(interval.value)) ||
+				(variantClasses.has(register) && variantClasses.get(register) !== variantKey) ||
 				overlaps(register, interval)
 			) {
 				register++;
 			}
 		}
-		assign(interval, register);
+		assign(interval, register, variantKey);
 		nextUniqueRegister = Math.max(nextUniqueRegister, register + 1);
 	}
 	return { roots, registers, registerRepresentations };
