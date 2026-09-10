@@ -395,12 +395,17 @@ for (const construct of rejectedConstructors) {
 		throw new Error("construction must fail");
 	};
 	const first = attempt();
+	first.marker = effects;
 	const second = attempt();
 	check(
 		first instanceof TypeError && second instanceof TypeError,
 		"construction error kind",
 	);
 	check(first !== second, "fresh thrown errors");
+	check(
+		first.marker === 2 && !Object.hasOwn(second, "marker"),
+		"error mutation belongs only to its own construction attempt",
+	);
 	check(effects === 4, "argument evaluation before rejection");
 	try {
 		construct(() => {
@@ -412,6 +417,29 @@ for (const construct of rejectedConstructors) {
 		check(error instanceof RangeError, "argument error precedes rejection");
 	}
 	check(effects === 5, "no replay after argument failure");
+	const events = [];
+	try {
+		try {
+			const result = construct(() => {
+				events.push("argument");
+				return 17;
+			});
+			events.push("consumer");
+			Object.prototype.valueOf.call(result);
+		} finally {
+			events.push("finally");
+		}
+	} catch (error) {
+		check(
+			error instanceof TypeError && error !== first && error !== second,
+			"fresh error after finally",
+		);
+		events.push("catch");
+	}
+	check(
+		events.join(",") === "argument,argument,finally,catch",
+		"abrupt construction skips its normal result consumer and preserves finally order",
+	);
 }
 function* suspendedConstructor(construct, effect) {
 	yield effect();

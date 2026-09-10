@@ -810,20 +810,35 @@ describe("primitive constructor target validation", () => {
 
 describe("rejected primitive construction profiles", () => {
 	const profiles = [
+		["static-object", (value: string) => `return new (${value})({value:17});`],
 		["dynamic-new-target", (value: string) => `return Reflect.construct(${value},[],x);`],
-		["unknown-string", (value: string) => `return new (${value})(String(x));`],
-		["unused", (value: string) => `new (${value})(x());return 17;`],
+		["unknown-string", (value: string) => `return new (${value})({value:String(x)});`],
+		["unused", (value: string) => `new (${value})({value:x()});return 17;`],
+		[
+			"normal-consumer",
+			(value: string) =>
+				`return Object.prototype.valueOf.call(new (${value})({value:x()}));`,
+		],
+		[
+			"aliased-target",
+			(value: string) => `const target=${value};return new target({value:x()});`,
+		],
+		[
+			"loop",
+			(value: string) =>
+				`let last;for(let i=0;i<3;i++){try{new (${value})({value:x()});}catch(error){last=error;}}return last;`,
+		],
 		[
 			"separate-errors",
 			(value: string) =>
-				`let first,second;try{new (${value})(x);}catch(error){first=error;}try{new (${value})(x);}catch(error){second=error;}return first===second;`,
+				`let first,second;try{new (${value})({value:x()});}catch(error){first=error;}try{new (${value})({value:x()});}catch(error){second=error;}return first===second;`,
 		],
 		[
 			"escaped-argument",
 			(value: string) =>
 				`const value={x};globalThis.sink(value);return new (${value})(value);`,
 		],
-		["suspension", (value: string) => `yield x();return new (${value})(x());`],
+		["suspension", (value: string) => `yield x();return new (${value})({value:x()});`],
 	] as const;
 	for (const [profile, body] of profiles) {
 		it.each(rejectedPrimitiveConstructors)(
@@ -854,8 +869,22 @@ describe("rejected primitive construction profiles", () => {
 					expect(output.structure.allocations).toBe(0);
 				}
 				if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
-				if (profile === "escaped-argument") expect(output.structure.allocations).toBe(1);
-				const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
+				if (profile === "separate-errors") expect(output.structure.genericCalls).toBe(2);
+				const descriptorAllocations = output.fn.instructions.filter((operation) => {
+					if (operation.opcode !== "CREATE_OBJECT_SHAPED") return false;
+					const keys = operation.keyStringIndices;
+					return keys.some(
+						(index) =>
+							String.fromCharCode(...output.image.runtime.stringConstants[index]!) ===
+							"get",
+					);
+				}).length;
+				expect(output.structure.allocations - descriptorAllocations).toBe(
+					profile === "escaped-argument" ? 1 : 0,
+				);
+				const mutable = inspectStaticValueFunction(source, "probe", {
+					locked: false,
+				});
 				expect(
 					mutable.core.some((operation) => operation.opcode === "builtinError"),
 				).toBe(false);
