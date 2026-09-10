@@ -243,7 +243,12 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 						return execute();
 					},
 				});
-				const units = emitProgramTranslationUnits(image, { debugInfo: false });
+				// Compiler-sized Wasm builds exceed 12 GiB with the shared 8 MiB unit budget.
+				const units = emitProgramTranslationUnits(
+					image,
+					{ debugInfo: false },
+					4 * 1024 * 1024,
+				);
 				return units.map((source, index) => {
 					const name = `unit-${String(index).padStart(4, "0")}.c`;
 					const file = path.join(directory, name);
