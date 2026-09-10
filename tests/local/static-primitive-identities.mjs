@@ -1538,4 +1538,77 @@ check(
 	Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get === rootedGetter,
 	"descriptor mutation does not change the primordial getter",
 );
+function branchBeforeRejection(reject, record) {
+	try {
+		if (reject) new Math.abs(record("argument"));
+		record("normal");
+		return 7;
+	} finally {
+		record("finally");
+	}
+}
+function* rejectWithSuspendedFinally(record) {
+	try {
+		try {
+			new Math.abs(record("argument"));
+			yield record("unreachable");
+		} finally {
+			yield record("inner-finally");
+		}
+	} finally {
+		record("outer-finally");
+	}
+}
+globalThis.branchBeforeRejection = branchBeforeRejection;
+globalThis.rejectWithSuspendedFinally = rejectWithSuspendedFinally;
+for (const reject of [false, true]) {
+	const events = [];
+	try {
+		const result = globalThis.branchBeforeRejection(reject, (event) =>
+			events.push(event),
+		);
+		check(!reject && result === 7, "reachable branch returns normally");
+	} catch (error) {
+		check(reject && error instanceof TypeError, "rejecting branch throws");
+	}
+	check(
+		events.join(",") === (reject ? "argument,finally" : "normal,finally"),
+		"shared continuation and finally preserve branch reachability",
+	);
+}
+const abruptEvents = [];
+const abruptIterator = globalThis.rejectWithSuspendedFinally((event) => {
+	abruptEvents.push(event);
+	return event;
+});
+const suspendedFinally = abruptIterator.next();
+check(
+	!suspendedFinally.done && suspendedFinally.value === "inner-finally",
+	"rejection suspends in the inner finally",
+);
+if (typeof globalThis.gc === "function") globalThis.gc();
+try {
+	abruptIterator.next();
+	throw new Error("suspended rejection must throw");
+} catch (error) {
+	check(error instanceof TypeError, "suspended rejection retains its error");
+}
+check(
+	abruptEvents.join(",") === "argument,inner-finally,outer-finally",
+	"nested finally runs after suspended rejection without dead yields",
+);
+const priorError = new RangeError("argument failure");
+let priorFinally = false;
+try {
+	globalThis.branchBeforeRejection(true, (event) => {
+		if (event === "argument") throw priorError;
+		if (event === "finally") priorFinally = true;
+	});
+	throw new Error("argument failure must throw");
+} catch (error) {
+	check(
+		error === priorError && priorFinally,
+		"argument failure precedes built-in rejection and runs finally",
+	);
+}
 console.log("primitive identities passed");

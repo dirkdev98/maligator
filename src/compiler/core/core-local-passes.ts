@@ -47,7 +47,11 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { CoreFunctionPass, CorePassBudget } from "./core-pass.ts";
+import type {
+	CoreFunctionPass,
+	CoreFunctionPassContext,
+	CorePassBudget,
+} from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const LOCAL_BUDGET: CorePassBudget = Object.freeze({
@@ -1685,67 +1689,127 @@ const lowerLocalExplicitThrows: CoreFunctionPass = {
 	},
 };
 
+interface AbruptTail {
+	readonly result: CoreValueId;
+	readonly instructions: Array<CoreInstructionId>;
+}
+
+function removeUnreachableControlFlow(
+	context: CoreFunctionPassContext,
+	abruptTails?: ReadonlyMap<CoreBlockId, AbruptTail>,
+) {
+	const { program, item } = context;
+	const fn = program.function(item.function);
+	const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
+	const reachable = new Set(abruptTails === undefined ? control.reachable : []);
+	const pendingRoots = fn.bodyEntry === undefined ? [] : [fn.bodyEntry];
+	if (abruptTails !== undefined) pendingRoots.push(fn.entry);
+	while (pendingRoots.length > 0) {
+		const block = pendingRoots.pop()!;
+		if (reachable.has(block)) continue;
+		reachable.add(block);
+		for (const edge of control.successors[block] ?? []) {
+			if (edge.kind === "exceptional" || !abruptTails?.has(block))
+				pendingRoots.push(edge.to);
+		}
+	}
+	const blocks = [...fn.blockIds()].filter((block) => !reachable.has(block));
+	const cuts = [...(abruptTails ?? [])].filter(
+		([block, tail]) =>
+			reachable.has(block) &&
+			(tail.instructions.length > 0 ||
+				fn.instructionKind(fn.blockTerminator(block)) !== "return" ||
+				instructionOperand(fn, fn.blockTerminator(block), 0) !== tail.result),
+	);
+	if (blocks.length === 0 && cuts.length === 0) return undefined;
+	const editor = CoreEditor.open(program, item.function);
+	const removed = new Set(blocks);
+	for (const block of fn.blockIds()) {
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler !== undefined && (removed.has(block) || removed.has(handler))) {
+			editor.clearHandler(block);
+		}
+	}
+	const pending = new Set(blocks.flatMap((block) => [...fn.instructionIds(block)]));
+	const removedGuardFacts = [...blocks, ...cuts.map(([block]) => block)].flatMap(
+		(block) => {
+			const fact = fn.kernel.terminatorFact(fn.blockTerminator(block));
+			return fact === undefined ? [] : [fact];
+		},
+	);
+	for (const [block, tail] of cuts) {
+		for (const instruction of tail.instructions) pending.add(instruction);
+		// Execution blocks require a control transfer even after an operation that always throws.
+		editor.replaceTerminator(block, { kind: "return", value: tail.result });
+	}
+	const queue = new Array<CoreInstructionId>();
+	const queued = new Set<CoreInstructionId>();
+	const enqueueIfDead = (instruction: CoreInstructionId): void => {
+		if (
+			!pending.has(instruction) ||
+			queued.has(instruction) ||
+			instructionResultsHaveUses(fn, instruction)
+		) {
+			return;
+		}
+		queued.add(instruction);
+		queue.push(instruction);
+	};
+	for (const instruction of pending) enqueueIfDead(instruction);
+	for (let cursor = 0; cursor < queue.length; cursor++) {
+		const instruction = queue[cursor]!;
+		queued.delete(instruction);
+		if (!pending.has(instruction)) continue;
+		if (instructionResultsHaveUses(fn, instruction)) continue;
+		const dependencies = copyInstructionOperands(fn, instruction).flatMap((value) => {
+			const definition = definingInstruction(fn, value);
+			return definition === undefined ? [] : [definition];
+		});
+		editor.removeInstruction(instruction);
+		pending.delete(instruction);
+		for (const dependency of dependencies) enqueueIfDead(dependency);
+	}
+	if (pending.size > 0)
+		throw new Error("Unreachable Core instructions retain external uses");
+	for (const block of blocks) editor.removeBlock(block);
+	for (const fact of removedGuardFacts) editor.removeFact(fact);
+	return editor.commit();
+}
+
 const removeUnreachableBlocks: CoreFunctionPass = {
 	name: "unreachable-block-removal",
 	stage: "canonicalize",
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
-	changes: { ...LOCAL_CHANGES, cfg: true },
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run: removeUnreachableControlFlow,
+};
+
+const removeBuiltinErrorContinuations: CoreFunctionPass = {
+	name: "builtin-error-continuation-removal",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["builtinError"],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
-		const { program, item } = context;
-		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
-		const reachable = new Set(control.reachable);
-		const pendingRoots = fn.bodyEntry === undefined ? [] : [fn.bodyEntry];
-		while (pendingRoots.length > 0) {
-			const block = pendingRoots.pop()!;
-			if (reachable.has(block)) continue;
-			reachable.add(block);
-			for (const edge of control.successors[block] ?? []) pendingRoots.push(edge.to);
-		}
-		const blocks = [...fn.blockIds()].filter((block) => !reachable.has(block));
-		if (blocks.length === 0) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		const removed = new Set(blocks);
+		const fn = context.program.function(context.item.function);
+		const abruptTails = new Map<CoreBlockId, AbruptTail>();
 		for (const block of fn.blockIds()) {
-			const handler = fn.kernel.blockHandlerBlock(block);
-			if (handler !== undefined && (removed.has(block) || removed.has(handler))) {
-				editor.clearHandler(block);
+			let tail: AbruptTail | undefined;
+			for (const instruction of fn.bodyInstructionIds(block)) {
+				if (tail !== undefined) tail.instructions.push(instruction);
+				else if (fn.instructionOpcodeName(instruction) === "builtinError")
+					tail = {
+						result: instructionResult(fn, instruction, 0)!,
+						instructions: [],
+					};
 			}
+			if (tail !== undefined) abruptTails.set(block, tail);
 		}
-		const pending = new Set(blocks.flatMap((block) => [...fn.instructionIds(block)]));
-		const queue = new Array<CoreInstructionId>();
-		const queued = new Set<CoreInstructionId>();
-		const enqueueIfDead = (instruction: CoreInstructionId): void => {
-			if (
-				!pending.has(instruction) ||
-				queued.has(instruction) ||
-				instructionResultsHaveUses(fn, instruction)
-			) {
-				return;
-			}
-			queued.add(instruction);
-			queue.push(instruction);
-		};
-		for (const instruction of pending) enqueueIfDead(instruction);
-		for (let cursor = 0; cursor < queue.length; cursor++) {
-			const instruction = queue[cursor]!;
-			queued.delete(instruction);
-			if (!pending.has(instruction)) continue;
-			if (instructionResultsHaveUses(fn, instruction)) continue;
-			const dependencies = copyInstructionOperands(fn, instruction).flatMap((value) => {
-				const definition = definingInstruction(fn, value);
-				return definition === undefined ? [] : [definition];
-			});
-			editor.removeInstruction(instruction);
-			pending.delete(instruction);
-			for (const dependency of dependencies) enqueueIfDead(dependency);
-		}
-		if (pending.size > 0)
-			throw new Error("Unreachable Core instructions retain external uses");
-		for (const block of blocks) editor.removeBlock(block);
-		return editor.commit();
+		return removeUnreachableControlFlow(context, abruptTails);
 	},
 };
 
@@ -2344,6 +2408,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	simplifyBlockParameters,
 	eliminateForwardingBlocks,
 	mergeLinearBlocks,
+	removeBuiltinErrorContinuations,
 	removeUnreachableBlocks,
 	foldValueKindObservations,
 	lowerLocalExplicitThrows,
@@ -2369,6 +2434,7 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	foldRedundantTdzChecks,
+	removeBuiltinErrorContinuations,
 	removeUnreachableBlocks,
 ];
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";

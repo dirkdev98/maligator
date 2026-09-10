@@ -96448,6 +96448,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "BigInt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "BigInt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -97100,6 +97121,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "BigInt.asIntN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "BigInt.asIntN"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -97732,6 +97774,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "BigInt.asUintN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "BigInt.asUintN"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -98617,6 +98680,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "BigInt.prototype.toString"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -99403,6 +99487,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "BigInt.prototype.valueOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -100918,6 +101023,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Boolean.prototype.toString"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -101878,6 +102004,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Boolean.prototype.valueOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -107894,6 +108041,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.abs"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.abs"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -108528,6 +108696,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.acos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.acos"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -109162,6 +109351,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.acosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.acosh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -109796,6 +110006,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.asin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.asin"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -110430,6 +110661,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.asinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.asinh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -111064,6 +111316,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.atan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.atan"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -111731,6 +112004,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.atan2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.atan2"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -112365,6 +112659,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.atanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.atanh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -112999,6 +113314,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.cbrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.cbrt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -113633,6 +113969,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.ceil"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.ceil"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -114267,6 +114624,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.clz32"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.clz32"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -114901,6 +115279,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.cos"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.cos"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -115535,6 +115934,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.cosh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.cosh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -116169,6 +116589,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.exp"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.exp"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -116803,6 +117244,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.expm1"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.expm1"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -117437,6 +117899,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.f16round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.f16round"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -118071,6 +118554,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.floor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.floor"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -118705,6 +119209,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.fround"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.fround"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -119392,6 +119917,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.hypot"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.hypot"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -120026,6 +120572,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.imul"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.imul"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -120660,6 +121227,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.log"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.log"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -121294,6 +121882,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.log10"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.log10"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -121928,6 +122537,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.log1p"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.log1p"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -122562,6 +123192,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.log2"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.log2"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -123249,6 +123900,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.max"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.max"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -123916,6 +124588,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.min"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.min"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -124603,6 +125296,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.pow"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.pow"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -125021,6 +125735,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.random"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.random"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -125689,6 +126424,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.round"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.round"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -126323,6 +127079,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.sign"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.sign"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -126977,6 +127754,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.sin"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.sin"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -127611,6 +128409,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.sinh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.sinh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -128245,6 +129064,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.sqrt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.sqrt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -128796,6 +129636,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.sumPrecise"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.sumPrecise"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -129430,6 +130291,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.tan"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.tan"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -130064,6 +130946,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.tanh"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.tanh"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -130698,6 +131601,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Math.trunc"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Math.trunc"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -131941,6 +132865,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.isFinite"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.isFinite"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -132616,6 +133561,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.isInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.isInteger"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -133246,6 +134212,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.isNaN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.isNaN"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -133921,6 +134908,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.isSafeInteger"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.isSafeInteger"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -134922,6 +135930,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.prototype.toExponential"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -135942,6 +136971,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.prototype.toFixed"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -136963,6 +138013,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.prototype.toPrecision"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -138019,6 +139090,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.prototype.toString"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -138960,6 +140052,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Number.prototype.valueOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -143411,6 +144524,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.fromCharCode"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.fromCharCode"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -144135,6 +145269,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.fromCodePoint"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.fromCodePoint"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -144839,6 +145994,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.anchor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.anchor"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -145619,6 +146795,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.at"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.at"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -146303,6 +147500,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.big"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.big"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -146987,6 +148205,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.blink"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.blink"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -147671,6 +148910,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.bold"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.bold"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -148490,6 +149750,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.charAt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.charAt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -149230,6 +150511,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.charCodeAt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -150010,6 +151312,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.codePointAt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -150712,6 +152035,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.concat"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.concat"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -151421,6 +152765,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.endsWith"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.endsWith"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -152105,6 +153470,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.fixed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.fixed"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -152809,6 +154195,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.fontcolor"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -153513,6 +154920,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.fontsize"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.fontsize"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -154222,6 +155650,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.includes"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.includes"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -154951,6 +156400,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.indexOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.indexOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -155620,6 +157090,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.isWellFormed"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -156304,6 +157795,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.italics"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.italics"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -157013,6 +158525,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.lastIndexOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -157717,6 +159250,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.link"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.link"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -158210,6 +159764,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.localeCompare"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.localeCompare"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -158978,6 +160553,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.normalize"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.normalize"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -159739,6 +161335,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.padEnd"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.padEnd"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -160480,6 +162097,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.padStart"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.padStart"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -161280,6 +162918,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.repeat"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.repeat"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -162027,6 +163686,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.replace"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.replace"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -162754,6 +164434,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.replaceAll"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -163522,6 +165223,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.slice"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.slice"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -164206,6 +165928,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.small"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.small"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -164757,6 +166500,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.split"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.split"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -165486,6 +167250,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.startsWith"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.startsWith"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -166170,6 +167955,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.strike"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.strike"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -166854,6 +168660,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.sub"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.sub"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -167582,6 +169409,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.substr"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.substr"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -168310,6 +170158,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.substring"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.substring"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -168994,6 +170863,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.sup"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.sup"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -169642,6 +171532,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toLocaleLowerCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toLocaleLowerCase"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -170290,6 +172201,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toLocaleUpperCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toLocaleUpperCase"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -170959,6 +172891,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toLowerCase"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -171896,6 +173849,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toString"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -172565,6 +174539,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toUpperCase"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -173234,6 +175229,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.toWellFormed"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.toWellFormed"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -173963,6 +175979,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.trim"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.trim"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -174632,6 +176669,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.trimEnd"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -175301,6 +177359,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.trimStart"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.trimStart"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -176258,6 +178337,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.prototype.valueOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -177046,6 +179146,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "String.raw"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "String.raw"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -177553,6 +179674,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -178262,6 +180404,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol.for"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol.for"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -178948,6 +181111,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol.keyFor"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol.keyFor"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -179694,6 +181878,27 @@
 						"file": "tests/local/static-primitive-identities.mjs",
 						"test": "escaping descriptors retain independent mutable state"
 					},
+					"lowering": "eliminated"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Object.getOwnPropertyDescriptor(Symbol.prototype, 'description').get"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Object.getOwnPropertyDescriptor(Symbol.prototype, 'description').get"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
 					"lowering": "eliminated"
 				}
 			]
@@ -180539,6 +182744,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol.prototype.toString"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -181325,6 +183551,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol.prototype.valueOf"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -182091,6 +184338,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive]"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "Symbol.prototype[Symbol.toPrimitive]"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -188061,6 +190329,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "decodeURI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "decodeURI"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -188755,6 +191044,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "decodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "decodeURIComponent"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -189440,6 +191750,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "encodeURI"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "encodeURI"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -190114,6 +192445,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "encodeURIComponent"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "encodeURIComponent"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -196077,6 +198429,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "globalThis.escape"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "globalThis.escape"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -197344,6 +199717,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "globalThis.unescape"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "globalThis.unescape"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -197921,6 +200315,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "isFinite"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "isFinite"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -198498,6 +200913,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "isNaN"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "isNaN"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -199063,6 +201499,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "parseFloat"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "parseFloat"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},
@@ -199725,6 +202182,27 @@
 						"test": "argument error precedes rejection"
 					},
 					"lowering": "materialized"
+				},
+				{
+					"profiles": ["known-consumer"],
+					"axes": ["Z"],
+					"state": "implemented",
+					"implementation": {
+						"file": "src/compiler/core/core-local-passes.ts",
+						"symbol": "removeBuiltinErrorContinuations"
+					},
+					"positive": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "preserves abrupt construction through ${profile} for %s",
+						"case": "parseInt"
+					},
+					"negative": {
+						"file": "tests/core-primitive-operations.test.ts",
+						"test": "retains a mutable construction target at %s",
+						"case": "parseInt"
+					},
+					"reason": "The proved built-in error has no normal continuation. Remove following consumers and exclusively normal successors while preserving argument effects, exceptional successors, runtime error identity and mutable targets.",
+					"lowering": "eliminated"
 				}
 			]
 		},

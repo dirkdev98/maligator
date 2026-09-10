@@ -1130,6 +1130,76 @@ describe("Core local canonicalization", () => {
 		).toBe(false);
 	});
 
+	it.each(["same-block", "successor"])(
+		"removes %s guarded continuations after built-in errors while retaining handlers",
+		(placement) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock([
+				{ representation: "boolean" },
+				{ representation: "boxed" },
+			]);
+			const guarded = placement === "same-block" ? entry : builder.createBlock();
+			const success = builder.createBlock();
+			const fallback = builder.createBlock();
+			const handler = builder.createBlock([
+				{ role: "exception", representation: "boxed" },
+			]);
+			const [condition, callback] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
+			const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+			builder.appendInstruction(entry, "call", [callback!, receiver!]);
+			builder.appendInstruction(entry, "builtinError", [], {
+				attributes: { error: "notConstructor" },
+			});
+			builder.appendInstruction(entry, "call", [callback!, receiver!]);
+			builder.setHandler(entry, handler);
+			if (guarded !== entry)
+				builder.setTerminator(entry, {
+					kind: "jump",
+					edge: { block: guarded, arguments: [] },
+				});
+			builder.setGuardTerminator(guarded, {
+				condition: condition!,
+				success: { block: success, arguments: [] },
+				fallback: { block: fallback, arguments: [] },
+				fact: {
+					kind: "unreachable-guard",
+					value: true,
+					claims: [],
+					origin: "test",
+				},
+			});
+			for (const block of [success, fallback]) {
+				const [value] = builder.appendInstruction(block, "call", [callback!, receiver!]);
+				builder.setTerminator(block, { kind: "return", value: value! });
+			}
+			const caught = inspectCoreBlockParameters(builder, handler)[0]!.value;
+			const [handlerReceiver] = builder.appendInstruction(handler, "createUndefined", []);
+			const [result] = builder.appendInstruction(handler, "call", [
+				callback!,
+				handlerReceiver!,
+				caught,
+			]);
+			builder.setTerminator(handler, { kind: "return", value: result! });
+			const function_ = builder.finish(entry).function;
+			const fn = optimizeCore(
+				{ program, context },
+				{ verification: "per-pass" },
+			).compilation.program.function(function_);
+			const operations = [...fn.blockIds()].flatMap((block) =>
+				[...fn.bodyInstructionIds(block)].map((instruction) =>
+					fn.instructionOpcodeName(instruction),
+				),
+			);
+			expect(operations.filter((opcode) => opcode === "call")).toHaveLength(2);
+			expect(operations.filter((opcode) => opcode === "builtinError")).toHaveLength(1);
+			expect([...fn.factIds()]).toEqual([]);
+			expect(inspectCoreBlockHandler(fn, entry)?.block).toBe(handler);
+		},
+	);
+
 	it("lowers chained sole explicit throws into ordinary local flow", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

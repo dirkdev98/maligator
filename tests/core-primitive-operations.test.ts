@@ -868,6 +868,12 @@ describe("rejected primitive construction profiles", () => {
 					expect(output.structure.genericCalls).toBe(1);
 					expect(output.structure.allocations).toBe(0);
 				}
+				if (profile === "normal-consumer") {
+					expect(output.structure.genericCalls).toBe(1);
+					expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
+						false,
+					);
+				}
 				if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
 				if (profile === "separate-errors") expect(output.structure.genericCalls).toBe(2);
 				expect(output.structure.allocations).toBe(profile === "escaped-argument" ? 1 : 0);
