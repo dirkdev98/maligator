@@ -201,6 +201,7 @@ function malFunctionRow(
 	instructionDataCount: number,
 	gcSafepointsSymbol: string,
 	gcSafepointCount: number,
+	gcSafepointsTrusted: boolean,
 	argumentSnapshotPlanSymbol: string,
 	argumentSnapshotPlanCount: number,
 	mappedArgumentSlotsSymbol: string,
@@ -241,7 +242,7 @@ function malFunctionRow(
 		fn.strict,
 		fn.needsArguments,
 		fn.mappedArguments,
-		!omitBytecode && vmSafepointRootMapsAreTrusted(fn),
+		gcSafepointsTrusted,
 		fn.isDerivedConstructor,
 		fn.isClassConstructor,
 		fn.hasPrototype,
@@ -964,6 +965,9 @@ function emitProgramImageSource(
 	// bytecode and handler tables are dead weight. Only uncompiled functions
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
+	const trustedSafepoints = runtime.functions.map(
+		(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+	);
 	const instructionDataByFunction = runtime.functions.map((fn, i) =>
 		omitBytecode[i]
 			? { data: compiledKnownOwnSlotSeedData(fn), offsets: [] }
@@ -997,8 +1001,7 @@ function emitProgramImageSource(
 				"",
 			);
 		}
-		const rootData =
-			omitBytecode[i] || !vmSafepointRootMapsAreTrusted(fn) ? [] : safepointRootData(fn);
+		const rootData = trustedSafepoints[i] ? safepointRootData(fn) : [];
 		if (rootData.length > 0) {
 			lines.push(
 				`static const i32 mal_function_${i}_gc_safepoints${suffix}[] = { ${rootData.join(", ")} };`,
@@ -1056,14 +1059,11 @@ function emitProgramImageSource(
 					? `mal_function_${i}_instruction_data${suffix}`
 					: "nullptr",
 				instructionDataByFunction[i]!.data.length,
-				!omitBytecode[i] &&
-					vmSafepointRootMapsAreTrusted(fn) &&
-					(fn.gcSafepoints?.length ?? 0) > 0
+				trustedSafepoints[i] && (fn.gcSafepoints?.length ?? 0) > 0
 					? `mal_function_${i}_gc_safepoints${suffix}`
 					: "nullptr",
-				omitBytecode[i] || !vmSafepointRootMapsAreTrusted(fn)
-					? 0
-					: (fn.gcSafepoints?.length ?? 0),
+				trustedSafepoints[i] ? (fn.gcSafepoints?.length ?? 0) : 0,
+				trustedSafepoints[i]!,
 				!omitBytecode[i] && fn.argumentSnapshotPlan.length > 0
 					? `mal_function_${i}_argument_snapshot_plan${suffix}`
 					: "nullptr",
@@ -1636,6 +1636,9 @@ export function emitBatch(
 		// Successfully compiled functions never re-enter the interpreter, so they
 		// need no bytecode tables.
 		const omitBytecode = compiled.map((c) => c !== null);
+		const trustedSafepoints = runtime.functions.map(
+			(fn, index) => !omitBytecode[index] && vmSafepointRootMapsAreTrusted(fn),
+		);
 
 		const instructionSymbols: Array<string> = [];
 		const instructionDataSymbols: Array<string> = [];
@@ -1675,15 +1678,13 @@ export function emitBatch(
 					: "nullptr",
 			);
 			instructionDataCounts.push(sideData.data.length);
-			const rootData = vmSafepointRootMapsAreTrusted(fn) ? safepointRootData(fn) : [];
+			const rootData = trustedSafepoints[i] ? safepointRootData(fn) : [];
 			gcSafepointSymbols.push(
 				rootData.length > 0
 					? intern("gc_safepoints", "i32", `    ${rootData.join(", ")}`)
 					: "nullptr",
 			);
-			gcSafepointCounts.push(
-				vmSafepointRootMapsAreTrusted(fn) ? (fn.gcSafepoints?.length ?? 0) : 0,
-			);
+			gcSafepointCounts.push(trustedSafepoints[i] ? (fn.gcSafepoints?.length ?? 0) : 0);
 			argumentSnapshotPlanSymbols.push(
 				fn.argumentSnapshotPlan.length > 0
 					? intern(
@@ -1720,6 +1721,7 @@ export function emitBatch(
 					instructionDataCounts[i]!,
 					gcSafepointSymbols[i]!,
 					gcSafepointCounts[i]!,
+					trustedSafepoints[i]!,
 					argumentSnapshotPlanSymbols[i]!,
 					argumentSnapshotPlanCounts[i]!,
 					mappedArgumentSlotsSymbols[i]!,

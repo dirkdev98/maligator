@@ -1274,8 +1274,10 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("revokes portable root-map trust after in-place bytecode mutation", () => {
-		const source = `
+	it.each(["single", "batch"])(
+		"revokes portable root-map trust between %s emissions after bytecode mutation",
+		(mode) => {
+			const source = `
 			function* keep(value) {
 				const live = { value };
 				yield live;
@@ -1283,27 +1285,34 @@ describe("emit-program-image instruction packing", () => {
 			}
 			globalThis.keep = keep;
 		`;
-		const semantic = analyzeSourceAndRunSemanticAnalysis(
-			source,
-			"portable-root-map-mutation.js",
-			parseScript(source, { strict: false }),
-		);
-		const image = compileSemanticProgramToProgramImage(semantic);
-		const functionIndex = image.runtime.functions.findIndex(
-			(fn) => (fn.gcSafepoints?.length ?? 0) > 0,
-		);
-		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const fn = image.runtime.functions[functionIndex]!;
-		expect(vmSafepointRootMapsAreTrusted(fn)).toBe(true);
-		fn.gcSafepoints![0]!.rootRegisters = [];
-		delete fn.gcSafepoints![0]!.clearRegisters;
-		expect(vmSafepointRootMapsAreTrusted(fn)).toBe(false);
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"portable-root-map-mutation.js",
+				parseScript(source, { strict: false }),
+			);
+			const image = compileSemanticProgramToProgramImage(semantic);
+			const functionIndex = image.runtime.functions.findIndex(
+				(fn) => (fn.gcSafepoints?.length ?? 0) > 0,
+			);
+			expect(functionIndex).toBeGreaterThanOrEqual(0);
+			const fn = image.runtime.functions[functionIndex]!;
+			const emit = () =>
+				mode === "single"
+					? emitProgramImage(image, { compiled: false })
+					: emitBatch([image], { compiled: false });
+			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(true);
+			const trusted = malFunctionRows(emit())[functionIndex]!;
+			expect(trusted[30]).toBe("true");
+			expect(trusted[4]).not.toBe("nullptr");
+			fn.gcSafepoints![0]!.rootRegisters = [];
+			delete fn.gcSafepoints![0]!.clearRegisters;
+			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(false);
 
-		const output = emitProgramImage(image, { compiled: false });
-		expect(output).not.toContain(
-			`static const i32 mal_function_${functionIndex}_gc_safepoints`,
-		);
-	});
+			const untrusted = malFunctionRows(emit())[functionIndex]!;
+			expect(untrusted[30]).toBe("false");
+			expect(untrusted[4]).toBe("nullptr");
+		},
+	);
 
 	it("uses a null side table when a function has no variable operands", () => {
 		const simple = {
