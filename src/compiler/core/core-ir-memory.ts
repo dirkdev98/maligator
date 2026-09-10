@@ -398,12 +398,13 @@ function memoryVersions(
 		return created;
 	};
 	const phiVersions = new Map<number, Map<number, number>>();
-	const writeVersions = new Map<number, Map<number, number>>();
 	const exceptionVersions = new Map<number, Map<number, number>>();
 	const phiIdentity = (block: CoreBlockId, slot: number): number =>
 		internVersion(phiVersions, block, slot);
-	const writeIdentity = (instruction: CoreInstructionId, slot: number): number =>
-		internVersion(writeVersions, instruction, slot);
+	const writeIdentity = (
+		definitions: ReadonlyMap<number, number>,
+		slot: number,
+	): number => definitions.get(slot) ?? nextVersion++;
 	const exceptionIdentity = (block: CoreBlockId, slot: number): number =>
 		internVersion(exceptionVersions, block, slot);
 	interface ReadStateRow {
@@ -480,7 +481,7 @@ function memoryVersions(
 			const slot = slotByLocation.get(location);
 			const value = layout.initialValues[index];
 			if (slot === undefined || value === undefined) continue;
-			const version = writeIdentity(instruction, slot);
+			const version = writeIdentity(definitions, slot);
 			definitions.set(slot, version);
 			valueByVersion.set(version, value);
 		}
@@ -494,16 +495,15 @@ function memoryVersions(
 	let familyWidenings = 0;
 	const killDomain = (
 		domain: CoreEffectDomain,
-		instruction: CoreInstructionId,
 		definitions: Map<number, number>,
 	): void => {
 		const fallbackSlot = domainSlot.get(domain)!;
-		definitions.set(fallbackSlot, writeIdentity(instruction, fallbackSlot));
+		definitions.set(fallbackSlot, writeIdentity(definitions, fallbackSlot));
 		for (const family of familiesKilledByDomain.get(domain)!) {
 			const slot = killSlotByFamily.get(family)!;
 			if (definitions.has(slot)) continue;
 			familyWidenings++;
-			definitions.set(slot, writeIdentity(instruction, slot));
+			definitions.set(slot, writeIdentity(definitions, slot));
 		}
 	};
 	for (const instruction of relevantInstructions) {
@@ -536,7 +536,7 @@ function memoryVersions(
 			const exactAccess = coreMemoryLocationIsExact(access.location);
 			const exactSlot = slotForAccess(access);
 			if (exactSlot !== undefined) {
-				const version = writeIdentity(instruction, exactSlot);
+				const version = writeIdentity(definitions, exactSlot);
 				definitions.set(exactSlot, version);
 				if (access.value !== undefined) valueByVersion.set(version, access.value);
 				if (!partitions[exactSlot]!.protectedLocalHeap) {
@@ -548,10 +548,10 @@ function memoryVersions(
 			for (const domain of domainsForFamily(family)) {
 				coveredWrites.add(domain);
 				if (!exactAccess) {
-					killDomain(domain, instruction, definitions);
+					killDomain(domain, definitions);
 				} else {
 					const slot = domainSlot.get(domain)!;
-					definitions.set(slot, writeIdentity(instruction, slot));
+					definitions.set(slot, writeIdentity(definitions, slot));
 				}
 			}
 		}
@@ -559,7 +559,7 @@ function memoryVersions(
 		for (const domain of CORE_EFFECT_DOMAINS) {
 			if (!effects.writes.includes(domain) && !universal) continue;
 			if (coveredWrites.has(domain) && !universal) continue;
-			killDomain(domain, instruction, definitions);
+			killDomain(domain, definitions);
 		}
 		if (reads.size === 0 && definitions.size === 0) continue;
 		for (const slot of reads) {
