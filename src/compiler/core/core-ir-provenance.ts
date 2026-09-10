@@ -995,12 +995,65 @@ const FRESH_DENSE_NUMERIC_OPERATORS: ReadonlySet<string> = new Set([
 	">>>",
 ]);
 
+interface CoreStackObjectControlUses {
+	readonly escapingRoots: ReadonlySet<CoreValueId>;
+	readonly returns: ReadonlyMap<CoreValueId, ReadonlyArray<CoreInstructionId>>;
+}
+
+function stackObjectControlUses(
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+): CoreStackObjectControlUses {
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const escapingRoots = new Set<CoreValueId>();
+	const returns = new Map<CoreValueId, Array<CoreInstructionId>>();
+	for (const block of control.reachable) {
+		const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
+		const handlerArgumentCount = fn.kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerArgumentCount; index++) {
+			escapingRoots.add(root(fn.kernel.handlerArgumentAt(handlerArgumentStart + index)));
+		}
+		const incoming = control.predecessors[block] ?? [];
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const parameter = root(fn.kernel.blockParameterValue(parameterStart + index));
+			for (const edge of incoming) {
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (argument === undefined) continue;
+				const argumentRoot = root(argument);
+				if (argumentRoot !== parameter) escapingRoots.add(argumentRoot);
+			}
+		}
+		const terminator = fn.blockTerminator(block);
+		const value = instructionOperand(fn, terminator, 0);
+		if (value === undefined) continue;
+		const valueRoot = root(value);
+		const kind = fn.instructionKind(terminator);
+		if (kind === "return") {
+			const instructions = returns.get(valueRoot);
+			if (instructions === undefined) returns.set(valueRoot, [terminator]);
+			else instructions.push(terminator);
+		} else if (
+			kind === "throw" ||
+			kind === "branch" ||
+			kind === "guard" ||
+			kind === "switch"
+		) {
+			escapingRoots.add(valueRoot);
+		}
+	}
+	return { escapingRoots, returns };
+}
+
 function stackObjectCandidate(
 	fn: CoreFunctionStore,
 	layout: CoreNamedAllocationLayout,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
+	controlUses: () => CoreStackObjectControlUses,
 ): CoreStackObjectCandidate | undefined {
 	if (
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
@@ -1008,33 +1061,8 @@ function stackObjectCandidate(
 	)
 		return undefined;
 	const allocationRoot = roots.get(layout.result) ?? layout.result;
-	const aliasesAllocation = (value: CoreValueId): boolean =>
-		(roots.get(value) ?? value) === allocationRoot;
-	for (const block of control.reachable) {
-		const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
-		const handlerArgumentCount = fn.kernel.blockHandlerArgumentCount(block);
-		for (let index = 0; index < handlerArgumentCount; index++) {
-			if (aliasesAllocation(fn.kernel.handlerArgumentAt(handlerArgumentStart + index))) {
-				return undefined;
-			}
-		}
-		const incoming = control.predecessors[block] ?? [];
-		const parameterStart = fn.kernel.blockParameterStart(block);
-		const parameterCount = fn.kernel.blockParameterCount(block);
-		for (let index = 0; index < parameterCount; index++) {
-			const parameter = fn.kernel.blockParameterValue(parameterStart + index);
-			if (aliasesAllocation(parameter)) continue;
-			if (
-				incoming.some((edge) => {
-					const argument =
-						edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-					return argument !== undefined && aliasesAllocation(argument);
-				})
-			) {
-				return undefined;
-			}
-		}
-	}
+	const flow = controlUses();
+	if (flow.escapingRoots.has(allocationRoot)) return undefined;
 
 	const slotByStringIndex = new Map(
 		layout.keys.map((stringIndex, slot) => [stringIndex, slot] as const),
@@ -1077,30 +1105,12 @@ function stackObjectCandidate(
 		return undefined;
 	}
 
-	const materializations: Array<{
-		readonly instruction: CoreInstructionId;
-		readonly kind: "return";
-	}> = [];
-	for (const block of control.reachable) {
-		const terminatorId = fn.blockTerminator(block);
-		const terminatorKind = fn.instructionKind(terminatorId);
-		const controlValue = instructionOperand(fn, terminatorId, 0);
-		if (
-			terminatorKind === "return" &&
-			controlValue !== undefined &&
-			aliasesAllocation(controlValue)
-		) {
-			materializations.push({ instruction: terminatorId, kind: "return" });
-		} else if (
-			controlValue !== undefined &&
-			((terminatorKind === "throw" && aliasesAllocation(controlValue)) ||
-				((terminatorKind === "branch" || terminatorKind === "guard") &&
-					aliasesAllocation(controlValue)) ||
-				(terminatorKind === "switch" && aliasesAllocation(controlValue)))
-		) {
-			return undefined;
-		}
-	}
+	const materializations = (flow.returns.get(allocationRoot) ?? []).map(
+		(instruction) => ({
+			instruction,
+			kind: "return" as const,
+		}),
+	);
 	const stableAccesses = Object.freeze(
 		[...accesses.values()].sort((left, right) => left.instruction - right.instruction),
 	);
@@ -1172,9 +1182,19 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			const control = bundle.control;
 			const roots = bundle.roots;
 			const index = bundle.index;
+			let controlUses: CoreStackObjectControlUses | undefined;
+			const getControlUses = () =>
+				(controlUses ??= stackObjectControlUses(fn, control, roots));
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
-				const candidate = stackObjectCandidate(fn, layout, control, roots, index);
+				const candidate = stackObjectCandidate(
+					fn,
+					layout,
+					control,
+					roots,
+					index,
+					getControlUses,
+				);
 				return candidate === undefined
 					? []
 					: [
@@ -3768,9 +3788,19 @@ function discoverCandidates(
 			}),
 		);
 	};
+	let stackControlUses: CoreStackObjectControlUses | undefined;
+	const getStackControlUses = () =>
+		(stackControlUses ??= stackObjectControlUses(fn, control, roots));
 	for (const layout of provenanceAnalysis.layouts) {
 		if (layout.kind === "named-slots") {
-			const candidate = stackObjectCandidate(fn, layout, control, roots, index);
+			const candidate = stackObjectCandidate(
+				fn,
+				layout,
+				control,
+				roots,
+				index,
+				getStackControlUses,
+			);
 			if (candidate !== undefined) addCandidate(candidate);
 		} else {
 			const dense = denseArrayCandidates(fn, layout, control, roots);
