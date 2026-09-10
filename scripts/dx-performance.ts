@@ -215,13 +215,7 @@ function report(sample: Sample): void {
 
 try {
 	mkdirSync(nodeModules, { recursive: true });
-	linkPackages(path.join(repositoryRoot, "tests/fixtures/express-5/node_modules"));
-	for (const name of ["drizzle-orm", "valibot"]) {
-		symlinkSync(
-			path.join(repositoryRoot, "node_modules", name),
-			path.join(nodeModules, name),
-		);
-	}
+	linkPackages(path.join(repositoryRoot, "node_modules"));
 	write("package.json", `{"type":"module","private":true}\n`);
 	write("local.mts", "export const localRevision = 0;\n");
 	write(
