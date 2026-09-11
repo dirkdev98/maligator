@@ -173,6 +173,72 @@ test("detects .js entry goals from the nearest package type", () => {
 	expect(module.modules.get(module.entry)!.goal).toBe("module");
 });
 
+test("refreshes entry and dependency goals after package type changes with a retained parse cache", () => {
+	const directory = "changing-package-type";
+	const entry = path.join(root, directory, "entry.js");
+	const dependency = path.join(root, directory, "dependency.js");
+	const leaf = path.join(root, directory, "leaf.cjs");
+	const parseCache = new ModuleParseCache();
+	write(`${directory}/entry.js`, 'require("./dependency.js");');
+	write(`${directory}/dependency.js`, 'require("./leaf.cjs");');
+	write(`${directory}/leaf.cjs`, "module.exports = 42;");
+
+	for (const type of ["module", "commonjs", "module"]) {
+		write(`${directory}/package.json`, JSON.stringify({ type }));
+		const graph = buildModuleGraph(entry, { parseCache });
+		expect(graph.modules.get(entry)!.goal).toBe(type === "module" ? "module" : "cjs");
+		expect(new Set(graph.modules.keys())).toEqual(
+			new Set(type === "module" ? [entry] : [entry, dependency, leaf]),
+		);
+		if (type === "commonjs") expect(graph.modules.get(dependency)!.goal).toBe("cjs");
+	}
+});
+
+test("refreshes package boundaries after missing, removed and malformed metadata", () => {
+	const directory = "changing-package-boundary";
+	const entry = path.join(root, directory, "nested/entry.js");
+	const metadata = `${directory}/nested/package.json`;
+	write(`${directory}/package.json`, JSON.stringify({ type: "module" }));
+	write(`${directory}/nested/entry.js`, "globalThis.value = 1;");
+	const goal = () => buildModuleGraph(entry).modules.get(entry)!.goal;
+
+	expect(goal()).toBe("module");
+	write(metadata, JSON.stringify({ type: "commonjs" }));
+	expect(goal()).toBe("cjs");
+	rmSync(path.join(root, metadata));
+	expect(goal()).toBe("module");
+	write(metadata, "{");
+	expect(goal()).toBe("module");
+	write(metadata, JSON.stringify({ type: "commonjs" }));
+	expect(goal()).toBe("cjs");
+});
+
+test.each(["main", "exports"] as const)(
+	"refreshes package %s targets for bare and directory imports between graph builds",
+	(field) => {
+		const name = `changing-package-${field}`;
+		const directory = `node_modules/${name}`;
+		const entry = path.join(root, `${name}.mjs`);
+		const parseCache = new ModuleParseCache();
+		write(`${name}.mjs`, `import "${name}"; import "./${directory}";`);
+		write(`${directory}/before.mjs`, 'export default "before";');
+		write(`${directory}/after.mjs`, 'export default "after";');
+
+		for (const target of ["before", "after"]) {
+			write(
+				`${directory}/package.json`,
+				JSON.stringify({ type: "module", [field]: `./${target}.mjs` }),
+			);
+			const graph = buildModuleGraph(entry, { parseCache });
+			expect(
+				graph.modules
+					.get(entry)!
+					.dependencies.map((dependency) => dependency.resolvedPath),
+			).toEqual(Array(2).fill(path.join(root, directory, `${target}.mjs`)));
+		}
+	},
+);
+
 test("explicit entry goals and goal-specific extensions take precedence over package type", () => {
 	write("goal-precedence/package.json", JSON.stringify({ type: "module" }));
 	write("goal-precedence/entry.js", `globalThis.value = 1;\n`);

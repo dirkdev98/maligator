@@ -72,17 +72,19 @@ describe("Wasm source cache identity", () => {
 		);
 	});
 
-	it("distinguishes package goals for the same source text", () => {
+	it("refreshes package goals for unchanged source text between builds", () => {
 		const files = {
 			"entry.mjs": 'import "./dep/entry.js";',
 			"dep/entry.js": "globalThis.value = 1;",
 			"dep/package.json": '{"type":"module"}',
 		};
-		const first = fixture(files).prepare();
-		const second = fixture({
-			...files,
-			"dep/package.json": '{"type":"commonjs"}',
-		}).prepare();
+		const project = fixture(files);
+		const first = project.prepare();
+		writeFileSync(
+			path.join(project.directory, "dep/package.json"),
+			'{"type":"commonjs"}',
+		);
+		const second = project.prepare();
 		expect(second.sourceIdentity).not.toBe(first.sourceIdentity);
 	});
 });

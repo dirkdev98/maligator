@@ -264,13 +264,12 @@ function exportConditions(
 	return new Set(nodeEnabled ? [...conditions, "node"] : conditions);
 }
 
-/**
- * Surface-dependent resolution inputs threaded through the resolver: the active
- * `exports` conditions and whether `node:*` host built-ins resolve.
- */
 interface ResolveContext {
 	conditions: ReadonlySet<string>;
 	nodeEnabled: boolean;
+	// Metadata and derived goals share one graph's lifetime, including cached misses.
+	packageJsonCache: Map<string, PackageJson | null>;
+	packageTypeCache: Map<string, ModuleGoal | undefined>;
 }
 
 /** Extensions probed when a specifier omits one. */
@@ -285,12 +284,13 @@ export function buildModuleGraph(
 ): ModuleGraph {
 	const entry = path.resolve(entryPath);
 	const modules = new Map<string, ModuleRecord>();
-	const packageTypeCache = new Map<string, ModuleGoal | undefined>();
 
 	const nodeEnabled = options.buildConfig?.surface.node ?? false;
 	const ctx: ResolveContext = {
 		nodeEnabled,
 		conditions: exportConditions(nodeEnabled, "import"),
+		packageJsonCache: new Map(),
+		packageTypeCache: new Map(),
 	};
 	const virtualModule = (specifier: string) =>
 		options.virtualModules?.get(specifier) ??
@@ -475,16 +475,14 @@ export function buildModuleGraph(
 				resolvedPath,
 				options.goalOverride ??
 					options.dependencyGoalOverride ??
-					detectDependencyGoal(resolvedPath, packageTypeCache),
+					detectDependencyGoal(resolvedPath, ctx),
 			);
 		}
 	};
 
 	load(
 		entry,
-		options.goalOverride ??
-			options.entryGoal ??
-			detectDependencyGoal(entry, packageTypeCache),
+		options.goalOverride ?? options.entryGoal ?? detectDependencyGoal(entry, ctx),
 		options.entrySource,
 	);
 	for (const candidate of options.dynamicImportCandidates ?? []) {
@@ -494,7 +492,7 @@ export function buildModuleGraph(
 				candidatePath,
 				options.goalOverride ??
 					options.dependencyGoalOverride ??
-					detectDependencyGoal(candidatePath, packageTypeCache),
+					detectDependencyGoal(candidatePath, ctx),
 			);
 		}
 		let specifier = path
@@ -547,10 +545,7 @@ function parseWithGoal(source: string, goal: ModuleGoal, strict: boolean) {
  * "type". A `.js` file under `type: module` is a module; otherwise it is
  * CommonJS.
  */
-function detectDependencyGoal(
-	filePath: string,
-	packageTypeCache: Map<string, ModuleGoal | undefined>,
-): ModuleGoal {
+function detectDependencyGoal(filePath: string, ctx: ResolveContext): ModuleGoal {
 	switch (path.extname(filePath)) {
 		case ".mjs":
 		case ".mts":
@@ -565,7 +560,7 @@ function detectDependencyGoal(
 			break;
 	}
 
-	return findNearestPackageType(path.dirname(filePath), packageTypeCache) === "module"
+	return findNearestPackageType(path.dirname(filePath), ctx) === "module"
 		? "module"
 		: "cjs";
 }
@@ -577,13 +572,14 @@ function detectDependencyGoal(
  */
 function findNearestPackageType(
 	dir: string,
-	cache: Map<string, ModuleGoal | undefined>,
+	ctx: ResolveContext,
 ): ModuleGoal | undefined {
+	const cache = ctx.packageTypeCache;
 	if (cache.has(dir)) {
 		return cache.get(dir);
 	}
 
-	const pkg = readPackageJson(path.join(dir, "package.json"));
+	const pkg = readPackageJson(path.join(dir, "package.json"), ctx);
 	if (pkg) {
 		const goal: ModuleGoal = pkg.type === "module" ? "module" : "cjs";
 		cache.set(dir, goal);
@@ -591,7 +587,7 @@ function findNearestPackageType(
 	}
 
 	const parent = path.dirname(dir);
-	const goal = parent === dir ? undefined : findNearestPackageType(parent, cache);
+	const goal = parent === dir ? undefined : findNearestPackageType(parent, ctx);
 	cache.set(dir, goal);
 	return goal;
 }
@@ -829,7 +825,7 @@ function probePath(target: string, ctx: ResolveContext): string | null {
  * index file.
  */
 function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
-	const pkg = readPackageJson(path.join(dir, "package.json"));
+	const pkg = readPackageJson(path.join(dir, "package.json"), ctx);
 
 	if (pkg?.exports !== undefined) {
 		// The presence of `exports` encapsulates the package. A missing or invalid
@@ -909,7 +905,7 @@ function resolveInPackage(
 	subpath: string,
 	ctx: ResolveContext,
 ): string | null {
-	const pkg = readPackageJson(path.join(packageDir, "package.json"));
+	const pkg = readPackageJson(path.join(packageDir, "package.json"), ctx);
 
 	if (subpath === "") {
 		if (pkg?.exports !== undefined) {
@@ -1132,12 +1128,13 @@ interface PackageJson {
 	exports?: ExportsField;
 }
 
-const packageJsonCache = new Map<string, PackageJson | null>();
-
-/** Read and cache a package.json, returning null when absent or unparseable. */
-function readPackageJson(packageJsonPath: string): PackageJson | null {
-	if (packageJsonCache.has(packageJsonPath)) {
-		return packageJsonCache.get(packageJsonPath)!;
+function readPackageJson(
+	packageJsonPath: string,
+	ctx: ResolveContext,
+): PackageJson | null {
+	const cache = ctx.packageJsonCache;
+	if (cache.has(packageJsonPath)) {
+		return cache.get(packageJsonPath)!;
 	}
 
 	let parsed: PackageJson | null = null;
@@ -1149,7 +1146,7 @@ function readPackageJson(packageJsonPath: string): PackageJson | null {
 		}
 	}
 
-	packageJsonCache.set(packageJsonPath, parsed);
+	cache.set(packageJsonPath, parsed);
 	return parsed;
 }
 
