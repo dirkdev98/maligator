@@ -513,9 +513,9 @@ export function scaledNativeRunTimeoutMs(
 	timeoutMs = 20000,
 	env: NodeJS.ProcessEnv = process.env,
 ): number {
-	return env.MAL_ASAN === "1" || env.MAL_UBSAN === "1" || env.MAL_GC_STRESS === "1"
-		? timeoutMs * 3
-		: timeoutMs;
+	const sanitizerMultiplier = env.MAL_ASAN === "1" || env.MAL_UBSAN === "1" ? 3 : 1;
+	const gcStressMultiplier = env.MAL_GC_STRESS === "1" ? 3 : 1;
+	return timeoutMs * sanitizerMultiplier * gcStressMultiplier;
 }
 
 /** An error carrying the child's captured streams, so a failing test shows them. */

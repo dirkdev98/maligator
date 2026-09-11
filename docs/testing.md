@@ -282,6 +282,11 @@ breadth is not recompiled under a sanitizer without an ownership-risk reason. A 
 belongs in both dimensions only through an explicit focused command for a
 mode-sensitive regression.
 
+`runToStdout` starts with a 20-second default child deadline. Sanitizer
+instrumentation and maximal GC stress (`MAL_GC_STRESS=1`) each multiply it by three;
+combined runs receive 180 seconds because both costs apply. An explicit child
+deadline uses the same factors. Outer test and queue job budgets remain separate.
+
 ## Policies
 
 The suite and standards runners accept two policies:
