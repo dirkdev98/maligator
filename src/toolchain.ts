@@ -149,10 +149,15 @@ export function formatToolCommand(tool: ToolExecutable): string {
 
 export interface WasmToolchain {
 	target: "wasm32-wasip1";
-	zigTarget: "wasm32-wasi";
+	sdkVersion: "34.0";
 	platform: "wasi";
 	arch: "wasm32";
-	tools: { zig: ToolExecutable; cargo: ToolExecutable; rustc: ToolExecutable };
+	tools: {
+		cc: ToolExecutable;
+		ar: ToolExecutable;
+		cargo: ToolExecutable;
+		rustc: ToolExecutable;
+	};
 	fingerprint: string;
 }
 
@@ -160,10 +165,32 @@ export interface WasmToolchain {
 export function requireWasmToolchain(rootDir: string, env = process.env): WasmToolchain {
 	const rustDir = path.join(rootDir, "runtime/rust");
 	const searchPath = env.PATH ?? "";
-	const zig = inspectExecutable(env.ZIG?.trim() || "zig", searchPath, rootDir, env, [
-		"version",
-	]);
-	if (zig === undefined) throw new Error("Wasm builds require Zig on PATH (or ZIG)");
+	const sdk = env.WASI_SDK_PATH?.trim();
+	if (!sdk)
+		throw new Error(
+			"Wasm builds require WASI SDK 34.0; set WASI_SDK_PATH to its directory",
+		);
+	const sdkRoot = path.resolve(rootDir, sdk);
+	const cc = inspectExecutable(path.join(sdkRoot, "bin/clang"), searchPath, rootDir, env);
+	const ar = inspectExecutable(
+		path.join(sdkRoot, "bin/llvm-ar"),
+		searchPath,
+		rootDir,
+		env,
+	);
+	if (cc === undefined || ar === undefined)
+		throw new Error("WASI_SDK_PATH must contain bin/clang and bin/llvm-ar");
+	// LLVM 23 fixes quadratic reachability storage in the Wasm irreducible-control-flow pass.
+	if (Number(/clang version (\d+)/.exec(cc.version)?.[1] ?? 0) < 23)
+		throw new Error("Wasm builds require LLVM 23 or newer from WASI SDK 34.0");
+	const sdkMetadata = readFileSync(path.join(sdkRoot, "VERSION"), "utf8");
+	// The shipped Explorer notices cover the runtime libraries in this SDK release.
+	if (firstLine(sdkMetadata) !== "34.0")
+		throw new Error("Wasm builds require the pinned WASI SDK 34.0 release");
+	cc.args = [
+		"--target=wasm32-wasip1",
+		`--sysroot=${path.join(sdkRoot, "share/wasi-sysroot")}`,
+	];
 	const rustup = inspectExecutable("rustup", searchPath, rustDir, env);
 	if (rustup === undefined) throw new Error("Wasm builds require rustup on PATH");
 	const cargo = selectedRustTool(rustup, "cargo", rustDir, env);
@@ -175,18 +202,19 @@ export function requireWasmToolchain(rootDir: string, env = process.env): WasmTo
 			"Missing Rust Wasm target. Run: (cd runtime/rust && rustup target add wasm32-wasip1)",
 		);
 	}
-	const tools = { zig, cargo, rustc };
+	const tools = { cc, ar, cargo, rustc };
 	return {
 		target: "wasm32-wasip1",
-		zigTarget: "wasm32-wasi",
+		sdkVersion: "34.0",
 		platform: "wasi",
 		arch: "wasm32",
 		tools,
 		fingerprint: hash(
 			"sha256",
 			JSON.stringify({
-				schema: 1,
+				schema: 2,
 				target: "wasm32-wasip1",
+				sdkMetadata,
 				tools: Object.values(tools).map(executableIdentity),
 			}),
 			"hex",

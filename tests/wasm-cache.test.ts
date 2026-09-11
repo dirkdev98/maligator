@@ -171,13 +171,21 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 		expect(restored.digest).toBe(first.digest);
 		expect(echo(restored.file)).toBe("echo:🐊");
 
-		const zig = path.join(directory, "zig");
-		writeFileSync(
-			zig,
-			`#!/bin/sh\nexec '${first.toolchain.tools.zig.path.replaceAll("'", "'\\''")}' "$@"\n`,
+		const sdk = path.join(directory, "sdk");
+		mkdirSync(path.join(sdk, "bin"), { recursive: true });
+		symlinkSync(
+			path.join(process.env.WASI_SDK_PATH!, "VERSION"),
+			path.join(sdk, "VERSION"),
 		);
-		chmodSync(zig, 0o755);
-		vi.stubEnv("ZIG", zig);
+		symlinkSync(path.join(process.env.WASI_SDK_PATH!, "share"), path.join(sdk, "share"));
+		symlinkSync(first.toolchain.tools.ar.path, path.join(sdk, "bin/llvm-ar"));
+		const cc = path.join(sdk, "bin/clang");
+		writeFileSync(
+			cc,
+			`#!/bin/sh\nexec '${first.toolchain.tools.cc.path.replaceAll("'", "'\\''")}' "$@"\n`,
+		);
+		chmodSync(cc, 0o755);
+		vi.stubEnv("WASI_SDK_PATH", sdk);
 		const changedTool = build(firstRoot);
 		expect(changedTool.toolchain.fingerprint).not.toBe(first.toolchain.fingerprint);
 		expect(changedTool.stages["wasm-object"]?.reused).toBe(0);

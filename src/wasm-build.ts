@@ -25,7 +25,7 @@ import { maligatorCacheDirectory } from "./cache-root.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { rustSourceDigest } from "./rust-build.ts";
-import { requireWasmToolchain } from "./toolchain.ts";
+import { requireWasmToolchain, toolArguments } from "./toolchain.ts";
 import type { WasmToolchain } from "./toolchain.ts";
 import { prepareWasmSource } from "./wasm-source.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
@@ -107,17 +107,15 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 		// Bump a stage protocol when output behavior changes beyond its keyed command recipe.
 		const producers = {
 			"wasm-source": source.producer,
-			"wasm-object": artifactProducer("wasm-object", 2, "zig-cc"),
-			"wasm-archive": artifactProducer("wasm-archive", 2, "zig-ar"),
+			"wasm-object": artifactProducer("wasm-object", 3, "clang"),
+			"wasm-archive": artifactProducer("wasm-archive", 3, "llvm-ar"),
 			"wasm-rust": artifactProducer("wasm-rust", 2, "cargo-build"),
-			"wasm-link": artifactProducer("wasm-link", 2, "zig-link"),
+			"wasm-link": artifactProducer("wasm-link", 3, "clang-link"),
 		};
 		const counts = { built: 0, reused: 0 };
 		const stages: Record<string, { built: number; reused: number }> = {};
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
-			ZIG_GLOBAL_CACHE_DIR: path.join(cache, "zig/global"),
-			ZIG_LOCAL_CACHE_DIR: path.join(cache, "zig/local"),
 			RUSTC: toolchain.tools.rustc.path,
 		};
 		const features = buildDerivationFromConfig(options.config).features;
@@ -126,13 +124,8 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			(directory) => ["-I", path.join(runtime, directory)],
 		);
 		const flags = [
-			"cc",
-			"-target",
-			toolchain.zigTarget,
+			...toolArguments(toolchain.tools.cc, []),
 			"-std=c2x",
-			"-O1",
-			// Zig maps -O1 to ReleaseFast; forward the requested level to Clang.
-			"-Xclang",
 			"-O1",
 			"-D_GNU_SOURCE",
 			"-D_WASI_EMULATED_MMAN",
@@ -245,7 +238,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 						const output = path.join(directory, "object.o");
 						run(
 							directory,
-							toolchain.tools.zig.path,
+							toolchain.tools.cc.path,
 							[...flags, "-x", "c", "-c", file, "-o", output],
 							env,
 							600_000,
@@ -276,16 +269,19 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 				{
 					objects: runtimeObjects.map((object) => object.digest),
 					toolchain: toolchain.fingerprint,
-					command: ["ar", "rcs", "<archive>", "<objects>"],
+					command: toolArguments(toolchain.tools.ar, ["rcs", "<archive>", "<objects>"]),
 				},
 				(directory) => {
 					const output = path.join(directory, "engine.a");
-					run(directory, toolchain.tools.zig.path, [
-						"ar",
-						"rcs",
-						output,
-						...runtimeObjects.map((object) => object.path),
-					]);
+					run(
+						directory,
+						toolchain.tools.ar.path,
+						toolArguments(toolchain.tools.ar, [
+							"rcs",
+							output,
+							...runtimeObjects.map((object) => object.path),
+						]),
+					);
 					return [{ name: "engine.a", file: output }];
 				},
 			),
@@ -398,13 +394,13 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			(directory) => {
 				log("Linking and validating the Wasm reactor");
 				const output = path.join(directory, "engine.wasm");
-				// Zig classifies link inputs by extension; cache blobs have digest-only names.
+				// The compiler classifies link inputs by extension; cache blobs have digest-only names.
 				const linkInputs = [bridge, ...objects, engine, rust].map((artifact, index) => {
 					const file = path.join(directory, `${index}-${artifact.name}`);
 					copyFileSync(artifact.path, file);
 					return file;
 				});
-				run(directory, toolchain.tools.zig.path, [
+				run(directory, toolchain.tools.cc.path, [
 					...flags,
 					...linkFlags,
 					...linkInputs,
@@ -455,11 +451,9 @@ export function probeWasmToolchain(root: string, toolchain: WasmToolchain): void
 			"#include <stdint.h>\nstatic_assert(sizeof(void *) == 4);\nint probe(void) { return 42; }\n",
 		);
 		execFileSync(
-			toolchain.tools.zig.path,
+			toolchain.tools.cc.path,
 			[
-				"cc",
-				"-target",
-				toolchain.zigTarget,
+				...toolArguments(toolchain.tools.cc, []),
 				"-std=c2x",
 				"-mexec-model=reactor",
 				"-Wl,--export=probe",
@@ -470,11 +464,7 @@ export function probeWasmToolchain(root: string, toolchain: WasmToolchain): void
 			{
 				timeout: 60_000,
 				stdio: "pipe",
-				env: {
-					...process.env,
-					ZIG_GLOBAL_CACHE_DIR: path.join(maligatorCacheDirectory(), "zig/global"),
-					ZIG_LOCAL_CACHE_DIR: path.join(maligatorCacheDirectory(), "zig/local"),
-				},
+				env: process.env,
 			},
 		);
 		const module = new WebAssembly.Module(readFileSync(output));

@@ -58,22 +58,11 @@ export function explorerLicenses(toolchain: WasmToolchain): string {
 		"Rust standard library and bundled dependencies",
 		path.join(rustDocs, "COPYRIGHT-library.html"),
 	]);
-	const zigEnvironment = execFileSync(toolchain.tools.zig.path, ["env"], {
-		encoding: "utf8",
-	});
-	const libDirectory = /\.lib_dir = ("(?:[^"\\]|\\.)*")/.exec(zigEnvironment)?.[1];
-	if (libDirectory === undefined)
-		throw new Error("Zig did not report its library directory");
-	const wasi = path.join(JSON.parse(libDirectory) as string, "libc/wasi");
-	for (const file of [
-		"LICENSE",
-		"LICENSE-MIT",
-		"LICENSE-APACHE",
-		"LICENSE-APACHE-LLVM",
-		"libc-bottom-half/cloudlibc/LICENSE",
-		"libc-top-half/musl/COPYRIGHT",
-	])
-		notices.push([`WASI libc: ${file}`, path.join(wasi, file)]);
+	// SDK binary archives omit the notices for the runtime libraries linked into the reactor.
+	notices.push([
+		`WASI SDK ${toolchain.sdkVersion} runtime libraries`,
+		"runtime/vendor/wasi-sdk/COPYRIGHT",
+	]);
 	return notices
 		.map(([name, file]) => `${name}\n${readFileSync(file, "utf8")}`)
 		.join("\n\n");

@@ -29,7 +29,11 @@ import {
 	runtimeHeaderHash,
 } from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
-import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
+import {
+	formatToolchainReport,
+	inspectToolchain,
+	requireWasmToolchain,
+} from "../src/toolchain.ts";
 import type { ToolchainReport } from "../src/toolchain.ts";
 
 interface FakeToolchain {
@@ -53,6 +57,27 @@ function executable(filePath: string, body: string): void {
 	writeFileSync(filePath, `#!/bin/sh\n${body}`);
 	chmodSync(filePath, 0o755);
 }
+
+it("rejects Wasm compilers without the LLVM reachability fix", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "mal-wasm-toolchain-"));
+	try {
+		const bin = path.join(root, "bin");
+		mkdirSync(bin);
+		executable(path.join(bin, "clang"), "echo 'clang version 22.1.0-wasi-sdk'\n");
+		executable(path.join(bin, "llvm-ar"), "echo 'LLVM version 22.1.0'\n");
+		expect(() => requireWasmToolchain(root, { WASI_SDK_PATH: root, PATH: "" })).toThrow(
+			"require LLVM 23 or newer",
+		);
+		expect(() => requireWasmToolchain(root, { PATH: bin })).toThrow("set WASI_SDK_PATH");
+		executable(path.join(bin, "clang"), "echo 'clang version 24.1.0-wasi-sdk'\n");
+		writeFileSync(path.join(root, "VERSION"), "35.0\n");
+		expect(() => requireWasmToolchain(root, { WASI_SDK_PATH: root, PATH: "" })).toThrow(
+			"pinned WASI SDK 34.0",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 function compilerScript(
 	version: string,
@@ -254,7 +279,11 @@ exit 7
 `,
 		);
 		const commands: Array<string> = [];
-		const environment = { ...process.env, MAL_BUILD_JOBS: "2" };
+		const environment = {
+			...process.env,
+			MALIGATOR_WORKERS: "2",
+			MAL_BUILD_JOBS: "2",
+		};
 		const context = {
 			environment,
 			onCommand: (command: { tool: string }) => {

@@ -1,16 +1,25 @@
 # Engine-only WebAssembly
 
-Maligator can build a synchronous engine reactor for `wasm32-wasip1`, using Zig's
-`wasm32-wasi` target and the Rust toolchain pinned in `runtime/rust/rust-toolchain.toml`.
+Maligator can build a synchronous engine reactor for `wasm32-wasip1`, using WASI SDK
+34.0 and the Rust toolchain pinned in `runtime/rust/rust-toolchain.toml`.
 This is the compiler host used by the website explorer. The ordinary native CLI's
 macOS/Linux executable targets remain separate.
 
-Install Zig and the pinned Rust toolchain, then add its target:
+Install [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-34),
+set `WASI_SDK_PATH` to its extracted directory, and install the pinned Rust target:
 
 ```sh
+export WASI_SDK_PATH=/path/to/wasi-sdk-34.0-your-platform
 cd runtime/rust
 rustup target add wasm32-wasip1
 ```
+
+The C compiler must use LLVM 23 or newer. Earlier LLVM versions can exhaust memory
+in the WebAssembly irreducible-control-flow pass when compiling the Explorer's
+large generated functions; LLVM 23 includes the
+[reachability fix](https://github.com/llvm/llvm-project/commit/0a76568db07ec7f5469aa189e10283980e609ef6).
+The SDK release is pinned together with its runtime notices in
+`runtime/vendor/wasi-sdk/COPYRIGHT`, since its binary archives omit those files.
 
 From the repository root, after the environment and activity checks in `AGENTS.md`:
 
