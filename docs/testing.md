@@ -317,10 +317,12 @@ Every selected test still executes on every run. Modified corpus snapshots are
 rejected, and an existing snapshot is never reset underneath another reader.
 The normal cache lease and pruning rules protect these inputs during execution.
 
-Canonical report commands remove ambient `MAL_*`, `T262_*`, `WPT_ROOT`, Node
-injection, sanitizer, allocator, and dynamic-loader dimensions before starting.
-Test262 preserves the throughput-only `T262_COMPILE_WORKERS` and `T262_OBJCACHE`
-settings. Partial selections cache their compiled batch objects by default. A
+Canonical report commands remove ambient runtime overrides from `MAL_*` and
+`T262_*`, plus `WPT_ROOT`, Node injection, sanitizer, allocator and dynamic-loader
+dimensions before starting. Resource allocations remain: `MALIGATOR_WORKERS`,
+`MAL_BUILD_JOBS`, `MAL_SANITIZER_WORKERS`, Cargo and other worker-pool limits.
+Test262 also preserves `T262_COMPILE_WORKERS` and `T262_OBJCACHE`.
+Partial selections cache their compiled batch objects by default. A
 complete corpus defaults to bounded per-worker scratch because retaining both
 strict and sloppy object sets can consume tens of GiB while the command is active;
 set `T262_OBJCACHE=1` explicitly to retain them when sufficient disk is available.
