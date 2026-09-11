@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
@@ -29,6 +29,7 @@ import {
 	runtimeHeaderHash,
 } from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
+import { runToStdout } from "../src/test-harness.ts";
 import {
 	formatToolchainReport,
 	inspectToolchain,
@@ -57,6 +58,28 @@ function executable(filePath: string, body: string): void {
 	writeFileSync(filePath, `#!/bin/sh\n${body}`);
 	chmodSync(filePath, 0o755);
 }
+
+it("reports native process failures immediately with the termination reason", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "mal-native-failure-"));
+	const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+	try {
+		const binary = path.join(root, "child");
+		executable(binary, "exit 7\n");
+		expect(() => runToStdout(binary)).toThrow("exited with status 7");
+		expect(stderr).toHaveBeenCalledWith(expect.stringContaining("exited with status 7"));
+		executable(binary, "exec /bin/sleep 1\n");
+		expect(() =>
+			runToStdout(binary, {
+				timeoutMs: 50,
+				env: { MAL_ASAN: "0", MAL_UBSAN: "0", MAL_GC_STRESS: "0" },
+			}),
+		).toThrow("timed out after 50ms");
+		expect(stderr).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));
+	} finally {
+		stderr.mockRestore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 it("rejects Wasm compilers without the LLVM reachability fix", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-wasm-toolchain-"));

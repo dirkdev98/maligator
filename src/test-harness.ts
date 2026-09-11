@@ -542,21 +542,34 @@ export class RunError extends Error {
 export function runToStdout(binary: string, options: RunOptions = {}): string {
 	const env = { ...process.env, ...options.env };
 	const invocation = resolveHarnessExecutionInvocation(binary);
+	const timeout = scaledNativeRunTimeoutMs(options.timeoutMs, env);
 	const startedAtMs = Date.now();
 	const startedAt = performance.now();
 	try {
 		return execFileSync(invocation.executable, invocation.args, {
 			env,
 			encoding: "utf-8",
-			timeout: scaledNativeRunTimeoutMs(options.timeoutMs, env),
+			timeout,
 		});
 	} catch (error) {
-		const e = error as { stdout?: string; stderr?: string };
-		throw new RunError(
-			`binary exited non-zero: ${binary}`,
-			e.stdout ?? "",
-			e.stderr ?? "",
-		);
+		const e = error as NodeJS.ErrnoException & {
+			stdout?: string;
+			stderr?: string;
+			status?: number | null;
+			signal?: NodeJS.Signals | null;
+		};
+		const reason =
+			e.code === "ETIMEDOUT"
+				? `timed out after ${timeout}ms`
+				: e.signal
+					? `terminated by ${e.signal}`
+					: e.status !== undefined && e.status !== null
+						? `exited with status ${e.status}`
+						: `could not start (${e.code ?? "unknown error"})`;
+		const message = `native binary ${reason}: ${binary}`;
+		// A job deadline can stop Vitest before its final failure summary is printed.
+		process.stderr.write(`[native] ${message}\n`);
+		throw new RunError(message, e.stdout ?? "", e.stderr ?? "");
 	} finally {
 		recordTestTelemetry({
 			phase: "execute",
