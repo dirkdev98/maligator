@@ -34,9 +34,24 @@ are independent: the compiler can describe native programs with capabilities tha
 its own engine host does not install.
 
 The build shares the normal compiler, feature derivation, cache leases and verified
-artifact store. Source contents, compiler implementation, runtime headers/sources,
-Rust inputs, explicit flags and toolchain identity determine cache reuse. Partial
-builds retain logs under the cache's `work/wasm` directory. No source patching is used.
+artifact store. Its source, C object, archive, Rust library and link stages have
+separate producer identities. Source generation includes the entrypoint, module
+goals and resolved edges, compiler implementation and resolved parser bundle.
+Equivalent checkouts share generated C; programs using `import.meta` or CommonJS
+retain their observable module paths in the identity.
+
+C objects include their source, headers and generated `.inc` files, normalized
+runtime paths, command flags and toolchain identity. A change to one runtime C
+body does not invalidate every other object. Linking keys include the ordered
+input digests and complete link recipe. Changes to logging or timeouts do not
+invalidate these artifacts; changes to output behavior not expressed by the recipe
+require a stage protocol bump.
+
+Compatible Rust feature builds reuse a locked Cargo target under `work/wasm-rust`.
+The target identity includes Rust sources, manifests, toolchain and build options;
+each feature selection publishes its own immutable library. Build worker counts
+do not affect artifact identity. Successful action scratch is removed, while failed
+builds retain command logs under `work/wasm`. No source patching is used.
 The default maximum linear memory is 256 MiB, including a 16 MiB C stack. General
 stackful scheduling, native process APIs and Wasm threads are unsupported.
 

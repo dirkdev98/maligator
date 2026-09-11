@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WASI } from "node:wasi";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { assertWasmEngineConfig, buildWasmEngine } from "../src/wasm-build.ts";
 import { WasmEngine } from "../src/wasm-embedding.ts";
@@ -18,12 +18,12 @@ const config = resolveBuildConfig({
 	surface: { node: false, webPlatform: false, maligator: false },
 });
 let module: WebAssembly.Module;
+const directory = mkdtempSync(path.join(os.tmpdir(), "mal-wasm-test-"));
+
+afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 beforeAll(() => {
-	const output = path.join(
-		mkdtempSync(path.join(os.tmpdir(), "mal-wasm-test-")),
-		"fixture.wasm",
-	);
+	const output = path.join(directory, "fixture.wasm");
 	buildWasmEngine({
 		root: process.cwd(),
 		entry: "tests/fixtures/wasm/entry.mts",
