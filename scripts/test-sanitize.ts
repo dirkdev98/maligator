@@ -33,6 +33,8 @@ export function sanitizerEnvironment(
 	const shared = {
 		...workerEnvironment(budget),
 		...(telemetry === undefined ? {} : { [TEST_TELEMETRY_ENV]: telemetry }),
+		// Standalone runners otherwise leave VM reclamation to process exit.
+		MAL_GC_AT_EXIT: "1",
 		MAL_BUILD_JOBS: String(buildJobs),
 		MAL_SANITIZER_WORKERS: String(workers),
 	};

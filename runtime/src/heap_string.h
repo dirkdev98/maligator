@@ -113,7 +113,8 @@ const c16 *mal_string_flatten(MalString *string);
  * keep that access local and leave the allocating cons-string path out of line.
  */
 static inline const c16 *mal_string_code_units(const MalString *string) {
-    if (string->storage == MAL_STRING_STORAGE_INLINE) {
+    // C memory operations require nonnull pointers, including empty wire strings.
+    if (string->storage == MAL_STRING_STORAGE_INLINE || string->length == 0) {
         return string->inline_code_units;
     }
     if (string->storage != MAL_STRING_STORAGE_CONS) {

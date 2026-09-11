@@ -270,8 +270,10 @@ Native coverage is also deliberately non-Cartesian. The explicit
 `tests/test-suite-native-sanitizer.txt` manifest owns files with elevated C/Rust UB
 risk: allocator and GC lifetime, suspended or re-entrant work, untrusted byte and
 buffer boundaries, interpreter memory access, and native FFI services. Those files
-run under UBSan on macOS and ASan+UBSan elsewhere; every other authored native test
-runs once in the ordinary native dimension. The standalone sanitizer runner defaults
+run under UBSan on macOS and ASan+UBSan elsewhere. Sanitizer runs enable
+`MAL_GC_AT_EXIT=1` so VM teardown is exercised and leak detection checks allocations
+that survive cleanup. Every other authored native test runs once in the ordinary
+native dimension. The standalone sanitizer runner defaults
 to at most two Vitest workers; gates pass their selected worker budget. Each test
 worker receives one child build job. Files whose dominant check already applies maximal GC stress and verification
 remain in the normal dimension instead of multiplying both expensive instruments.

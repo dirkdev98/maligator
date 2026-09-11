@@ -120,6 +120,31 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr).toBe(0);
 	}
+	it("interns empty wire strings before installing language intrinsics", () => {
+		acceptsWire(
+			"empty-string-constant",
+			serializeRuntimeImage(
+				{ ...definition, stringConstants: [[]] },
+				{ debugInfo: false },
+			),
+		);
+	});
+	it("reads empty wire strings through JSON, padding and Symbol descriptions", () => {
+		const entrypoint = path.join(directory, "empty-string-operations.mjs");
+		writeFileSync(
+			entrypoint,
+			`function inspect(value) {
+				return JSON.stringify({[value]: [value, value.padStart(2, "x"), value.padEnd(2, "x"), String(Symbol(value))]});
+			}
+			globalThis.inspect = inspect;
+			if (inspect("") !== '{"":["","xx","xx","Symbol()"]}') throw new Error("empty string operations");`,
+		);
+		const image = compileEntrypoint(entrypoint, { stripTypes: stripCompactTypes });
+		acceptsWire(
+			"empty-string-operations",
+			serializeRuntimeImage(image.runtime, { debugInfo: false }),
+		);
+	});
 	it("validates precise sum register bounds and bounded side data", () => {
 		const image: RuntimeImage = {
 			...definition,
