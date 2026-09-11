@@ -499,10 +499,14 @@ export function analyzeCoreValueKinds(
 		)
 			exactInt32[value] = 1;
 	}
-	const exactQueue = new Array<number>(transferOutputs.length);
-	for (let index = 0; index < exactQueue.length; index++) exactQueue[index] = index;
+	const exactQueue: Array<number> = [];
 	const exactQueued = new Uint8Array(transferOutputs.length);
-	exactQueued.fill(1);
+	for (let index = 0; index < transferOutputs.length; index++) {
+		const kind = transferKinds[index]!;
+		if (kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY) continue;
+		exactQueue.push(index);
+		exactQueued[index] = 1;
+	}
 	let exactCursor = 0;
 	while (exactCursor < exactQueue.length) {
 		const index = exactQueue[exactCursor++]!;
@@ -532,7 +536,18 @@ export function analyzeCoreValueKinds(
 				) === "move");
 		if (!forwardsInteger) continue;
 		exactInt32[output] = 1;
-		wakeDependents(output, exactQueued, exactQueue);
+		for (let dependency = dependentHeads[output]!; dependency >= 0; ) {
+			const transfer = dependentTransfers[dependency]!;
+			dependency = dependentNext[dependency]!;
+			const kind = transferKinds[transfer]!;
+			if (
+				exactQueued[transfer] !== 0 ||
+				(kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY)
+			)
+				continue;
+			exactQueued[transfer] = 1;
+			exactQueue.push(transfer);
+		}
 	}
 	const result: CoreValueKindAnalysis = {
 		kindMask(value) {

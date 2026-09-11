@@ -1,5 +1,10 @@
 import { coreOpcodeId } from "./core-ir.ts";
-import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreOpcodeRegistry,
+} from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_FUNCTION_HAS_BRANCHES = 1 << 0;
@@ -21,6 +26,8 @@ export const CORE_FUNCTION_FEATURE_MASK =
 	CORE_FUNCTION_HAS_EDGE_ARGUMENTS;
 
 export type CoreFunctionFeatureBits = number;
+
+const opcodeFeatures = new WeakMap<CoreOpcodeRegistry, Map<number, number>>();
 
 function hasControlCycle(fn: CoreFunctionStore): boolean {
 	const colors = new Map<CoreBlockId, number>();
@@ -70,6 +77,11 @@ function scanFeatures(
 	opcodeOffset: number,
 ): CoreFunctionFeatureBits {
 	let bits = 0;
+	let featuresByOpcode = opcodeFeatures.get(fn.registry);
+	if (featuresByOpcode === undefined) {
+		featuresByOpcode = new Map();
+		opcodeFeatures.set(fn.registry, featuresByOpcode);
+	}
 	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
 		const block = blockIndex as CoreBlockId;
 		if (fn.kernel.blockLive(block) === 0) continue;
@@ -102,15 +114,22 @@ function scanFeatures(
 			if (opcodePresence !== undefined) {
 				opcodePresence[opcodeOffset + (opcode >>> 5)]! |= 1 << (opcode & 31);
 			}
-			const descriptor = fn.registry.byId(coreOpcodeId(opcode));
-			if (descriptor.effects.mayThrow) bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
-			if (descriptor.effects.reads.length > 0 || descriptor.effects.writes.length > 0) {
-				bits |= CORE_FUNCTION_HAS_MEMORY_ACCESSES;
+			let features = featuresByOpcode.get(opcode);
+			if (features === undefined) {
+				const descriptor = fn.registry.byId(coreOpcodeId(opcode));
+				features = 0;
+				if (descriptor.effects.mayThrow) features |= CORE_FUNCTION_HAS_EXCEPTIONS;
+				if (descriptor.effects.reads.length > 0 || descriptor.effects.writes.length > 0) {
+					features |= CORE_FUNCTION_HAS_MEMORY_ACCESSES;
+				}
+				if (descriptor.allocation !== undefined)
+					features |= CORE_FUNCTION_HAS_ALLOCATIONS;
+				if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
+					features |= CORE_FUNCTION_HAS_CALLS;
+				}
+				featuresByOpcode.set(opcode, features);
 			}
-			if (descriptor.allocation !== undefined) bits |= CORE_FUNCTION_HAS_ALLOCATIONS;
-			if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
-				bits |= CORE_FUNCTION_HAS_CALLS;
-			}
+			bits |= features;
 			if ((candidateOpcodes?.[opcode] ?? 0) !== 0) {
 				bits |= CORE_FUNCTION_HAS_CANDIDATE_OPCODES;
 			}

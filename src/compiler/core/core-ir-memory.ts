@@ -195,13 +195,13 @@ function exactLocation(
 	instruction: CoreInstructionId,
 	access: CoreOpcodeAccess,
 	resolution: CoreMemoryResolution | undefined,
+	base: CoreValueId | undefined,
+	key: CoreAccessKey | undefined,
 ): CoreExactMemoryLocation | undefined {
 	const attributes = access.attributes ?? [];
 	switch (access.family) {
 		case "object-slot": {
 			if (resolution === undefined || access.baseOperand === undefined) return undefined;
-			const base = operandAt(fn, instruction, access.baseOperand);
-			const key = declaredKey(fn, instruction, access);
 			if (base === undefined || key === undefined) return undefined;
 			const resolved = resolution.ownCell(base, key, access.mode);
 			if (resolved === undefined) return undefined;
@@ -261,14 +261,14 @@ export function coreMemoryAccesses(
 				: undefined;
 		const memoryAccess: CoreMemoryAccess = {
 			mode: access.mode,
-			location: exactLocation(fn, instruction, access, resolution) ?? {
+			location: exactLocation(fn, instruction, access, resolution, base, key) ?? {
 				kind: "family",
 				family: access.family,
 			},
-			...(base === undefined ? {} : { base }),
-			...(key === undefined ? {} : { key }),
-			...(value === undefined ? {} : { value }),
-			...(result === undefined ? {} : { result }),
+			base,
+			key,
+			value,
+			result,
 		};
 		accesses.push(Object.freeze(memoryAccess));
 	}
@@ -506,6 +506,7 @@ function memoryVersions(
 			definitions.set(slot, writeIdentity(definitions, slot));
 		}
 	};
+	const coveredWrites = new Uint8Array(CORE_EFFECT_DOMAINS.length);
 	for (const instruction of relevantInstructions) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const block = fn.instructionBlock(instruction);
@@ -529,7 +530,7 @@ function memoryVersions(
 		const definitions = new Map<number, number>();
 		initializationDefinitions(instruction, definitions);
 		const effects = coreInstructionEffects(fn, instruction);
-		const coveredWrites = new Set<CoreEffectDomain>();
+		coveredWrites.fill(0);
 		for (const access of accesses) {
 			if (access.mode !== "write") continue;
 			const family = coreMemoryLocationFamily(access.location);
@@ -546,7 +547,7 @@ function memoryVersions(
 				}
 			}
 			for (const domain of domainsForFamily(family)) {
-				coveredWrites.add(domain);
+				coveredWrites[domainSlot.get(domain)!] = 1;
 				if (!exactAccess) {
 					killDomain(domain, definitions);
 				} else {
@@ -556,9 +557,10 @@ function memoryVersions(
 			}
 		}
 		const universal = effects.callsUserCode || effects.maySuspend;
-		for (const domain of CORE_EFFECT_DOMAINS) {
+		for (let slot = 0; slot < CORE_EFFECT_DOMAINS.length; slot++) {
+			const domain = CORE_EFFECT_DOMAINS[slot]!;
 			if (!effects.writes.includes(domain) && !universal) continue;
-			if (coveredWrites.has(domain) && !universal) continue;
+			if (coveredWrites[slot] !== 0 && !universal) continue;
 			killDomain(domain, definitions);
 		}
 		if (reads.size === 0 && definitions.size === 0) continue;
