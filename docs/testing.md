@@ -186,11 +186,12 @@ use the matched experiment workflow above for performance conclusions.
 
 ## Cache ownership
 
-Maligator bounds its shared user-cache artifacts without touching source,
-the pinned Test262 corpus, committed baselines, or user output. Inspect usage
+Maligator bounds its shared user-cache artifacts without touching project source,
+committed baselines, or user output. Shared Test262 snapshots are rebuildable cache
+entries; pruning retains the two most recently used corpus revisions. Inspect usage
 with `maligator cache status`; preview or apply reclamation with
 `maligator cache prune --dry-run` and `maligator cache prune`. Explicit prune
-targets 5 GiB and normally considers entries unused for at least one day. Above
+targets 15 GiB and normally considers entries unused for at least one day. Above
 twice the target it applies the per-family retention floors immediately, which
 prevents a burst of content-addressed artifacts from filling the disk.
 
@@ -284,6 +285,16 @@ backends; it is not part of the routine full gate. `test:full:report` completes
 every full-gate stage even if an earlier stage fails. Test262 writes
 dimension-specific strict, sloppy, and combined reports under
 `.cache/mal-build/test262*/`.
+
+`npm run test262:prepare` publishes the pinned corpus under
+`<shared-cache>/test262-corpora/<revision>` and its parsed metadata in the shared
+artifact store. All Maligator checkouts using that revision share the corpus;
+metadata reuse also requires matching parser code, YAML dependency contents, and
+index format. The index contains source digests and frontmatter, with no test
+results or source-text copies. Workers load and verify only their assigned batches.
+Every selected test still executes on every run. Modified corpus snapshots are
+rejected, and an existing snapshot is never reset underneath another reader.
+The normal cache lease and pruning rules protect these inputs during execution.
 
 Canonical report commands remove ambient `MAL_*`, `T262_*`, `WPT_ROOT`, Node
 injection, sanitizer, allocator, and dynamic-loader dimensions before starting.
@@ -415,8 +426,9 @@ execution. It excludes application fixtures and the slow tests listed in
 those directly. `npm test run` runs both regular Vitest projects once. The Rust lane is
 full-only because it compiles the feature-complete crate. `test262:prepare` is
 the only Test262 command that clones, fetches, or checks out the pinned full
-corpus. All execution commands consume that cached checkout read-only and name
-this recovery command when it is absent or stale. The full Test262 corpus
+corpus. All execution commands consume that shared snapshot read-only and name
+this preparation command when it is absent. A modified snapshot must be restored
+before it can be used. Running the full Test262 corpus
 requires explicit approval; targeted filters and manifests do not.
 
 The native harness shares persistent frontend, generated-object, runtime, and
@@ -509,7 +521,7 @@ backend/mode only when that dimension matters to the failure.
   the direct lane covers the same curated set as the cumulative check tier.
 - Every Test262 manifest path must exist in the pinned corpus; missing paths fail.
 - Test262 checkout and cache revisions must match `TEST262_METADATA.revision`.
-  Run `npm run test262:prepare` to populate or repair the cached full corpus;
+  Run `npm run test262:prepare` to populate the shared pinned corpus and input index;
   never vendor upstream Test262 files. To advance the corpus, update that revision
   deliberately, run the approved baseline-update command, and commit the resulting
   `scripts/test262.json` change.

@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -124,6 +131,27 @@ describe("Maligator cache management", () => {
 		expect(result.removed.map((entry) => entry.path)).toContain(old);
 		expect(existsSync(old)).toBe(false);
 		expect(existsSync(path.join(current, "aa", "image-a", "program.malc"))).toBe(true);
+	});
+
+	it("retains the two most recently used shared Test262 corpus revisions", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "test262-corpora", "old-revision", 100, 10);
+		const recent = [
+			artifact(root, "test262-corpora", "previous-revision", 100, 1),
+			artifact(root, "test262-corpora", "current-revision", 100, 0),
+		];
+		try {
+			const result = pruneMaligatorCache({
+				cacheRoot: root,
+				maxBytes: 1,
+				minAgeMs: 0,
+				nowMs: pruneNowMs,
+			});
+			expect(result.removed.map((entry) => entry.path)).toEqual([old]);
+			for (const directory of recent) expect(existsSync(directory)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("prunes Rust target families independently", () => {

@@ -1,39 +1,27 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { test262LoadCache } from "./cache.ts";
+import { test262LoadInputs } from "./cache.ts";
+import { TEST262_METADATA } from "./constants.ts";
 import {
 	test262DrainStats,
 	test262RunBatch,
 	test262SetNativeBuildInputs,
 } from "./runtime.ts";
 import type { Test262NativeBuildInputs } from "./runtime.ts";
-import type { Test262File } from "./types.ts";
-
-/**
- * A compile worker owns a whole batch end to end - compose, JS->C compile, cc,
- * run, parse - on its own thread, so the otherwise single-threaded JS->C compile
- * (the run's serial bottleneck) parallelizes across cores. Only path lists and
- * small result lists cross the thread boundary: the worker loads the test corpus
- * itself (from the on-disk cache) and writes/reads the large generated C and
- * objects through the filesystem and the shared artifact cache.
- */
+import type { Test262Input } from "./types.ts";
 
 if (!parentPort) {
 	throw new Error("compile-worker must run as a worker thread");
 }
 const port = parentPort;
-test262SetNativeBuildInputs(
-	(workerData as { nativeBuildInputs: Test262NativeBuildInputs }).nativeBuildInputs,
-);
-
-// Each worker holds its own copy of the corpus, indexed by path. Loading it here
-// (rather than shipping file contents per message) keeps messages tiny.
-const corpus = test262LoadCache();
-const filesByPath = new Map<string, Test262File>(
-	corpus.files.map((file) => [file.path, file]),
-);
+const inputs = workerData as {
+	nativeBuildInputs: Test262NativeBuildInputs;
+	corpusRoot: string;
+};
+test262SetNativeBuildInputs(inputs.nativeBuildInputs);
+TEST262_METADATA.path = inputs.corpusRoot;
 
 type IncomingMessage =
-	| { type: "batch"; paths: Array<string>; workerId: number }
+	| { type: "batch"; inputs: Array<Test262Input>; workerId: number }
 	| { type: "drain" };
 
 port.on("message", (message: IncomingMessage) => {
@@ -43,28 +31,19 @@ port.on("message", (message: IncomingMessage) => {
 		return;
 	}
 
-	void runBatch(message.paths, message.workerId);
+	void runBatch(message.inputs, message.workerId);
 });
 
-async function runBatch(paths: Array<string>, workerId: number) {
-	const files: Array<Test262File> = [];
-	for (const path of paths) {
-		const file = filesByPath.get(path);
-		if (file) {
-			// Results are mutated in place; reset before a (re)run.
-			file.result = "UNKNOWN";
-			files.push(file);
-		}
-	}
+async function runBatch(inputs: Array<Test262Input>, workerId: number) {
+	const files = test262LoadInputs(TEST262_METADATA.path, inputs);
 
 	await test262RunBatch(files, workerId);
 
 	port.postMessage({
 		type: "batchDone",
 		results: files.map((file) => ({ path: file.path, result: file.result })),
-		processed: paths.length,
+		processed: files.length,
 	});
 }
 
-// Signal readiness so the main thread sends the first batch.
 port.postMessage({ type: "ready" });

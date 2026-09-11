@@ -144,7 +144,7 @@ export function test262RuntimeVerdict(
 
 export function test262BatchRegressions(
 	results: ReadonlyArray<{ path: string; result: Test262Result }>,
-	filesByPath: ReadonlyMap<string, Test262File>,
+	filesByPath: ReadonlyMap<string, Pick<Test262File, "frontmatter">>,
 	previous: Readonly<Test262Output["results"]>,
 	variant: Test262Variant,
 ): Array<string> {

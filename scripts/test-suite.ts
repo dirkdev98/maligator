@@ -18,6 +18,7 @@ import {
 	TEST_TELEMETRY_ENV,
 } from "../src/test-telemetry.ts";
 import type { TestTelemetrySummary } from "../src/test-telemetry.ts";
+import { TEST262_METADATA } from "../src/test262/constants.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -698,8 +699,8 @@ const coldSmokeRun =
 		path.join(sharedCache, "test262-program-images"),
 		path.join(sharedCache, "frontend", "artifacts"),
 		path.join(root, ".cache/mal-build/test262/Test262Wire"),
-		path.join(root, ".cache/test262/.git"),
-		path.join(root, ".cache/test262-cache.json"),
+		path.join(TEST262_METADATA.path, ".git"),
+		path.join(sharedCache, "actions", "test262-input-index"),
 	].some((entry) => !existsSync(entry));
 // Cumulative gates must finish when earlier benchmark work evicts an exact artifact
 // while leaving the coarse cache roots that the standalone warm probe can inspect.

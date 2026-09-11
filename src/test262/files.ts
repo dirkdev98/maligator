@@ -1,145 +1,141 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	renameSync,
+	rmSync,
+	utimesSync,
+} from "node:fs";
 import * as path from "node:path";
-import { parse } from "yaml";
+import {
+	artifactActionKey,
+	artifactProducer,
+	withArtifactActionLock,
+} from "../artifact-store.ts";
+import { createCacheLease } from "../cache-management.ts";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
-import type { Test262File, Test262Frontmatter } from "./types.ts";
 
-const TEST262_REMOTE = `https://github.com/${TEST262_METADATA.repository}`;
+const CORPUS_PRODUCER = artifactProducer("test262-corpus", 1, "git-checkout");
 
-/** Materialize the exact Test262 revision selected by the repository. */
-export function test262PrepareCheckout() {
-	if (!existsSync(path.join(TEST262_METADATA.path, ".git"))) {
-		test262Log("Cloning repository...");
-		mkdirSync(TEST262_METADATA.path, { recursive: true });
-		execFileSync("git", ["init"], {
-			cwd: TEST262_METADATA.path,
-			stdio: "ignore",
-		});
-		execFileSync("git", ["remote", "add", "origin", TEST262_REMOTE], {
-			cwd: TEST262_METADATA.path,
-			stdio: "ignore",
-		});
-	} else {
-		// Preparation is the only command allowed to repair/fetch the corpus. Keep
-		// it non-interactive even when an old cache was initialized with SSH.
-		execFileSync("git", ["remote", "set-url", "origin", TEST262_REMOTE], {
-			cwd: TEST262_METADATA.path,
-			stdio: "ignore",
-		});
-	}
-
-	try {
-		execFileSync("git", ["cat-file", "-e", `${TEST262_METADATA.revision}^{commit}`], {
-			cwd: TEST262_METADATA.path,
-			stdio: "ignore",
-		});
-	} catch {
-		test262Log(`Fetching pinned revision ${TEST262_METADATA.revision}...`);
-		execFileSync("git", ["fetch", "--depth", "1", "origin", TEST262_METADATA.revision], {
-			cwd: TEST262_METADATA.path,
-			stdio: "ignore",
-		});
-	}
-	execFileSync("git", ["checkout", "--detach", "--force", TEST262_METADATA.revision], {
-		cwd: TEST262_METADATA.path,
-		stdio: "ignore",
-	});
-
-	return test262Checkout();
+export interface Test262Corpus {
+	path: string;
+	revision: string;
+	tree: string;
+	files: Array<string>;
 }
 
-/**
- * Validate the pinned full corpus without cloning, fetching, or changing its
- * checkout. Test commands are deliberately read-only cache consumers.
- */
-export function test262Checkout() {
-	if (!existsSync(path.join(TEST262_METADATA.path, ".git"))) {
-		throw new Error(
-			`Test262 corpus cache is missing at ${TEST262_METADATA.path}; run npm run test262:prepare`,
-		);
-	}
-
-	const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-		cwd: TEST262_METADATA.path,
-		encoding: "utf-8",
-	}).trim();
-	if (sha !== TEST262_METADATA.revision) {
-		throw new Error(
-			`Test262 corpus cache is ${sha}; expected ${TEST262_METADATA.revision}; run npm run test262:prepare`,
-		);
-	}
-	test262Log(`Revision: ${sha}.`);
-
-	return sha;
+interface CorpusOptions {
+	cacheDirectory?: string;
+	repository?: string;
+	revision?: string;
 }
 
-export function test262ListFiles() {
-	return execFileSync("git", ["ls-files", "-z", "--", "test"], {
-		cwd: TEST262_METADATA.path,
-		encoding: "utf8",
-		maxBuffer: 8 * 1024 * 1024,
-	})
+function corpusLocation(options: CorpusOptions) {
+	const cache = options.cacheDirectory ?? maligatorCacheDirectory();
+	const revision = options.revision ?? TEST262_METADATA.revision;
+	if (!/^[0-9a-f]{40}$/.test(revision))
+		throw new Error("Test262 requires a pinned commit");
+	return { cache, revision, directory: path.join(cache, "test262-corpora", revision) };
+}
+
+function git(directory: string, arguments_: Array<string>): string {
+	return execFileSync(
+		"git",
+		["-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", ...arguments_],
+		{
+			cwd: directory,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+			maxBuffer: 16 * 1024 * 1024,
+			timeout: 120_000,
+			env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+		},
+	);
+}
+
+function inspectCorpus(directory: string, revision: string): Test262Corpus {
+	if (!existsSync(path.join(directory, ".git"))) {
+		throw new Error(
+			`Test262 corpus is missing at ${directory}; run npm run test262:prepare`,
+		);
+	}
+	const sha = git(directory, ["rev-parse", "HEAD"]).trim();
+	if (sha !== revision) throw new Error(`Test262 corpus is ${sha}; expected ${revision}`);
+	if (
+		git(directory, [
+			"status",
+			"--porcelain=v1",
+			"--untracked-files=all",
+			"--ignored",
+		]).trim() !== ""
+	) {
+		throw new Error(
+			`Shared Test262 corpus is modified at ${directory}; restore the pinned contents before running tests`,
+		);
+	}
+	const files = git(directory, [
+		"ls-tree",
+		"-r",
+		"--name-only",
+		"-z",
+		"HEAD",
+		"--",
+		"test",
+	])
 		.split("\0")
 		.filter((file) => file.endsWith(".js") && !file.endsWith("FIXTURE.js"))
 		.sort();
+	if (files.length === 0) throw new Error("Test262 corpus contains no tests");
+	return {
+		path: directory,
+		revision,
+		tree: git(directory, ["rev-parse", "HEAD^{tree}"]).trim(),
+		files,
+	};
 }
 
-export async function test262CollectFiles(
-	iterator: Iterable<string> | AsyncIterable<string>,
-) {
-	const files: Array<Test262File> = [];
-	for await (const file of iterator) {
-		const contents = await readFile(path.join(TEST262_METADATA.path, file), "utf-8");
-		const { source, frontmatter } = extractFrontmatterFromSource(file, contents);
-		files.push({
-			frontmatter,
-			path: file,
-			content: source,
-			result: "UNKNOWN",
-		});
-	}
-
-	files.sort((left, right) =>
-		left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-	);
-	test262Log(`Loaded ${files.length} files.`);
-
-	return files;
-}
-
-export function extractFrontmatterFromSource(
-	path: string,
-	source: string,
-): {
-	frontmatter: Test262Frontmatter;
-	source: string;
-} {
-	const yamlRegex = /\/\*---([\s\S]*?)---\*\//;
-	const match = source.match(yamlRegex);
-
-	if (!match) {
-		return { frontmatter: {}, source };
-	}
-
-	const frontMatterSource = match[1]!.trim().replace(/[\r\n]+/g, "\n");
-
+/** Publish a pinned corpus once; existing snapshots are only validated, never checked out again. */
+export function test262PrepareCheckout(options: CorpusOptions = {}): Test262Corpus {
+	const { cache, directory, revision } = corpusLocation(options);
+	const lease = createCacheLease("test262:prepare", cache);
 	try {
-		const frontmatter = parse(frontMatterSource, {
-			strict: false,
-		}) as Test262Frontmatter;
-
-		return {
-			frontmatter,
-			source,
-		};
-	} catch (e) {
-		// @ts-expect-error add some context to the error.
-		e.source = frontMatterSource;
-		throw new Error(`Could not parse frontmatter for '${path}'.`, {
-			cause: e,
-		});
+		return withArtifactActionLock(
+			cache,
+			"test262-corpus",
+			CORPUS_PRODUCER,
+			artifactActionKey(CORPUS_PRODUCER, { revision }),
+			() => {
+				if (existsSync(directory)) return test262Checkout(options);
+				mkdirSync(path.dirname(directory), { recursive: true });
+				const temporary = mkdtempSync(path.join(path.dirname(directory), ".prepare-"));
+				try {
+					git(temporary, ["init", "--quiet"]);
+					const repository =
+						options.repository ?? `https://github.com/${TEST262_METADATA.repository}`;
+					test262Log(`Fetching pinned revision ${revision}...`);
+					git(temporary, ["fetch", "--depth", "1", repository, revision]);
+					git(temporary, ["checkout", "--detach", "--quiet", revision]);
+					const corpus = inspectCorpus(temporary, revision);
+					renameSync(temporary, directory);
+					return { ...corpus, path: directory };
+				} finally {
+					rmSync(temporary, { recursive: true, force: true });
+				}
+			},
+		);
+	} finally {
+		lease.release();
 	}
+}
+
+export function test262Checkout(options: CorpusOptions = {}): Test262Corpus {
+	const { directory, revision } = corpusLocation(options);
+	const corpus = inspectCorpus(directory, revision);
+	const now = new Date();
+	utimesSync(directory, now, now);
+	test262Log(`Revision: ${revision}.`);
+	return corpus;
 }

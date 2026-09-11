@@ -1,5 +1,3 @@
-import type { Test262File } from "./types.ts";
-
 export function parseTest262Manifest(contents: string): Set<string> {
 	const entries = contents
 		.split("\n")
@@ -44,11 +42,11 @@ function assertManifestPaths(
 	}
 }
 
-export function selectTest262ManifestFiles(
-	files: ReadonlyArray<Test262File>,
+export function selectTest262ManifestFiles<T extends { path: string }>(
+	files: ReadonlyArray<T>,
 	include: ReadonlySet<string> | undefined,
 	exclude: ReadonlySet<string> | undefined,
-): Array<Test262File> {
+): Array<T> {
 	const corpusPaths = new Set(files.map((file) => file.path));
 	if (include) {
 		assertManifestPaths(include, corpusPaths, "Include manifest");

@@ -5,13 +5,9 @@ import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
 import { CommandProgress } from "../src/command-progress.ts";
-import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
+import { test262LoadInputIndex } from "../src/test262/cache.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
-import {
-	test262Checkout,
-	test262CollectFiles,
-	test262ListFiles,
-} from "../src/test262/files.ts";
+import { test262Checkout } from "../src/test262/files.ts";
 import { test262Log } from "../src/test262/log.ts";
 import {
 	parseTest262Policy,
@@ -43,7 +39,7 @@ import {
 	parseTest262Manifest,
 	selectTest262ManifestFiles,
 } from "../src/test262/selection.ts";
-import type { Test262File, Test262Output } from "../src/test262/types.ts";
+import type { Test262File, Test262Input, Test262Output } from "../src/test262/types.ts";
 import { reexecWithCleanTestEnvironment } from "./test-environment.ts";
 
 interface Test262Arguments {
@@ -257,18 +253,20 @@ if (
 	test262Log(`${message}. A full baseline-update run must replace it.`);
 }
 
-const checkoutSha = test262Checkout();
-const fileList = test262ListFiles();
-const cacheContext = test262LoadCache(fileList);
-if (!cacheContext.files.length) {
-	cacheContext.sha = checkoutSha;
+const corpus = test262Checkout();
+const inputIndex = test262LoadInputIndex(corpus);
+progress.stagePassed(
+	1,
+	3,
+	"prepare pinned corpus",
+	`${corpus.revision.slice(0, 12)} · input index ${inputIndex.cache}`,
+);
 
-	cacheContext.files = await test262CollectFiles(fileList);
-	test262PersistCache(cacheContext);
-}
-progress.stagePassed(1, 3, "prepare pinned corpus", checkoutSha.slice(0, 12));
-
-let selection = cacheContext.files;
+type SelectedInput = Test262Input & Pick<Test262File, "result">;
+let selection: Array<SelectedInput> = inputIndex.files.map((file) => ({
+	...file,
+	result: "UNKNOWN",
+}));
 const includeManifest =
 	manifestPaths.length > 0
 		? mergeTest262Manifests(
@@ -359,7 +357,7 @@ function reportProgress(processed: number) {
  */
 async function runWithWorkers(
 	workerCount: number,
-	allBatches: Array<Array<Test262File>>,
+	allBatches: Array<Array<SelectedInput>>,
 	variant: Test262Variant,
 ): Promise<{ aborted: boolean; regressions: Array<string> }> {
 	const filesByPath = new Map(selection.map((file) => [file.path, file]));
@@ -376,7 +374,10 @@ async function runWithWorkers(
 			(_unused, workerId) =>
 				new Promise<void>((resolve, reject) => {
 					const thread = new Worker(workerUrl, {
-						workerData: { nativeBuildInputs: test262NativeBuildInputs() },
+						workerData: {
+							nativeBuildInputs: test262NativeBuildInputs(),
+							corpusRoot: corpus.path,
+						},
 					});
 
 					const sendNext = () => {
@@ -384,7 +385,11 @@ async function runWithWorkers(
 							const batch = allBatches[nextBatch++]!;
 							thread.postMessage({
 								type: "batch",
-								paths: batch.map((file) => file.path),
+								inputs: batch.map(({ path, frontmatter, sourceDigest }) => ({
+									path,
+									frontmatter,
+									sourceDigest,
+								})),
 								workerId,
 							});
 						} else {
@@ -446,7 +451,7 @@ async function runWithWorkers(
 /**
  * Fold the detailed categories for the committed results file.
  */
-function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
+function foldResult(file: Pick<Test262File, "result">): "PASSED" | "SKIPPED" | "FAILED" {
 	if (file.result === "PASSED") {
 		return "PASSED";
 	}
@@ -496,13 +501,13 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	test262Log(`=== ${variant} pass ===`);
 
 	test262ResetStats();
-	for (const file of cacheContext.files) {
+	for (const file of selection) {
 		file.result = "UNKNOWN";
 	}
 	startedAt = Date.now();
 	completed = 0;
 	lastProgressBucket = -1;
-	const batches: Array<Array<Test262File>> = [];
+	const batches: Array<Array<SelectedInput>> = [];
 	for (let i = 0; i < selection.length; i += batchSize) {
 		batches.push(selection.slice(i, i + batchSize));
 	}
@@ -714,7 +719,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 		outputFile,
 		JSON.stringify(
 			{
-				sha: cacheContext.sha,
+				sha: corpus.revision,
 				summary,
 				skips,
 				code,

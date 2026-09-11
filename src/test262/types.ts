@@ -28,10 +28,10 @@ export interface Test262File {
 	result: Test262Result;
 }
 
-export interface Test262Cache {
-	schemaVersion: 2;
-	sha: string;
-	files: Array<Test262File>;
+export interface Test262Input {
+	path: string;
+	frontmatter: Test262Frontmatter;
+	sourceDigest: string;
 }
 
 /**

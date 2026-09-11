@@ -1,9 +1,13 @@
+import * as path from "node:path";
+import { maligatorCacheDirectory } from "../cache-root.ts";
+
+const revision = "3655e7464de3d52643ecddd4b5f9f4f3e7f62398";
+
 export const TEST262_METADATA = {
-	path: ".cache/test262",
+	path: path.join(maligatorCacheDirectory(), "test262-corpora", revision),
 	repository: "tc39/test262",
-	revision: "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
+	revision,
 	buildPath: ".cache/mal-build/test262",
-	cacheFile: ".cache/test262-cache.json",
 	outputFile: "scripts/test262.json",
 
 	// Four full-suite workers can double the wall time of valid native stress tests.

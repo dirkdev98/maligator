@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { SyntaxDiagnostic } from "../src/compiler/frontend/syntax-diagnostic.ts";
 import { compileTest262ProgramImage } from "../src/test262/compile.ts";
-import { extractFrontmatterFromSource } from "../src/test262/files.ts";
+import { extractFrontmatterFromSource } from "../src/test262/frontmatter.ts";
 import { test262CompileNegativeVerdict } from "../src/test262/policy.ts";
 import type { Test262File, Test262Frontmatter } from "../src/test262/types.ts";
 
