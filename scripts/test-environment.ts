@@ -18,7 +18,9 @@ export function cleanTestEnvironment(
 	const environment = Object.fromEntries(
 		Object.entries(source).filter(
 			([name]) =>
-				!name.startsWith("MAL_") &&
+				(!name.startsWith("MAL_") ||
+					name === "MAL_BUILD_JOBS" ||
+					name === "MAL_SANITIZER_WORKERS") &&
 				(!name.startsWith("T262_") ||
 					name === "T262_COMPILE_WORKERS" ||
 					name === "T262_OBJCACHE") &&

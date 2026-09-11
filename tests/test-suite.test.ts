@@ -82,7 +82,7 @@ describe("test suite planner", () => {
 		expect(full).not.toContain("full: Test262 interpreted");
 		expect(full).not.toContain("full: WPT interpreted");
 		expect(full).not.toContain("full: WPT backend and GC matrix");
-		expect(smoke).toContain("  npm run type-check\n");
+		expect(smoke).toContain(" npm run type-check\n");
 		expect(smoke).not.toContain("tests/fixtures/maligator-test");
 	});
 
@@ -124,6 +124,48 @@ describe("test suite planner", () => {
 		).toBe("light");
 		expect(full.approval).toBe("explicit");
 	});
+
+	it.each([1, 2, 4])(
+		"propagates a %i-worker budget into every stage without nested build fan-out",
+		(workers) => {
+			const plan = JSON.parse(
+				runSuite("check", "--workers", String(workers), "--plan=json"),
+			) as {
+				workers: number;
+				stages: Array<{
+					name: string;
+					kind: string;
+					workers: {
+						testWorkers: number;
+						childBuildJobs: number;
+						preparationBuildJobs: number;
+					};
+					environment: NodeJS.ProcessEnv;
+				}>;
+			};
+			expect(plan.workers).toBe(Math.min(workers, os.availableParallelism()));
+			for (const stage of plan.stages) {
+				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
+				expect(
+					stage.workers.testWorkers * stage.workers.childBuildJobs,
+				).toBeLessThanOrEqual(plan.workers);
+				expect(stage.workers.preparationBuildJobs).toBe(plan.workers);
+			}
+			const native = plan.stages.find((stage) => stage.name === "check: native normal")!;
+			expect(native.workers).toEqual({
+				testWorkers: plan.workers,
+				childBuildJobs: 1,
+				preparationBuildJobs: plan.workers,
+			});
+		},
+	);
+
+	it.each(["0", "-1", "1.5", "many"])(
+		"rejects --workers %s before execution",
+		(workers) => {
+			expect(() => runSuite("check", "--workers", workers, "--plan=json")).toThrow();
+		},
+	);
 
 	it.each(["smoke", "check", "full"])(
 		"omits only quality stages from the %s plan and records the missing coverage",

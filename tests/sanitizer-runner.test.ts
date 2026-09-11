@@ -19,7 +19,9 @@ describe("sanitizer runner", () => {
 	});
 
 	it("uses UBSan on Darwin where ASan deadlocks during loader initialization", () => {
-		expect(sanitizerEnvironment("darwin", {}, 8)).toEqual({
+		expect(sanitizerEnvironment("darwin", {}, 8)).toMatchObject({
+			MALIGATOR_WORKERS: "4",
+			CARGO_BUILD_JOBS: "4",
 			MAL_BUILD_JOBS: "4",
 			MAL_SANITIZER_WORKERS: "2",
 			MAL_UBSAN: "1",
@@ -28,7 +30,9 @@ describe("sanitizer runner", () => {
 	});
 
 	it("uses the combined ASan and UBSan compiler mode elsewhere", () => {
-		expect(sanitizerEnvironment("linux", {}, 8)).toEqual({
+		expect(sanitizerEnvironment("linux", {}, 8)).toMatchObject({
+			MALIGATOR_WORKERS: "4",
+			CARGO_BUILD_JOBS: "4",
 			MAL_ASAN: "1",
 			MAL_BUILD_JOBS: "4",
 			MAL_SANITIZER_WORKERS: "2",
@@ -45,6 +49,21 @@ describe("sanitizer runner", () => {
 				8,
 			),
 		).toMatchObject({ MAL_BUILD_JOBS: "3", MAL_SANITIZER_WORKERS: "4" });
+	});
+
+	it("caps sanitizer pools at the queue budget even with larger ambient counts", () => {
+		expect(
+			sanitizerEnvironment(
+				"linux",
+				{ MALIGATOR_WORKERS: "1", MAL_BUILD_JOBS: "4", MAL_SANITIZER_WORKERS: "4" },
+				8,
+			),
+		).toMatchObject({
+			MALIGATOR_WORKERS: "1",
+			MAL_BUILD_JOBS: "1",
+			CARGO_BUILD_JOBS: "1",
+			MAL_SANITIZER_WORKERS: "1",
+		});
 	});
 
 	it("passes an explicitly requested gate telemetry directory to Vitest", () => {

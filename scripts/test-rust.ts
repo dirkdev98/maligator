@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
+import { workerBudget, workerEnvironment } from "../src/worker-budget.ts";
 
 function selectedRustTool(rustup: string, name: "cargo" | "rustc", cwd: string): string {
 	const selected = spawnSync(rustup, ["which", name], { cwd, encoding: "utf8" });
@@ -42,6 +43,7 @@ export function runRustTests(args = process.argv.slice(2)): number {
 			stdio: "inherit",
 			env: {
 				...process.env,
+				...workerEnvironment(workerBudget(process.env.MALIGATOR_WORKERS)),
 				PATH: `${path.dirname(cargo)}${path.delimiter}${process.env.PATH ?? ""}`,
 				CARGO_HOME: cargoCacheDirectory(),
 				CARGO_TARGET_DIR: path.join(maligatorCacheDirectory(), "work", "rust-tests"),

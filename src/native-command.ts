@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { buildWorkerCount } from "./worker-budget.ts";
 
 const DEFAULT_NATIVE_BUILD_JOBS = 8;
 let resourceReportSerial = 0;
@@ -17,14 +18,8 @@ export interface NativeCommand {
 	args: ReadonlyArray<string>;
 }
 
-/** Bound compiler fan-out while allowing constrained builders to opt down. */
 export function nativeBuildJobs(environment: NodeJS.ProcessEnv): number {
-	const configured = environment.MAL_BUILD_JOBS;
-	if (configured === undefined || configured === "") return DEFAULT_NATIVE_BUILD_JOBS;
-	if (!/^\d+$/.test(configured) || Number(configured) < 1) {
-		throw new Error("MAL_BUILD_JOBS must be a positive integer");
-	}
-	return Number(configured);
+	return buildWorkerCount(environment, "MAL_BUILD_JOBS", DEFAULT_NATIVE_BUILD_JOBS);
 }
 
 function shellQuote(argument: string): string {

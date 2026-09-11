@@ -2,6 +2,7 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
 import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
+import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
 import {
 	commandEnvironmentPlan,
 	requirementsForCommand,
@@ -16,15 +17,24 @@ export function sanitizerEnvironment(
 ): NodeJS.ProcessEnv {
 	const undefinedBehavior = "halt_on_error=1:print_stacktrace=1";
 	const telemetry = environment[TEST_TELEMETRY_ENV];
-	const workers =
-		environment.MAL_SANITIZER_WORKERS ?? String(Math.min(2, availableParallelism));
-	const buildJobs =
-		environment.MAL_BUILD_JOBS ??
-		String(Math.max(1, Math.floor(availableParallelism / 2)));
+	const budget = workerBudget(environment.MALIGATOR_WORKERS, availableParallelism);
+	const workers = workerCount(
+		environment.MAL_SANITIZER_WORKERS,
+		"MAL_SANITIZER_WORKERS",
+		Math.min(2, budget),
+		budget,
+	);
+	const buildJobs = workerCount(
+		environment.MAL_BUILD_JOBS,
+		"MAL_BUILD_JOBS",
+		budget,
+		budget,
+	);
 	const shared = {
+		...workerEnvironment(budget),
 		...(telemetry === undefined ? {} : { [TEST_TELEMETRY_ENV]: telemetry }),
-		MAL_BUILD_JOBS: buildJobs,
-		MAL_SANITIZER_WORKERS: workers,
+		MAL_BUILD_JOBS: String(buildJobs),
+		MAL_SANITIZER_WORKERS: String(workers),
 	};
 	return platform === "darwin"
 		? { ...shared, MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }

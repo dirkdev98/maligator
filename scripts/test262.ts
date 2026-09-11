@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
 import { CommandProgress } from "../src/command-progress.ts";
@@ -40,6 +39,7 @@ import {
 	selectTest262ManifestFiles,
 } from "../src/test262/selection.ts";
 import type { Test262File, Test262Input, Test262Output } from "../src/test262/types.ts";
+import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
 import { reexecWithCleanTestEnvironment } from "./test-environment.ts";
 
 interface Test262Arguments {
@@ -195,15 +195,13 @@ if (onlyVariant !== undefined && onlyVariant !== "strict" && onlyVariant !== "sl
 	throw new Error(`--variant only supports 'strict' or 'sloppy', got '${onlyVariant}'`);
 }
 
-const configuredCompileWorkers = Number(
-	process.env.T262_COMPILE_WORKERS ?? TEST262_METADATA.compileWorkers,
-);
-if (!Number.isInteger(configuredCompileWorkers) || configuredCompileWorkers < 1) {
-	throw new Error("T262_COMPILE_WORKERS must be a positive integer");
-}
-const compileWorkers = Math.max(
-	1,
-	Math.min(configuredCompileWorkers, os.availableParallelism()),
+const budget = workerBudget(process.env.MALIGATOR_WORKERS);
+process.env.MALIGATOR_WORKERS = String(budget);
+const compileWorkers = workerCount(
+	process.env.T262_COMPILE_WORKERS,
+	"T262_COMPILE_WORKERS",
+	TEST262_METADATA.compileWorkers,
+	budget,
 );
 const progress = new CommandProgress("test262");
 progress.start(`${requestedBackend}/${requestedMode} · ${policy} policy`);
@@ -374,6 +372,7 @@ async function runWithWorkers(
 			(_unused, workerId) =>
 				new Promise<void>((resolve, reject) => {
 					const thread = new Worker(workerUrl, {
+						env: { ...process.env, ...workerEnvironment(1) },
 						workerData: {
 							nativeBuildInputs: test262NativeBuildInputs(),
 							corpusRoot: corpus.path,

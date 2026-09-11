@@ -30,6 +30,27 @@ spans. Vitest forks write process-local JSONL while running, so telemetry does n
 serialize the native suite; reports count the contributing processes explicitly.
 Test verdicts and program output are still always recomputed.
 
+## Worker budgets
+
+Use `npm run test:check -- --workers 4` to set a total allocation, or set
+`MALIGATOR_WORKERS=4` for focused commands and queue jobs. The default is half the
+CPUs reported by `os.availableParallelism()`, with a minimum of one; explicit
+allocations are capped at the available CPUs. `--workers` overrides the environment
+default for the gate. Plans and reports record the effective budget and each stage's
+test workers, child build jobs and preparation build jobs.
+
+Vitest and Test262 use up to that many test workers, each inheriting one compiler
+and Cargo job. Native global setup and the Test262 runtime preparation run before
+those workers and can use the full budget. Serial WPT and self-hosted checks can
+also use the full build allocation. Cargo compiles Rust tests before running the
+Rust test pool. `MAL_BUILD_JOBS` and `CARGO_BUILD_JOBS` can lower a build pool further;
+neither can raise it above the inherited allocation. Resource controls survive
+canonical environment cleaning without retaining ambient runtime modes.
+
+The allocation limits managed test and build pools; the queue's CPU affinity and
+quota remain the operating-system limits. Changing worker counts does not change
+artifact identities or permit reuse of previous test verdicts.
+
 ## Diagnostic artifacts
 
 Keep run evidence in a task-scoped directory under `.cache/`. Remove disposable
@@ -250,9 +271,9 @@ Native coverage is also deliberately non-Cartesian. The explicit
 risk: allocator and GC lifetime, suspended or re-entrant work, untrusted byte and
 buffer boundaries, interpreter memory access, and native FFI services. Those files
 run under UBSan on macOS and ASan+UBSan elsewhere; every other authored native test
-runs once in the ordinary native dimension. The sanitizer runner uses two Vitest
-workers by default while bounding nested native compilation to half the available
-CPUs. Files whose dominant check already applies maximal GC stress and verification
+runs once in the ordinary native dimension. The standalone sanitizer runner defaults
+to at most two Vitest workers; gates pass their selected worker budget. Each test
+worker receives one child build job. Files whose dominant check already applies maximal GC stress and verification
 remain in the normal dimension instead of multiplying both expensive instruments.
 Smoke, check, and full retain a complete disjoint partition, so semantic API
 breadth is not recompiled under a sanitizer without an ownership-risk reason. A test

@@ -1,20 +1,17 @@
 import { readFileSync } from "node:fs";
-import * as os from "node:os";
 import { defineConfig } from "vitest/config";
+import { workerBudget, workerCount } from "./src/worker-budget.ts";
 
-// Native tests build + link a C binary per fixture and spawn it; cap parallelism
-// so we don't launch a swarm of cc/link + server processes at once (battery-friendly,
-// matches the test262 half-cores default).
-// Instrumented binaries are much heavier and can otherwise starve each other's
-// fixed-startup tests and child-process deadlines under the full sanitizer lane.
+const budget = workerBudget(process.env.MALIGATOR_WORKERS);
 const sanitizerBuild = process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1";
-const configuredSanitizerWorkers = Number(process.env.MAL_SANITIZER_WORKERS ?? "1");
-if (!Number.isInteger(configuredSanitizerWorkers) || configuredSanitizerWorkers < 1) {
-	throw new Error("MAL_SANITIZER_WORKERS must be a positive integer");
-}
 const nativeForks = sanitizerBuild
-	? Math.min(configuredSanitizerWorkers, os.availableParallelism())
-	: Math.max(2, Math.floor(os.cpus().length / 2));
+	? workerCount(
+			process.env.MAL_SANITIZER_WORKERS,
+			"MAL_SANITIZER_WORKERS",
+			Math.min(2, budget),
+			budget,
+		)
+	: budget;
 const fullOnlyUnitTests = readFileSync(
 	new URL("./tests/test-suite-unit-full-only.txt", import.meta.url),
 	"utf8",
@@ -36,7 +33,6 @@ export default defineConfig({
 
 		projects: [
 			{
-				// Pure-TS compiler tests: no C build, instant, the watch loop.
 				test: {
 					name: "unit",
 					include: runningFullOnlyUnitTests ? fullOnlyUnitTests : ["tests/**/*.test.ts"],
@@ -46,6 +42,8 @@ export default defineConfig({
 						...(runningFullOnlyUnitTests ? [] : fullOnlyUnitTests),
 					],
 					pool: "threads",
+					maxWorkers: budget,
+					setupFiles: ["tests/setup-workers.ts"],
 					isolate: false,
 					sequence: {
 						// Distinct groupOrder per project: vitest requires it when projects
@@ -57,12 +55,11 @@ export default defineConfig({
 				},
 			},
 			{
-				// Feature-acceptance tests: build a fixture into a real isolate binary
-				// (or server) and drive it. globalSetup builds the shared archives once.
 				test: {
 					name: "native",
 					include: ["tests/native/**/*.test.ts"],
 					globalSetup: ["tests/native/setup.ts"],
+					setupFiles: ["tests/setup-workers.ts"],
 					pool: "forks",
 					maxWorkers: nativeForks,
 					sequence: { groupOrder: 1 },

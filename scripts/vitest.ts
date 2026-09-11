@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
+import { workerBudget, workerEnvironment } from "../src/worker-budget.ts";
 import {
 	assertLoopbackAvailable,
 	testSelectionRequiresLoopback,
@@ -38,7 +39,12 @@ const progress = new CommandProgress("vitest");
 progress.start(arguments_.length === 0 ? "watch all projects" : arguments_.join(" "));
 progress.stage(1, 1, "run tests");
 
-const environment = { ...process.env };
+const budget = workerBudget(process.env.MALIGATOR_WORKERS);
+const environment: NodeJS.ProcessEnv = {
+	...workerEnvironment(budget),
+	...process.env,
+	MALIGATOR_WORKERS: String(budget),
+};
 if (runFullOnlyUnitTests) environment.MAL_TEST_UNIT_FULL_ONLY = "1";
 else delete environment.MAL_TEST_UNIT_FULL_ONLY;
 const status = await runTestProcess(

@@ -28,6 +28,7 @@ import { rustSourceDigest } from "./rust-build.ts";
 import { requireWasmToolchain } from "./toolchain.ts";
 import type { WasmToolchain } from "./toolchain.ts";
 import { prepareWasmSource } from "./wasm-source.ts";
+import { buildWorkerCount } from "./worker-budget.ts";
 
 export const WASM_ABI_VERSION = 1;
 type ArtifactAction = ReturnType<typeof publishArtifactAction>;
@@ -327,7 +328,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 							const rustEnv: NodeJS.ProcessEnv = {
 								...env,
 								CARGO_TARGET_DIR: target,
-								CARGO_BUILD_JOBS: env.CARGO_BUILD_JOBS ?? "2",
+								CARGO_BUILD_JOBS: String(buildWorkerCount(env, "CARGO_BUILD_JOBS", 2)),
 								RUSTFLAGS: "",
 								CARGO_ENCODED_RUSTFLAGS: rustFlags.join("\x1f"),
 							};

@@ -21,6 +21,7 @@ import {
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand } from "./native-command.ts";
 import { formatToolCommand, toolArguments } from "./toolchain.ts";
+import { buildWorkerCount } from "./worker-budget.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
 
@@ -242,6 +243,9 @@ export function ensureRustArtifacts(
 								PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
 								CARGO_HOME: cargoCacheDirectory(context.environment),
 								CARGO_TARGET_DIR: artifacts.targetDirectory,
+								CARGO_BUILD_JOBS: String(
+									buildWorkerCount(context.environment, "CARGO_BUILD_JOBS", 8),
+								),
 								RUSTC: context.toolchain.tools.rustc.path,
 							},
 							verbose,

@@ -19,6 +19,7 @@ import {
 } from "../src/test-telemetry.ts";
 import type { TestTelemetrySummary } from "../src/test-telemetry.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
+import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -47,6 +48,13 @@ interface StageReport {
 	status: number | null;
 	signal: NodeJS.Signals | null;
 	telemetry: TestTelemetrySummary;
+	workers: StageWorkers;
+}
+
+interface StageWorkers {
+	testWorkers: number;
+	childBuildJobs: number;
+	preparationBuildJobs: number;
 }
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -76,6 +84,7 @@ Options:
   --policy bail|complete  stop at the first failure or finish every stage
   --exclude-quality       omit type-check/lint and report the excluded coverage
   --test262-baseline PATH  explicit Test262 comparison input for every standards stage
+  --workers N             total worker budget (default: half the available CPUs)
   --list                  print the exact commands without running them
   --plan=json             print commands and environment requirements as JSON
   -h, --help              show this help
@@ -95,6 +104,7 @@ function parseArguments(): {
 	jsonPlan: boolean;
 	excludeQuality: boolean;
 	test262Baseline?: string;
+	workers: number;
 } {
 	let tier: Tier = "check";
 	let tierSeen = false;
@@ -104,6 +114,7 @@ function parseArguments(): {
 	let jsonPlan = false;
 	let excludeQuality = false;
 	let test262Baseline: string | undefined;
+	let workers: number | undefined;
 	for (let index = 2; index < process.argv.length; index++) {
 		const argument = process.argv[index];
 		if (argument === "-h" || argument === "--help") exitWithUsage();
@@ -136,6 +147,17 @@ function parseArguments(): {
 			test262Baseline = path.resolve(value);
 			continue;
 		}
+		if (argument === "--workers") {
+			if (workers !== undefined) exitWithUsage("--workers may only be specified once");
+			const value = process.argv[++index];
+			if (value === undefined) exitWithUsage("--workers requires a positive integer");
+			try {
+				workers = workerCount(value, "--workers", 1);
+			} catch (error) {
+				exitWithUsage(error instanceof Error ? error.message : String(error));
+			}
+			continue;
+		}
 		if (argument === "--list") {
 			if (list) exitWithUsage("--list may only be specified once");
 			list = true;
@@ -149,7 +171,15 @@ function parseArguments(): {
 		exitWithUsage(`unknown argument: ${argument}`);
 	}
 	if (list && jsonPlan) exitWithUsage("--list and --plan=json cannot be combined");
-	return { tier, policy, list, jsonPlan, excludeQuality, test262Baseline };
+	return {
+		tier,
+		policy,
+		list,
+		jsonPlan,
+		excludeQuality,
+		test262Baseline,
+		workers: workers ?? workerBudget(process.env.MALIGATOR_WORKERS),
+	};
 }
 
 function readManifest(file: string): Array<string> {
@@ -251,11 +281,28 @@ function shellArgument(value: string): string {
 }
 
 function formatCommand(command: Command): string {
-	const environment = Object.entries(command.env ?? {})
+	const environment = Object.entries(stageEnvironment(command))
 		.map(([name, value]) => `${name}=${shellArgument(value ?? "")}`)
 		.join(" ");
 	const invocation = [command.command, ...command.args].map(shellArgument).join(" ");
 	return environment.length === 0 ? invocation : `${environment} ${invocation}`;
+}
+
+function stageWorkers(command: Command): StageWorkers {
+	const testPool =
+		command.kind === "unit" ||
+		command.kind === "native" ||
+		command.kind === "rust" ||
+		command.args.includes("scripts/test262.ts");
+	return {
+		testWorkers: testPool ? workers : 1,
+		childBuildJobs: testPool ? 1 : workers,
+		preparationBuildJobs: workers,
+	};
+}
+
+function stageEnvironment(command: Command): NodeJS.ProcessEnv {
+	return { ...workerEnvironment(workers), ...command.env };
 }
 
 function selectionArgs(entries: Array<string>, option: string): Array<string> {
@@ -277,7 +324,7 @@ function runCommand(
 	const result = spawnSync(command.command, command.args, {
 		cwd: root,
 		env: cleanTestEnvironment({
-			...command.env,
+			...stageEnvironment(command),
 			[TEST_TELEMETRY_ENV]: telemetryDirectory,
 		}),
 		stdio: "inherit",
@@ -290,6 +337,7 @@ function runCommand(
 		status: result.status,
 		signal: result.signal,
 		telemetry: summarizeTestTelemetry(readTestTelemetry(telemetryDirectory)),
+		workers: stageWorkers(command),
 	};
 	if (result.status === 0) {
 		progress.stagePassed(current, total, command.name);
@@ -302,7 +350,7 @@ function runCommand(
 	return report;
 }
 
-const { tier, policy, list, jsonPlan, excludeQuality, test262Baseline } =
+const { tier, policy, list, jsonPlan, excludeQuality, test262Baseline, workers } =
 	parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
@@ -616,11 +664,14 @@ if (jsonPlan) {
 				policy,
 				scope,
 				test262Baseline,
+				workers,
 				stages: commands.map((command) => ({
 					kind: command.kind,
 					name: command.name,
 					invocation: formatCommand(command),
 					requirements: command.requirements,
+					workers: stageWorkers(command),
+					environment: stageEnvironment(command),
 				})),
 			},
 			null,
@@ -644,11 +695,12 @@ function persistSuiteReport(complete: boolean): void {
 		suiteReportPath,
 		`${JSON.stringify(
 			{
-				schemaVersion: 2,
+				schemaVersion: 3,
 				tier,
 				policy,
 				scope,
 				test262Baseline,
+				workers,
 				startedAt: suiteStartedAt.toISOString(),
 				durationMs: Math.round((performance.now() - suiteStartedAtMs) * 1000) / 1000,
 				complete,
