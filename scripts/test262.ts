@@ -41,12 +41,14 @@ import {
 import type { Test262File, Test262Input, Test262Output } from "../src/test262/types.ts";
 import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
 import { reexecWithCleanTestEnvironment } from "./test-environment.ts";
+import { test262BaselineFromReport } from "./test262-baseline.ts";
 
 interface Test262Arguments {
 	backend?: string;
 	canonical: boolean;
 	check: boolean;
 	updateBaseline: boolean;
+	fromReport?: string;
 	baseline?: string;
 	excludeManifests: Array<string>;
 	filter?: string;
@@ -70,6 +72,7 @@ Options:
   --check                      compare without updating the baseline (default)
   --baseline <file>            compare against an explicit baseline instead of HEAD
   --update-baseline            replace scripts/test262.json after a full canonical run
+  --from-report <file>         import a complete report with --update-baseline
   --policy bail|complete       stop on a regression or complete the selection
   --random                     run a non-baseline random sample
   -h, --help                   show this help`;
@@ -112,6 +115,7 @@ function parseArguments(): Test262Arguments {
 			else if (option === "--variant") result.variant = value;
 			else if (option === "--policy") result.policy = value;
 			else if (option === "--baseline") result.baseline = nodePath.resolve(value);
+			else if (option === "--from-report") result.fromReport = nodePath.resolve(value);
 			else throw new Error(`unknown option: ${option}\n${usage}`);
 		}
 	}
@@ -121,6 +125,9 @@ function parseArguments(): Test262Arguments {
 const arguments_ = parseArguments();
 if (arguments_.check && arguments_.updateBaseline) {
 	throw new Error("--check and --update-baseline are mutually exclusive");
+}
+if (arguments_.fromReport !== undefined && !arguments_.updateBaseline) {
+	throw new Error("--from-report requires --update-baseline");
 }
 if (
 	arguments_.updateBaseline &&
@@ -259,6 +266,22 @@ progress.stagePassed(
 	"prepare pinned corpus",
 	`${corpus.revision.slice(0, 12)} · input index ${inputIndex.cache}`,
 );
+
+if (arguments_.fromReport !== undefined) {
+	const output = test262BaselineFromReport(
+		JSON.parse(readFileSync(arguments_.fromReport, "utf8")),
+		{
+			revision: corpus.revision,
+			paths: new Set(inputIndex.files.map((file) => file.path)),
+		},
+		previousOutput,
+		baselineIdentity.digest,
+	);
+	writeFileSync(TEST262_METADATA.outputFile, JSON.stringify(output, null, 2));
+	test262Log(`Imported complete report into ${TEST262_METADATA.outputFile}.`);
+	progress.complete();
+	process.exit(0);
+}
 
 type SelectedInput = Test262Input & Pick<Test262File, "result">;
 let selection: Array<SelectedInput> = inputIndex.files.map((file) => ({

@@ -10,8 +10,10 @@ export const TEST262_METADATA = {
 	buildPath: ".cache/mal-build/test262",
 	outputFile: "scripts/test262.json",
 
-	// Four full-suite workers can double the wall time of valid native stress tests.
-	runTimeoutMs: 30_000,
+	// Eval-heavy conformance cases exceed 40 seconds on supported Linux hosts.
+	runTimeoutMs: 120_000,
+	gcStressRunTimeoutMs: 1_200_000,
+	guardMallocRunTimeoutMs: 360_000,
 	// Full-suite batches can exceed one minute on the largest generated C units;
 	// timing those out is counterproductive because the single-test fallback then
 	// recompiles hundreds of files while competing with the remaining workers.

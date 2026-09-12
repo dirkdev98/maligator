@@ -41,6 +41,7 @@ describe("Test262 runner policy", () => {
 	});
 	it.each([
 		["--check", "--update-baseline"],
+		["--from-report", "missing.json"],
 		["--canonical", "--update-baseline", "--variant", "strict"],
 		["--canonical", "--update-baseline", "--manifest", "missing.txt"],
 		["--canonical", "--update-baseline", "--backend", "wire"],

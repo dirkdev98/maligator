@@ -354,6 +354,20 @@ single-variant, custom-baseline, and instrumented updates are rejected before wo
 All three full-corpus commands are expensive; ask before running them, `test:full`,
 or `test:full:report`. Filtered diagnostic selections remain focused commands.
 
+For an authorized baseline refresh measured on another host, first verify the
+queue's captured source and retain its combined, strict, and sloppy reports. Apply
+the combined report locally with:
+
+```bash
+npm run test262:update-baseline -- --from-report .cache/results/report-compiled-normal-combined.json
+```
+
+This prepares the pinned corpus index without compiling or executing tests. Import
+requires complete compiled/normal results for every pinned test, a matching HEAD
+baseline digest, consistent totals and skip reasons, and no regressions. Source
+identity must be verified from the queue receipt; the combined report does not
+record the compiler revision.
+
 ### Test262 verdicts and counts
 
 The combined verdict counts test files, not executions. A default script must pass
@@ -361,6 +375,11 @@ both strict and sloppy execution; `onlyStrict`, `noStrict`, and module tests req
 their designated execution only. Raw scripts run once without forced strictness or
 source changes; raw modules retain the module parse goal. A failed required variant
 makes the file fail. Intentional variant omissions do not count as failures.
+
+Normal Test262 execution has a two-minute per-test deadline: eval-heavy upstream
+cases take 32–44 seconds on the Linux queue host. GC-stress and Guard Malloc use
+independent 20-minute and six-minute deadlines. Batch process deadlines include
+the per-test budgets and a fixed shutdown allowance.
 
 Harness files execute in order as separate global scripts in the test's realm before
 the test is instantiated. Their declarations and directives do not become part of
