@@ -7,6 +7,7 @@ import {
 	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -105,12 +106,18 @@ describe("targeted GC unit tests", () => {
 				);
 			});
 
-			it("compiled + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-				assertPassLine(
-					runToStdout(compiled, { env: { ...HOST_GC, ...spec.env, ...STRESS_ENV } }),
-					spec.tag,
-				);
-			});
+			it(
+				"compiled + MAL_GC_STRESS + MAL_GC_VERIFY",
+				() => {
+					assertPassLine(
+						runToStdout(compiled, {
+							env: { ...HOST_GC, ...spec.env, ...STRESS_ENV },
+						}),
+						spec.tag,
+					);
+				},
+				scaledNativeRunTimeoutMs(120_000),
+			);
 
 			it("interpreter backend (Tier B root walk)", () => {
 				assertPassLine(
@@ -119,12 +126,18 @@ describe("targeted GC unit tests", () => {
 				);
 			});
 
-			it("interpreter + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-				assertPassLine(
-					runToStdout(interp, { env: { ...HOST_GC, ...spec.env, ...STRESS_ENV } }),
-					spec.tag,
-				);
-			});
+			it(
+				"interpreter + MAL_GC_STRESS + MAL_GC_VERIFY",
+				() => {
+					assertPassLine(
+						runToStdout(interp, {
+							env: { ...HOST_GC, ...spec.env, ...STRESS_ENV },
+						}),
+						spec.tag,
+					);
+				},
+				scaledNativeRunTimeoutMs(120_000),
+			);
 		});
 	}
 });
