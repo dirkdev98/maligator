@@ -58,12 +58,24 @@ interface StageWorkers {
 }
 
 const root = path.resolve(import.meta.dirname, "..");
+const NOMINAL_SMOKE_WORKERS = 4;
+const WARM_SMOKE_FUSE_MS = 20_000;
+const COLD_SMOKE_FUSE_MS = 240_000;
+
+function smokeBudgetForWorkers(workers: number): { warmMs: number; coldMs: number } {
+	const divisor = Math.min(workers, NOMINAL_SMOKE_WORKERS);
+	return {
+		warmMs: Math.ceil((WARM_SMOKE_FUSE_MS * NOMINAL_SMOKE_WORKERS) / divisor),
+		coldMs: Math.ceil((COLD_SMOKE_FUSE_MS * NOMINAL_SMOKE_WORKERS) / divisor),
+	};
+}
+
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          20-second warm / four-minute cold fail-fast fuse
+  npm run test:smoke          20-second warm / four-minute cold fuse at four workers
   npm run test:check          approximately two-minute default developer gate
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
@@ -665,6 +677,10 @@ if (jsonPlan) {
 				scope,
 				test262Baseline,
 				workers,
+				smokeBudget: {
+					nominalWorkers: NOMINAL_SMOKE_WORKERS,
+					...smokeBudgetForWorkers(workers),
+				},
 				stages: commands.map((command) => ({
 					kind: command.kind,
 					name: command.name,
@@ -757,12 +773,17 @@ const coldSmokeRun =
 // Cumulative gates must finish when earlier benchmark work evicts an exact artifact
 // while leaving the coarse cache roots that the standalone warm probe can inspect.
 const useColdSmokeBudget = coldSmokeRun || tier !== "smoke";
-const smokeFuseMs = useColdSmokeBudget ? 240_000 : 20_000;
+const smokeBudget = smokeBudgetForWorkers(workers);
+const smokeFuseMs = useColdSmokeBudget ? smokeBudget.coldMs : smokeBudget.warmMs;
 
 if (coldSmokeRun) {
-	console.log("[test-suite] cold caches detected; smoke fuse extended to four minutes");
+	console.log(
+		`[test-suite] cold caches detected; smoke fuse extended to ${formatCommandDuration(smokeFuseMs)}`,
+	);
 } else if (tier !== "smoke") {
-	console.log("[test-suite] cumulative gate uses four-minute smoke completion budget");
+	console.log(
+		`[test-suite] cumulative gate uses ${formatCommandDuration(smokeFuseMs)} smoke completion budget`,
+	);
 }
 
 let failures = 0;

@@ -93,7 +93,7 @@ describe("test suite planner", () => {
 		expect(help).toContain("npm run test262:report      full Test262 report");
 		expect(help).toContain("approval required");
 		expect(help).toContain("npm run test262:regressions");
-		expect(help).toContain("20-second warm / four-minute cold");
+		expect(help).toContain("20-second warm / four-minute cold fuse at four workers");
 		expect(help).toContain("npm run test:check -- --list");
 		expect(help).toContain("--plan=json");
 	});
@@ -132,6 +132,7 @@ describe("test suite planner", () => {
 				runSuite("check", "--workers", String(workers), "--plan=json"),
 			) as {
 				workers: number;
+				smokeBudget: { nominalWorkers: number; warmMs: number; coldMs: number };
 				stages: Array<{
 					name: string;
 					kind: string;
@@ -144,6 +145,11 @@ describe("test suite planner", () => {
 				}>;
 			};
 			expect(plan.workers).toBe(Math.min(workers, os.availableParallelism()));
+			expect(plan.smokeBudget).toEqual({
+				nominalWorkers: 4,
+				warmMs: Math.ceil((20_000 * 4) / Math.min(plan.workers, 4)),
+				coldMs: Math.ceil((240_000 * 4) / Math.min(plan.workers, 4)),
+			});
 			for (const stage of plan.stages) {
 				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
 				expect(
