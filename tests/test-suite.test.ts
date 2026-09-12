@@ -172,6 +172,9 @@ describe("test suite planner", () => {
 			});
 			for (const stage of plan.stages) {
 				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
+				expect(stage.environment.MAL_TEST_WORKERS).toBe(
+					String(stage.workers.testWorkers),
+				);
 				expect(stage.environment.MAL_PREPARATION_BUILD_JOBS).toBe(String(plan.workers));
 				expect(
 					stage.workers.testWorkers * stage.workers.childBuildJobs,
@@ -179,13 +182,19 @@ describe("test suite planner", () => {
 				expect(stage.workers.preparationBuildJobs).toBe(plan.workers);
 			}
 			const native = plan.stages.find((stage) => stage.name === "check: native normal")!;
+			const nativeTestWorkers = Math.max(1, Math.floor(plan.workers / 2));
 			expect(native.workers).toEqual({
-				testWorkers: plan.workers,
-				childBuildJobs: 1,
+				testWorkers: nativeTestWorkers,
+				childBuildJobs: Math.max(1, Math.floor(plan.workers / nativeTestWorkers)),
 				preparationBuildJobs: plan.workers,
 			});
-			expect(native.environment.MAL_BUILD_JOBS).toBe("1");
-			expect(native.environment.CARGO_BUILD_JOBS).toBe("1");
+			expect(native.environment.MAL_BUILD_JOBS).toBe(
+				String(native.workers.childBuildJobs),
+			);
+			expect(native.environment.CARGO_BUILD_JOBS).toBe(
+				String(native.workers.childBuildJobs),
+			);
+			expect(native.environment.MAL_SANITIZER_WORKERS).toBe(String(nativeTestWorkers));
 			const smokeNative = plan.stages.find(
 				(stage) => stage.name === "smoke: native normal",
 			)!;

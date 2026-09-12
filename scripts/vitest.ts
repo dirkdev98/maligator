@@ -1,12 +1,18 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
-import { workerBudget, workerEnvironment } from "../src/worker-budget.ts";
+import {
+	nestedTestWorkerAllocation,
+	workerBudget,
+	workerCount,
+	workerEnvironment,
+} from "../src/worker-budget.ts";
 import {
 	assertLoopbackAvailable,
 	testSelectionRequiresLoopback,
 } from "./test-environment.ts";
 import { runTestProcess } from "./test-process.ts";
+import { constrainVitestMaxWorkers } from "./vitest-arguments.ts";
 
 const FULL_ONLY_ARGUMENT = "--maligator-unit-full-only";
 const keepArtifacts = process.argv.includes("--keep-artifacts");
@@ -30,20 +36,50 @@ if (testSelectionRequiresLoopback(userArguments, loopbackTests)) {
 		process.exit(2);
 	}
 }
-const arguments_ = userArguments.some(
+const budget = workerBudget(process.env.MALIGATOR_WORKERS);
+const nativeProject = userArguments.some(
+	(argument, index) =>
+		argument === "--project=native" ||
+		(argument === "--project" && userArguments[index + 1] === "native"),
+);
+const selectedTestFiles = userArguments.filter((argument) =>
+	argument.endsWith(".test.ts"),
+).length;
+const plannedAllocation = nestedTestWorkerAllocation(
+	budget,
+	selectedTestFiles,
+	nativeProject,
+);
+const testWorkers =
+	process.env.MAL_TEST_WORKERS === undefined
+		? plannedAllocation.testWorkers
+		: Math.min(
+				plannedAllocation.testWorkers,
+				workerCount(
+					process.env.MAL_TEST_WORKERS,
+					"MAL_TEST_WORKERS",
+					plannedAllocation.testWorkers,
+					budget,
+				),
+			);
+const allocatedArguments = nativeProject
+	? constrainVitestMaxWorkers(userArguments, testWorkers)
+	: userArguments;
+const arguments_ = allocatedArguments.some(
 	(argument) => argument === "--configLoader" || argument.startsWith("--configLoader="),
 )
-	? userArguments
-	: ["--configLoader", "runner", ...userArguments];
+	? allocatedArguments
+	: ["--configLoader", "runner", ...allocatedArguments];
 const progress = new CommandProgress("vitest");
 progress.start(arguments_.length === 0 ? "watch all projects" : arguments_.join(" "));
 progress.stage(1, 1, "run tests");
 
-const budget = workerBudget(process.env.MALIGATOR_WORKERS);
 const environment: NodeJS.ProcessEnv = {
 	...workerEnvironment(budget),
 	...process.env,
 	MALIGATOR_WORKERS: String(budget),
+	MAL_TEST_WORKERS: String(testWorkers),
+	MAL_PREPARATION_BUILD_JOBS: process.env.MAL_PREPARATION_BUILD_JOBS ?? String(budget),
 };
 if (runFullOnlyUnitTests) environment.MAL_TEST_UNIT_FULL_ONLY = "1";
 else delete environment.MAL_TEST_UNIT_FULL_ONLY;

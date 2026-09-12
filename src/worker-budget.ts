@@ -28,6 +28,24 @@ export function workerBudget(
 	);
 }
 
+export function nestedTestWorkerAllocation(
+	workers: number,
+	selectedTestFiles: number,
+	buildHeavy: boolean,
+): { testWorkers: number; childBuildJobs: number } {
+	const concurrencyLimit = buildHeavy ? Math.max(1, Math.floor(workers / 2)) : workers;
+	const testWorkers = Math.max(
+		1,
+		selectedTestFiles > 0
+			? Math.min(concurrencyLimit, selectedTestFiles)
+			: concurrencyLimit,
+	);
+	return {
+		testWorkers,
+		childBuildJobs: Math.max(1, Math.floor(workers / testWorkers)),
+	};
+}
+
 export function buildWorkerCount(
 	environment: NodeJS.ProcessEnv,
 	variable: "MAL_BUILD_JOBS" | "CARGO_BUILD_JOBS",

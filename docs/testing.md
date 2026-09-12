@@ -43,15 +43,17 @@ allocations are capped at the available CPUs. `--workers` overrides the environm
 default for the gate. Plans and reports record the effective budget and each stage's
 test workers, child build jobs and preparation build jobs.
 
-Vitest uses up to that many test workers and divides compiler and Cargo jobs across
-the files that can actually run concurrently. A single selected native file can use
-the full build budget; a four-file-or-larger selection gets one nested build job per
-worker. Native global setup and Test262 runtime preparation can use the full budget.
-Serial WPT and self-hosted checks can also use the full build allocation. Cargo
-compiles Rust tests before running the Rust test pool. `MAL_BUILD_JOBS` and
-`CARGO_BUILD_JOBS` can lower a build pool further; neither can raise it above the
-inherited allocation. Resource controls survive canonical environment cleaning
-without retaining ambient runtime modes.
+Unit Vitest uses up to the full test-worker budget. Build-heavy native selections
+reserve at least two build jobs for each concurrent test process when the budget
+allows it: a four-worker selection runs two test processes with two build jobs each,
+while one selected file can use all four build jobs. This prevents the process that
+owns a shared runtime build from compiling on one core while every other core waits
+on its artifact lock. Native global setup and Test262 runtime preparation can use
+the full budget. Serial WPT and self-hosted checks can also use the full build
+allocation. Cargo compiles Rust tests before running the Rust test pool.
+`MAL_BUILD_JOBS` and `CARGO_BUILD_JOBS` can lower a build pool further; neither can
+raise it above the inherited allocation. Resource controls survive canonical
+environment cleaning without retaining ambient runtime modes.
 
 The allocation limits managed test and build pools; the queue's CPU affinity and
 quota remain the operating-system limits. Changing worker counts does not change
@@ -281,8 +283,8 @@ run under UBSan on macOS and ASan+UBSan elsewhere. Sanitizer runs enable
 `MAL_GC_AT_EXIT=1` so VM teardown is exercised and leak detection checks allocations
 that survive cleanup. Every other authored native test runs once in the ordinary
 native dimension. The standalone sanitizer runner defaults to at most two Vitest
-workers; gates pass their selected worker budget. Gate stages divide child build
-jobs across the files that can run concurrently. Files whose dominant check already
+workers; gates cap the test-process pool and divide child build jobs across the files
+that can run concurrently. Files whose dominant check already
 applies maximal GC stress and verification remain in the normal dimension instead
 of multiplying both expensive instruments.
 Smoke, check, and full retain a complete disjoint partition, so semantic API

@@ -30,6 +30,12 @@ export function sanitizerEnvironment(
 		budget,
 		budget,
 	);
+	const preparationBuildJobs = workerCount(
+		environment.MAL_PREPARATION_BUILD_JOBS,
+		"MAL_PREPARATION_BUILD_JOBS",
+		budget,
+		budget,
+	);
 	const shared = {
 		...workerEnvironment(budget),
 		...(telemetry === undefined ? {} : { [TEST_TELEMETRY_ENV]: telemetry }),
@@ -37,6 +43,8 @@ export function sanitizerEnvironment(
 		MAL_GC_AT_EXIT: "1",
 		MAL_BUILD_JOBS: String(buildJobs),
 		MAL_SANITIZER_WORKERS: String(workers),
+		MAL_TEST_WORKERS: String(workers),
+		MAL_PREPARATION_BUILD_JOBS: String(preparationBuildJobs),
 	};
 	return platform === "darwin"
 		? { ...shared, MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }

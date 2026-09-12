@@ -40,6 +40,8 @@ describe("sanitizer runner", () => {
 			CARGO_BUILD_JOBS: "4",
 			MAL_BUILD_JOBS: "4",
 			MAL_SANITIZER_WORKERS: "2",
+			MAL_TEST_WORKERS: "2",
+			MAL_PREPARATION_BUILD_JOBS: "4",
 			MAL_UBSAN: "1",
 			MAL_GC_AT_EXIT: "1",
 			UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
@@ -54,6 +56,8 @@ describe("sanitizer runner", () => {
 			MAL_GC_AT_EXIT: "1",
 			MAL_BUILD_JOBS: "4",
 			MAL_SANITIZER_WORKERS: "2",
+			MAL_TEST_WORKERS: "2",
+			MAL_PREPARATION_BUILD_JOBS: "4",
 			ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
 			UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
 		});

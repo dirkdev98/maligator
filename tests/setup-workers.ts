@@ -1,4 +1,13 @@
-import { workerEnvironment } from "../src/worker-budget.ts";
+import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
 
-// Each test worker owns one slot; globalSetup retains the parent's preparation allocation.
-Object.assign(process.env, workerEnvironment(1));
+const budget = workerBudget(process.env.MALIGATOR_WORKERS);
+const testWorkers = workerCount(
+	process.env.MAL_TEST_WORKERS,
+	"MAL_TEST_WORKERS",
+	budget,
+	budget,
+);
+Object.assign(
+	process.env,
+	workerEnvironment(Math.max(1, Math.floor(budget / testWorkers))),
+);

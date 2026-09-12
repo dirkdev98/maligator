@@ -19,7 +19,12 @@ import {
 } from "../src/test-telemetry.ts";
 import type { TestTelemetrySummary } from "../src/test-telemetry.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
-import { workerBudget, workerCount, workerEnvironment } from "../src/worker-budget.ts";
+import {
+	nestedTestWorkerAllocation,
+	workerBudget,
+	workerCount,
+	workerEnvironment,
+} from "../src/worker-budget.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -308,11 +313,15 @@ function stageWorkers(command: Command): StageWorkers {
 		selectedTestFiles > 0 ||
 		command.kind === "rust" ||
 		command.args.includes("scripts/test262.ts");
-	const testWorkers =
-		selectedTestFiles > 0 ? Math.min(workers, selectedTestFiles) : pooled ? workers : 1;
+	const allocation = nestedTestWorkerAllocation(
+		workers,
+		selectedTestFiles,
+		command.kind === "native",
+	);
+	const testWorkers = pooled ? allocation.testWorkers : 1;
 	return {
 		testWorkers,
-		childBuildJobs: pooled ? Math.max(1, Math.floor(workers / testWorkers)) : workers,
+		childBuildJobs: pooled ? allocation.childBuildJobs : workers,
 		preparationBuildJobs: workers,
 	};
 }
@@ -327,8 +336,10 @@ function stageEnvironment(command: Command): NodeJS.ProcessEnv {
 		: allocation.preparationBuildJobs;
 	return {
 		...workerEnvironment(workers),
+		MAL_TEST_WORKERS: String(allocation.testWorkers),
 		MAL_BUILD_JOBS: String(buildJobs),
 		CARGO_BUILD_JOBS: String(buildJobs),
+		MAL_SANITIZER_WORKERS: String(allocation.testWorkers),
 		MAL_PREPARATION_BUILD_JOBS: String(allocation.preparationBuildJobs),
 		...command.env,
 	};

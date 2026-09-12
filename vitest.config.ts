@@ -3,15 +3,21 @@ import { defineConfig } from "vitest/config";
 import { workerBudget, workerCount } from "./src/worker-budget.ts";
 
 const budget = workerBudget(process.env.MALIGATOR_WORKERS);
+const testWorkers = workerCount(
+	process.env.MAL_TEST_WORKERS,
+	"MAL_TEST_WORKERS",
+	budget,
+	budget,
+);
 const sanitizerBuild = process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1";
 const nativeForks = sanitizerBuild
 	? workerCount(
 			process.env.MAL_SANITIZER_WORKERS,
 			"MAL_SANITIZER_WORKERS",
-			Math.min(2, budget),
-			budget,
+			Math.min(2, testWorkers),
+			testWorkers,
 		)
-	: budget;
+	: testWorkers;
 const fullOnlyUnitTests = readFileSync(
 	new URL("./tests/test-suite-unit-full-only.txt", import.meta.url),
 	"utf8",
@@ -42,7 +48,7 @@ export default defineConfig({
 						...(runningFullOnlyUnitTests ? [] : fullOnlyUnitTests),
 					],
 					pool: "threads",
-					maxWorkers: budget,
+					maxWorkers: testWorkers,
 					setupFiles: ["tests/setup-workers.ts"],
 					isolate: false,
 					sequence: {

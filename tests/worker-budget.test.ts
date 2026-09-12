@@ -4,6 +4,7 @@ import { nativeBuildEnvironmentFingerprint } from "../src/native-build-context.t
 import { nativeBuildJobs } from "../src/native-command.ts";
 import {
 	buildWorkerCount,
+	nestedTestWorkerAllocation,
 	workerBudget,
 	workerCount,
 	workerEnvironment,
@@ -32,6 +33,21 @@ describe("worker allocation", () => {
 		};
 		expect(nativeBuildJobs(environment)).toBe(1);
 		expect(buildWorkerCount(environment, "CARGO_BUILD_JOBS", 8)).toBe(1);
+	});
+
+	it("splits build-heavy test pools without idling the worker budget", () => {
+		expect(nestedTestWorkerAllocation(4, 17, true)).toEqual({
+			testWorkers: 2,
+			childBuildJobs: 2,
+		});
+		expect(nestedTestWorkerAllocation(4, 1, true)).toEqual({
+			testWorkers: 1,
+			childBuildJobs: 4,
+		});
+		expect(nestedTestWorkerAllocation(4, 17, false)).toEqual({
+			testWorkers: 4,
+			childBuildJobs: 1,
+		});
 	});
 
 	it("preserves resource allocations when canonical runners remove runtime overrides", () => {
