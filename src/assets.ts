@@ -40,10 +40,6 @@ interface AssetSnapshotManifest {
 	schema: 1;
 	digest: string;
 	size: number;
-	mtimeMs: number;
-	ctimeMs: number;
-	ino: number;
-	dev: number;
 }
 
 export interface IncludedAsset {
@@ -122,18 +118,12 @@ function validSnapshot(
 		const manifest = JSON.parse(
 			readFileSync(manifestPath, "utf-8"),
 		) as AssetSnapshotManifest;
+		if (manifest.schema !== 1 || manifest.digest !== digest || manifest.size !== size) {
+			return false;
+		}
 		const stats = statSync(file);
-		return (
-			manifest.schema === 1 &&
-			manifest.digest === digest &&
-			manifest.size === size &&
-			stats.isFile() &&
-			stats.size === manifest.size &&
-			stats.mtimeMs === manifest.mtimeMs &&
-			stats.ctimeMs === manifest.ctimeMs &&
-			stats.ino === manifest.ino &&
-			stats.dev === manifest.dev
-		);
+		if (!stats.isFile() || stats.size !== manifest.size) return false;
+		return hash("sha256", new Uint8Array(readFileSync(file)), "hex") === digest;
 	} catch {
 		return false;
 	}
@@ -160,15 +150,10 @@ function cachedSnapshot(
 		const temporaryFile = path.join(temporaryDirectory, "asset.bin");
 		writeFileSync(temporaryFile, bytes);
 		renameSync(temporaryFile, file);
-		const stats = statSync(file);
 		const manifest: AssetSnapshotManifest = {
 			schema: 1,
 			digest,
 			size,
-			mtimeMs: stats.mtimeMs,
-			ctimeMs: stats.ctimeMs,
-			ino: stats.ino,
-			dev: stats.dev,
 		};
 		const temporaryManifest = path.join(temporaryDirectory, "asset.json");
 		writeFileSync(temporaryManifest, `${JSON.stringify(manifest)}\n`);
