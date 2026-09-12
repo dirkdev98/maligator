@@ -172,6 +172,7 @@ describe("test suite planner", () => {
 			});
 			for (const stage of plan.stages) {
 				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
+				expect(stage.environment.MAL_PREPARATION_BUILD_JOBS).toBe(String(plan.workers));
 				expect(
 					stage.workers.testWorkers * stage.workers.childBuildJobs,
 				).toBeLessThanOrEqual(plan.workers);
@@ -194,6 +195,8 @@ describe("test suite planner", () => {
 				preparationBuildJobs: plan.workers,
 			});
 			expect(smokeNative.environment.MAL_BUILD_JOBS).toBe(String(plan.workers));
+			expect(smokeNative.environment.MAL_NATIVE_PREWARM).toBe("0");
+			expect(native.environment.MAL_NATIVE_PREWARM).toBeUndefined();
 		},
 	);
 

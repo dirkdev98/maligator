@@ -1,8 +1,3 @@
-/**
- * vitest globalSetup for the native lane. Prewarms the canonical runtime artifact
- * set; feature-specific archives are built lazily by the tests that need them.
- */
-
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
@@ -37,8 +32,17 @@ const compilerBake = {
 		}),
 };
 
-// vitest globalSetup supports a named `setup` export (avoids a default export).
 export function setup(): void {
+	if (process.env.MAL_NATIVE_PREWARM === "0") return;
+	const preparationJobs = process.env.MAL_PREPARATION_BUILD_JOBS;
+	const environment =
+		preparationJobs === undefined
+			? process.env
+			: {
+					...process.env,
+					MAL_BUILD_JOBS: preparationJobs,
+					CARGO_BUILD_JOBS: preparationJobs,
+				};
 	const config = resolveBuildConfig({
 		engine: {
 			primordials: "mutable",
@@ -54,6 +58,7 @@ export function setup(): void {
 		resolveNativeBuildContext({
 			features: buildDerivationFromConfig(config).features,
 			compilerBake,
+			environment,
 		}),
 	);
 }

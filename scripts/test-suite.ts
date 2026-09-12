@@ -329,6 +329,7 @@ function stageEnvironment(command: Command): NodeJS.ProcessEnv {
 		...workerEnvironment(workers),
 		MAL_BUILD_JOBS: String(buildJobs),
 		CARGO_BUILD_JOBS: String(buildJobs),
+		MAL_PREPARATION_BUILD_JOBS: String(allocation.preparationBuildJobs),
 		...command.env,
 	};
 }
@@ -471,7 +472,10 @@ const allSmokeCommands: Array<Command> = [
 		"--sequence.seed=1",
 		...unitSmoke,
 	]),
-	...nativeDimensionCommands("smoke", nativeSmoke),
+	...nativeDimensionCommands("smoke", nativeSmoke).map((command) => ({
+		...command,
+		env: { ...command.env, MAL_NATIVE_PREWARM: "0" },
+	})),
 	node("smoke: Test262 cross-section", "scripts/test262.ts", [
 		"--canonical",
 		"--backend",
