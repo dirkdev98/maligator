@@ -95,7 +95,10 @@ test/harness/verifyProperty-restore-accessor-symbol.js
 test/intl402/BigInt/prototype/toLocaleString/prop-desc.js
 test/intl402/Collator/prototype/resolvedOptions/basic.js
 test/intl402/Date/prototype/toLocaleString/builtin.js
+test/intl402/DateTimeFormat/prototype/format/time-clip-to-integer.js
+test/intl402/DateTimeFormat/prototype/formatRange/argument-to-integer.js
 test/intl402/DateTimeFormat/prototype/formatRange/prop-desc.js
+test/intl402/DateTimeFormat/prototype/formatRangeToParts/argument-to-integer.js
 test/intl402/DisplayNames/options-style-toString-abrupt-throws.js
 test/intl402/DurationFormat/prototype/format/not-a-constructor.js
 test/intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js

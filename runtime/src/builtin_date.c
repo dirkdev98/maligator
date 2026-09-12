@@ -1715,6 +1715,7 @@ f64 mal_date_now_ms(void) {
 }
 
 bool mal_date_to_local_components(f64 time_value, i32 *year, i32 *month, i32 *day, i32 *hour, i32 *minute, i32 *second) {
+    time_value = date_time_clip(time_value);
     if (!isfinite(time_value)) {
         return false;
     }

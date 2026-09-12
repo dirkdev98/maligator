@@ -23,10 +23,7 @@ MalValue mal_builtin_date_utc_known(MalVm *vm, const MalValue *args, i32 arg_cou
  */
 f64 mal_date_now_ms(void);
 
-/**
- * Decompose a time value (ms since epoch) into LOCAL civil components (month is
- * 1-12) for Intl.DateTimeFormat. Returns false for a non-finite time value.
- */
+/** Apply TimeClip before local civil projection (month 1-12); false for invalid time. */
 bool mal_date_to_local_components(f64 time_value, i32 *year, i32 *month, i32 *day, i32 *hour, i32 *minute, i32 *second);
 
 /** Fixed locale-insensitive formatter used when Intl.DateTimeFormat is absent. */
