@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "../assets.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
@@ -362,7 +363,7 @@ export async function executeTestCommand(
 			: readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const session = new TestCompilationSession();
 	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
-		cacheDirectory: ".cache/mal-cache",
+		cacheDirectory: maligatorCacheDirectory(),
 		session,
 	});
 	const assetManifest = cacheDevelopmentAssets(assets);

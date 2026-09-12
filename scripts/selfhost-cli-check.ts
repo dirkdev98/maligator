@@ -11,12 +11,18 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const root = path.join(repositoryRoot, ".cache/mal-build/selfhost-cli-product");
+const root = path.join(
+	maligatorCacheDirectory(),
+	"work",
+	"selfhost-cli",
+	String(process.pid),
+);
 const tools = path.join(root, "tools");
 const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");

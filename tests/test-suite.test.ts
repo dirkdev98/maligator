@@ -44,6 +44,15 @@ describe("test suite planner", () => {
 		expect(check).toMatch(
 			/check: native sanitizer-primary:[\s\S]*npm run test:sanitize[\s\S]*tests\/native\/runtime-mechanics\.test\.ts/,
 		);
+		for (const compilerMatrix of [
+			"tests/native/static-data-query.test.ts",
+			"tests/native/static-primitive-operations.test.ts",
+		]) {
+			expect(stageInvocation(check, "check: native normal")).toContain(compilerMatrix);
+			expect(stageInvocation(check, "check: native sanitizer-primary")).not.toContain(
+				compilerMatrix,
+			);
+		}
 		expect(check).not.toContain("full: self-hosted frontend");
 		expect(full).toContain("smoke: Test262 cross-section");
 		expect(full).toContain("check: native normal");
@@ -69,6 +78,17 @@ describe("test suite planner", () => {
 		expect(stageInvocation(full, "full: remaining: native normal")).toContain(
 			"tests/native/intl-features.test.ts",
 		);
+		for (const profile of [
+			"tests/native/symbol-metadata-profiles.test.ts",
+			"tests/native/string-raw-profiles.test.ts",
+			"tests/native/string-call-profiles.test.ts",
+		]) {
+			expect(check).not.toContain(profile);
+			expect(stageInvocation(full, "full: remaining: native normal")).toContain(profile);
+			expect(
+				stageInvocation(full, "full: remaining: native sanitizer-primary"),
+			).not.toContain(profile);
+		}
 		expect(
 			stageInvocation(full, "full: remaining: native sanitizer-primary"),
 		).not.toContain("tests/native/shadow-realm.test.ts");
@@ -126,7 +146,7 @@ describe("test suite planner", () => {
 	});
 
 	it.each([1, 2, 4])(
-		"propagates a %i-worker budget into every stage without nested build fan-out",
+		"right-sizes test and build workers within a %i-worker budget",
 		(workers) => {
 			const plan = JSON.parse(
 				runSuite("check", "--workers", String(workers), "--plan=json"),
@@ -163,6 +183,17 @@ describe("test suite planner", () => {
 				childBuildJobs: 1,
 				preparationBuildJobs: plan.workers,
 			});
+			expect(native.environment.MAL_BUILD_JOBS).toBe("1");
+			expect(native.environment.CARGO_BUILD_JOBS).toBe("1");
+			const smokeNative = plan.stages.find(
+				(stage) => stage.name === "smoke: native normal",
+			)!;
+			expect(smokeNative.workers).toEqual({
+				testWorkers: 1,
+				childBuildJobs: plan.workers,
+				preparationBuildJobs: plan.workers,
+			});
+			expect(smokeNative.environment.MAL_BUILD_JOBS).toBe(String(plan.workers));
 		},
 	);
 

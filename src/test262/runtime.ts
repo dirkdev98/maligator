@@ -134,7 +134,11 @@ export type Test262NativeBuildInputs = {
 };
 
 let nativeBuildInputs: Test262NativeBuildInputs | undefined;
-const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
+const REPORT_PATH = `${TEST262_METADATA.reportPath}${buildSuffix()}`;
+const WORK_PATH = path.join(
+	TEST262_METADATA.workPath,
+	`${String(process.pid)}${buildSuffix()}`,
+);
 let reportSelectionId: string | undefined;
 
 export function test262NativeBuildInputs(): Test262NativeBuildInputs {
@@ -167,7 +171,7 @@ export function test262ReportPath(variant: "strict" | "sloppy" | "combined"): st
 			: "compiled";
 	const mode = process.env.MAL_GC_STRESS ? "gc-stress" : "normal";
 	const selection = reportSelectionId === undefined ? "" : `-${reportSelectionId}`;
-	return `${BUILD_PATH}/report-${backend}-${mode}-${variant}${selection}.json`;
+	return `${REPORT_PATH}/report-${backend}-${mode}-${variant}${selection}.json`;
 }
 
 export function test262SetReportSelection(paths?: Array<string>): void {
@@ -346,14 +350,13 @@ export function test262ResetStats() {
 
 export function test262PrepareBuild() {
 	const toolchain = (selectedToolchain ??= requireToolchain({ needsCxx: true }));
-	mkdirSync(BUILD_PATH, { recursive: true });
+	mkdirSync(REPORT_PATH, { recursive: true });
+	mkdirSync(WORK_PATH, { recursive: true });
 	for (const variant of ["strict", "sloppy", "combined"] as const) {
 		rmSync(test262ReportPath(variant), { force: true });
 	}
-	for (const name of readdirSync(BUILD_PATH)) {
-		if (!name.startsWith("report-")) {
-			rmSync(path.join(BUILD_PATH, name), { recursive: true, force: true });
-		}
+	for (const name of readdirSync(WORK_PATH)) {
+		rmSync(path.join(WORK_PATH, name), { recursive: true, force: true });
 	}
 
 	test262Log(
@@ -406,7 +409,7 @@ export function test262PrepareBuild() {
 				cSource: '#include "vm.h"\n',
 				verbose: false,
 				mainFile: path.resolve("runtime/test262_wire.c"),
-				outDir: BUILD_PATH,
+				outDir: WORK_PATH,
 			}).binaryPath
 		: undefined;
 	test262SetNativeBuildInputs({ toolchain, artifacts, wireRunner });
@@ -434,7 +437,7 @@ export function test262PrepareBuild() {
 			"-c",
 			"runtime/test262_batch.c",
 			"-o",
-			`${BUILD_PATH}/test262_batch.o`,
+			`${WORK_PATH}/test262_batch.o`,
 		],
 		{ env: nativeContext.environment, stdio: "inherit" },
 	);
@@ -717,7 +720,7 @@ function retainBatchCcFailure(input: {
 	error: unknown;
 }): string {
 	const id = test262BatchId(input.paths).slice("batch-".length);
-	const artifactPath = path.join(BUILD_PATH, `report-cc-failure-${id}`);
+	const artifactPath = path.join(REPORT_PATH, `report-cc-failure-${id}`);
 	const error = input.error as Error & {
 		code?: unknown;
 		signal?: unknown;
@@ -785,7 +788,7 @@ async function executeWireBatch(
 	const resolved = parseBatchOutput(stdout, entries);
 	const unreported = entries.filter((entry) => !resolved.has(entry.index));
 	if (unreported.length > 0) {
-		const outputPath = path.join(BUILD_PATH, `wire${workerId}.last-stdout.txt`);
+		const outputPath = path.join(REPORT_PATH, `wire${workerId}.last-stdout.txt`);
 		writeFileSync(outputPath, stdout);
 		test262Log(
 			`Wire driver on worker ${workerId} left ${unreported.length}/${entries.length} unreported (stdout saved), retrying singly.`,
@@ -838,7 +841,7 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 		const wirePaths = images.map((image) =>
 			cacheFrontendWire(serializeRuntimeImage(image.runtime)),
 		);
-		const wirePath = path.join(BUILD_PATH, `wire${workerId}-${entries.length}.plan`);
+		const wirePath = path.join(WORK_PATH, `wire${workerId}-${entries.length}.plan`);
 		writeFileSync(wirePath, `${wirePaths.join("\n")}\n`);
 		entries.push({ file, index: entries.length, wirePath });
 	}
@@ -855,7 +858,7 @@ async function linkBatch(objectPath: string, binPath: string): Promise<number> {
 		[
 			...CC_LINK_FLAGS,
 			objectPath,
-			`${BUILD_PATH}/test262_batch.o`,
+			`${WORK_PATH}/test262_batch.o`,
 			artifacts.c.engine,
 			...artifacts.rust.linkArgs,
 			"-o",
@@ -989,7 +992,7 @@ export async function test262RunBatch(
 		return;
 	}
 	const useCache = cacheEnabled();
-	const baseName = path.join(BUILD_PATH, `batch${workerId}`);
+	const baseName = path.join(WORK_PATH, `batch${workerId}`);
 	const paths = files.map((file) => file.path);
 	const timings: Test262BatchPhaseTimings = {
 		compileMs: null,
@@ -1193,7 +1196,7 @@ export async function test262RunBatch(
 		: [
 				...CC_COMPILE_FLAGS,
 				`${baseName}.c`,
-				`${BUILD_PATH}/test262_batch.o`,
+				`${WORK_PATH}/test262_batch.o`,
 				artifacts.c.engine,
 				...artifacts.rust.linkArgs,
 				"-o",

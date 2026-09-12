@@ -37,6 +37,16 @@ const BUILD_DIRECTORY = maligatorBuildDirectory();
 const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 1, "cc");
 const LINKED_BINARY_PRODUCER = artifactProducer("linked-binary", 1, "cc-link");
 
+function runnerWorkDirectory(context: NativeBuildContext): string {
+	return path.join(
+		context.cacheDirectory,
+		"work",
+		"local-runner",
+		String(process.pid),
+		...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
+	);
+}
+
 export type { BuildCacheEvent } from "./native-build-context.ts";
 
 export interface LocalBuildOptions {
@@ -213,6 +223,7 @@ export function buildLoadDriver(
 		cSource: '#include "vm.h"\n',
 		verbose,
 		mainFile: path.join(context.runtimeDirectory, "load_main.c"),
+		outDir: runnerWorkDirectory(context),
 	}).binaryPath;
 }
 
@@ -229,6 +240,7 @@ export function buildDevelopmentRunner(
 		verbose,
 		mainFile: path.join(context.runtimeDirectory, "dev_main.c"),
 		cacheSuffix,
+		outDir: runnerWorkDirectory(context),
 	});
 }
 

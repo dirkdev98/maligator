@@ -2,13 +2,19 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
 
-const root = path.resolve(".cache/selfhost-native");
+const root = path.join(
+	maligatorCacheDirectory(),
+	"work",
+	"selfhost-native",
+	String(process.pid),
+);
 const tools = path.join(root, "tools");
 const fixture = path.resolve("tests/fixtures/selfhost-native/entry.mts");
 const progress = new CommandProgress("selfhost-native");

@@ -7,7 +7,8 @@ export const TEST262_METADATA = {
 	path: path.join(maligatorCacheDirectory(), "test262-corpora", revision),
 	repository: "tc39/test262",
 	revision,
-	buildPath: ".cache/mal-build/test262",
+	reportPath: ".cache/mal-build/test262",
+	workPath: path.join(maligatorCacheDirectory(), "work", "test262"),
 	outputFile: "scripts/test262.json",
 
 	// Eval-heavy conformance cases exceed 40 seconds on supported Linux hosts.

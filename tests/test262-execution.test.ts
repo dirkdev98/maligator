@@ -7,12 +7,14 @@ import type * as Test262Runner from "../src/test262/runtime.ts";
 import type { Test262File, Test262Frontmatter } from "../src/test262/types.ts";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-test262-execution-"));
-const originalBuildPath = TEST262_METADATA.buildPath;
+const originalReportPath = TEST262_METADATA.reportPath;
+const originalWorkPath = TEST262_METADATA.workPath;
 const originalCorpusPath = TEST262_METADATA.path;
 let runner: typeof Test262Runner;
 
 beforeAll(async () => {
-	TEST262_METADATA.buildPath = path.join(directory, "build");
+	TEST262_METADATA.reportPath = path.join(directory, "reports");
+	TEST262_METADATA.workPath = path.join(directory, "work");
 	TEST262_METADATA.path = path.join(directory, "corpus");
 	mkdirSync(path.join(TEST262_METADATA.path, "harness"), { recursive: true });
 	for (const name of ["assert.js", "sta.js", "doneprintHandle.js", "testTypedArray.js"]) {
@@ -51,7 +53,8 @@ beforeAll(async () => {
 
 afterAll(() => {
 	vi.unstubAllEnvs();
-	TEST262_METADATA.buildPath = originalBuildPath;
+	TEST262_METADATA.reportPath = originalReportPath;
+	TEST262_METADATA.workPath = originalWorkPath;
 	TEST262_METADATA.path = originalCorpusPath;
 	rmSync(directory, { recursive: true, force: true });
 });

@@ -6,6 +6,7 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../src/local-build.ts";
@@ -41,7 +42,12 @@ const checkoutRoot = externalRoot
 	? path.resolve(externalRoot)
 	: path.join(metadataRoot, "fixtures/wpt");
 const outputRoot = path.join(root, ".cache/wpt");
-const buildRoot = path.join(outputRoot, "build");
+const buildRoot = path.join(
+	maligatorCacheDirectory(),
+	"work",
+	"wpt",
+	String(process.pid),
+);
 const resultsPath = path.join(outputRoot, "results.json");
 
 const requestedPaths: Array<string> = [];
@@ -188,6 +194,7 @@ interface ExecutionReport extends WptExecutionKey {
 	missingExpectations: Array<WptExpectation>;
 }
 
+rmSync(buildRoot, { recursive: true, force: true });
 mkdirSync(buildRoot, { recursive: true });
 if (!keepArtifacts) {
 	process.once("exit", () => rmSync(buildRoot, { recursive: true, force: true }));

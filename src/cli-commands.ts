@@ -1234,7 +1234,7 @@ function executeIsolatedTests(
 			? compiled.wires.map((wire) => wire.path)
 			: [cacheFrontendWire(compiled.wire)];
 	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
-		cacheDirectory: ".cache/mal-cache",
+		cacheDirectory: maligatorCacheDirectory(),
 		session: new FrontendCompilationSession(),
 	});
 	const assetManifest = cacheDevelopmentAssets(assets);

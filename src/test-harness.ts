@@ -8,17 +8,20 @@ import { execFileSync, spawn } from "node:child_process";
  * Two responsibilities beyond deduplication:
  *   - ordinary fixture frontends, generated objects, linked binaries, and the
  *     expensive C/Rust archives are atomically cached in the shared user cache;
- *     only the emitted `.c` and restored binary land in the caller's `outDir`.
+ *     emitted `.c` and restored binaries use shared-cache work space unless the
+ *     caller requests an explicit `outDir`.
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
  */
 import type { ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./compiler/core/core-optimization-families.ts";
@@ -70,6 +73,20 @@ export const CRYPTO_START_FAILURE_MAIN = "runtime/crypto_start_failure_test_main
 const compilerSourceDirectory = path.resolve("src");
 const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
 let compilerSourceFiles: Array<string> | undefined;
+let harnessArtifactDirectory: string | undefined;
+
+function defaultHarnessArtifactDirectory(): string {
+	if (harnessArtifactDirectory !== undefined) return harnessArtifactDirectory;
+	const parent = path.join(maligatorCacheDirectory(), "work", "test-harness");
+	mkdirSync(parent, { recursive: true });
+	harnessArtifactDirectory = mkdtempSync(path.join(parent, `${String(process.pid)}-`));
+	process.once("exit", () => {
+		if (harnessArtifactDirectory !== undefined) {
+			rmSync(harnessArtifactDirectory, { recursive: true, force: true });
+		}
+	});
+	return harnessArtifactDirectory;
+}
 
 function defaultCompilerBake(): CompilerBakeInput {
 	// Harness-only edits must not rebake the eval compiler; key its actual import cone.
@@ -114,7 +131,7 @@ export interface BuildOptions {
 	entryGoal?: ModuleGoal;
 	/** C driver to link; defaults to the test262 harness main. */
 	mainFile?: string;
-	/** Artifact directory; defaults to `.cache/mal-build`. Pass a temp dir under vitest. */
+	/** Artifact directory; defaults to process-scoped shared-cache work space. */
 	outDir?: string;
 	/**
 	 * Include runtime eval / new Function (embed the baked compiler). Defaults to
@@ -349,7 +366,7 @@ function linkProgramImage(
 		cSource,
 		verbose: false,
 		mainFile: options.mainFile,
-		outDir: options.outDir,
+		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		onGeneratedObjectCacheEvent: (event) =>
 			recordTestTelemetry({

@@ -2,18 +2,24 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
 
 const fixture = path.resolve("tests/fixtures/selfhost-frontend/entry.mts");
-const outDir = path.resolve(".cache/selfhost-frontend");
+const outDir = path.join(
+	maligatorCacheDirectory(),
+	"work",
+	"selfhost-frontend",
+	String(process.pid),
+);
 const nativeOutput = path.join(outDir, "native.malw");
 const progress = new CommandProgress("selfhost-frontend");
 progress.start("compare Node-hosted and native compiler wire output");
+rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
-rmSync(nativeOutput, { force: true });
 
 const config = resolveBuildConfig({
 	engine: { eval: false, regexp: true, intl: { enabled: false } },

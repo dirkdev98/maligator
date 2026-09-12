@@ -1,8 +1,9 @@
 # Testing
 
-Maligator uses three cumulative test tiers. The two-minute check is the normal
-developer gate. The smoke tier is primarily an early fuse inside larger runs,
-and the full tier is exhaustive rather than interactive.
+Maligator uses three cumulative test tiers. Check is the normal developer gate;
+its native duration depends on cache warmth and the selected worker budget. The
+smoke tier is primarily an early fuse inside larger runs, and the full tier is
+exhaustive rather than interactive.
 
 ## DX performance exercise
 
@@ -28,7 +29,10 @@ exit status, and native fixture spans for frontend work, C/Rust artifacts, gener
 objects, linking, and execution, including cache hit/miss counts and the 20 slowest
 spans. Vitest forks write process-local JSONL while running, so telemetry does not
 serialize the native suite; reports count the contributing processes explicitly.
-Test verdicts and program output are still always recomputed.
+Test verdicts and program output are still always recomputed. Test262 build work and
+materialized runners live under `<shared-cache>/work/test262`; repository `.cache`
+contains reports and retained failure evidence only. Native fixture, WPT, and
+self-hosted gate materializations likewise use process-scoped shared-cache work roots.
 
 ## Worker budgets
 
@@ -39,13 +43,15 @@ allocations are capped at the available CPUs. `--workers` overrides the environm
 default for the gate. Plans and reports record the effective budget and each stage's
 test workers, child build jobs and preparation build jobs.
 
-Vitest and Test262 use up to that many test workers, each inheriting one compiler
-and Cargo job. Native global setup and the Test262 runtime preparation run before
-those workers and can use the full budget. Serial WPT and self-hosted checks can
-also use the full build allocation. Cargo compiles Rust tests before running the
-Rust test pool. `MAL_BUILD_JOBS` and `CARGO_BUILD_JOBS` can lower a build pool further;
-neither can raise it above the inherited allocation. Resource controls survive
-canonical environment cleaning without retaining ambient runtime modes.
+Vitest uses up to that many test workers and divides compiler and Cargo jobs across
+the files that can actually run concurrently. A single selected native file can use
+the full build budget; a four-file-or-larger selection gets one nested build job per
+worker. Native global setup and Test262 runtime preparation can use the full budget.
+Serial WPT and self-hosted checks can also use the full build allocation. Cargo
+compiles Rust tests before running the Rust test pool. `MAL_BUILD_JOBS` and
+`CARGO_BUILD_JOBS` can lower a build pool further; neither can raise it above the
+inherited allocation. Resource controls survive canonical environment cleaning
+without retaining ambient runtime modes.
 
 The allocation limits managed test and build pools; the queue's CPU affinity and
 quota remain the operating-system limits. Changing worker counts does not change
@@ -233,7 +239,7 @@ WPT removes its per-run native scratch tree on exit; pass
 | Tier  | Command              | Policy                                | Intended use                                                                                     |
 | ----- | -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Smoke | `npm run test:smoke` | Bail, 20s warm / 5m cold at 4 workers | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
-| Check | `npm run test:check` | Bail, about two minutes               | All regular unit tests, curated wire/normal standards, and disjoint normal/UBSan native coverage |
+| Check | `npm run test:check` | Bail                                  | All regular unit tests, curated wire/normal standards, and disjoint normal/UBSan native coverage |
 | Full  | `npm run test:full`  | Bail, unbounded                       | Self-hosting, remaining partitioned native coverage, standards, collectors, and leaks            |
 
 Smoke and check own disjoint unit selections: the small
@@ -274,14 +280,17 @@ buffer boundaries, interpreter memory access, and native FFI services. Those fil
 run under UBSan on macOS and ASan+UBSan elsewhere. Sanitizer runs enable
 `MAL_GC_AT_EXIT=1` so VM teardown is exercised and leak detection checks allocations
 that survive cleanup. Every other authored native test runs once in the ordinary
-native dimension. The standalone sanitizer runner defaults
-to at most two Vitest workers; gates pass their selected worker budget. Each test
-worker receives one child build job. Files whose dominant check already applies maximal GC stress and verification
-remain in the normal dimension instead of multiplying both expensive instruments.
+native dimension. The standalone sanitizer runner defaults to at most two Vitest
+workers; gates pass their selected worker budget. Gate stages divide child build
+jobs across the files that can run concurrently. Files whose dominant check already
+applies maximal GC stress and verification remain in the normal dimension instead
+of multiplying both expensive instruments.
 Smoke, check, and full retain a complete disjoint partition, so semantic API
 breadth is not recompiled under a sanitizer without an ownership-risk reason. A test
 belongs in both dimensions only through an explicit focused command for a
-mode-sensitive regression.
+mode-sensitive regression. Compiler-semantic native matrices run in the normal
+dimension, and exhaustive call-profile matrices run in the full normal lane; focused
+Core suites and smaller native fixtures cover those operations in the developer gate.
 
 `runToStdout` starts with a 20-second default child deadline. Sanitizer
 instrumentation and maximal GC stress (`MAL_GC_STRESS=1`) each multiply it by three;

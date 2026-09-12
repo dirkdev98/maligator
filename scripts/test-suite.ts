@@ -76,7 +76,7 @@ Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
   npm run test:smoke          20-second warm / five-minute cold fuse at four workers
-  npm run test:check          approximately two-minute default developer gate
+  npm run test:check          canonical developer gate; native cache warmth affects duration
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
   npm run test262:report      full Test262 report; approval required
@@ -301,20 +301,36 @@ function formatCommand(command: Command): string {
 }
 
 function stageWorkers(command: Command): StageWorkers {
-	const testPool =
-		command.kind === "unit" ||
-		command.kind === "native" ||
+	const selectedTestFiles = command.args.filter((argument) =>
+		argument.endsWith(".test.ts"),
+	).length;
+	const pooled =
+		selectedTestFiles > 0 ||
 		command.kind === "rust" ||
 		command.args.includes("scripts/test262.ts");
+	const testWorkers =
+		selectedTestFiles > 0 ? Math.min(workers, selectedTestFiles) : pooled ? workers : 1;
 	return {
-		testWorkers: testPool ? workers : 1,
-		childBuildJobs: testPool ? 1 : workers,
+		testWorkers,
+		childBuildJobs: pooled ? Math.max(1, Math.floor(workers / testWorkers)) : workers,
 		preparationBuildJobs: workers,
 	};
 }
 
 function stageEnvironment(command: Command): NodeJS.ProcessEnv {
-	return { ...workerEnvironment(workers), ...command.env };
+	const allocation = stageWorkers(command);
+	const nestedVitestBuilds = command.args.some((argument) =>
+		argument.endsWith(".test.ts"),
+	);
+	const buildJobs = nestedVitestBuilds
+		? allocation.childBuildJobs
+		: allocation.preparationBuildJobs;
+	return {
+		...workerEnvironment(workers),
+		MAL_BUILD_JOBS: String(buildJobs),
+		CARGO_BUILD_JOBS: String(buildJobs),
+		...command.env,
+	};
 }
 
 function selectionArgs(entries: Array<string>, option: string): Array<string> {
@@ -764,9 +780,10 @@ const coldSmokeRun =
 		path.join(sharedCache, "compiler-wire"),
 		path.join(sharedCache, "actions", "runtime-archive"),
 		path.join(sharedCache, "actions", "rust-library"),
+		path.join(sharedCache, "actions", "generated-object"),
+		path.join(sharedCache, "actions", "linked-binary"),
 		path.join(sharedCache, "test262-program-images"),
 		path.join(sharedCache, "frontend", "artifacts"),
-		path.join(root, ".cache/mal-build/test262/Test262Wire"),
 		path.join(TEST262_METADATA.path, ".git"),
 		path.join(sharedCache, "actions", "test262-input-index"),
 	].some((entry) => !existsSync(entry));

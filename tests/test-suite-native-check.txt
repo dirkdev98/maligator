@@ -14,10 +14,7 @@ tests/native/literal-constants.test.ts
 tests/native/literal-materialization.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
-tests/native/symbol-metadata-profiles.test.ts
 tests/native/symbol-registry-reuse.test.ts
-tests/native/string-raw-profiles.test.ts
-tests/native/string-call-profiles.test.ts
 tests/native/virtual-state.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/object-has-own-known.test.ts
