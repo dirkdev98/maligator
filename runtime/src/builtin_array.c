@@ -28,6 +28,11 @@ MalNativeFunctionCallback mal_array_values_callback = nullptr;
 
 static bool mal_array_default_species(MalVm *vm, MalValue recv);
 
+typedef struct MalArrayJoinFrame {
+    MalObject *receiver;
+    struct MalArrayJoinFrame *previous;
+} MalArrayJoinFrame;
+
 static bool mal_builtin_array_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -2359,26 +2364,8 @@ static i32 mal_builtin_array_join_dense_strings(
     return 1;
 }
 
-static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
-    if (!mal_builtin_array_to_object(vm, &this_value)) {
-        return mal_value_new_undefined();
-    }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
-        return mal_value_new_undefined();
-    }
-
-    // ToString(separator) (throwing on a Symbol/abrupt toString), default ",".
-    MalString *separator;
-    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        if (!mal_vm_to_string(vm, args[0], &separator)) {
-            return mal_value_new_undefined();
-        }
-    } else {
-        separator = mal_intrinsic_ascii(vm, ",");
-    }
-
+static MalValue mal_builtin_array_join_active(
+    MalVm *vm, MalValue this_value, u32 length, MalString *separator) {
     if (length == 0) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     }
@@ -2442,6 +2429,46 @@ done:
     mal_gc_unroot(&roots_span);
     mal_rooted_string_parts_dispose(&parts);
     return ret;
+}
+
+static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
+    if (!mal_builtin_array_to_object(vm, &this_value)) {
+        return mal_value_new_undefined();
+    }
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    // ToString(separator) (throwing on a Symbol/abrupt toString), default ",".
+    MalString *separator;
+    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
+        if (!mal_vm_to_string(vm, args[0], &separator)) {
+            return mal_value_new_undefined();
+        }
+    } else {
+        separator = mal_intrinsic_ascii(vm, ",");
+    }
+
+    MalObject *receiver = mal_value_to_object(this_value);
+    for (MalArrayJoinFrame *active = vm->array_join_frames;
+         active != nullptr; active = active->previous) {
+        if (active->receiver == receiver) {
+            return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        }
+    }
+
+    MalArrayJoinFrame frame = {
+        .receiver = receiver,
+        .previous = vm->array_join_frames,
+    };
+    vm->array_join_frames = &frame;
+    MalValue result = mal_builtin_array_join_active(
+        vm, this_value, length, separator);
+    assert(vm->array_join_frames == &frame);
+    vm->array_join_frames = frame.previous;
+    return result;
 }
 
 static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

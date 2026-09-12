@@ -1763,6 +1763,9 @@ typedef struct MalVm {
     /** Lazily allocated immutable BigInt cells for values -128 through 255. */
     struct MalBigInt **small_bigint_cache;
 
+    /** C-stack-linked receivers currently being joined, used to terminate array cycles. */
+    struct MalArrayJoinFrame *array_join_frames;
+
     /** Tail-only semantic versions: do not perturb established hot VM offsets. */
     MalSemanticEpochs semantic_epochs;
 } MalVm;

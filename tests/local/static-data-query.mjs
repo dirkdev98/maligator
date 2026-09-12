@@ -373,6 +373,38 @@ console.log(joiningMutation.join("|"));
 const joiningCycle = ["first"];
 joiningCycle[1] = joiningCycle;
 console.log(joiningCycle.join("|"));
+const indirectCycleA = [];
+const indirectCycleB = [];
+indirectCycleA[0] = indirectCycleB;
+indirectCycleB[0] = indirectCycleA;
+console.log(JSON.stringify(indirectCycleA.join("|")));
+let reentrantJoinResult = "pending";
+const reentrantJoin = [];
+Object.defineProperty(reentrantJoin, 0, {
+	get() {
+		if (reentrantJoinResult === "pending") reentrantJoinResult = reentrantJoin.join(":");
+		return "value";
+	},
+});
+console.log(reentrantJoin.join("|"), JSON.stringify(reentrantJoinResult));
+const recursiveSeparatorEffects = [];
+const recursiveSeparator = {
+	toString() {
+		recursiveSeparatorEffects.push("separator");
+		return ":";
+	},
+};
+const recursiveSeparatorJoin = [
+	{
+		toString() {
+			return recursiveSeparatorJoin.join(recursiveSeparator);
+		},
+	},
+];
+console.log(
+	JSON.stringify(recursiveSeparatorJoin.join("|")),
+	recursiveSeparatorEffects.join(","),
+);
 let emptyJoinCoercions = 0;
 console.log(
 	[].join({

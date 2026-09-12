@@ -522,6 +522,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->small_uint_string_cache = nullptr;
     vm->small_uint_string_cache_scan_limit = 0;
     vm->small_bigint_cache = nullptr;
+    vm->array_join_frames = nullptr;
     vm->semantic_epochs = (MalSemanticEpochs) {
         .activity = 1,
         .array_elements = 1,
