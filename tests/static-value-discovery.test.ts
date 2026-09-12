@@ -35,6 +35,84 @@ const context: CoreCompilationContext = {
 };
 
 describe("static-value producer discovery", () => {
+	it.each(["none", "call", "unknown-target", "coercing-key", "indirect-write"] as const)(
+		"tracks a stored child across distinct data definitions and retains %s invalidation",
+		(effect) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const parameter = builder.blockParameterValue(entry, 0);
+			const number = (value: number) =>
+				builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value },
+				})[0]!;
+			const zero = number(0),
+				one = number(1),
+				seven = number(7),
+				nine = number(9);
+			const [child] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 1 },
+			});
+			builder.appendInstruction(entry, "defineProperty", [child!, zero, seven], {
+				attributes: { enumerable: true },
+			});
+			const [parent] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 2 },
+			});
+			builder.appendInstruction(entry, "defineProperty", [parent!, zero, child!], {
+				attributes: { enumerable: true },
+			});
+			builder.appendInstruction(entry, "defineProperty", [parent!, one, nine], {
+				attributes: { enumerable: true },
+			});
+			if (effect === "call") {
+				const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+				builder.appendInstruction(entry, "call", [parameter, receiver!, parent!]);
+			} else if (effect === "unknown-target")
+				builder.appendInstruction(entry, "defineProperty", [parameter, zero, child!], {
+					attributes: { enumerable: true },
+				});
+			else if (effect === "coercing-key")
+				builder.appendInstruction(entry, "defineProperty", [parent!, parameter, child!], {
+					attributes: { enumerable: true },
+				});
+			else if (effect === "indirect-write") {
+				const [alias] = builder.appendInstruction(entry, "loadProperty", [parent!, zero]);
+				builder.appendInstruction(entry, "defineProperty", [alias!, zero, nine], {
+					attributes: { enumerable: true },
+				});
+			}
+			const [read] = builder.appendInstruction(entry, "loadProperty", [child!, zero]);
+			builder.setTerminator(entry, { kind: "return", value: read! });
+			const fn = program.function(builder.finish(entry).function);
+			const analysis = new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				65536,
+				context,
+			);
+			const fact = analysis.queryAt(
+				child!,
+				coreInstructionId(fn.kernel.valueDefinitionOwner(read!)),
+			);
+			if (fact.kind !== "known") throw new Error("Expected child identity");
+			const description = program.staticDescriptions.description(fact.description);
+			if (description.kind !== "array") throw new Error("Expected child array");
+			expect(fact.privateUntilObservation).toBe(false);
+			if (effect === "none") {
+				expect(description.ownKeysComplete).toBe(true);
+				const member = description.properties[0]?.descriptor;
+				if (member?.kind !== "data" || member.value.kind !== "constant")
+					throw new Error("Expected retained child element");
+				expect(analysis.descriptionConstant(member.value.description)).toEqual({
+					kind: "number",
+					value: 7,
+				});
+			} else expect(description.ownKeysComplete).toBe(false);
+		},
+	);
+
 	it("represents explicit undefined separately from a literal hole", () => {
 		const result = inspectStaticValueFunction(
 			"function probe(x) { return [undefined, , 2].includes(x); } globalThis.probe = probe;",

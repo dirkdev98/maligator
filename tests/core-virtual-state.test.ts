@@ -192,4 +192,236 @@ describe("virtual local state", () => {
 		expect(inspected.structure.operations).toHaveLength(0);
 		expect(inspected.structure.pooledMaterializations).toBe(0);
 	});
+
+	it.each([
+		["const a=[1,2,3]; a.reverse(); return a[0]*10+a[2];", 31],
+		["const a=[1,2]; const before=a[0]; a.reverse(); return before*10+a[0];", 12],
+		["const a=[1,2]; a.reverse().push(3); return a.pop()*10+a[0];", 32],
+		["const a=[]; a.reverse(); return a.length;", 0],
+		["const a=[9]; a.reverse(); return a[0];", 9],
+		[
+			"const a=[1,2,3]; const before=a[1]; const first=a.shift(); return first*100+before*10+a[0];",
+			122,
+		],
+		[
+			"const a=[,2,undefined,4]; const first=a.shift(); return (first===undefined?100:0)+a.length*10+a[0];",
+			132,
+		],
+		["const a=[]; a['-1']=7; a.shift(); return a['-1'];", 7],
+		["const a=[]; a['-1']=7; a.pop(); return a['-1'];", 7],
+		["const a=[1]; a.shift(); return a.length;", 0],
+		["const a=[3,4]; a.reverse(); const first=a.shift(); return first*10+a[0];", 43],
+		[
+			"const a=[1,2]; const before=a[1]; const count=a.unshift(7,8); return count*100+before*10+a[3];",
+			422,
+		],
+		["const a=[,2]; return a.unshift()*10+a.length;", 22],
+		["const a=[]; a['-1']=9; return a.unshift()+a['-1'];", 9],
+		["const a=[undefined,,4]; return a.unshift(1)*10+a[3];", 44],
+		[
+			"const a=[1,2,3,4]; const before=a[2]; a.fill(9,-2,undefined); return before*100+a[2]*10+a[3];",
+			399,
+		],
+		[
+			"const a=[1,,3]; a.fill(); return (a[0]===undefined?10:0)+(a[1]===undefined?1:0);",
+			11,
+		],
+		["const a=[1,2,3]; a.fill(9,'1.9',undefined); return a[0]*100+a[1]*10+a[2];", 199],
+		["const a=[1,2,3]; a.fill(8,-Infinity,Infinity); return a[0]+a[2];", 16],
+		["const a=[1,2,3]; a.fill(8,NaN,null); return a[0]+a[2];", 4],
+		["const a=[1,2]; return a.fill(7).pop();", 7],
+		[
+			"const a=[1,2,3,4,5]; a.copyWithin(1,0,4); return a[0]*10000+a[1]*1000+a[2]*100+a[3]*10+a[4];",
+			11234,
+		],
+		[
+			"const a=[1,2,3,4,5]; a.copyWithin(0,1); return a[0]*10000+a[1]*1000+a[2]*100+a[3]*10+a[4];",
+			23455,
+		],
+		["const a=[1,2,3,4,5]; a.copyWithin(3,0,2); return a[3]*10+a[4];", 12],
+		[
+			"const a=[1,2,3]; const before=a[1]; a.copyWithin(1,0,2); return before*100+a[1]*10+a[2];",
+			212,
+		],
+		["const a=[1,2,3,4]; a.copyWithin('-2.9',0,undefined); return a[2]*10+a[3];", 12],
+		["const a=[1,2,3]; a.copyWithin(0,1,undefined); return a[0]*100+a[1]*10+a[2];", 233],
+		["const a=[1,2,3]; a.copyWithin(0,1,null); return a[0]*100+a[1]*10+a[2];", 123],
+		["const a=[1,2]; a.copyWithin(Infinity,0); return a[0]*10+a[1];", 12],
+		["const a=[1,,undefined,4]; a.copyWithin(1,0,3); return a[0]*10+a[1];", 11],
+		["const a=[1,2,3]; return a.copyWithin(1,0,2).shift()*100+a[0]*10+a[1];", 112],
+		["const a=[]; a['-1']=7; a.copyWithin(); return a['-1'];", 7],
+	] as const)("transfers private array state: %s", (body, expected) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe() { ${body} } globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBe(0);
+		expect(inspected.structure.operations).toHaveLength(0);
+		const returned = inspected.fn.instructions.find(
+			(instruction) => instruction.opcode === "RETURN",
+		);
+		expect(returned).toBeDefined();
+		const result = inspected.fn.instructions.findLast(
+			(instruction) => "dst" in instruction && instruction.dst === returned!.value,
+		);
+		expect(result).toMatchObject({ value: expected });
+	});
+
+	it("materializes a reversed alias with sparse cells and dynamic child identities", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(x,sink) { const a=[x,,undefined,4]; const b=a.reverse(); sink(b); return a; } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBe(1);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.reverse"),
+		).toBe(false);
+		expect(inspected.structure.genericCalls).toBe(1);
+	});
+
+	it("materializes a returned reverse receiver without copying its dynamic child", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(x) { const a=[x,,4]; return a.reverse(); } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBe(1);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.reverse"),
+		).toBe(false);
+	});
+
+	it.each([
+		"Object.freeze(a);",
+		"Object.defineProperty(a,'1',{writable:false});",
+		"Object.setPrototypeOf(a,proto);",
+		"sink(a);",
+	])("retains reverse after an observable state boundary: %s", (boundary) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(proto,sink) { const a=[1,2]; ${boundary} Array.prototype.reverse.call(a); return a; } globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBeGreaterThan(0);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.reverse"),
+		).toBe(true);
+	});
+
+	it.each([
+		"Object.freeze(a);",
+		"Object.defineProperty(a,'1',{writable:false});",
+		"Object.setPrototypeOf(a,proto);",
+		"sink(a);",
+	])("retains shift after an observable state boundary: %s", (boundary) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(proto,sink) { const a=[1,2,3]; ${boundary} Array.prototype.shift.call(a); return a; } globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBeGreaterThan(0);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.shift"),
+		).toBe(true);
+	});
+
+	it.each(["unshift", "fill"])(
+		"materializes %s state with dynamic child identity",
+		(method) => {
+			const inspected = inspectStaticValueFunction(
+				`function probe(x) { const a=[1,,3]; const result=a.${method}(x); return a; } globalThis.probe=probe;`,
+				"probe",
+			);
+			expect(inspected.structure.allocations).toBe(1);
+			expect(
+				inspected.core.some(
+					(op) => op.attributes.operation === `Array.prototype.${method}`,
+				),
+			).toBe(false);
+		},
+	);
+
+	it.each(["unshift", "fill"])(
+		"retains %s after observable state boundaries",
+		(method) => {
+			for (const boundary of [
+				"Object.freeze(a);",
+				"Object.defineProperty(a,'1',{writable:false});",
+				"Object.setPrototypeOf(a,proto);",
+				"sink(a);",
+			]) {
+				const inspected = inspectStaticValueFunction(
+					`function probe(proto,sink) { const a=[1,2,3]; ${boundary} Array.prototype.${method}.call(a,9); return a; } globalThis.probe=probe;`,
+					"probe",
+				);
+				expect(inspected.structure.allocations).toBeGreaterThan(0);
+				expect(
+					inspected.core.some(
+						(op) => op.attributes.operation === `Array.prototype.${method}`,
+					),
+				).toBe(true);
+			}
+		},
+	);
+
+	it("retains unshift growth beyond the virtual array limit", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(x) { const a=[]; a.length=64; return a.unshift(x); } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.unshift"),
+		).toBe(true);
+	});
+
+	it("retains dynamic fill bounds and their coercion", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(start,end) { const a=[1,2,3]; return a.fill(9,start,end); } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.fill"),
+		).toBe(true);
+	});
+
+	it("materializes the copyWithin receiver with repeated dynamic children and sparse deletion", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(x) { const a=[x,,undefined,4]; return a.copyWithin(1,0,3); } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBe(1);
+		expect(
+			inspected.core.some(
+				(op) => op.attributes.operation === "Array.prototype.copyWithin",
+			),
+		).toBe(false);
+	});
+
+	it.each([
+		"Object.freeze(a);",
+		"Object.defineProperty(a,'1',{writable:false});",
+		"Object.defineProperty(a,'1',{configurable:false});",
+		"Object.setPrototypeOf(a,proto);",
+		"sink(a);",
+	])("retains copyWithin after an observable state boundary: %s", (boundary) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(proto,sink) { const a=[1,2,,4]; ${boundary} Array.prototype.copyWithin.call(a,0,1,3); return a; } globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBeGreaterThan(0);
+		expect(
+			inspected.core.some(
+				(op) => op.attributes.operation === "Array.prototype.copyWithin",
+			),
+		).toBe(true);
+	});
+
+	it("retains all dynamic copyWithin coercions even for a known empty range", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(start,end) { const a=[1,2,3]; return a.copyWithin(Infinity,start,end); } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			inspected.core.some(
+				(op) => op.attributes.operation === "Array.prototype.copyWithin",
+			),
+		).toBe(true);
+	});
 });

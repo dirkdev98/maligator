@@ -32,6 +32,8 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreStaticArrayCopyResult } from "./core-static-array-copies.ts";
+import { coreStaticStringResult } from "./core-static-string-results.ts";
 import { CORE_STATIC_CELL_INDEX } from "./core-static-value-cells.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
@@ -782,6 +784,45 @@ export class CoreStaticValueAnalysis {
 						}
 					}
 				}
+				if (
+					opcode === "defineProperty" &&
+					!receiver &&
+					(escaped || touches) &&
+					initial.identity?.kind === "fresh-per-evaluation"
+				) {
+					const target = this.query(args[0]!),
+						key = this.query(args[1]!);
+					const keyDescription =
+						key.kind === "known" ? intern.description(key.description) : undefined;
+					if (
+						target.kind === "known" &&
+						target.identity?.kind === "fresh-per-evaluation" &&
+						target.identity.function === this.#fn.id &&
+						initial.identity.function === this.#fn.id &&
+						!sameStaticIdentity(target.identity, initial.identity) &&
+						this.#fn.kernel.valueDefinitionKind(target.identity.value) === 1 &&
+						["createArray", "createObject", "createObjectShaped"].includes(
+							this.#fn.instructionOpcodeName(
+								coreInstructionId(
+									this.#fn.kernel.valueDefinitionOwner(target.identity.value),
+								),
+							),
+						) &&
+						key.kind === "known" &&
+						!["object", "array", "function"].includes(key.brand) &&
+						(target.brand !== "array" ||
+							key.brand !== "string" ||
+							(keyDescription?.kind === "string" &&
+								(keyDescription.codeUnits.length !== 6 ||
+									keyDescription.codeUnits.some(
+										(unit, index) => unit !== "length".charCodeAt(index),
+									))))
+					) {
+						// Array length is excluded because its definition coerces the value.
+						escaped ||= touches;
+						continue;
+					}
+				}
 				const descriptor = this.#fn.registry.byId(
 					this.#fn.instructionOpcode(instruction),
 				);
@@ -1427,6 +1468,34 @@ export class CoreStaticValueAnalysis {
 			const canonical = callee.kind === "known" ? callee.canonical : undefined;
 
 			if (opcode === "call" && canonical !== undefined) {
+				const arrayCopy =
+					operands[1] === undefined || this.#context.facts.world.realms
+						? undefined
+						: coreStaticArrayCopyResult(
+								program,
+								fn,
+								this,
+								instruction,
+								value,
+								canonical,
+								operands[1],
+								operands.slice(2),
+							);
+				if (arrayCopy !== undefined) return arrayCopy;
+				const stringResult =
+					operands[1] === undefined || this.#context.facts.world.realms
+						? undefined
+						: coreStaticStringResult(
+								program,
+								fn,
+								this,
+								instruction,
+								value,
+								canonical,
+								operands[1],
+								operands.slice(2),
+							);
+				if (stringResult !== undefined) return stringResult;
 				const primitiveBrand = builtinPrimitiveResult(canonical);
 				if (
 					primitiveBrand !== undefined &&

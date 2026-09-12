@@ -3653,10 +3653,10 @@ static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, co
         goto done;
     }
 
+    // Disjoint ranges must retain ascending observable property accesses.
+    bool backward = start < target && target < start + count;
     for (f64 step = 0; step < count; step++) {
-        // Overlapping regions copy back-to-front so sources are read before
-        // they are overwritten.
-        f64 moved = target > start ? count - 1 - step : step;
+        f64 moved = backward ? count - 1 - step : step;
 
         MalValue element;
         bool present = mal_builtin_array_try_get_wide(vm, this_value, start + moved, &element);

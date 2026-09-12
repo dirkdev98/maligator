@@ -1,3 +1,4 @@
+import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import type { StaticMember } from "../shared/static-values.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -11,6 +12,7 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import { coreStaticMemberOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
@@ -22,16 +24,21 @@ import type {
 	CoreTransformCandidateService,
 } from "./core-transform-candidates.ts";
 
+type StaticSearchMethod = "includes" | "indexOf" | "lastIndexOf";
+
+interface StaticSearchPlan {
+	readonly method: StaticSearchMethod;
+	readonly search?: CoreValueId;
+	readonly elements: ReadonlyArray<{
+		readonly index: number;
+		readonly operation: CoreStaticMemberOperation;
+	}>;
+}
+
 interface StaticParameterPlan {
 	readonly parameter: number;
 	readonly replacements: ReadonlyMap<CoreInstructionId, CoreStaticMemberOperation>;
-	readonly includes: ReadonlyMap<
-		CoreInstructionId,
-		{
-			readonly search?: CoreValueId;
-			readonly elements: ReadonlyArray<CoreStaticMemberOperation>;
-		}
-	>;
+	readonly searches: ReadonlyMap<CoreInstructionId, StaticSearchPlan>;
 	readonly blocks: ReadonlyArray<CoreBlockId>;
 	readonly cost: number;
 }
@@ -48,6 +55,63 @@ function inputs(
 }
 function result(fn: CoreFunctionStore, instruction: CoreInstructionId): CoreValueId {
 	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+}
+
+function staticSearchStart(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	method: StaticSearchMethod,
+	length: number,
+	value: CoreValueId | undefined,
+): number | undefined {
+	// Empty searches return before coercing an explicitly supplied offset.
+	if (length === 0) return method === "lastIndexOf" ? -1 : 0;
+	if (value === undefined) return method === "lastIndexOf" ? length - 1 : 0;
+	// The collection proof belongs to the caller; helper SSA IDs need local definitions.
+	for (let depth = 0; depth < 32; depth++) {
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionKind(instruction) !== "operation") return undefined;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "move") {
+			value = inputs(fn, instruction)[0]!;
+			continue;
+		}
+		if (opcode === "createUndefined" || opcode === "createNull") return 0;
+		const attribute = fn.instructionAttributes(instruction).value;
+		let constant: number;
+		if (opcode === "createBoolean") {
+			if (typeof attribute !== "boolean") return undefined;
+			constant = attribute ? 1 : 0;
+		} else if (opcode === "createString") {
+			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
+			if (typeof stringIndex !== "number") return undefined;
+			const units = program.stringConstants[stringIndex];
+			if (units === undefined || units.length > 4096) return undefined;
+			const converted = evaluateConstantBuiltin("Number", undefined, [
+				{ kind: "string", value: String.fromCharCode(...units) },
+			]);
+			if (converted.kind !== "value" || converted.value.kind !== "number")
+				return undefined;
+			constant = converted.value.value;
+		} else if (
+			opcode === "createNumber" ||
+			opcode === "createF64" ||
+			opcode === "createI32"
+		) {
+			if (typeof attribute !== "number") return undefined;
+			constant = attribute;
+		} else return undefined;
+		const integer = Number.isNaN(constant) ? 0 : Math.trunc(constant);
+		return method === "lastIndexOf"
+			? integer >= 0
+				? Math.min(integer, length - 1)
+				: length + integer
+			: integer >= 0
+				? integer
+				: Math.max(length + integer, 0);
+	}
+	return undefined;
 }
 
 function staticParameterPlan(
@@ -78,12 +142,9 @@ function staticParameterPlan(
 	if (control.loops.length !== 0 || control.irreducibleCycles.length !== 0)
 		return undefined;
 	const replacements = new Map<CoreInstructionId, CoreStaticMemberOperation>();
-	const includes = new Map<
-		CoreInstructionId,
-		{ search?: CoreValueId; elements: Array<CoreStaticMemberOperation> }
-	>();
+	const searches = new Map<CoreInstructionId, StaticSearchPlan>();
 	const aliases = new Set<CoreValueId>([fn.kernel.functionParameter(parameter)]),
-		methods = new Set<CoreValueId>();
+		methods = new Map<CoreValueId, StaticSearchMethod>();
 	let cost = fn.liveStorageCounts().instructions;
 	for (const block of control.reversePostorder) {
 		if (
@@ -119,7 +180,7 @@ function staticParameterPlan(
 				continue;
 			}
 			if (opcode === "move" && methods.has(args[0]!)) {
-				methods.add(result(fn, instruction));
+				methods.set(result(fn, instruction), methods.get(args[0]!)!);
 				replacements.set(instruction, { opcode: "createUndefined", inputs: [] });
 				continue;
 			}
@@ -151,8 +212,11 @@ function staticParameterPlan(
 					continue;
 				}
 				const proof = analysis.inherited(fact, key);
-				if (proof?.resolution?.value?.[0] === "Array.prototype.includes") {
-					methods.add(result(fn, instruction));
+				const method = (["includes", "indexOf", "lastIndexOf"] as const).find(
+					(method) => proof?.resolution?.value?.[0] === `Array.prototype.${method}`,
+				);
+				if (method !== undefined) {
+					methods.set(result(fn, instruction), method);
 					replacements.set(instruction, { opcode: "createUndefined", inputs: [] });
 					continue;
 				}
@@ -162,13 +226,24 @@ function staticParameterPlan(
 				opcode === "call" &&
 				methods.has(args[0]!) &&
 				aliases.has(args[1]!) &&
-				args.length <= 3 &&
+				args.length <= 4 &&
 				description.kind === "array" &&
 				description.length !== null &&
 				description.length <= 64
 			) {
-				const elements: Array<CoreStaticMemberOperation> = [];
+				const method = methods.get(args[0]!)!;
+				// Erased receiver/method aliases cannot stand in for an observed search identity.
+				if (
+					description.length > 0 &&
+					args[2] !== undefined &&
+					(aliases.has(args[2]) || methods.has(args[2]))
+				)
+					return undefined;
+				const start = staticSearchStart(program, fn, method, description.length, args[3]);
+				if (start === undefined) return undefined;
+				const elements: Array<StaticSearchPlan["elements"][number]> = [];
 				for (let index = 0; index < description.length; index++) {
+					if (method === "lastIndexOf" ? index > start : index < start) continue;
 					const property = description.properties.find(
 						(property) => property.key === String(index),
 					);
@@ -176,6 +251,7 @@ function staticParameterPlan(
 					if (property === undefined) {
 						if (analysis.inherited(fact, String(index))?.kind !== "absent")
 							return undefined;
+						if (method !== "includes") continue;
 						member = {
 							kind: "constant",
 							description: program.staticDescriptions.intern({ kind: "undefined" }),
@@ -186,9 +262,10 @@ function staticParameterPlan(
 					}
 					const operation = coreStaticMemberOperation(program, member, []);
 					if (operation === undefined) return undefined;
-					elements.push(operation);
+					elements.push({ index, operation });
 				}
-				includes.set(instruction, { search: args[2], elements });
+				if (method === "lastIndexOf") elements.reverse();
+				searches.set(instruction, { method, search: args[2], elements });
 				cost += elements.length * 4 + 3;
 				continue;
 			}
@@ -217,7 +294,7 @@ function staticParameterPlan(
 			return undefined;
 	}
 	if (replacements.size === 0) return undefined;
-	return { parameter, replacements, includes, blocks: control.reversePostorder, cost };
+	return { parameter, replacements, searches, blocks: control.reversePostorder, cost };
 }
 
 function cloneWithStaticParameter(
@@ -259,7 +336,7 @@ function cloneWithStaticParameter(
 		return mapped;
 	};
 	for (const block of plan.blocks) {
-		const outputBlock = blocks.get(block)!;
+		let outputBlock = blocks.get(block)!;
 		const append = (
 			opcode: string,
 			args: ReadonlyArray<CoreValueId>,
@@ -267,7 +344,7 @@ function cloneWithStaticParameter(
 		) => editor.appendInstruction(outputBlock, opcode, args, { attributes }).outputs[0]!;
 		for (const instruction of target.bodyInstructionIds(block)) {
 			const replacement = plan.replacements.get(instruction),
-				includes = plan.includes.get(instruction);
+				searchPlan = plan.searches.get(instruction);
 			if (replacement !== undefined) {
 				values.set(
 					result(target, instruction),
@@ -275,16 +352,53 @@ function cloneWithStaticParameter(
 				);
 				continue;
 			}
-			if (includes !== undefined) {
+			if (searchPlan !== undefined && searchPlan.method !== "includes") {
 				const search =
-					includes.search === undefined
+					searchPlan.search === undefined
 						? append("createUndefined", [])
-						: map(includes.search);
+						: map(searchPlan.search);
+				const continuation = editor.createBlock([{}]);
+				for (const { index, operation } of searchPlan.elements) {
+					const constant = append(
+						operation.opcode,
+						operation.inputs,
+						operation.attributes,
+					);
+					const equal = append("binary", [search, constant], { operator: "===" });
+					const found = append("createNumber", [], { value: index });
+					const next = editor.createBlock();
+					editor.setTerminator(outputBlock, {
+						kind: "branch",
+						condition: equal,
+						consequent: { block: continuation, arguments: [found] },
+						alternate: { block: next, arguments: [] },
+					});
+					outputBlock = next;
+				}
+				const absent = append("createNumber", [], { value: -1 });
+				editor.setTerminator(outputBlock, {
+					kind: "jump",
+					edge: { block: continuation, arguments: [absent] },
+				});
+				outputBlock = continuation;
+				values.set(
+					result(target, instruction),
+					editor.function.kernel.blockParameterValue(
+						editor.function.kernel.blockParameterStart(continuation),
+					),
+				);
+				continue;
+			}
+			if (searchPlan !== undefined) {
+				const search =
+					searchPlan.search === undefined
+						? append("createUndefined", [])
+						: map(searchPlan.search);
 				let accumulated = append("createNumber", [], { value: 0 });
-				for (const element of includes.elements) {
+				for (const { operation: element } of searchPlan.elements) {
 					const constant = append(element.opcode, element.inputs, element.attributes);
 					const nan =
-						element.opcode === "createNumber" &&
+						(element.opcode === "createNumber" || element.opcode === "createF64") &&
 						typeof element.attributes?.value === "number" &&
 						Number.isNaN(element.attributes.value);
 					const equal = append("binary", nan ? [search, search] : [search, constant], {

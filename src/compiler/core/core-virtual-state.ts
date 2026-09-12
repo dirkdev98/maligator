@@ -1,3 +1,4 @@
+import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -5,6 +6,7 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreMaterializationPlan } from "./core-materialization-demands.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { coreStaticMemberOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 
@@ -27,7 +29,10 @@ const numberCell = (value: number): Cell => ({
 	inputs: [],
 	attributes: { value },
 });
-const valueCell = (value: CoreValueId): Cell => ({ opcode: "move", inputs: [value] });
+const valueCell = (value: CoreValueId): Cell => ({
+	opcode: "move",
+	inputs: [value],
+});
 
 export const materializeVirtualState: CoreFunctionPass = {
 	name: "materialize-virtual-state",
@@ -71,8 +76,23 @@ export const materializeVirtualState: CoreFunctionPass = {
 				(attributes.operation === "Object" ||
 					(attributes.construct &&
 						["Boolean", "Number", "String"].includes(attributes.operation as string)));
+			const arrayResult =
+				opcode === "callKnown" &&
+				attributes.argumentMode === undefined &&
+				!attributes.construct &&
+				[
+					"Array.of",
+					"Array.prototype.toReversed",
+					"Array.prototype.with",
+					"Array.prototype.toSpliced",
+					"Array.prototype.slice",
+					"Array.prototype.concat",
+					"Array.prototype.flat",
+					"String.prototype.split",
+				].includes(attributes.operation as string);
 			if (
 				(!wrapper &&
+					!arrayResult &&
 					!["createArray", "createObject", "createObjectShaped"].includes(opcode)) ||
 				attributes[MATERIALIZED]
 			)
@@ -85,6 +105,45 @@ export const materializeVirtualState: CoreFunctionPass = {
 				continue;
 			const fact = analysis.query(value);
 			if (fact.kind !== "known") continue;
+			const producedCells = new Map<string, Cell>();
+			let resultLength = 0;
+			if (arrayResult) {
+				const description = program.staticDescriptions.description(fact.description);
+				if (
+					fact.construction?.instruction !== root ||
+					description.kind !== "array" ||
+					description.length === null ||
+					!Number.isSafeInteger(description.length) ||
+					description.length < 0 ||
+					description.length > LIMIT ||
+					description.ownKeysComplete !== true ||
+					description.prototype.kind !== "intrinsic" ||
+					description.prototype.id !== "Array.prototype"
+				)
+					continue;
+				resultLength = description.length;
+				for (const property of description.properties) {
+					if (
+						typeof property.key !== "string" ||
+						property.descriptor.kind !== "data" ||
+						!property.descriptor.writable ||
+						!property.enumerable ||
+						!property.configurable ||
+						!/^(0|[1-9][0-9]*)$/.test(property.key) ||
+						Number(property.key) >= description.length
+					)
+						break;
+					const cell = coreStaticMemberOperation(
+						program,
+						property.descriptor.value,
+						fact.operands,
+					);
+					if (cell === undefined) break;
+					producedCells.set(property.key, cell);
+				}
+				// Missing indexes in a complete description are holes, not undefined cells.
+				if (producedCells.size !== description.properties.length) continue;
+			}
 			let conversion: Cell | undefined;
 			if (wrapper) {
 				if (
@@ -119,8 +178,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 				}
 			}
 			const stringWrapper = wrapper && fact.exactBrand === "String";
-			const array = opcode === "createArray";
-			let length = array ? (attributes.length as number) : 0;
+			const array = opcode === "createArray" || arrayResult;
+			let length = arrayResult ? resultLength : array ? (attributes.length as number) : 0;
 			if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) continue;
 			const initializers = new Set<CoreInstructionId>();
 			const keyConversions = new Set<CoreInstructionId>();
@@ -221,7 +280,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 				editor.removeInstruction(root);
 				return editor.commit();
 			}
-			const cells = new Map<string, Cell>();
+			const cells = new Map(producedCells);
 			if (opcode === "createObjectShaped") {
 				const keys = attributes.keyStringIndices as ReadonlyArray<number>,
 					args = argsOf(root);
@@ -300,10 +359,195 @@ export const materializeVirtualState: CoreFunctionPass = {
 							instruction,
 							length === 0 ? undefinedCell : (cells.get(key) ?? undefinedCell),
 						);
-						cells.delete(key);
-						length = Math.max(length - 1, 0);
+						if (length > 0) {
+							cells.delete(key);
+							length--;
+						}
 						transitions++;
 						continue;
+					}
+					if (attrs.operation === "Array.prototype.unshift") {
+						const count = args.length - 1;
+						let shiftable = length + count <= LIMIT;
+						for (
+							let index = 0;
+							shiftable && count > 0 && index < length + count;
+							index++
+						) {
+							const key = String(index);
+							if (!cells.has(key) && !absent(key)) shiftable = false;
+						}
+						if (shiftable) {
+							if (count > 0) {
+								for (let index = length - 1; index >= 0; index--) {
+									const cell = cells.get(String(index)),
+										key = String(index + count);
+									if (cell === undefined) cells.delete(key);
+									else cells.set(key, cell);
+								}
+								for (let index = 0; index < count; index++)
+									cells.set(String(index), valueCell(args[index + 1]!));
+								length += count;
+							}
+							replacements.set(instruction, numberCell(length));
+							transitions++;
+							continue;
+						}
+					}
+					if (attrs.operation === "Array.prototype.shift") {
+						let shiftable = true;
+						for (let index = 0; index < length; index++) {
+							const key = String(index);
+							if (!cells.has(key) && !absent(key)) {
+								shiftable = false;
+								break;
+							}
+						}
+						if (shiftable) {
+							replacements.set(
+								instruction,
+								length === 0 ? undefinedCell : (cells.get("0") ?? undefinedCell),
+							);
+							for (let index = 1; index < length; index++) {
+								const cell = cells.get(String(index)),
+									key = String(index - 1);
+								if (cell === undefined) cells.delete(key);
+								else cells.set(key, cell);
+							}
+							if (length > 0) cells.delete(String(--length));
+							transitions++;
+							continue;
+						}
+					}
+					if (
+						attrs.operation === "Array.prototype.fill" ||
+						attrs.operation === "Array.prototype.copyWithin"
+					) {
+						const bound = (input: CoreValueId | undefined, fallback: number) => {
+							if (input === undefined) return fallback;
+							const constant = analysis.constant(input, instruction);
+							if (constant?.kind === "undefined") return fallback;
+							// Array bounds use ToNumber, which rejects BigInt unlike Number().
+							if (constant === undefined || constant.kind === "bigint") return undefined;
+							const converted = evaluateConstantBuiltin("Number", undefined, [constant]);
+							if (converted.kind !== "value" || converted.value.kind !== "number")
+								return undefined;
+							const number = converted.value.value;
+							const relative =
+								Number.isNaN(number) || number === 0 ? 0 : Math.trunc(number);
+							return relative < 0
+								? Math.max(length + relative, 0)
+								: Math.min(relative, length);
+						};
+						if (attrs.operation === "Array.prototype.copyWithin") {
+							const target = bound(args[1], 0),
+								start = bound(args[2], 0),
+								end = bound(args[3], length);
+							if (target !== undefined && start !== undefined && end !== undefined) {
+								const count = Math.min(Math.max(end - start, 0), length - target);
+								let copyable = true;
+								for (let offset = 0; offset < count; offset++) {
+									const source = String(start + offset),
+										destination = String(target + offset);
+									if (
+										(!cells.has(source) && !absent(source)) ||
+										(cells.has(source) && !cells.has(destination) && !absent(destination))
+									) {
+										copyable = false;
+										break;
+									}
+								}
+								if (copyable) {
+									const alias = fn.kernel.resultAt(
+										fn.kernel.instructionResultStart(instruction),
+									);
+									if (fn.kernel.valueHandlerUseCount(alias) !== 0) {
+										boundary = root;
+										break;
+									}
+									const backward = start < target && target < start + count;
+									for (let step = 0; step < count; step++) {
+										const offset = backward ? count - step - 1 : step,
+											cell = cells.get(String(start + offset)),
+											key = String(target + offset);
+										if (cell === undefined) cells.delete(key);
+										else cells.set(key, cell);
+									}
+									aliases.add(alias);
+									removals.add(instruction);
+									transitions++;
+									continue;
+								}
+							}
+							boundary = instruction;
+							break;
+						}
+						const start = bound(args[2], 0),
+							end = bound(args[3], length);
+						if (start !== undefined && end !== undefined) {
+							let fillable = true;
+							for (let index = start; index < end; index++) {
+								const key = String(index);
+								if (!cells.has(key) && !absent(key)) {
+									fillable = false;
+									break;
+								}
+							}
+							if (fillable) {
+								const alias = fn.kernel.resultAt(
+									fn.kernel.instructionResultStart(instruction),
+								);
+								if (fn.kernel.valueHandlerUseCount(alias) !== 0) {
+									boundary = root;
+									break;
+								}
+								const cell = args[1] === undefined ? undefinedCell : valueCell(args[1]);
+								for (let index = start; index < end; index++)
+									cells.set(String(index), cell);
+								aliases.add(alias);
+								removals.add(instruction);
+								transitions++;
+								continue;
+							}
+						}
+					}
+					if (attrs.operation === "Array.prototype.reverse") {
+						let reversible = true;
+						for (let lower = 0; lower < Math.floor(length / 2); lower++) {
+							const low = String(lower),
+								high = String(length - lower - 1);
+							if (
+								(!cells.has(low) && !absent(low)) ||
+								(!cells.has(high) && !absent(high))
+							) {
+								reversible = false;
+								break;
+							}
+						}
+						if (reversible) {
+							const alias = fn.kernel.resultAt(
+								fn.kernel.instructionResultStart(instruction),
+							);
+							if (fn.kernel.valueHandlerUseCount(alias) !== 0) {
+								boundary = root;
+								break;
+							}
+							// Prove every endpoint before applying any swap; a failed proof keeps the whole call.
+							for (let lower = 0; lower < Math.floor(length / 2); lower++) {
+								const low = String(lower),
+									high = String(length - lower - 1),
+									left = cells.get(low),
+									right = cells.get(high);
+								if (right === undefined) cells.delete(low);
+								else cells.set(low, right);
+								if (left === undefined) cells.delete(high);
+								else cells.set(high, left);
+							}
+							aliases.add(alias);
+							removals.add(instruction);
+							transitions++;
+							continue;
+						}
 					}
 				}
 				if (
@@ -435,7 +679,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 					if (!consumed.has(fn.kernel.useInstruction(use))) return true;
 				return false;
 			});
-			if (transitions === 0 && escapes) continue;
+			if (transitions === 0 && escapes && !arrayResult) continue;
 			analysis.verify(fact);
 			const editor = CoreEditor.open(program, fn.id);
 			// Coercion belongs to construction even when the private shell moves or disappears.
@@ -462,7 +706,10 @@ export const materializeVirtualState: CoreFunctionPass = {
 					});
 				} else
 					editor.replaceInstruction(root, array ? "createArray" : "createObject", [], {
-						attributes: { ...(array ? { length } : {}), [MATERIALIZED]: true },
+						attributes: {
+							...(array ? { length } : {}),
+							[MATERIALIZED]: true,
+						},
 					});
 				editor.moveInstruction(root, block, boundary);
 				for (const [key, cell] of cells) {
