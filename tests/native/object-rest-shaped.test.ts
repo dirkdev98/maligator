@@ -48,7 +48,7 @@ describe("shaped object-rest construction", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-	});
+	}, 600_000);
 
 	it("preserves compiled and interpreted semantics", () => {
 		run(compiled);

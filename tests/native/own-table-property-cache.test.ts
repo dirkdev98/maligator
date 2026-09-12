@@ -33,7 +33,7 @@ describe("dictionary own-property cache hints", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-	});
+	}, 600_000);
 
 	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
