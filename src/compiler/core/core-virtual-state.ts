@@ -65,6 +65,18 @@ export const materializeVirtualState: CoreFunctionPass = {
 			Array.from({ length: fn.kernel.instructionOperandCount(instruction) }, (_, index) =>
 				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index),
 			);
+		const primitiveValue = (value: CoreValueId) => {
+			for (let depth = 0; depth < 32; depth++) {
+				if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+				if (fn.instructionKind(definition) !== "operation") return false;
+				const opcode = fn.instructionOpcodeName(definition);
+				if (CONSTANTS.has(opcode)) return true;
+				if (opcode !== "move") return false;
+				value = argsOf(definition)[0]!;
+			}
+			return false;
+		};
 		for (const root of fn.instructionIds()) {
 			if (++visits > 4096) return undefined;
 			if (fn.instructionKind(root) !== "operation") continue;
@@ -289,11 +301,13 @@ export const materializeVirtualState: CoreFunctionPass = {
 					cells.set(analysis.string(keys[index]!), valueCell(args[index]!));
 			}
 			const aliases = new Set([value]),
-				removals = new Set<CoreInstructionId>();
+				removals = new Set<CoreInstructionId>(),
+				methods = new Map<CoreValueId, string>();
 			const replacements = new Map<CoreInstructionId, Cell>();
 			let boundary: CoreInstructionId | undefined,
 				started = false,
-				transitions = 0;
+				transitions = 0,
+				crossUnrelatedEffects = false;
 			const absent = (key: string) => analysis.inherited(fact, key)?.kind === "absent";
 			for (const instruction of fn.instructionIds(block)) {
 				if (++visits > 4096) return undefined;
@@ -310,12 +324,31 @@ export const materializeVirtualState: CoreFunctionPass = {
 				}
 				const op = fn.instructionOpcodeName(instruction),
 					attrs = fn.instructionAttributes(instruction);
+				const knownBuiltinCall = attrs.knownBuiltinCall as
+					| { readonly operation?: unknown }
+					| undefined;
+				const operation =
+					op === "callKnown"
+						? attrs.operation
+						: op === "call"
+							? (knownBuiltinCall?.operation ?? methods.get(args[0]!))
+							: undefined;
+				const stateArgs =
+					op === "call" && typeof operation === "string" ? args.slice(1) : args;
 				if (!touches) {
 					if (CONSTANTS.has(op)) continue;
 					const effects = coreInstructionEffects(fn, instruction);
 					if (effects.mayGc || effects.callsUserCode || effects.maySuspend) {
-						boundary = instruction;
-						break;
+						const primitiveCells = [...cells.values()].every(
+							(cell) =>
+								CONSTANTS.has(cell.opcode) ||
+								(cell.opcode === "move" && primitiveValue(cell.inputs[0]!)),
+						);
+						// An unrelated safepoint can observe the lifetime of referenced objects.
+						if (!crossUnrelatedEffects || !primitiveCells) {
+							boundary = instruction;
+							break;
+						}
 					}
 					continue;
 				}
@@ -329,29 +362,32 @@ export const materializeVirtualState: CoreFunctionPass = {
 					removals.add(instruction);
 					continue;
 				}
-				if (!aliases.has(args[0]!) || args.slice(1).some((input) => aliases.has(input))) {
+				if (
+					!aliases.has(stateArgs[0]!) ||
+					stateArgs.slice(1).some((input) => aliases.has(input))
+				) {
 					boundary = instruction;
 					break;
 				}
 				if (
 					array &&
-					op === "callKnown" &&
+					typeof operation === "string" &&
 					!attrs.construct &&
 					attrs.argumentMode === undefined
 				) {
 					if (
-						attrs.operation === "Array.prototype.push" &&
-						length + args.length - 1 <= LIMIT &&
-						args.slice(1).every((_, index) => absent(String(length + index)))
+						operation === "Array.prototype.push" &&
+						length + stateArgs.length - 1 <= LIMIT &&
+						stateArgs.slice(1).every((_, index) => absent(String(length + index)))
 					) {
-						for (const input of args.slice(1))
+						for (const input of stateArgs.slice(1))
 							cells.set(String(length++), valueCell(input));
 						replacements.set(instruction, numberCell(length));
 						transitions++;
 						continue;
 					}
 					if (
-						attrs.operation === "Array.prototype.pop" &&
+						operation === "Array.prototype.pop" &&
 						(length === 0 || cells.has(String(length - 1)) || absent(String(length - 1)))
 					) {
 						const key = String(length - 1);
@@ -366,8 +402,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 						transitions++;
 						continue;
 					}
-					if (attrs.operation === "Array.prototype.unshift") {
-						const count = args.length - 1;
+					if (operation === "Array.prototype.unshift") {
+						const count = stateArgs.length - 1;
 						let shiftable = length + count <= LIMIT;
 						for (
 							let index = 0;
@@ -386,15 +422,16 @@ export const materializeVirtualState: CoreFunctionPass = {
 									else cells.set(key, cell);
 								}
 								for (let index = 0; index < count; index++)
-									cells.set(String(index), valueCell(args[index + 1]!));
+									cells.set(String(index), valueCell(stateArgs[index + 1]!));
 								length += count;
 							}
 							replacements.set(instruction, numberCell(length));
 							transitions++;
+							crossUnrelatedEffects = true;
 							continue;
 						}
 					}
-					if (attrs.operation === "Array.prototype.shift") {
+					if (operation === "Array.prototype.shift") {
 						let shiftable = true;
 						for (let index = 0; index < length; index++) {
 							const key = String(index);
@@ -416,12 +453,13 @@ export const materializeVirtualState: CoreFunctionPass = {
 							}
 							if (length > 0) cells.delete(String(--length));
 							transitions++;
+							crossUnrelatedEffects = true;
 							continue;
 						}
 					}
 					if (
-						attrs.operation === "Array.prototype.fill" ||
-						attrs.operation === "Array.prototype.copyWithin"
+						operation === "Array.prototype.fill" ||
+						operation === "Array.prototype.copyWithin"
 					) {
 						const bound = (input: CoreValueId | undefined, fallback: number) => {
 							if (input === undefined) return fallback;
@@ -439,10 +477,10 @@ export const materializeVirtualState: CoreFunctionPass = {
 								? Math.max(length + relative, 0)
 								: Math.min(relative, length);
 						};
-						if (attrs.operation === "Array.prototype.copyWithin") {
-							const target = bound(args[1], 0),
-								start = bound(args[2], 0),
-								end = bound(args[3], length);
+						if (operation === "Array.prototype.copyWithin") {
+							const target = bound(stateArgs[1], 0),
+								start = bound(stateArgs[2], 0),
+								end = bound(stateArgs[3], length);
 							if (target !== undefined && start !== undefined && end !== undefined) {
 								const count = Math.min(Math.max(end - start, 0), length - target);
 								let copyable = true;
@@ -476,14 +514,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 									aliases.add(alias);
 									removals.add(instruction);
 									transitions++;
+									crossUnrelatedEffects = true;
 									continue;
 								}
 							}
 							boundary = instruction;
 							break;
 						}
-						const start = bound(args[2], 0),
-							end = bound(args[3], length);
+						const start = bound(stateArgs[2], 0),
+							end = bound(stateArgs[3], length);
 						if (start !== undefined && end !== undefined) {
 							let fillable = true;
 							for (let index = start; index < end; index++) {
@@ -501,17 +540,19 @@ export const materializeVirtualState: CoreFunctionPass = {
 									boundary = root;
 									break;
 								}
-								const cell = args[1] === undefined ? undefinedCell : valueCell(args[1]);
+								const cell =
+									stateArgs[1] === undefined ? undefinedCell : valueCell(stateArgs[1]);
 								for (let index = start; index < end; index++)
 									cells.set(String(index), cell);
 								aliases.add(alias);
 								removals.add(instruction);
 								transitions++;
+								crossUnrelatedEffects = true;
 								continue;
 							}
 						}
 					}
-					if (attrs.operation === "Array.prototype.reverse") {
+					if (operation === "Array.prototype.reverse") {
 						let reversible = true;
 						for (let lower = 0; lower < Math.floor(length / 2); lower++) {
 							const low = String(lower),
@@ -546,8 +587,20 @@ export const materializeVirtualState: CoreFunctionPass = {
 							aliases.add(alias);
 							removals.add(instruction);
 							transitions++;
+							crossUnrelatedEffects = true;
 							continue;
 						}
+					}
+					if (
+						arrayResult &&
+						[
+							"Array.prototype.includes",
+							"Array.prototype.indexOf",
+							"Array.prototype.lastIndexOf",
+						].includes(operation)
+					) {
+						boundary = root;
+						break;
 					}
 				}
 				if (
@@ -580,6 +633,44 @@ export const materializeVirtualState: CoreFunctionPass = {
 					break;
 				}
 				if (op.startsWith("load")) {
+					const output = fn.kernel.resultAt(
+						fn.kernel.instructionResultStart(instruction),
+					);
+					const inheritedOperation = analysis.inherited(fact, key)?.resolution
+						?.value?.[0];
+					let knownCallTarget =
+						typeof inheritedOperation === "string" &&
+						inheritedOperation === `Array.prototype.${key}` &&
+						fn.kernel.valueUseCount(output) > 0;
+					for (
+						let use = fn.kernel.valueFirstUse(output);
+						knownCallTarget && use >= 0;
+						use = fn.kernel.useNext(use)
+					) {
+						const user = fn.kernel.useInstruction(use);
+						if (fn.instructionKind(user) !== "operation") {
+							knownCallTarget = false;
+							break;
+						}
+						const userArgs = argsOf(user);
+						knownCallTarget =
+							fn.kernel.useOperand(use) === 0 &&
+							fn.instructionOpcodeName(user) === "call" &&
+							aliases.has(userArgs[1]!);
+					}
+					if (
+						array &&
+						!cells.has(key) &&
+						fn.kernel.valueHandlerUseCount(output) === 0 &&
+						(knownCallTarget ||
+							(fn.kernel.valueUseCount(output) === 0 &&
+								inheritedOperation === `Array.prototype.${key}`))
+					) {
+						if (knownCallTarget && inheritedOperation !== undefined)
+							methods.set(output, inheritedOperation);
+						replacements.set(instruction, undefinedCell);
+						continue;
+					}
 					const cell =
 						array && key === "length"
 							? numberCell(length)
@@ -670,6 +761,15 @@ export const materializeVirtualState: CoreFunctionPass = {
 				continue;
 			boundary ??= fn.blockTerminator(block);
 			const consumed = new Set([...removals, ...replacements.keys()]);
+			let capturedMethodUsesConsumed = true;
+			for (const method of methods.keys())
+				for (
+					let use = fn.kernel.valueFirstUse(method);
+					capturedMethodUsesConsumed && use >= 0;
+					use = fn.kernel.useNext(use)
+				)
+					capturedMethodUsesConsumed = consumed.has(fn.kernel.useInstruction(use));
+			if (!capturedMethodUsesConsumed) continue;
 			const escapes = [...aliases].some((alias) => {
 				for (
 					let use = fn.kernel.valueFirstUse(alias);

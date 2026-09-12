@@ -45,13 +45,21 @@ primordial proof; missing methods still evaluate arguments before throwing.
 
 Known-call specialization reuses existing target/effect summaries and candidate
 budgets. A non-inlined helper can consume a complete private array/object description
-through constant own reads or certified `includes`, while its original callable body
+through constant own reads or certified `includes`, `indexOf` and `lastIndexOf`, while its original callable body
 remains available. Signatures share variants, capped at four per target. Recursive,
 escaping, identity-sensitive and unsupported signatures retain normal calls and
 materialization. Sloppy helpers that can expose their function identity through a
 callback's `caller` are excluded. A resolved property or call does not by itself
 eliminate an object; consumer demands and current virtual state determine whether
 its representation can disappear.
+
+Helper search variants retain sparse source indexes and distinguish strict equality
+from SameValueZero. Index searches branch to the first match in their search order;
+holes are skipped only after inherited indexed properties are proved absent. The
+existing 64-element and per-target variant bounds apply to these expansions.
+Fixed numeric, boolean, null, undefined and certified string offsets are decoded
+from the helper's own SSA definitions. Unknown offsets retain the original call
+and coercion; caller analysis is never queried with helper-local value IDs.
 
 `builtin-registry.ts` exports the shared primordial graph, literal entries and
 invocation summaries. The native descriptor audit supplies canonical object and
@@ -190,6 +198,17 @@ Constant numeric unary results reuse those same certified facts, allowing their 
 argument work to disappear after a builtin folds. Protected immutable global data
 bindings resolve to catalog references under the locked-world proof; mutable reads
 retain lookup. Neither rule suppresses unknown coercions or failed conversions.
+Signed 128-bit BigInt constants support exact increment, decrement, same-type
+comparisons, bitwise operations, powers and bounded shifts. Powers use checked
+squaring within the work budget; negative exponents and overflowing products retain
+runtime evaluation. Zero exponents and bases zero or plus/minus one avoid expansion.
+Negative shift counts reverse direction; large right shifts produce the sign
+extension without a large host shift. Updates and left shifts outside the target
+range and mixed numeric operands retain their runtime operations.
+Zero-width `BigInt.asIntN` and `BigInt.asUintN` calls can discard narrowing when
+the value is a proved primitive BigInt or Boolean and the shared evaluator certifies
+the width conversion. Value producers remain; other value kinds keep their
+conversion and errors even when the width is zero.
 
 ## Known operations
 
@@ -243,9 +262,24 @@ aliases, reflection, callbacks and suspension retain fresh identities. Descripti
 interning shares immutable recipe words; it never merges fresh runtime identities.
 
 Bounded private ordinary arrays and objects can keep local writes, deletes, length
-changes and certified push/pop operations in virtual cells. This transfer is limited
-to 64 cells and 4,096 instruction visits per pass. Constant keys, ordinary writable
-data descriptors and inherited-property absence proofs are required where relevant.
+changes and certified push/pop/shift/unshift/fill/copyWithin/reverse operations in
+virtual cells. Shift preserves hole positions relative to the remaining elements
+and returns the original first cell. Unshift moves cells in descending order and
+returns the new length;
+an empty argument list performs no indexed transfer. Fill accepts certified primitive
+bounds and retains its returned receiver alias. Empty pop/shift perform no indexed
+deletion. Reverse preserves holes and keeps its returned receiver as an alias of
+the same array. Each affected endpoint is proved before any swap is applied. This
+transfer is limited to 64 cells and 4,096 instruction visits per pass. Constant
+keys, ordinary writable data descriptors and inherited-property absence proofs are
+required where relevant.
+CopyWithin proves source reads and destination writes before transferring cells,
+preserves holes through deletion, and reverses direction only for overlapping
+ranges whose destination follows the source. Its native fallback uses the same
+direction rule to preserve observable getter/setter order for disjoint ranges.
+Direct method syntax can enter this pass before known-call lowering only when the
+locked inherited resolution identifies the exact Array prototype method and every
+captured method use is consumed by the completed state transfer.
 The existing scalar replacement and SSA passes handle compatible branch and loop
 values. Other joins, handlers and suspension retain or reconstruct runtime storage.
 Unsupported internal slots remain with their owning operation families.
@@ -265,6 +299,27 @@ keys retain `ToNumber`/`ToPropertyKey`, exceptions and GC roots; an empty includ
 table skips offset coercion. Tables use bounded scan code and pooled string/BigInt
 references, with direct numeric comparison for compact int32 words.
 
+The same primitive tables support `indexOf` and `lastIndexOf` with numeric results.
+Hole tags remain distinct from own undefined values, and NaN never matches a strict
+index search. A missing `lastIndexOf` offset starts at the last element; an explicit
+undefined offset starts at zero. Reverse searches retain the last matching index
+during a bounded forward scan of immutable data, avoiding a second offset table.
+Offset coercion remains before the scan and can throw or trigger image adoption;
+empty receivers skip that coercion. Wire and compiler-artifact identities change
+when query kinds are added.
+Constant searches fold through the same bounded scan. `includes` returns a boolean
+under SameValueZero, including NaN and holes read as undefined; index searches
+return original positions. Boolean, null, undefined and certified string offsets
+use the shared primitive conversion. BigInt offsets retain the runtime's ToNumber
+rejection.
+BigInt comparisons fold only within the signed 128-bit literal range; larger
+descriptions retain runtime comparison after the target's literal wrapping.
+Short index searches with dynamic elements use strict comparisons and bounded
+numeric index selection. They retain original positions and choose the first match
+in the requested direction; holes are skipped only after inherited absence is proved.
+Constant primitive tables remain available when a short comparison sequence is
+ineligible or the receiver is larger than sixteen elements.
+
 Private read-only consumers that still need runtime storage can select lazy cached
 templates. Generated C checks the current VM's slot inline and calls construction
 only on a miss. A VM retains at most 32 cached graphs, each compiler-selected recipe
@@ -273,6 +328,47 @@ remain independently rooted. Strings, BigInts and recipe words belong to the ima
 the retention bound covers materialized graphs, not the immutable program image.
 Fresh instances use the same recipe storage without a cache slot. The runtime's
 mutable backing stores are owned, so these choices introduce no copy-on-write layer.
+
+Bounded `toReversed`, `with` and `toSpliced` results carry fresh array descriptions
+with shallow child bindings. Proved absent indexes become own undefined elements;
+replaced or removed indexes need no read. Effectful index conversion, observed
+accessors and unproved inherited indexes retain the original operations. Description
+expansion is capped at 256 elements. The existing virtual-state pass consumes copies
+of at most 64 elements, discards unobserved results, and constructs a fresh array at
+an identity observation. Canonical `Array.of` results use the same materialization
+path. Producer expressions and child identities remain in their original order.
+
+`slice` descriptions additionally prove the default species through the locked
+intrinsic Array constructor, rejecting own constructor overrides. Copy bounds
+accept numeric, boolean, null, undefined and certified string conversions; BigInt
+and effectful object bounds retain runtime coercion. Omitted and undefined slice
+end bounds use the source length. Sparse slices preserve missing properties:
+materialization creates the result length and writes only present own elements.
+Complete ordinary array descriptors permit this path for both sparse and dense
+results.
+
+Concat builds bounded fresh descriptions after proving default receiver species
+and absent spreadability overrides on each object segment. Array segments preserve
+holes and shallow element aliases; known primitive and ordinary non-array segments
+append as single values. Unknown protocol reads retain the runtime operation.
+Descriptor scans share a budget of 4,096 across segments and inherited-property
+proofs, independently of the 256-element output cap.
+Flat uses the same root species proof and follows certified depths through known
+array children, removing proved holes at every visited level. At exhausted depth
+it retains child identities without inspecting their array brand. Traversal is
+bounded to 256 result elements, 4,096 visits and 32 nested descents; cycles, unknown
+array brands and unsupported allocation recipes retain runtime flattening.
+
+Storing an object in a distinct ordinary fresh container can expose the child
+without changing its contents. Data definitions with primitive keys preserve that
+snapshot; array length definitions remain a coercion boundary. Unknown subsequent
+calls or writes still invalidate the exposed child's contents.
+
+Join folds bounded arrays of certified primitive elements using target string
+conversion. Holes, null and undefined contribute empty text; explicit undefined
+separators use the default comma. Object and Symbol conversions retain runtime
+behavior, including on empty receivers where separator conversion still matters.
+Descriptor scans and generated UTF-16 text share the evaluation budget.
 
 Construction roots the result and active parent frames, polls during deep graphs,
 preserves allocation exceptions and publishes a cache slot only after success.
@@ -398,6 +494,14 @@ the getter and uses an empty string inside descriptive text. ToString stays at
 creation, before later effects and observations, with the original exception
 handler. Registry operations keep their runtime identity.
 
+Escaping Symbols also retain their identity while canonical metadata consumers reuse
+the description captured at creation. Object conversion stays after argument
+evaluation and before allocation. An unknown fresh-Symbol input branches once for
+undefined and shares the captured description and descriptive text across consumers.
+Registry keys always undergo ToString. Handler arguments that would depend on moved
+instructions prevent the conditional transform; mutable metadata lookup remains
+ordinary dispatch.
+
 Mutable Number formatting retains the property Get and all argument evaluation.
 Native and interpreted calls guard the captured native callback, current realm,
 primitive Number receiver and valid numeric option before entering the existing
@@ -492,6 +596,26 @@ remain in place. This does not recreate BigInts or identity-bearing Symbols.
 String searches with proved primitive String receiver and needle and a numeric
 position use the shared search kernel directly. Cons strings retain both GC roots
 while flattening before the scan; unknown string operands keep the guarded entry.
+Proved primitive String receivers also admit `repeat(0)` as the empty string and
+`repeat(1)` as the original value after certified count conversion. Nonpositive
+padding lengths reuse the receiver without converting the filler. Receiver
+conversion and argument producer effects remain at their original positions.
+Full-range `slice` and `substring` calls reuse the string when certified bounds
+cover every possible receiver length. A no-argument `concat` also returns that
+immutable value; uncertain bounds retain the ordinary operation.
+Certified empty slice/substring ranges discard only the string operation. Empty
+primitive needles make includes/startsWith/endsWith true after certifying position
+conversion; unknown or effectful positions still execute at runtime.
+Concat also reuses the receiver when every suffix is an empty primitive string.
+Padding with an empty primitive filler reuses it after certified length conversion.
+Substr supports certified full-range and empty-result identities while preserving
+its start/length conversion rules and argument producer effects.
+Split of a proved primitive string with an omitted or undefined separator carries
+a fresh singleton result whose element references the receiver. A certified zero
+ToUint32 limit produces a fresh empty result when the separator is also a proved
+primitive string or undefined. Receiver and argument producers remain; unknown
+separator protocols or limit coercions keep the original call. Fully constant
+splits continue through the existing literal-template lowering.
 Successful locale case transforms with immutable primitive String receiver and locale
 inputs can reuse their result. The target fixes default-locale behavior; locale-list
 objects retain each property observation. Discarding an unused transform additionally

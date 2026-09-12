@@ -186,6 +186,16 @@ describe("static-data query representation", () => {
 			}),
 		).toThrow(/operands/);
 	});
+
+	it("represents an omitted lastIndexOf offset as floating-point infinity", () => {
+		const inspected = inspect("return [1, 2, 1].lastIndexOf(x);");
+		expect(
+			inspected.core.some(
+				(operation) =>
+					operation.opcode === "createF64" && operation.attributes.value === Infinity,
+			),
+		).toBe(true);
+	});
 });
 
 describe("constant static-array search results", () => {

@@ -204,7 +204,7 @@ export const lowerKnownOperationResults: CoreFunctionPass = {
 							? undef()
 							: (query.args[2] ??
 								(query.queryKind === "last-index-of"
-									? editor.insertInstruction(block, instruction, "createNumber", [], {
+									? editor.insertInstruction(block, instruction, "createF64", [], {
 											attributes: { value: Infinity },
 										}).outputs[0]!
 									: undef()));

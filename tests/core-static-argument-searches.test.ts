@@ -77,7 +77,7 @@ describe("static search arguments across retained helpers", () => {
 	);
 
 	it.each(["includes", "indexOf", "lastIndexOf"])(
-		"retains %s inputs when its helper offset can call user code",
+		"routes %s through the runtime query when its helper offset is dynamic",
 		(method) => {
 			const inspected = inspectStaticValueFunction(
 				`const search = (xs, x, start) => xs.${method}(x, start);
@@ -85,7 +85,10 @@ describe("static search arguments across retained helpers", () => {
 				globalThis.probe = probe; globalThis.search = search;`,
 				"probe",
 			);
-			expect(inspected.structure.allocations).toBeGreaterThan(0);
+			expect(inspected.structure.allocations).toBe(0);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(true);
 		},
 	);
 

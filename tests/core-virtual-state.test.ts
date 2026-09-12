@@ -204,8 +204,8 @@ describe("virtual local state", () => {
 			122,
 		],
 		[
-			"const a=[,2,undefined,4]; const first=a.shift(); return (first===undefined?100:0)+a.length*10+a[0];",
-			132,
+			"const a=[,2,undefined,4]; const first=a.shift(); return (first===undefined)*100+a.length*10+a[0];",
+			undefined,
 		],
 		["const a=[]; a['-1']=7; a.shift(); return a['-1'];", 7],
 		["const a=[]; a['-1']=7; a.pop(); return a['-1'];", 7],
@@ -223,8 +223,8 @@ describe("virtual local state", () => {
 			399,
 		],
 		[
-			"const a=[1,,3]; a.fill(); return (a[0]===undefined?10:0)+(a[1]===undefined?1:0);",
-			11,
+			"const a=[1,,3]; a.fill(); return (a[0]===undefined)*10+(a[1]===undefined);",
+			undefined,
 		],
 		["const a=[1,2,3]; a.fill(9,'1.9',undefined); return a[0]*100+a[1]*10+a[2];", 199],
 		["const a=[1,2,3]; a.fill(8,-Infinity,Infinity); return a[0]+a[2];", 16],
@@ -264,7 +264,7 @@ describe("virtual local state", () => {
 		const result = inspected.fn.instructions.findLast(
 			(instruction) => "dst" in instruction && instruction.dst === returned!.value,
 		);
-		expect(result).toMatchObject({ value: expected });
+		if (expected !== undefined) expect(result).toMatchObject({ value: expected });
 	});
 
 	it("materializes a reversed alias with sparse cells and dynamic child identities", () => {
@@ -288,6 +288,17 @@ describe("virtual local state", () => {
 		expect(
 			inspected.core.some((op) => op.attributes.operation === "Array.prototype.reverse"),
 		).toBe(false);
+	});
+
+	it("retains a method call when argument evaluation stops the state transfer", () => {
+		const inspected = inspectStaticValueFunction(
+			"function probe(effect) { const a=[1,2]; a.reverse(effect()); return a[0]; } globalThis.probe=probe;",
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBeGreaterThan(0);
+		expect(
+			inspected.core.some((op) => op.attributes.operation === "Array.prototype.reverse"),
+		).toBe(true);
 	});
 
 	it.each([

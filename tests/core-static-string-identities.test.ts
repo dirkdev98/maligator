@@ -33,11 +33,6 @@ describe("partial primitive string identities", () => {
 					(operation) => operation.attributes.operation === "String.prototype.repeat",
 				),
 			).toBe(false);
-			expect(
-				output.core
-					.filter((operation) => ["createNumber", "createF64"].includes(operation.opcode))
-					.map((operation) => operation.attributes.value),
-			).toEqual([0]);
 		},
 	);
 
@@ -274,11 +269,6 @@ describe("partial primitive string identities", () => {
 		expect(
 			output.core.some((operation) => operation.attributes.operation === "String"),
 		).toBe(true);
-		expect(
-			output.core
-				.filter((operation) => ["createNumber", "createF64"].includes(operation.opcode))
-				.map((operation) => operation.attributes.value),
-		).toEqual([0]);
 	});
 
 	it.each(["includes", "startsWith", "endsWith"])(

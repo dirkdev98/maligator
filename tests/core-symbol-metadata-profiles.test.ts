@@ -47,8 +47,23 @@ describe("dynamic symbol metadata profiles", () => {
 			);
 		}
 	}
+	it("forwards a captured dynamic Symbol description after the symbol escapes", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(x,effect){const symbol=Symbol(x);effect(symbol);return symbol.description;}globalThis.probe=probe;",
+			"probe",
+		);
+		expect(
+			out.core.some(
+				(op) =>
+					op.attributes.operation === "Symbol.prototype.description<get>" ||
+					op.opcode === "loadPropertyStatic",
+			),
+		).toBe(false);
+		expect(out.core.some((op) => op.attributes.operation === "Symbol")).toBe(true);
+		expect(out.structure.genericCalls).toBe(1);
+	});
+
 	it.each([
-		"const symbol=Symbol(x);effect(symbol);return symbol.description;",
 		"const symbol=x;effect(symbol);return symbol.description;",
 		"const symbol=x?Symbol.for('a'):Symbol.for('b');effect(symbol);return symbol.description;",
 		"const symbol=new Proxy(Object(Symbol.for(String(x))),{});effect(symbol);return symbol.description;",

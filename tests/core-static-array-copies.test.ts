@@ -575,11 +575,8 @@ describe("static array copy descriptions", () => {
 			`function target(constructor) { const a=[1,,2]; a.constructor=constructor; return a.flat(${depth}); } globalThis.target=target;`,
 			"target",
 		);
-		expect(
-			output.core.some(
-				(operation) => operation.attributes.operation === "Array.prototype.flat",
-			),
-		).toBe(true);
+		expect(output.structure.genericLookups).toBeGreaterThan(0);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
 	});
 
 	it.each([
@@ -663,11 +660,8 @@ describe("static array copy descriptions", () => {
 				`function target(constructor) { const source = [1,2,3]; source.constructor = constructor; return source.${method}(1); } globalThis.target = target;`,
 				"target",
 			);
-			expect(
-				output.core.some(
-					(operation) => operation.attributes.operation === `Array.prototype.${method}`,
-				),
-			).toBe(true);
+			expect(output.structure.genericLookups).toBeGreaterThan(0);
+			expect(output.structure.genericCalls).toBeGreaterThan(0);
 		},
 	);
 
