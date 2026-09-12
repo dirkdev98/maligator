@@ -37,7 +37,7 @@
 	},
 	{
 		"file": "builtin_date.c",
-		"sha256": "904347e41d3389d9428dcd8981bb4c9fa145ccbca82709778f96a293cdfa67a6"
+		"sha256": "33ea428f9d19b38eeb8a968b192e428456ce216964bab747f5729ab39a5f6eaa"
 	},
 	{
 		"file": "builtin_disposable_stack.c",
