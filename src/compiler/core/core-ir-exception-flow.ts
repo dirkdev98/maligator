@@ -69,27 +69,33 @@ export function analyzeCoreLocalExceptionFlows(
 		const flow = localThrowCatchFlow(fn, block);
 		if (flow !== undefined) candidates.push(flow);
 	}
+	if (candidates.length === 0) return Object.freeze(candidates);
 	const candidateSources = new Map(candidates.map((flow) => [flow.source, flow.handler]));
-	const handlerOwners = new Map<CoreBlockId, Array<CoreBlockId>>();
+	const blockedHandlers = new Set<CoreBlockId>();
 	for (const block of fn.blockIds()) {
 		const handler = fn.kernel.blockHandlerBlock(block);
-		if (handler === undefined) continue;
-		const owners = handlerOwners.get(handler) ?? [];
-		owners.push(block);
-		handlerOwners.set(handler, owners);
+		if (handler !== undefined && candidateSources.get(block) !== handler) {
+			blockedHandlers.add(handler);
+		}
 	}
-	return Object.freeze(
-		candidates.filter(
-			({ handler }) =>
-				(handlerOwners.get(handler) ?? []).every(
-					(source) => candidateSources.get(source) === handler,
-				) &&
+	// Eligibility belongs to the handler, not to each of its candidate throw sites.
+	const handlerEligibility = new Map<CoreBlockId, boolean>();
+	const accepted: Array<CoreLocalThrowCatchFlow> = [];
+	for (const flow of candidates) {
+		const handler = flow.handler;
+		let eligible = handlerEligibility.get(handler);
+		if (eligible === undefined) {
+			eligible =
+				!blockedHandlers.has(handler) &&
 				(cfg.predecessors[handler] ?? []).every(
 					(edge) =>
 						edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
-				),
-		),
-	);
+				);
+			handlerEligibility.set(handler, eligible);
+		}
+		if (eligible) accepted.push(flow);
+	}
+	return Object.freeze(accepted);
 }
 
 export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<

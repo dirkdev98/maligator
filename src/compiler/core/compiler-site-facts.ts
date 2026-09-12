@@ -57,10 +57,8 @@ function sourceOwner(
 	functionIndex: number | undefined,
 ): CoreFunctionStore | undefined {
 	if (functionIndex === undefined) return fallback;
-	for (const functionId of program.functionIds()) {
-		if (functionId === functionIndex) return program.function(functionId);
-	}
-	return undefined;
+	const functionId = functionIndex as CoreFunctionId;
+	return program.hasFunction(functionId) ? program.function(functionId) : undefined;
 }
 
 function logicalSourceSite(
@@ -248,10 +246,30 @@ export function attachCoreCompilerSiteFacts(
 	const callTargets = selectedCallTargets(compilation);
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
+		let logicalFunctionId: string | undefined;
 		for (const block of fn.blockIds()) {
 			for (const instruction of fn.bodyInstructionIds(block)) {
 				const opcode = fn.instructionOpcodeName(instruction);
 				const attributes = fn.instructionAttributes(instruction);
+				const immutableBinding = immutableBindingFact(
+					program,
+					opcode,
+					attributes,
+					context,
+				);
+				const builtin = knownBuiltinCall(attributes);
+				const selectionKey = `${functionId}:${instruction}`;
+				const selectedTargets = callTargets.get(selectionKey);
+				const isAllocation = allocationOpcodes.has(opcode);
+				const isStack = stackAllocations.has(selectionKey);
+				if (
+					!isAllocation &&
+					!isStack &&
+					immutableBinding === undefined &&
+					builtin === undefined &&
+					selectedTargets === undefined
+				)
+					continue;
 				const id = coreCompilerSiteId(functionId, block, instruction, opcode);
 				const sourceSite = logicalSourceSite(
 					program,
@@ -260,14 +278,6 @@ export function attachCoreCompilerSiteFacts(
 					`residual:${opcode}`,
 				);
 				const shape = shapeFact(program, fn, opcode, attributes, sourceSite);
-				const immutableBinding = immutableBindingFact(
-					program,
-					opcode,
-					attributes,
-					context,
-				);
-				const builtin = knownBuiltinCall(attributes);
-				const selectedTargets = callTargets.get(`${functionId}:${instruction}`);
 				const callTarget =
 					selectedTargets === undefined
 						? undefined
@@ -275,8 +285,6 @@ export function attachCoreCompilerSiteFacts(
 								selectedTargets,
 								siteProof(fn, sourceSite, "core-specialization-plan"),
 							);
-				const isAllocation = allocationOpcodes.has(opcode);
-				const isStack = stackAllocations.has(`${functionId}:${instruction}`);
 				const representation = isAllocation
 					? knownFact(
 							isStack ? ("stack" as const) : ("heap" as const),
@@ -296,7 +304,7 @@ export function attachCoreCompilerSiteFacts(
 				const facts: CompilerSiteFacts = {
 					id,
 					...(sourceSite === undefined ? {} : { sourceSite }),
-					functionId: compilerFunctionId(fn),
+					functionId: (logicalFunctionId ??= compilerFunctionId(fn)),
 					instruction: opcode,
 					...(shape === undefined ? {} : { shape }),
 					...(escape === undefined ? {} : { escape }),

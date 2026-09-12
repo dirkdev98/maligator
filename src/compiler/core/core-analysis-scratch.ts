@@ -65,12 +65,22 @@ export class CoreAnalysisScratchPool {
 			release: () => {
 				if (!active) throw new Error("Core analysis scratch lease already released");
 				active = false;
-				if (
-					available.length >= MAX_BUFFERS_PER_KIND ||
-					this.#retainedBytes + values.byteLength > this.#maxRetainedBytes
-				) {
+				if (available.length >= MAX_BUFFERS_PER_KIND) {
+					let smallest = 0;
+					for (let index = 1; index < available.length; index++) {
+						if (available[index]!.length < available[smallest]!.length) smallest = index;
+					}
+					const replaced = available[smallest]!;
+					const retainedBytes =
+						this.#retainedBytes - replaced.byteLength + values.byteLength;
+					// Small early functions must not pin every slot against later, larger analyses.
+					if (values.length <= replaced.length || retainedBytes > this.#maxRetainedBytes)
+						return;
+					available[smallest] = values;
+					this.#retainedBytes = retainedBytes;
 					return;
 				}
+				if (this.#retainedBytes + values.byteLength > this.#maxRetainedBytes) return;
 				available.push(values);
 				this.#retainedBytes += values.byteLength;
 			},

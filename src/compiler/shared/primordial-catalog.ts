@@ -73,6 +73,40 @@ export interface PrimordialResolution {
 	readonly setter?: PrimordialNode;
 }
 
+interface PrimordialOwnPropertyIndex {
+	readonly strings: ReadonlyMap<string, PrimordialProperty>;
+	readonly symbols: ReadonlyMap<string, PrimordialProperty>;
+}
+
+// Index only the fixed catalog, never arbitrary queries or world-dependent proofs.
+const ownPropertyIndices: Array<PrimordialOwnPropertyIndex | undefined> = [];
+
+function indexedOwnProperty(
+	index: number,
+	key: PrimordialKey,
+): PrimordialProperty | undefined {
+	let properties = ownPropertyIndices[index];
+	if (properties === undefined) {
+		const nodes = getPrimordialCatalog().nodes;
+		const strings = new Map<string, PrimordialProperty>();
+		const symbols = new Map<string, PrimordialProperty>();
+		for (const property of nodes[index]![4]) {
+			const propertyKey = property[0];
+			if (typeof propertyKey === "string") {
+				if (!strings.has(propertyKey)) strings.set(propertyKey, property);
+			} else {
+				const symbol = nodes[propertyKey[0]]![0];
+				if (!symbols.has(symbol)) symbols.set(symbol, property);
+			}
+		}
+		properties = { strings, symbols };
+		ownPropertyIndices[index] = properties;
+	}
+	return typeof key === "string"
+		? properties.strings.get(key)
+		: properties.symbols.get(key.symbol);
+}
+
 export function resolvePrimordialProperty(
 	id: string,
 	key: PrimordialKey,
@@ -83,12 +117,7 @@ export function resolvePrimordialProperty(
 		const owner = getPrimordialCatalog().nodes[index]!;
 		if (chain.includes(owner[0])) throw new Error("Cyclic primordial prototype chain");
 		chain.push(owner[0]);
-		const descriptor = owner[4].find((property) =>
-			typeof key === "string"
-				? property[0] === key
-				: typeof property[0] !== "string" &&
-					getPrimordialCatalog().nodes[property[0][0]]![0] === key.symbol,
-		);
+		const descriptor = indexedOwnProperty(index, key);
 		if (descriptor !== undefined)
 			return {
 				owner,

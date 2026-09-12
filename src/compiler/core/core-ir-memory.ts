@@ -389,12 +389,12 @@ function memoryVersions(
 		versions.set(slot, created);
 		return created;
 	};
-	const entryVersions = new Map<number, number>();
+	const entryVersions = new Array<number | undefined>(slotCount);
 	const entryIdentity = (slot: number): number => {
-		const existing = entryVersions.get(slot);
+		const existing = entryVersions[slot];
 		if (existing !== undefined) return existing;
 		const created = nextVersion++;
-		entryVersions.set(slot, created);
+		entryVersions[slot] = created;
 		return created;
 	};
 	const phiVersions = new Map<number, Map<number, number>>();

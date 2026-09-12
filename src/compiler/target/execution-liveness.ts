@@ -86,6 +86,7 @@ export function executionSafepointRootRegisters(
 	fn: ExecutionFunction,
 	safepoints: ReadonlySet<CompilerInstruction>,
 ): ReadonlyMap<CompilerInstruction, ReadonlyArray<number>> {
+	if (safepoints.size === 0) return new Map();
 	const wordCount = Math.ceil(fn.registerCount / 32);
 	const add = (registers: Uint32Array, register: number): void => {
 		registers[register >>> 5]! |= 1 << (register & 31);
@@ -114,8 +115,12 @@ export function executionSafepointRootRegisters(
 		}
 		return roots;
 	};
-	const operands: Array<Array<BoxedOperands>> = fn.blocks.map(({ instructions }) =>
-		instructions.map((instruction) => {
+	const firstSafepoints = new Int32Array(fn.blocks.length).fill(-1);
+	const operands: Array<Array<BoxedOperands>> = fn.blocks.map(({ instructions }, block) =>
+		instructions.map((instruction, index) => {
+			if (firstSafepoints[block] === -1 && safepoints.has(instruction)) {
+				firstSafepoints[block] = index;
+			}
 			const registers = instructionRegisters(instruction);
 			const writes = writeCount(instruction);
 			const rooted = (register: number): boolean => {
@@ -137,13 +142,25 @@ export function executionSafepointRootRegisters(
 	for (const [block, targets] of successors.entries()) {
 		for (const target of targets) predecessors[target]!.push(block);
 	}
-	const transfer = (block: number, out: Uint32Array): Uint32Array => {
-		const live = out.slice();
-		for (let index = operands[block]!.length - 1; index >= 0; index--) {
-			for (const register of operands[block]![index]!.writes) remove(live, register);
-			for (const register of operands[block]![index]!.reads) add(live, register);
+	const transfers = operands.map((instructions) => {
+		const generated = new Uint32Array(wordCount);
+		const killed = new Uint32Array(wordCount);
+		for (let index = instructions.length - 1; index >= 0; index--) {
+			for (const register of instructions[index]!.writes) {
+				remove(generated, register);
+				add(killed, register);
+			}
+			for (const register of instructions[index]!.reads) add(generated, register);
 		}
-		return live;
+		return { generated, killed };
+	});
+	const transfer = (block: number, out: Uint32Array): Uint32Array => {
+		const { generated, killed } = transfers[block]!;
+		// The union buffer belongs to this visit; no successor's live-in set is mutated.
+		for (let word = 0; word < wordCount; word++) {
+			out[word] = (out[word]! & ~killed[word]!) | generated[word]!;
+		}
+		return out;
 	};
 	const liveIn: Array<Uint32Array> = fn.blocks.map(() => new Uint32Array(wordCount));
 	const worklist = fn.blocks.map((_, block) => block);
@@ -167,11 +184,13 @@ export function executionSafepointRootRegisters(
 
 	const roots = new Map<CompilerInstruction, ReadonlyArray<number>>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
+		const firstSafepoint = firstSafepoints[block]!;
+		if (firstSafepoint < 0) continue;
 		const live = new Uint32Array(wordCount);
 		for (const successor of successors[block]!) {
 			unionInto(live, liveIn[successor]!);
 		}
-		for (let index = instructions.length - 1; index >= 0; index--) {
+		for (let index = instructions.length - 1; index >= firstSafepoint; index--) {
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
 			if (safepoints.has(instruction)) {

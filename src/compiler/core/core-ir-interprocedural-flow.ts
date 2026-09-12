@@ -42,6 +42,8 @@ export function coreCallReceiver(call: CoreLocalCallSite): CoreValueId | undefin
 	return call.receiver;
 }
 
+const emptyPositionalArguments: ReadonlyArray<CoreValueId> = Object.freeze([]);
+
 export function analyzeCoreInterproceduralValueFlow(
 	fn: CoreFunctionStore,
 	localTransfers?: CoreProgramFlowLocalTransfers,
@@ -75,17 +77,21 @@ export function analyzeCoreInterproceduralValueFlow(
 		if (transfer.arguments.kind === "positional") {
 			positionalCalls++;
 			const firstOperand = transfer.arguments.firstOperand;
+			let positionalArguments = emptyPositionalArguments;
+			if (firstOperand < operandCount) {
+				const values = new Array<CoreValueId>(operandCount - firstOperand);
+				for (let index = 0; index < values.length; index++) {
+					values[index] = fn.kernel.operandAt(operandStart + firstOperand + index);
+				}
+				positionalArguments = Object.freeze(values);
+			}
 			calls.push(
 				Object.freeze({
 					caller: fn.id,
 					instruction,
 					callee,
 					...(receiver === undefined ? {} : { receiver }),
-					arguments: Object.freeze(
-						Array.from({ length: operandCount - firstOperand }, (_, index) =>
-							fn.kernel.operandAt(operandStart + firstOperand + index),
-						),
-					),
+					arguments: positionalArguments,
 					transfer,
 				}),
 			);

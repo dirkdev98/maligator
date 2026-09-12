@@ -18,15 +18,29 @@ export interface CoreCallGraphStatistics {
 	readonly storedEntries: number;
 }
 
+const emptyTargets: ReadonlyArray<CoreFunctionId> = Object.freeze([]);
+
 function normalizedTargets(
 	targets: ReadonlyArray<CoreFunctionId>,
+	previous: ReadonlyArray<CoreFunctionId> = emptyTargets,
 ): ReadonlyArray<CoreFunctionId> {
-	return Object.freeze([...new Set(targets)].sort((left, right) => left - right));
+	if (sameNumbers(previous, targets)) return previous;
+	if (targets.length === 0) return emptyTargets;
+	for (let index = 1; index < targets.length; index++) {
+		if (targets[index - 1]! < targets[index]!) continue;
+		const normalized = Object.freeze(
+			[...new Set(targets)].sort((left, right) => left - right),
+		);
+		return sameNumbers(previous, normalized) ? previous : normalized;
+	}
+	// A new row must remain owned even when the input is already canonical.
+	return Object.freeze([...targets]);
 }
 
 function sameNumbers(left: ReadonlyArray<number>, right: ReadonlyArray<number>): boolean {
 	return (
-		left.length === right.length && left.every((value, index) => value === right[index])
+		left === right ||
+		(left.length === right.length && left.every((value, index) => value === right[index]))
 	);
 }
 
@@ -104,11 +118,11 @@ export class CoreCallGraph {
 	}
 
 	exactOutgoing(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId> {
-		return this.#exactOutgoing.get(functionId) ?? [];
+		return this.#exactOutgoing.get(functionId) ?? emptyTargets;
 	}
 
 	exactCallers(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId> {
-		return this.#exactCallers.get(functionId) ?? [];
+		return this.#exactCallers.get(functionId) ?? emptyTargets;
 	}
 
 	isWildcardCaller(functionId: CoreFunctionId): boolean {
@@ -163,9 +177,10 @@ export function updateCoreCallGraph(
 	const reverse = new Map<CoreFunctionId, Array<CoreFunctionId>>();
 	const wildcardCallers: Array<CoreFunctionId> = [];
 	for (const row of rows) {
-		const normalized = normalizedTargets(row.exactTargets);
-		const priorTargets = previous?.exactOutgoing(row.caller) ?? [];
-		const targets = sameNumbers(priorTargets, normalized) ? priorTargets : normalized;
+		const targets = normalizedTargets(
+			row.exactTargets,
+			previous?.exactOutgoing(row.caller),
+		);
 		if (targets.length > 0) outgoing.set(row.caller, targets);
 		for (const target of targets) {
 			const callers = reverse.get(target) ?? [];
@@ -175,15 +190,10 @@ export function updateCoreCallGraph(
 		if (row.wildcard) wildcardCallers.push(row.caller);
 	}
 	wildcardCallers.sort((left, right) => left - right);
-	const exactCallers = new Map(
-		[...reverse].map(([target, callers]) => {
-			const normalized = Object.freeze(
-				[...new Set(callers)].sort((left, right) => left - right),
-			);
-			const priorCallers = previous?.exactCallers(target) ?? [];
-			return [target, sameNumbers(priorCallers, normalized) ? priorCallers : normalized];
-		}),
-	);
+	const exactCallers = new Map<CoreFunctionId, ReadonlyArray<CoreFunctionId>>();
+	for (const [target, callers] of reverse) {
+		exactCallers.set(target, normalizedTargets(callers, previous?.exactCallers(target)));
+	}
 	const changed = new Set<CoreCallGraphNode>();
 	for (const functionId of functions) {
 		if (

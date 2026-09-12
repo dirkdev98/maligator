@@ -48,43 +48,55 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	)
 		return false;
 	if (opcode === "unary") {
-		if (operator === "tostring")
-			return masks.length === 1 && masks[0] === COMPILER_VALUE_KIND_BOOLEAN;
-		return (
-			masks.length === 1 &&
-			["-", "+", "~", "increment", "decrement", "tonumeric"].includes(operator) &&
-			compilerValueKindMaskIsSubset(masks[0]!, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
-		);
+		if (masks.length !== 1) return false;
+		switch (operator) {
+			case "tostring":
+				return masks[0] === COMPILER_VALUE_KIND_BOOLEAN;
+			case "-":
+			case "+":
+			case "~":
+			case "increment":
+			case "decrement":
+			case "tonumeric":
+				return compilerValueKindMaskIsSubset(
+					masks[0]!,
+					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+				);
+			default:
+				return false;
+		}
 	}
 	if (opcode !== "binary" || masks.length !== 2) return false;
-	const allowed = ["==", "!=", "===", "!=="].includes(operator)
-		? COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED
-		: COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE;
-	return (
-		[
-			"+",
-			"-",
-			"*",
-			"/",
-			"%",
-			"**",
-			"&",
-			"|",
-			"^",
-			"<<",
-			">>",
-			">>>",
-			"<",
-			"<=",
-			">",
-			">=",
-			"==",
-			"!=",
-			"===",
-			"!==",
-		].includes(operator) &&
-		masks.every((mask) => compilerValueKindMaskIsSubset(mask, allowed))
-	);
+	let allowed: CompilerValueKindMask;
+	switch (operator) {
+		case "==":
+		case "!=":
+		case "===":
+		case "!==":
+			allowed = COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED;
+			break;
+		case "+":
+		case "-":
+		case "*":
+		case "/":
+		case "%":
+		case "**":
+		case "&":
+		case "|":
+		case "^":
+		case "<<":
+		case ">>":
+		case ">>>":
+		case "<":
+		case "<=":
+		case ">":
+		case ">=":
+			allowed = COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE;
+			break;
+		default:
+			return false;
+	}
+	return masks.every((mask) => compilerValueKindMaskIsSubset(mask, allowed));
 }
 
 export function compilerValueKindMaskIsValid(
@@ -116,13 +128,12 @@ export function compilerBuiltinInputKindsAreValid(
 		masks.length === operandCount &&
 		masks.length >= 1 &&
 		masks.length <= 17 &&
-		masks.every((mask) =>
-			[
-				COMPILER_VALUE_KIND_BOOLEAN,
-				COMPILER_VALUE_KIND_NUMBER,
-				COMPILER_VALUE_KIND_STRING,
-				COMPILER_VALUE_KIND_TOP,
-			].includes(mask),
+		masks.every(
+			(mask) =>
+				mask === COMPILER_VALUE_KIND_BOOLEAN ||
+				mask === COMPILER_VALUE_KIND_NUMBER ||
+				mask === COMPILER_VALUE_KIND_STRING ||
+				mask === COMPILER_VALUE_KIND_TOP,
 		)
 	);
 }

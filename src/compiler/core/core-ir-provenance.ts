@@ -35,6 +35,7 @@ import type {
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreOpcodeAccess,
+	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
@@ -1528,10 +1529,17 @@ function decodeCoreString(program: CoreProgram, index: number): string | undefin
 	return units === undefined ? undefined : String.fromCodePoint(...units);
 }
 
+const MEMORY_OPCODE_FLAGS = new WeakMap<CoreOpcodeRegistry, Map<number, boolean>>();
+
 export function buildCoreLocalFactIndex(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreLocalFactIndex {
+	let memoryOpcodes = MEMORY_OPCODE_FLAGS.get(fn.registry);
+	if (memoryOpcodes === undefined) {
+		memoryOpcodes = new Map();
+		MEMORY_OPCODE_FLAGS.set(fn.registry, memoryOpcodes);
+	}
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const location = new Map<
 		CoreInstructionId,
@@ -1569,21 +1577,23 @@ export function buildCoreLocalFactIndex(
 			const index = bodyIndex++;
 			location.set(instruction, { block, index });
 			const opcode = fn.instructionOpcode(instruction);
-			const descriptor = fn.registry.byId(opcode);
 			const instructions = mutableOpcodes[opcode] ?? [];
 			instructions.push(instruction);
 			mutableOpcodes[opcode] = instructions;
 			operations.push(instruction);
-			if (
-				(descriptor.accesses?.length ?? 0) > 0 ||
-				descriptor.effects.reads.length > 0 ||
-				descriptor.effects.writes.length > 0 ||
-				descriptor.effects.callsUserCode ||
-				descriptor.effects.maySuspend ||
-				descriptor.allocation !== undefined
-			) {
-				memoryOperations.push(instruction);
+			let memoryOpcode = memoryOpcodes.get(opcode);
+			if (memoryOpcode === undefined) {
+				const descriptor = fn.registry.byId(opcode);
+				memoryOpcode =
+					(descriptor.accesses?.length ?? 0) > 0 ||
+					descriptor.effects.reads.length > 0 ||
+					descriptor.effects.writes.length > 0 ||
+					descriptor.effects.callsUserCode ||
+					descriptor.effects.maySuspend ||
+					descriptor.allocation !== undefined;
+				memoryOpcodes.set(opcode, memoryOpcode);
 			}
+			if (memoryOpcode) memoryOperations.push(instruction);
 			const operandCount = instructionOperandCount(fn, instruction);
 			for (let position = 0; position < operandCount; position++) {
 				const operand = instructionOperand(fn, instruction, position)!;

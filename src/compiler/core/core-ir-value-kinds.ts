@@ -442,6 +442,8 @@ export function analyzeCoreValueKinds(
 	while (cursor < queue.length) {
 		const index = queue[cursor++]!;
 		queued[index] = 0;
+		const output = transferOutputs[index]! as CoreValueId;
+		if (masks[output] === COMPILER_VALUE_KIND_TOP) continue;
 		const kind = transferKinds[index]!;
 		const inputStart = transferInputStarts[index]!;
 		const inputCount = transferInputCounts[index]!;
@@ -478,7 +480,6 @@ export function analyzeCoreValueKinds(
 						: COMPILER_VALUE_KIND_TOP;
 			}
 		}
-		const output = transferOutputs[index]! as CoreValueId;
 		const next = masks[output]! | incoming;
 		if (next === masks[output]) continue;
 		masks[output] = next;

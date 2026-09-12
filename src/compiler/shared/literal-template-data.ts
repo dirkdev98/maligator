@@ -44,7 +44,9 @@ export function scanLiteralTemplateSegment(
 	let position = offset;
 	const stringReferences: Array<LiteralTemplateReference> = [];
 	const bigintReferences: Array<LiteralTemplateReference> = [];
-	const actions: Array<"node" | "property"> = ["node"];
+	// Positive counts are array/root nodes; negative counts are object properties.
+	// One frame per nesting level avoids a work item for every sibling.
+	const actions: Array<number> = [1];
 	const take = (where: string): number => {
 		if (position >= data.length) throw new Error(`Truncated ${owner} ${where}`);
 		return data[position++]!;
@@ -57,8 +59,11 @@ export function scanLiteralTemplateSegment(
 		return count;
 	};
 	while (actions.length > 0) {
-		const action = actions.pop()!;
-		if (action === "property") {
+		const top = actions.length - 1;
+		const remaining = actions[top]!;
+		if (remaining === 1 || remaining === -1) actions.pop();
+		else actions[top] = remaining > 0 ? remaining - 1 : remaining + 1;
+		if (remaining < 0) {
 			const tag = take("object key tag");
 			if (tag !== 10) throw new Error(`Unknown ${owner} object tag ${tag}`);
 			const referencePosition = position;
@@ -66,8 +71,6 @@ export function scanLiteralTemplateSegment(
 				position: referencePosition,
 				index: take("object key"),
 			});
-			actions.push("node");
-			continue;
 		}
 		const tag = take("node");
 		switch (tag) {
@@ -102,12 +105,12 @@ export function scanLiteralTemplateSegment(
 			}
 			case 8: {
 				const count = takeCount("array length");
-				for (let index = 0; index < count; index++) actions.push("node");
+				if (count > 0) actions.push(count);
 				break;
 			}
 			case 9: {
 				const count = takeCount("object size");
-				for (let index = 0; index < count; index++) actions.push("property");
+				if (count > 0) actions.push(-count);
 				break;
 			}
 			default:

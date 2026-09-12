@@ -218,27 +218,31 @@ export function normalizeUnicode(
 	}
 	for (const character of source)
 		if (!decompose(character.codePointAt(0)!)) return undefined;
+	const classes = points.map(combiningClass);
 	for (let index = 1; index < points.length; index++) {
 		const cp = points[index]!,
-			currentClass = combiningClass(cp);
+			currentClass = classes[index]!;
 		if (currentClass === 0) continue;
 		let cursor = index;
 		while (cursor > 0) {
 			if (++work > workLimit) return undefined;
-			const previousClass = combiningClass(points[cursor - 1]!);
+			const previousClass = classes[cursor - 1]!;
 			if (previousClass <= currentClass) break;
 			points[cursor] = points[cursor - 1]!;
+			classes[cursor] = previousClass;
 			cursor--;
 		}
 		points[cursor] = cp;
+		classes[cursor] = currentClass;
 	}
 	if (form === "NFC" || form === "NFKC") {
 		let length = 0,
 			starter = -1,
 			previousClass = 0;
-		for (const cp of points) {
+		for (let index = 0; index < points.length; index++) {
+			const cp = points[index]!;
 			if (++work > workLimit) return undefined;
-			const currentClass = combiningClass(cp);
+			const currentClass = classes[index]!;
 			const combined =
 				starter >= 0 && (previousClass === 0 || previousClass < currentClass)
 					? composite(points[starter]!, cp)

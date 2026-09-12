@@ -181,12 +181,13 @@ export function traverseEstree<Context = undefined>(
 
 		for (const childKey of ESTREE_VISITOR_KEYS[value.type] ?? Object.keys(value)) {
 			const child: unknown = (value as unknown as Record<string, unknown>)[childKey];
-			if (isEstreeNode(child)) {
-				visit(child, value, childKey);
-			} else if (Array.isArray(child)) {
+			if (Array.isArray(child)) {
 				for (let index = 0; index < child.length && !stopped; index++) {
 					visit(child[index], value, index);
 				}
+			} else if (typeof child === "object" && child !== null) {
+				// The recursive entry owns node validation; do not repeat it here.
+				visit(child, value, childKey);
 			}
 		}
 	};

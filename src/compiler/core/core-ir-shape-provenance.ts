@@ -227,7 +227,9 @@ export function analyzeCoreShapeProvenance(
 	}
 	const globalOrigins = new Map<number, ReadonlyArray<CoreShapeOrigin>>();
 	const overflowGlobalSlots = new Set<number>();
-	for (const instruction of fn.instructionIds()) {
+	const storeCandidates =
+		closedGlobalSlots.size === 0 || origins.size === 0 ? [] : fn.instructionIds();
+	for (const instruction of storeCandidates) {
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
 			fn.instructionOpcodeName(instruction) !== "storeGlobal"
@@ -303,7 +305,8 @@ export function analyzeCoreShapeProvenance(
 				}
 			}
 			// Closed-slot representatives restore portable read guards; writes retain the local store IC.
-			if (mode === "write") return CORE_SHAPE_CANDIDATES_OPAQUE;
+			if (mode === "write" || globalOrigins.size === 0)
+				return CORE_SHAPE_CANDIDATES_OPAQUE;
 			const global = closedGlobalCandidates(value);
 			return global === undefined || global.length === 0
 				? CORE_SHAPE_CANDIDATES_OPAQUE

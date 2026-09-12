@@ -181,10 +181,16 @@ export class StaticDescriptionInterner {
 	}
 }
 
+const numberDescriptionBits = new DataView(new ArrayBuffer(8));
+
 export function staticNumberDescription(
 	value: number,
 ): Extract<StaticDescription, { kind: "number" }> {
-	const bits = new DataView(new ArrayBuffer(8));
-	bits.setFloat64(0, value, true);
-	return { kind: "number", low: bits.getUint32(0, true), high: bits.getUint32(4, true) };
+	// The synchronous write/read sequence returns scalar words, never the reusable view.
+	numberDescriptionBits.setFloat64(0, value, true);
+	return {
+		kind: "number",
+		low: numberDescriptionBits.getUint32(0, true),
+		high: numberDescriptionBits.getUint32(4, true),
+	};
 }

@@ -46,14 +46,7 @@ export function coreInstructionInputsEqual(
 	leftInputs?: ReadonlyArray<CoreValueId>,
 	rightInputs?: ReadonlyArray<CoreValueId>,
 ): boolean {
-	if (
-		fn.instructionOpcode(left) !== fn.instructionOpcode(right) ||
-		!coreAttributeValuesEqual(
-			fn.instructionAttributes(left),
-			fn.instructionAttributes(right),
-		)
-	)
-		return false;
+	if (fn.instructionOpcode(left) !== fn.instructionOpcode(right)) return false;
 	const leftStart = fn.kernel.instructionOperandStart(left);
 	const rightStart = fn.kernel.instructionOperandStart(right);
 	const leftCount = leftInputs?.length ?? fn.kernel.instructionOperandCount(left);
@@ -64,5 +57,8 @@ export function coreInstructionInputsEqual(
 		const rightValue = rightInputs?.[index] ?? fn.kernel.operandAt(rightStart + index);
 		if (leftValue !== rightValue) return false;
 	}
-	return true;
+	return coreAttributeValuesEqual(
+		fn.instructionAttributes(left),
+		fn.instructionAttributes(right),
+	);
 }

@@ -186,28 +186,33 @@ export function factDependencyImplies(
 }
 
 /**
- * Deterministic canonical form: compare fields directly, discard dependencies
+ * Deterministic canonical form: deduplicate tagged identities, discard dependencies
  * implied by another retained dependency, then sort for stable artifacts.
  */
 export function normalizeFactDependencies(
 	dependencies: ReadonlyArray<FactDependency>,
 ): ReadonlyArray<FactDependency> {
-	const unique: Array<FactDependency> = [];
+	const seen = new Set<string>();
+	const worlds: Array<FactDependency> = [];
+	const unique: Array<{ readonly dependency: FactDependency; readonly key: string }> = [];
 	for (const dependency of dependencies) {
-		if (!unique.some((candidate) => factDependencyEquals(candidate, dependency)))
-			unique.push(dependency);
+		const key = factDependencyKey(dependency);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push({ dependency, key });
+		if (dependency.kind === "world") worlds.push(dependency);
 	}
+	// Only a world fact can imply a distinct dependency in this closed vocabulary.
 	return unique
 		.filter(
-			(dependency, index) =>
-				!unique.some(
-					(candidate, candidateIndex) =>
-						candidateIndex !== index && factDependencyImplies(candidate, dependency),
+			({ dependency }) =>
+				!worlds.some(
+					(candidate) =>
+						candidate !== dependency && factDependencyImplies(candidate, dependency),
 				),
 		)
-		.sort((left, right) =>
-			factDependencyKey(left).localeCompare(factDependencyKey(right)),
-		);
+		.sort((left, right) => left.key.localeCompare(right.key))
+		.map(({ dependency }) => dependency);
 }
 
 /**
@@ -248,23 +253,31 @@ export function factObligationIsDischarged(
  * set establishes, and sort by key. The cause and authority witness are part of
  * identity: two duties may deliberately share a user-facing site id while only
  * one of their witnesses is covered by a closed world.
- * Linear in the obligation count; the witness test is a scan of the dependency
- * set, which normalization has already collapsed to at most a handful of entries.
+ * Display keys only select deduplication buckets: IDs and witnesses may contain
+ * delimiters, so semantic equality still decides whether a duty is redundant.
  */
 export function normalizeFactObligations(
 	obligations: ReadonlyArray<FactObligation>,
 	dependencies: ReadonlyArray<FactDependency>,
 ): ReadonlyArray<FactObligation> {
-	const unique: Array<FactObligation> = [];
+	const buckets = new Map<string, Array<FactObligation>>();
+	const unique: Array<{ readonly obligation: FactObligation; readonly key: string }> = [];
 	for (const obligation of obligations) {
-		if (!unique.some((candidate) => factObligationEquals(candidate, obligation)))
-			unique.push(obligation);
+		const key = factObligationKey(obligation);
+		let bucket = buckets.get(key);
+		if (bucket === undefined) {
+			bucket = [];
+			buckets.set(key, bucket);
+		} else if (bucket.some((candidate) => factObligationEquals(candidate, obligation))) {
+			continue;
+		}
+		bucket.push(obligation);
+		unique.push({ obligation, key });
 	}
 	return unique
-		.filter((obligation) => !factObligationIsDischarged(obligation, dependencies))
-		.sort((left, right) =>
-			factObligationKey(left).localeCompare(factObligationKey(right)),
-		);
+		.filter(({ obligation }) => !factObligationIsDischarged(obligation, dependencies))
+		.sort((left, right) => left.key.localeCompare(right.key))
+		.map(({ obligation }) => obligation);
 }
 
 /**
