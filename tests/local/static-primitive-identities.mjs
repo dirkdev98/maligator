@@ -1611,4 +1611,777 @@ try {
 		"argument failure precedes built-in rejection and runs finally",
 	);
 }
+function escapingSymbolText(input, record) {
+	const description = {
+		[Symbol.toPrimitive](hint) {
+			record(`coerce:${hint}`);
+			return input;
+		},
+	};
+	const value = Symbol(description, record("extra"));
+	record(value);
+	description[Symbol.toPrimitive] = () => {
+		throw new Error("description coerced after creation");
+	};
+	return [value, value.description, value.toString(), String(value)];
+}
+function escapingRegisteredSymbolText(input, record) {
+	const value = Symbol.for(input);
+	record(value);
+	return [
+		value,
+		value.description,
+		value.toString(),
+		String(value),
+		Symbol.keyFor(value),
+	];
+}
+function* suspendedEscapingSymbolText(input, record) {
+	const value = Symbol({
+		toString() {
+			record("convert");
+			return input;
+		},
+	});
+	yield value;
+	record("resume");
+	return [value, value.description, value.toString(), String(value)];
+}
+function abruptEscapingSymbolText(error, record) {
+	try {
+		const value = Symbol({
+			toString() {
+				record("coerce");
+				throw error;
+			},
+		});
+		record(value);
+		return value.toString();
+	} finally {
+		record("finally");
+	}
+}
+globalThis.escapingSymbolText = escapingSymbolText;
+globalThis.escapingRegisteredSymbolText = escapingRegisteredSymbolText;
+globalThis.suspendedEscapingSymbolText = suspendedEscapingSymbolText;
+globalThis.abruptEscapingSymbolText = abruptEscapingSymbolText;
+for (const input of [undefined, null, true, -0, 17n, "", "a😀\ud800z"]) {
+	const events = [];
+	const result = globalThis.escapingSymbolText(input, (event) => events.push(event));
+	const text = String(input);
+	check(
+		events[0] === "extra" &&
+			events[1] === "coerce:string" &&
+			events[2] === result[0] &&
+			events.length === 3,
+		"escaping Symbol captures object coercion after argument effects exactly once",
+	);
+	check(
+		result[1] === text && result[2] === `Symbol(${text})` && result[3] === result[2],
+		"escaping Symbol metadata preserves captured UTF-16 text",
+	);
+	const again = globalThis.escapingSymbolText(input, () => {});
+	check(
+		again[0] !== result[0],
+		"equal captured descriptions retain fresh Symbol identity",
+	);
+}
+const registryEvents = [];
+const registryKey = "captured-dynamic-registry-key";
+const registryResult = globalThis.escapingRegisteredSymbolText(
+	{
+		[Symbol.toPrimitive](hint) {
+			registryEvents.push(hint);
+			return registryKey;
+		},
+	},
+	(value) => registryEvents.push(value),
+);
+check(
+	registryEvents.length === 2 &&
+		registryEvents[0] === "string" &&
+		registryEvents[1] === registryResult[0] &&
+		Symbol.for(registryKey) === registryResult[0] &&
+		registryResult[1] === registryKey &&
+		registryResult[2] === `Symbol(${registryKey})` &&
+		registryResult[3] === registryResult[2] &&
+		registryResult[4] === registryKey,
+	"metadata forwarding preserves registration and single registry-key coercion",
+);
+const symbolConversionFailure = {};
+const abruptSymbolEvents = [];
+try {
+	globalThis.abruptEscapingSymbolText(symbolConversionFailure, (event) =>
+		abruptSymbolEvents.push(event),
+	);
+	throw new Error("symbol conversion must throw");
+} catch (error) {
+	check(
+		error === symbolConversionFailure &&
+			abruptSymbolEvents.join(",") === "coerce,finally",
+		"captured object coercion retains the original abrupt continuation",
+	);
+}
+let escapedAfterConversionFailure = false;
+try {
+	globalThis.escapingSymbolText(
+		{
+			toString() {
+				throw symbolConversionFailure;
+			},
+		},
+		(event) => {
+			if (typeof event === "symbol") escapedAfterConversionFailure = true;
+		},
+	);
+	throw new Error("object returned from ToPrimitive must throw");
+} catch (error) {
+	check(
+		error instanceof TypeError && !escapedAfterConversionFailure,
+		"captured Symbol description rejects a nonprimitive conversion before escape",
+	);
+}
+try {
+	globalThis.escapingRegisteredSymbolText(
+		{
+			toString() {
+				throw symbolConversionFailure;
+			},
+		},
+		() => {
+			throw new Error("registry symbol escaped after failed conversion");
+		},
+	);
+	throw new Error("registry conversion must throw");
+} catch (error) {
+	check(
+		error === symbolConversionFailure,
+		"captured registry coercion preserves exceptions",
+	);
+}
+const suspendedSymbolEvents = [];
+const suspendedSymbol = globalThis.suspendedEscapingSymbolText("retained", (event) =>
+	suspendedSymbolEvents.push(event),
+);
+const yieldedSymbol = suspendedSymbol.next();
+check(
+	!yieldedSymbol.done && typeof yieldedSymbol.value === "symbol",
+	"symbol identity escapes through suspension",
+);
+if (typeof globalThis.gc === "function") globalThis.gc();
+const resumedSymbol = suspendedSymbol.next();
+check(
+	resumedSymbol.done &&
+		resumedSymbol.value[0] === yieldedSymbol.value &&
+		resumedSymbol.value[1] === "retained" &&
+		resumedSymbol.value[2] === "Symbol(retained)" &&
+		resumedSymbol.value[3] === "Symbol(retained)" &&
+		suspendedSymbolEvents.join(",") === "convert,resume",
+	"captured Symbol text and identity survive suspension without recoercion",
+);
+const symbolTextMethod = Object.getOwnPropertyDescriptor(Symbol.prototype, "toString");
+if (symbolTextMethod.writable) {
+	const mutableSymbol = globalThis.suspendedEscapingSymbolText("mutable", () => {});
+	mutableSymbol.next();
+	try {
+		Symbol.prototype.toString = () => "replaced";
+		const observed = mutableSymbol.next().value;
+		check(
+			observed[2] === "replaced" && observed[3] === "Symbol(mutable)",
+			"mutable Symbol text lookup remains distinct from String symbol conversion",
+		);
+	} finally {
+		Object.defineProperty(Symbol.prototype, "toString", symbolTextMethod);
+	}
+}
+function escapingOptionalSymbolText(input, record) {
+	try {
+		const value = Symbol(input, record("extra"));
+		record(value);
+		return [value, value.description, value.toString(), String(value)];
+	} finally {
+		record("finally");
+	}
+}
+globalThis.escapingOptionalSymbolText = escapingOptionalSymbolText;
+for (const input of [undefined, "", "undefined", null, false, -0, 7n, "x😀\ud800y"]) {
+	const events = [];
+	const result = globalThis.escapingOptionalSymbolText(input, (event) =>
+		events.push(event),
+	);
+	const description = input === undefined ? undefined : String(input);
+	check(
+		result[1] === description &&
+			result[2] === `Symbol(${description === undefined ? "" : description})` &&
+			result[3] === result[2],
+		"optional escaping Symbol distinguishes absent, empty, and undefined text",
+	);
+	check(
+		events.length === 3 &&
+			events[0] === "extra" &&
+			events[1] === result[0] &&
+			events[2] === "finally" &&
+			globalThis.escapingOptionalSymbolText(input, () => {})[0] !== result[0],
+		"optional description capture retains effects and fresh identity",
+	);
+}
+const optionalSymbolEvents = [];
+const optionalSymbolInput = {
+	[Symbol.toPrimitive](hint) {
+		optionalSymbolEvents.push(hint);
+		return undefined;
+	},
+};
+const optionalSymbolResult = globalThis.escapingOptionalSymbolText(
+	optionalSymbolInput,
+	(event) => {
+		optionalSymbolEvents.push(event);
+		if (typeof event === "symbol") {
+			optionalSymbolInput[Symbol.toPrimitive] = () => {
+				throw new Error("optional Symbol description coerced again");
+			};
+		}
+	},
+);
+check(
+	optionalSymbolResult[1] === "undefined" &&
+		optionalSymbolResult[2] === "Symbol(undefined)" &&
+		optionalSymbolResult[3] === "Symbol(undefined)" &&
+		optionalSymbolEvents.length === 4 &&
+		optionalSymbolEvents[0] === "extra" &&
+		optionalSymbolEvents[1] === "string" &&
+		optionalSymbolEvents[2] === optionalSymbolResult[0] &&
+		optionalSymbolEvents[3] === "finally",
+	"unknown input captures object conversion once before escape",
+);
+for (const input of [
+	Symbol("rejected"),
+	{
+		toString() {
+			throw symbolConversionFailure;
+		},
+	},
+]) {
+	const events = [];
+	try {
+		globalThis.escapingOptionalSymbolText(input, (event) => events.push(event));
+		throw new Error("optional Symbol conversion must throw");
+	} catch (error) {
+		check(
+			(typeof input === "symbol"
+				? error instanceof TypeError
+				: error === symbolConversionFailure) && events.join(",") === "extra,finally",
+			"optional description conversion retains its original abrupt continuation",
+		);
+	}
+}
+function repeatZeroIdentity(input, record) {
+	return String(input).repeat((record("count"), -0.9), record("extra"));
+}
+function repeatOneIdentity(input, record) {
+	return String(input).repeat((record("count"), " 1.9 "), record("extra"));
+}
+function paddingIdentity(input, fill, record) {
+	const text = String(input);
+	return [
+		text.padStart((record("start"), -Infinity), (record("fill-start"), fill)),
+		text.padEnd((record("end"), NaN), (record("fill-end"), fill)),
+	];
+}
+function fullStringRangeIdentity(input, record) {
+	const text = String(input);
+	return [
+		text.slice(
+			(record("slice-start"), -Infinity),
+			(record("slice-end"), Infinity),
+			record("slice-extra"),
+		),
+		text.substring(
+			(record("substring-start"), -99),
+			(record("substring-end"), undefined),
+			record("substring-extra"),
+		),
+		text.concat(),
+	];
+}
+function coerciveStringRange(input, start, end, record) {
+	return String.prototype.slice.call(
+		input,
+		(record("start-argument"), start),
+		(record("end-argument"), end),
+		record("extra-argument"),
+	);
+}
+function bigintStringRange(input, variant) {
+	const text = String(input);
+	if (variant === 0) return text.slice(0n, Infinity);
+	if (variant === 1) return text.slice(0, 0n);
+	if (variant === 2) return text.substring(0n, Infinity);
+	if (variant === 3) return text.substring(0, 0n);
+	return text.slice(Infinity, 0n);
+}
+function emptyStringRanges(input, record) {
+	const text = String(input);
+	return [
+		text.slice((record("start"), 5), (record("end"), 2), record("extra")),
+		text.slice(-2, -5),
+		text.slice(Infinity),
+		text.slice(0, -Infinity),
+		text.substring(-2, -5),
+		text.substring(2, 2),
+		text.substring(Infinity, Infinity),
+	];
+}
+function emptyStringNeedles(input, record) {
+	const text = String(input);
+	return [
+		text.includes(
+			(record("needle"), ""),
+			(record("position"), Infinity),
+			record("extra"),
+		),
+		text.startsWith("", -Infinity),
+		text.endsWith("", undefined),
+		text.includes("", "invalid"),
+		text.startsWith("", null),
+		text.endsWith("", "1.9"),
+	];
+}
+function invalidEmptyNeedlePosition(input, variant) {
+	const text = String(input);
+	if (variant === 0) return text.includes("", 0n);
+	if (variant === 1) return text.startsWith("", Symbol.iterator);
+	return text.endsWith("", 0n);
+}
+function emptyNeedleWithObjectPosition(input, record) {
+	return String(input).includes("", {
+		valueOf() {
+			record("position-coercion");
+			return Infinity;
+		},
+	});
+}
+function regexpMarkedEmptyNeedle(input, record) {
+	return String(input).startsWith(
+		{
+			get [Symbol.match]() {
+				record("match");
+				return true;
+			},
+			toString() {
+				record("needle-coercion");
+				return "";
+			},
+		},
+		{
+			valueOf() {
+				record("position-coercion");
+				return 0;
+			},
+		},
+	);
+}
+function emptySuffixIdentity(input, record) {
+	return String(input).concat(
+		(record("first"), ""),
+		(record("second"), ""),
+		(record("third"), ""),
+	);
+}
+function emptyFillIdentity(input, record) {
+	const text = String(input);
+	return [
+		text.padStart(
+			(record("start-length"), Infinity),
+			(record("start-fill"), ""),
+			record("start-extra"),
+		),
+		text.padEnd(
+			(record("end-length"), "20"),
+			(record("end-fill"), ""),
+			record("end-extra"),
+		),
+	];
+}
+function substrIdentity(input, record) {
+	const text = String(input);
+	return [
+		text.substr(
+			(record("start"), -Infinity),
+			(record("count"), Infinity),
+			record("extra"),
+		),
+		text.substr(0),
+		text.substr(
+			(record("empty-start"), -2),
+			(record("empty-count"), 0),
+			record("empty-extra"),
+		),
+		text.substr(Infinity),
+		text.substr(0, -1),
+	];
+}
+function objectSuffixAndFill(input, record) {
+	const text = String(input);
+	return [
+		text.concat({
+			toString() {
+				record("suffix");
+				return "";
+			},
+		}),
+		text.padEnd(Infinity, {
+			toString() {
+				record("fill");
+				return "";
+			},
+		}),
+		text.padStart(
+			{
+				valueOf() {
+					record("length");
+					return 5;
+				},
+			},
+			"",
+		),
+	];
+}
+function invalidEmptyFillAndSubstr(input, variant) {
+	const text = String(input);
+	if (variant === 0) return text.padStart(0n, "");
+	if (variant === 1) return text.padEnd(Symbol.iterator, "");
+	if (variant === 2) return text.substr(0n, 0);
+	return text.substr(Infinity, 0n);
+}
+globalThis.repeatZeroIdentity = repeatZeroIdentity;
+globalThis.repeatOneIdentity = repeatOneIdentity;
+globalThis.paddingIdentity = paddingIdentity;
+globalThis.fullStringRangeIdentity = fullStringRangeIdentity;
+globalThis.coerciveStringRange = coerciveStringRange;
+globalThis.bigintStringRange = bigintStringRange;
+globalThis.emptyStringRanges = emptyStringRanges;
+globalThis.emptyStringNeedles = emptyStringNeedles;
+globalThis.invalidEmptyNeedlePosition = invalidEmptyNeedlePosition;
+globalThis.emptyNeedleWithObjectPosition = emptyNeedleWithObjectPosition;
+globalThis.regexpMarkedEmptyNeedle = regexpMarkedEmptyNeedle;
+globalThis.emptySuffixIdentity = emptySuffixIdentity;
+globalThis.emptyFillIdentity = emptyFillIdentity;
+globalThis.substrIdentity = substrIdentity;
+globalThis.objectSuffixAndFill = objectSuffixAndFill;
+globalThis.invalidEmptyFillAndSubstr = invalidEmptyFillAndSubstr;
+for (const text of ["", "hello", "😀\ud800\udfff", "\0x"]) {
+	const events = [];
+	const input = {
+		toString() {
+			events.push("receiver");
+			return text;
+		},
+	};
+	const record = (event) => events.push(event);
+	check(globalThis.repeatZeroIdentity(input, record) === "", "repeat zero result");
+	check(events.join(",") === "receiver,count,extra", "repeat zero conversion order");
+	events.length = 0;
+	check(
+		globalThis.repeatOneIdentity(input, record) === text,
+		"repeat one preserves UTF-16",
+	);
+	check(events.join(",") === "receiver,count,extra", "repeat one conversion order");
+	events.length = 0;
+	const fill = {
+		toString() {
+			throw new Error("zero-length padding must not convert its filler");
+		},
+	};
+	const padded = globalThis.paddingIdentity(input, fill, record);
+	check(padded[0] === text && padded[1] === text, "nonpositive padding preserves input");
+	check(
+		events.join(",") === "receiver,start,fill-start,end,fill-end",
+		"padding keeps filler producer effects without filler coercion",
+	);
+	events.length = 0;
+	const ranged = globalThis.fullStringRangeIdentity(input, record);
+	check(
+		ranged.every((value) => value === text),
+		"full ranges and empty concat preserve UTF-16",
+	);
+	check(
+		events.join(",") ===
+			"receiver,slice-start,slice-end,slice-extra,substring-start,substring-end,substring-extra",
+		"full string ranges keep bound and extra argument producer order",
+	);
+	events.length = 0;
+	check(
+		globalThis.emptyStringRanges(input, record).every((value) => value === ""),
+		"equal and reversed normalized ranges are empty at every string length",
+	);
+	check(events.join(",") === "receiver,start,end,extra", "empty ranges preserve effects");
+	events.length = 0;
+	check(
+		globalThis.emptyStringNeedles(input, record).every((value) => value === true),
+		"empty string needles match at every clamped position",
+	);
+	check(
+		events.join(",") === "receiver,needle,position,extra",
+		"empty needle searches preserve effects",
+	);
+	events.length = 0;
+	check(
+		globalThis.emptyNeedleWithObjectPosition(input, record) === true &&
+			events.join(",") === "receiver,position-coercion",
+		"empty needle retains object position conversion",
+	);
+	events.length = 0;
+	try {
+		globalThis.regexpMarkedEmptyNeedle(input, record);
+		throw new Error("regexp-marked empty needle must fail");
+	} catch (error) {
+		check(
+			error instanceof TypeError && events.join(",") === "receiver,match",
+			"IsRegExp failure precedes needle and position coercion",
+		);
+	}
+	events.length = 0;
+	check(
+		globalThis.emptySuffixIdentity(input, record) === text,
+		"empty concat suffixes preserve input",
+	);
+	check(
+		events.join(",") === "receiver,first,second,third",
+		"empty concat suffix producer order",
+	);
+	events.length = 0;
+	check(
+		globalThis.emptyFillIdentity(input, record).every((value) => value === text),
+		"empty filler preserves input before any maximum padding length check",
+	);
+	check(
+		events.join(",") ===
+			"receiver,start-length,start-fill,start-extra,end-length,end-fill,end-extra",
+		"empty filler keeps length, filler and extra argument producer order",
+	);
+	events.length = 0;
+	const substrings = globalThis.substrIdentity(input, record);
+	check(
+		substrings[0] === text &&
+			substrings[1] === text &&
+			substrings.slice(2).every((value) => value === ""),
+		"substr distinguishes a character count from an end index",
+	);
+	check(
+		events.join(",") === "receiver,start,count,extra,empty-start,empty-count,empty-extra",
+		"substr preserves both bound and extra argument producers",
+	);
+	events.length = 0;
+	check(
+		globalThis.objectSuffixAndFill(input, record).every((value) => value === text) &&
+			events.join(",") === "receiver,suffix,fill,length",
+		"empty suffix and filler results retain object coercions",
+	);
+}
+const repeatConversionFailure = {};
+const repeatFailureEvents = [];
+try {
+	globalThis.repeatZeroIdentity(
+		{
+			toString() {
+				throw repeatConversionFailure;
+			},
+		},
+		(event) => repeatFailureEvents.push(event),
+	);
+	throw new Error("repeat zero must retain receiver conversion failure");
+} catch (error) {
+	check(
+		error === repeatConversionFailure && repeatFailureEvents.length === 0,
+		"receiver conversion failure precedes repeat arguments",
+	);
+}
+const stringRangeEvents = [];
+const stringRangeInput = {
+	toString() {
+		stringRangeEvents.push("receiver");
+		return "😀\ud800tail";
+	},
+};
+const stringRangeStart = {
+	valueOf() {
+		stringRangeEvents.push("start-conversion");
+		return -Infinity;
+	},
+};
+const stringRangeEnd = {
+	valueOf() {
+		stringRangeEvents.push("end-conversion");
+		return Infinity;
+	},
+};
+check(
+	globalThis.coerciveStringRange(
+		stringRangeInput,
+		stringRangeStart,
+		stringRangeEnd,
+		(event) => stringRangeEvents.push(event),
+	) === "😀\ud800tail",
+	"unknown receiver and object bounds retain full-range result",
+);
+check(
+	stringRangeEvents.join(",") ===
+		"start-argument,end-argument,extra-argument,receiver,start-conversion,end-conversion",
+	"range receiver and bound coercions remain after all argument producers",
+);
+for (const input of ["", "text"]) {
+	for (let variant = 0; variant < 5; variant++) {
+		try {
+			globalThis.bigintStringRange(input, variant);
+			throw new Error("BigInt range bound must fail");
+		} catch (error) {
+			check(error instanceof TypeError, "BigInt range bound retains TypeError");
+		}
+	}
+	for (let variant = 0; variant < 3; variant++) {
+		try {
+			globalThis.invalidEmptyNeedlePosition(input, variant);
+			throw new Error("empty needle still requires numeric position conversion");
+		} catch (error) {
+			check(
+				error instanceof TypeError,
+				"empty needle retains BigInt and Symbol position errors",
+			);
+		}
+	}
+	for (let variant = 0; variant < 4; variant++) {
+		try {
+			globalThis.invalidEmptyFillAndSubstr(input, variant);
+			throw new Error("empty filler and substr still require numeric conversion");
+		} catch (error) {
+			check(
+				error instanceof TypeError,
+				"empty filler and substr retain numeric conversion errors",
+			);
+		}
+	}
+}
+for (const method of ["repeat", "padStart", "padEnd"]) {
+	try {
+		String.prototype[method].call("text", 0n);
+		throw new Error("BigInt string builder count must fail");
+	} catch (error) {
+		check(error instanceof TypeError, "BigInt string builder count retains TypeError");
+	}
+}
+function staticBigintPowers() {
+	return [
+		0n ** 0n,
+		3n ** 40n,
+		(-2n) ** 127n,
+		(-1n) ** 170141183460469231731687303715884105727n,
+	];
+}
+globalThis.staticBigintPowers = staticBigintPowers;
+const powers = globalThis.staticBigintPowers();
+check(
+	powers[0] === 1n &&
+		powers[1] === 12157665459056928801n &&
+		powers[2] === -170141183460469231731687303715884105728n &&
+		powers[3] === -1n,
+	"bounded BigInt powers retain exact values",
+);
+function bigintPowerEffects(record) {
+	return (record("base"), 3n) ** (record("exponent"), 4n);
+}
+globalThis.bigintPowerEffects = bigintPowerEffects;
+const powerEvents = [];
+check(
+	globalThis.bigintPowerEffects((event) => powerEvents.push(event)) === 81n &&
+		powerEvents.join(",") === "base,exponent",
+	"folded BigInt powers retain operand producer order",
+);
+for (const evaluate of [() => 0n ** -1n, () => 1n ** -1n, () => (-1n) ** -1n]) {
+	let threw = false;
+	try {
+		evaluate();
+	} catch (error) {
+		threw = error instanceof RangeError;
+	}
+	check(threw, "negative BigInt exponent retains RangeError");
+}
+function zeroWidthBigint(value) {
+	return [
+		BigInt.asIntN(0, BigInt(value)),
+		BigInt.asUintN(0.9, !!value),
+		BigInt.asIntN(-0.9, !!value),
+		BigInt.asUintN(undefined, BigInt(value)),
+	];
+}
+globalThis.zeroWidthBigint = zeroWidthBigint;
+check(
+	globalThis.zeroWidthBigint("19").every((value) => value === 0n),
+	"zero-width narrowing keeps exact bigint zero",
+);
+const zeroWidthEvents = [];
+function zeroWidthEffects(value, extra) {
+	return BigInt.asIntN(0, BigInt(value()), extra());
+}
+globalThis.zeroWidthEffects = zeroWidthEffects;
+check(
+	globalThis.zeroWidthEffects(
+		() => (zeroWidthEvents.push("value"), 19n),
+		() => zeroWidthEvents.push("extra"),
+	) === 0n && zeroWidthEvents.join(":") === "value:extra",
+	"zero-width narrowing preserves producer and extra argument order",
+);
+zeroWidthEvents.length = 0;
+let zeroWidthProducerThrew = false;
+try {
+	globalThis.zeroWidthEffects(
+		() => (zeroWidthEvents.push("value"), "invalid"),
+		() => zeroWidthEvents.push("extra"),
+	);
+} catch (error) {
+	zeroWidthProducerThrew = error instanceof SyntaxError;
+}
+check(
+	zeroWidthProducerThrew && zeroWidthEvents.join(":") === "value",
+	"zero-width narrowing preserves abrupt producer completion before later arguments",
+);
+for (const method of ["asIntN", "asUintN"]) {
+	for (const value of [1, null, undefined, Symbol("width-value")]) {
+		let rejected = false;
+		try {
+			BigInt[method](0, value);
+		} catch (error) {
+			rejected = error instanceof TypeError;
+		}
+		check(rejected, "zero width still rejects values that cannot convert to BigInt");
+	}
+	let invalidString = false;
+	try {
+		BigInt[method](0, "invalid");
+	} catch (error) {
+		invalidString = error instanceof SyntaxError;
+	}
+	check(invalidString, "zero width still parses string values");
+	const events = [];
+	check(
+		BigInt[method](0, {
+			valueOf() {
+				events.push("convert");
+				return 9n;
+			},
+		}) === 0n && events.join(":") === "convert",
+		"zero width retains object-to-BigInt conversion",
+	);
+	let invalidWidth = false;
+	try {
+		BigInt[method](0n, 1n);
+	} catch (error) {
+		invalidWidth = error instanceof TypeError;
+	}
+	check(invalidWidth, "BigInt width is rejected before narrowing");
+}
+check(
+	BigInt.asIntN(1, true) === -1n && BigInt.asUintN(128, 9n) === 9n,
+	"nonzero widths retain their result",
+);
 console.log("primitive identities passed");

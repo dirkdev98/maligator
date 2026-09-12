@@ -640,6 +640,40 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 			}
 			if (
+				(operation === "BigInt.asIntN" || operation === "BigInt.asUintN") &&
+				inputs[1] !== undefined &&
+				inputs[2] !== undefined
+			) {
+				const width = analysis.constant(inputs[1], instruction),
+					input = analysis.queryAt(inputs[2], instruction);
+				if (
+					width !== undefined &&
+					input.kind === "known" &&
+					(input.brand === "bigint" || input.brand === "boolean")
+				) {
+					// One becomes zero only after a zero-width ToIndex conversion.
+					const witness: ConstantValue =
+						input.brand === "bigint"
+							? { kind: "bigint", value: 1n }
+							: { kind: "boolean", value: true };
+					const evaluated = evaluateConstantBuiltin(
+						operation,
+						undefined,
+						[width, witness],
+						constantTarget,
+					);
+					if (
+						evaluated.kind === "value" &&
+						evaluated.value.kind === "bigint" &&
+						evaluated.value.value === 0n
+					) {
+						analysis.verify(input, instruction);
+						plans.push({ instruction, value: evaluated.value });
+						continue;
+					}
+				}
+			}
+			if (
 				noncoercingNumberPredicates.has(operation) &&
 				fn.kernel.valueUseCount(
 					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
@@ -778,14 +812,20 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			}
 			if (
 				operation === "Symbol.prototype.description<get>" ||
-				operation === "Symbol.keyFor"
+				operation === "Symbol.prototype.toString" ||
+				operation === "Symbol.keyFor" ||
+				operation === "String"
 			) {
 				const forwarded = forwardSymbolDescription(
 					context,
 					analysis,
 					instruction,
-					inputs[operation === "Symbol.keyFor" ? 1 : 0],
-					operation === "Symbol.keyFor",
+					inputs[operation === "Symbol.keyFor" || operation === "String" ? 1 : 0],
+					operation === "Symbol.keyFor"
+						? "key"
+						: operation === "Symbol.prototype.description<get>"
+							? "description"
+							: "string",
 				);
 				if (forwarded !== undefined) return forwarded;
 			}
@@ -912,6 +952,118 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					sequenceEdits += elements.length * 2;
 				}
 				continue;
+			}
+			if (
+				operation === "String.prototype.repeat" ||
+				operation === "String.prototype.padStart" ||
+				operation === "String.prototype.padEnd" ||
+				operation === "String.prototype.slice" ||
+				operation === "String.prototype.substring" ||
+				operation === "String.prototype.substr" ||
+				operation === "String.prototype.includes" ||
+				operation === "String.prototype.startsWith" ||
+				operation === "String.prototype.endsWith" ||
+				operation === "String.prototype.concat"
+			) {
+				const receiver = inputs[0]!;
+				const fact = analysis.queryAt(receiver, instruction);
+				if (fact.kind === "known" && fact.brand === "string") {
+					if (
+						operation === "String.prototype.concat" &&
+						inputs.length <= 4096 &&
+						inputs.slice(1).every((input) => {
+							const part = analysis.constant(input, instruction);
+							return part?.kind === "string" && part.value.length === 0;
+						})
+					) {
+						plans.push({
+							instruction,
+							operation: { opcode: "move", inputs: [receiver] },
+						});
+						continue;
+					}
+					const integer = (input: CoreValueId | undefined, fallback = 0) => {
+						if (input === undefined) return fallback;
+						const value = analysis.constant(input, instruction);
+						if (value === undefined || value.kind === "bigint") return undefined;
+						if (value.kind === "undefined") return fallback;
+						const converted = evaluateConstantBuiltin(
+							"Number",
+							undefined,
+							[value],
+							constantTarget,
+						);
+						if (converted.kind !== "value" || converted.value.kind !== "number")
+							return undefined;
+						return Number.isNaN(converted.value.value)
+							? 0
+							: Math.trunc(converted.value.value);
+					};
+					const search =
+						operation === "String.prototype.includes" ||
+						operation === "String.prototype.startsWith" ||
+						operation === "String.prototype.endsWith";
+					if (search && inputs[1] !== undefined) {
+						const needle = analysis.constant(inputs[1], instruction);
+						if (
+							needle?.kind === "string" &&
+							needle.value.length === 0 &&
+							integer(inputs[2]) !== undefined
+						) {
+							plans.push({ instruction, value: { kind: "boolean", value: true } });
+							continue;
+						}
+					}
+					const count =
+						search || operation === "String.prototype.concat"
+							? undefined
+							: integer(inputs[1]);
+					if (count !== undefined) {
+						const repeat = operation === "String.prototype.repeat";
+						if (repeat && count === 0) {
+							plans.push({ instruction, value: { kind: "string", value: "" } });
+							continue;
+						}
+						const range =
+							operation === "String.prototype.slice" ||
+							operation === "String.prototype.substring" ||
+							operation === "String.prototype.substr";
+						const end = range ? integer(inputs[2], Infinity) : undefined;
+						if (range && end !== undefined) {
+							const empty =
+								operation === "String.prototype.substr"
+									? end <= 0 || count === Infinity
+									: operation === "String.prototype.substring"
+										? count === end || (count <= 0 && end <= 0)
+										: count === end ||
+											count === Infinity ||
+											end === -Infinity ||
+											(count < 0 === end < 0 && end <= count);
+							if (empty) {
+								plans.push({ instruction, value: { kind: "string", value: "" } });
+								continue;
+							}
+						}
+						const filler =
+							!repeat && !range && inputs[2] !== undefined
+								? analysis.constant(inputs[2], instruction)
+								: undefined;
+						const identity = repeat
+							? count === 1
+							: range
+								? (operation === "String.prototype.substring"
+										? count <= 0
+										: count === 0 || count === -Infinity) && end === Infinity
+								: count <= 0 || (filler?.kind === "string" && filler.value.length === 0);
+						if (identity) {
+							plans.push({
+								instruction,
+								operation: { opcode: "move", inputs: [receiver] },
+							});
+							continue;
+						}
+					}
+				}
 			}
 			if (operation === "Math.pow") {
 				const base = inputs[numericOperation ? 0 : 1],

@@ -5,14 +5,198 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionPassContext } from "./core-pass.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 
+function symbolStringIndex(editor: CoreEditor, text: string): number {
+	const units = Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
+	const found = editor.program.stringConstants.findIndex(
+		(value) =>
+			value.length === units.length &&
+			value.every((unit, index) => unit === units[index]),
+	);
+	return found >= 0 ? found : editor.appendStringConstants([units]);
+}
+
+function replaceSymbolText(
+	editor: CoreEditor,
+	consumer: CoreInstructionId,
+	text: CoreValueId,
+) {
+	const fn = editor.function;
+	const block = fn.instructionBlock(consumer);
+	const sourcePosition = fn.instructionSourcePosition(consumer);
+	const prefix = editor.insertInstruction(block, consumer, "createString", [], {
+		sourcePosition,
+		attributes: { stringIndex: symbolStringIndex(editor, "Symbol(") },
+	}).outputs[0]!;
+	const suffix = editor.insertInstruction(block, consumer, "createString", [], {
+		sourcePosition,
+		attributes: { stringIndex: symbolStringIndex(editor, ")") },
+	}).outputs[0]!;
+	const start = editor.insertInstruction(block, consumer, "binary", [prefix, text], {
+		sourcePosition,
+		attributes: { operator: "+" },
+	}).outputs[0]!;
+	editor.replaceInstruction(consumer, "binary", [start, suffix], {
+		attributes: { operator: "+" },
+	});
+}
+
+function forwardOptionalSymbolDescription(
+	context: CoreFunctionPassContext,
+	producer: CoreInstructionId,
+	input: CoreValueId,
+) {
+	const { program, item } = context;
+	const fn = program.function(item.function);
+	const root = fn.kernel.resultAt(fn.kernel.instructionResultStart(producer));
+	const pending = [root],
+		visited = new Set<CoreValueId>(),
+		consumers = new Map<CoreInstructionId, "description" | "string">();
+	let edits = 20,
+		inspectedUses = 0;
+	while (pending.length) {
+		const value = pending.pop()!;
+		if (visited.has(value)) continue;
+		visited.add(value);
+		if (visited.size > 64) return undefined;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (++inspectedUses > 256) return undefined;
+			const consumer = fn.kernel.useInstruction(use);
+			if (fn.instructionKind(consumer) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(consumer);
+			if (opcode === "move") {
+				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(consumer)));
+				if (pending.length + visited.size > 64) return undefined;
+				continue;
+			}
+			const attributes = fn.instructionAttributes(consumer);
+			if (
+				opcode !== "callKnown" ||
+				attributes.construct ||
+				attributes.argumentMode !== undefined
+			)
+				continue;
+			const operation = attributes.operation;
+			if (
+				fn.kernel.useOperand(use) !== (operation === "String" ? 1 : 0) ||
+				![
+					"Symbol.prototype.description<get>",
+					"Symbol.prototype.toString",
+					"String",
+				].includes(operation as string)
+			)
+				continue;
+			const kind =
+				operation === "Symbol.prototype.description<get>" ? "description" : "string";
+			if (!consumers.has(consumer)) edits += kind === "description" ? 1 : 4;
+			consumers.set(consumer, kind);
+			if (edits > context.remainingEdits || consumers.size > 64) return undefined;
+		}
+	}
+	if (consumers.size === 0) return undefined;
+	const block = fn.instructionBlock(producer);
+	const terminator = fn.blockTerminator(block);
+	if (fn.instructionKind(terminator) === "guard") return undefined;
+	const tail: Array<CoreInstructionId> = [];
+	for (
+		let next: CoreInstructionId | undefined = producer;
+		next !== undefined && next !== terminator;
+		next = fn.instructionNext(next)
+	) {
+		tail.push(next);
+		if (edits + tail.length > context.remainingEdits) return undefined;
+	}
+	const handler = fn.kernel.blockHandlerBlock(block);
+	const handlerArguments: Array<CoreValueId> = [];
+	if (handler !== undefined) {
+		const count = fn.kernel.blockHandlerArgumentCount(block);
+		if (count > 64) return undefined;
+		const start = fn.kernel.blockHandlerArgumentStart(block);
+		const moved = new Set(tail);
+		for (let index = 0; index < count; index++) {
+			const argument = fn.kernel.handlerArgumentAt(start + index);
+			// The conversion can throw before any value in the allocation tail exists.
+			if (
+				fn.kernel.valueDefinitionKind(argument) === 1 &&
+				moved.has(coreInstructionId(fn.kernel.valueDefinitionOwner(argument)))
+			)
+				return undefined;
+			handlerArguments.push(argument);
+		}
+	}
+	const editor = CoreEditor.open(program, fn.id);
+	const sourcePosition = fn.instructionSourcePosition(producer);
+	const absent = editor.insertInstruction(block, producer, "createUndefined", [], {
+		sourcePosition,
+	}).outputs[0]!;
+	const empty = editor.insertInstruction(block, producer, "createString", [], {
+		sourcePosition,
+		attributes: { stringIndex: symbolStringIndex(editor, "") },
+	}).outputs[0]!;
+	const condition = editor.insertInstruction(block, producer, "binary", [input, absent], {
+		sourcePosition,
+		attributes: { operator: "===" },
+	}).outputs[0]!;
+	const convert = editor.createBlock();
+	const join = editor.createBlock([{}, {}]);
+	const parameterStart = fn.kernel.blockParameterStart(join);
+	const description = fn.kernel.blockParameterValue(parameterStart);
+	const text = fn.kernel.blockParameterValue(parameterStart + 1);
+	for (const instruction of tail) editor.moveInstruction(instruction, join);
+	editor.setTerminator(join, {
+		...coreTerminatorInput(fn, terminator),
+		sourcePosition: fn.instructionSourcePosition(terminator),
+	});
+	// Undefined suppresses conversion but still creates a fresh symbol at the join.
+	const captured = editor.insertInstruction(convert, undefined, "unary", [input], {
+		sourcePosition,
+		attributes: { operator: "tostring" },
+	}).outputs[0]!;
+	editor.setTerminator(convert, {
+		kind: "jump",
+		edge: { block: join, arguments: [captured, captured] },
+		sourcePosition,
+	});
+	editor.replaceTerminator(block, {
+		kind: "branch",
+		condition,
+		consequent: { block: join, arguments: [absent, empty] },
+		alternate: { block: convert, arguments: [] },
+		sourcePosition,
+	});
+	if (handler !== undefined) {
+		editor.setHandler(convert, handler, handlerArguments);
+		editor.setHandler(join, handler, handlerArguments);
+	}
+	const operandStart = fn.kernel.instructionOperandStart(producer);
+	const inputs = Array.from(
+		{ length: fn.kernel.instructionOperandCount(producer) },
+		(_, index) => fn.kernel.operandAt(operandStart + index),
+	);
+	inputs[1] = description;
+	editor.replaceOperands(producer, inputs);
+	for (const [consumer, kind] of consumers) {
+		if (kind === "string") replaceSymbolText(editor, consumer, text);
+		else editor.replaceInstruction(consumer, "move", [description]);
+	}
+	return editor.commit();
+}
+
 export function forwardSymbolDescription(
 	context: CoreFunctionPassContext,
 	analysis: CoreStaticValueAnalysis,
 	consumer: CoreInstructionId,
 	receiver: CoreValueId | undefined,
-	registryKey: boolean,
+	observation: "description" | "string" | "key",
 ) {
-	if (receiver === undefined || context.remainingEdits < 3) return undefined;
+	if (
+		receiver === undefined ||
+		context.remainingEdits < (observation === "string" ? 8 : 3)
+	)
+		return undefined;
 	const { program, item } = context;
 	const fn = program.function(item.function);
 	for (let depth = 0; depth < 64; depth++) {
@@ -29,7 +213,7 @@ export function forwardSymbolDescription(
 			attributes.construct ||
 			attributes.argumentMode !== undefined ||
 			(attributes.operation !== "Symbol.for" &&
-				(registryKey || attributes.operation !== "Symbol")) ||
+				(observation === "key" || attributes.operation !== "Symbol")) ||
 			fn.kernel.instructionOperandCount(producer) < 2
 		)
 			return undefined;
@@ -39,10 +223,9 @@ export function forwardSymbolDescription(
 		if (
 			!string &&
 			attributes.operation === "Symbol" &&
-			(fact.kind !== "known" ||
-				!["number", "boolean", "bigint", "null", "symbol"].includes(fact.brand))
+			(fact.kind !== "known" || fact.brand === "undefined")
 		)
-			return undefined;
+			return forwardOptionalSymbolDescription(context, producer, input);
 		const editor = CoreEditor.open(program, fn.id);
 		if (!string) {
 			// Capture text at creation; later metadata reads must not repeat coercion.
@@ -63,7 +246,8 @@ export function forwardSymbolDescription(
 			inputs[1] = input;
 			editor.replaceOperands(producer, inputs);
 		}
-		editor.replaceInstruction(consumer, "move", [input]);
+		if (observation === "string") replaceSymbolText(editor, consumer, input);
+		else editor.replaceInstruction(consumer, "move", [input]);
 		return editor.commit();
 	}
 	return undefined;
@@ -150,15 +334,6 @@ export function eliminateSymbolDescription(
 			return undefined;
 	}
 	const editor = CoreEditor.open(program, fn.id);
-	const stringIndex = (text: string) => {
-		const units = Array.from(text, (character) => character.charCodeAt(0));
-		const found = program.stringConstants.findIndex(
-			(value) =>
-				value.length === units.length &&
-				value.every((unit, index) => unit === units[index]),
-		);
-		return found >= 0 ? found : editor.appendStringConstants([units]);
-	};
 	let description = root,
 		text = root;
 	if (mayBeUndefined) {
@@ -173,7 +348,7 @@ export function eliminateSymbolDescription(
 			absentInputs.push(
 				editor.insertInstruction(block, instruction, "createString", [], {
 					sourcePosition,
-					attributes: { stringIndex: stringIndex("") },
+					attributes: { stringIndex: symbolStringIndex(editor, "") },
 				}).outputs[0]!,
 			);
 		const convert = editor.createBlock();
@@ -230,23 +405,7 @@ export function eliminateSymbolDescription(
 			editor.replaceInstruction(consumer, "move", [description]);
 			continue;
 		}
-		const block = fn.instructionBlock(consumer);
-		const sourcePosition = fn.instructionSourcePosition(consumer);
-		const prefix = editor.insertInstruction(block, consumer, "createString", [], {
-			sourcePosition,
-			attributes: { stringIndex: stringIndex("Symbol(") },
-		}).outputs[0]!;
-		const suffix = editor.insertInstruction(block, consumer, "createString", [], {
-			sourcePosition,
-			attributes: { stringIndex: stringIndex(")") },
-		}).outputs[0]!;
-		const start = editor.insertInstruction(block, consumer, "binary", [prefix, text], {
-			sourcePosition,
-			attributes: { operator: "+" },
-		}).outputs[0]!;
-		editor.replaceInstruction(consumer, "binary", [start, suffix], {
-			attributes: { operator: "+" },
-		});
+		replaceSymbolText(editor, consumer, text);
 	}
 	return editor.commit();
 }

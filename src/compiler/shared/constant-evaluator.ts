@@ -51,6 +51,20 @@ export type ConstantEvaluation =
 			readonly work: number;
 	  };
 
+function bigintProductFits(
+	left: bigint,
+	right: bigint,
+	minimum: bigint,
+	maximum: bigint,
+): boolean {
+	return !(
+		(left > 0n && right > 0n && left > maximum / right) ||
+		(left > 0n && right < 0n && right < minimum / left) ||
+		(left < 0n && right > 0n && left < minimum / right) ||
+		(left < 0n && right < 0n && left < maximum / right)
+	);
+}
+
 export function evaluateConstantOperation(
 	operation: string,
 	inputs: ReadonlyArray<ConstantValue>,
@@ -215,6 +229,14 @@ export function evaluateConstantOperation(
 				return boolean(left.value === 0n);
 			case "tonumeric":
 				return result(left);
+			case "increment":
+				return left.value === maximum
+					? unsupported("target-contract")
+					: result({ kind: "bigint", value: left.value + 1n });
+			case "decrement":
+				return left.value === minimum
+					? unsupported("target-contract")
+					: result({ kind: "bigint", value: left.value - 1n });
 		}
 	}
 	if (
@@ -251,15 +273,72 @@ export function evaluateConstantOperation(
 				value = left.value - right.value;
 				break;
 			case "*":
-				if (
-					(left.value > 0n && right.value > 0n && left.value > maximum / right.value) ||
-					(left.value > 0n && right.value < 0n && right.value < minimum / left.value) ||
-					(left.value < 0n && right.value > 0n && left.value < minimum / right.value) ||
-					(left.value < 0n && right.value < 0n && left.value < maximum / right.value)
-				)
+				if (!bigintProductFits(left.value, right.value, minimum, maximum))
 					return unsupported("target-contract");
 				value = left.value * right.value;
 				break;
+			case "**": {
+				if (right.value < 0n) return unsupported("uncertified-operation");
+				if (right.value === 0n) {
+					value = 1n;
+					break;
+				}
+				if (left.value === 0n || left.value === 1n) {
+					value = left.value;
+					break;
+				}
+				if (left.value === -1n) {
+					value = right.value % 2n === 0n ? 1n : -1n;
+					break;
+				}
+				let base = left.value,
+					exponent = right.value;
+				value = 1n;
+				while (exponent > 0n) {
+					if ((exponent & 1n) !== 0n) {
+						if (work + 1 > workLimit) return unsupported("work-limit");
+						work++;
+						if (!bigintProductFits(value, base, minimum, maximum))
+							return unsupported("target-contract");
+						value *= base;
+					}
+					exponent >>= 1n;
+					// The final square is unused and may overflow even when the result fits.
+					if (exponent === 0n) break;
+					if (work + 1 > workLimit) return unsupported("work-limit");
+					work++;
+					if (!bigintProductFits(base, base, minimum, maximum))
+						return unsupported("target-contract");
+					base *= base;
+				}
+				break;
+			}
+			case "&":
+				value = left.value & right.value;
+				break;
+			case "|":
+				value = left.value | right.value;
+				break;
+			case "^":
+				value = left.value ^ right.value;
+				break;
+			case "<<":
+			case ">>": {
+				const shiftLeft = operation.endsWith("<<") !== right.value < 0n;
+				if (right.value <= -128n || right.value >= 128n) {
+					if (shiftLeft && left.value !== 0n) return unsupported("target-contract");
+					value = !shiftLeft && left.value < 0n ? -1n : 0n;
+					break;
+				}
+				const count = right.value < 0n ? -right.value : right.value;
+				if (shiftLeft) {
+					// Only certify shifts that do not depend on the runtime's i128 wrapping.
+					if (left.value < minimum >> count || left.value > maximum >> count)
+						return unsupported("target-contract");
+					value = left.value << count;
+				} else value = left.value >> count;
+				break;
+			}
 			case "/":
 			case "%":
 				if (right.value === 0n)
@@ -277,8 +356,20 @@ export function evaluateConstantOperation(
 					? left.value / right.value
 					: left.value % right.value;
 				break;
+			case "==":
 			case "===":
 				return boolean(left.value === right.value);
+			case "!=":
+			case "!==":
+				return boolean(left.value !== right.value);
+			case "<":
+				return boolean(left.value < right.value);
+			case "<=":
+				return boolean(left.value <= right.value);
+			case ">":
+				return boolean(left.value > right.value);
+			case ">=":
+				return boolean(left.value >= right.value);
 			default:
 				return unsupported("uncertified-operation");
 		}
