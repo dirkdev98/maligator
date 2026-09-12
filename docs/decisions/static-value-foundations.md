@@ -398,10 +398,13 @@ coverage ledger:
 
 ```sh
 node scripts/generate-primordial-catalog.ts .cache/primordial-inventory
-node scripts/generate-static-value-coverage.ts maligator_static_values_backlog.json
+node scripts/generate-static-value-coverage.ts
 npm run test:unit -- --run tests/primordial-catalog.test.ts
 npm run test:unit:full-only -- --run tests/primordial-inventory.test.ts
 ```
+
+The tracked coverage ledger owns its seed assignments and expansion obligations, so
+regeneration does not depend on workspace-only planning files.
 
 The matrix records both language initialization and host installation, including
 individual Intl services and diagnostic installers. Raw JSONL retains every native

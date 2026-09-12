@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 const primordialCatalog = getPrimordialCatalog();
@@ -14,15 +14,11 @@ import type {
 	StaticValueCoverageRow,
 } from "./static-value-coverage.ts";
 
-interface Seed {
-	owner: string;
-	key: string;
-	task: string;
-	key_kind: string;
-}
-const plan = JSON.parse(
-	readFileSync(process.argv[2] ?? "maligator_static_values_backlog.json", "utf8"),
-) as { surface_seed: Array<Seed> };
+type CoverageSeed = StaticValueCoverage["seeds"][number];
+
+const output = "tests/fixtures/primordial-inventory/coverage.json";
+const previous = JSON.parse(readFileSync(output, "utf8")) as StaticValueCoverage;
+const seeds = previous.seeds;
 const normalizedOwner = (owner: string) =>
 	owner
 		.replace(/^globalThis\./, "")
@@ -31,7 +27,7 @@ const normalizedOwner = (owner: string) =>
 		.replace(/[^a-zA-Z0-9]/g, "")
 		.toLowerCase();
 const seedOwners = new Map(
-	plan.surface_seed.map((seed) => [normalizedOwner(seed.owner), seed.owner]),
+	seeds.map((seed) => [normalizedOwner(seed.owner), seed.owner]),
 );
 const hostInstallers = new Map(
 	[...HOST_MODULES.values()].map((module) => [module.installer, module.id]),
@@ -43,9 +39,7 @@ function reconciledOwner(owner: string): string {
 }
 const seedKey = (owner: string, key: string) =>
 	JSON.stringify([reconciledOwner(owner), key.replace(/^symbol:%(Symbol\.\w+)%$/, "$1")]);
-const exact = new Map(
-	plan.surface_seed.map((seed) => [seedKey(seed.owner, seed.key), seed.task]),
-);
+const exact = new Map(seeds.map((seed) => [seedKey(seed.owner, seed.key), seed.task]));
 
 const invocationTasks = new Map<string, { task: string; canonical: boolean }>();
 for (const node of primordialCatalog.nodes) {
@@ -94,7 +88,7 @@ function ownerTask(owner: string, key: string): string {
 		].includes(key)
 	)
 		return "H-10";
-	const matches = plan.surface_seed.filter(
+	const matches = seeds.filter(
 		(seed) => seed.owner === owner || owner.startsWith(`${seed.owner}.`),
 	);
 	if (matches.length > 0)
@@ -112,13 +106,9 @@ function ownerTask(owner: string, key: string): string {
 	if (/^globalThis\./.test(owner)) return "N-03";
 	return "N-06";
 }
-const output = "tests/fixtures/primordial-inventory/coverage.json";
-const previous = existsSync(output)
-	? (JSON.parse(readFileSync(output, "utf8")) as StaticValueCoverage)
-	: undefined;
-const priorRows = new Map(previous?.rows.map((row) => [row.id, row]));
+const priorRows = new Map(previous.rows.map((row) => [row.id, row]));
 const priorSeeds = new Map(
-	previous?.seeds.map((seed) => [catalogExposureId(seed.owner, seed.key), seed]),
+	previous.seeds.map((seed) => [catalogExposureId(seed.owner, seed.key), seed]),
 );
 const rows: Array<StaticValueCoverageRow> = primordialCatalog.nodes.flatMap((node) =>
 	node[4].map((property) => {
@@ -206,7 +196,7 @@ const ownerNodes = new Map(
 		[node[0], ...node[5]].map((owner) => [reconciledOwner(owner), index] as const),
 	),
 );
-function seedExposures(seed: Seed): ReadonlyArray<string> {
+function seedExposures(seed: CoverageSeed): ReadonlyArray<string> {
 	const observation = priorSeeds.get(
 		catalogExposureId(seed.owner, seed.key),
 	)?.instanceObservation;
@@ -237,7 +227,7 @@ const coverage: StaticValueCoverage = {
 	profiles: staticValueProfiles,
 	rows,
 	implementations: [...implementations].map(([id, identities]) => ({ id, identities })),
-	seeds: plan.surface_seed.map((seed) => {
+	seeds: seeds.map((seed) => {
 		const exposures = seedExposures(seed);
 		return {
 			owner: seed.owner,
@@ -254,9 +244,7 @@ const coverage: StaticValueCoverage = {
 			state:
 				exposures.length > 0
 					? "reconciled"
-					: seed.key_kind === "synthetic-obligation" ||
-						  seed.owner.startsWith("%Every") ||
-						  seed.owner.endsWith(" instances")
+					: seed.state === "expansion-obligation"
 						? "expansion-obligation"
 						: "not-installed-in-full-inventory",
 		};
