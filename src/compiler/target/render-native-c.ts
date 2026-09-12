@@ -21,6 +21,7 @@ import {
 	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
 	nativeStringSwitchHash,
 } from "../shared/native-string-switch.ts";
+import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { stringCaseLocale } from "../shared/string-case-locale.ts";
 import {
 	emitBinaryOperator,
@@ -3944,7 +3945,7 @@ function emitInstruction(
 		}
 		case "QUERY_STATIC_DATA":
 			return [
-				`r${instruction.dst} = ${profileCall(instruction.queryKind === "includes" ? "call" : "property", `mal_vm_query_static_data(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.queryKind === "includes" ? 0 : 1}, ${boxed(instruction.needle)}, ${boxed(instruction.fromIndex)})`)};`,
+				`r${instruction.dst} = ${profileCall(instruction.queryKind === "has-own" ? "property" : "call", `mal_vm_query_static_data(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${staticDataQueryTag(instruction.queryKind)}, ${boxed(instruction.needle)}, ${boxed(instruction.fromIndex)})`)};`,
 				throwCheck(),
 			];
 		case "CREATE_FUNCTION":

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 51u
+#define WIRE_VERSION 52u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1364,7 +1364,7 @@ static bool mal_loaded_static_query_valid(const MalRuntimeImage *image, const Ma
     i32 registers[] = { instruction->as.query_static_data.dst, instruction->as.query_static_data.needle, instruction->as.query_static_data.from_index };
     for (usize index = 0; index < sizeof(registers) / sizeof(registers[0]); index++)
         if (registers[index] < 0 || registers[index] >= fn->register_count) return false;
-    if ((kind != 0 && kind != 1) || offset < 0 || offset >= image->literal_template_data_count - 1) return false;
+    if (kind < 0 || kind > 3 || offset < 0 || offset >= image->literal_template_data_count - 1) return false;
     const u32 *data = image->literal_template_data;
     u32 position = (u32) offset, end = (u32) image->literal_template_data_count;
     if (data[position++] != MAL_LITERAL_ARRAY) return false;

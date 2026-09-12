@@ -16,6 +16,8 @@ import {
 	remapLiteralTemplateConstants,
 	validateStaticQueryTemplate,
 } from "../shared/literal-template-data.ts";
+import { staticDataQueryKinds } from "../shared/static-data-query.ts";
+import type { StaticDataQueryKind } from "../shared/static-data-query.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
@@ -712,7 +714,7 @@ export type BytecodeInstruction =
 			needle: number;
 			fromIndex: number;
 			templateOffset: number;
-			queryKind: "includes" | "has-own";
+			queryKind: StaticDataQueryKind;
 	  }
 	| {
 			opcode: "CREATE_MODULE_NAMESPACE";
@@ -1906,7 +1908,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 			}
 			if (instruction.opcode !== "QUERY_STATIC_DATA") continue;
 			if (
-				!["includes", "has-own"].includes(instruction.queryKind) ||
+				!staticDataQueryKinds.includes(instruction.queryKind) ||
 				[instruction.dst, instruction.needle, instruction.fromIndex].some(
 					(register) =>
 						!Number.isInteger(register) || register < 0 || register >= fn.registerCount,

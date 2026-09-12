@@ -3,6 +3,7 @@ import type { KnownBuiltinCall } from "./compiler-facts.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
+import type { StaticDataQueryKind } from "./static-data-query.ts";
 
 export const MAX_PRECISE_NUMBER_SUM_INPUTS = 64;
 
@@ -208,7 +209,7 @@ export type CompilerInstruction =
 			type: "queryStaticData";
 			registers: [number, number, number];
 			templateOffset: number;
-			queryKind: "includes" | "has-own";
+			queryKind: StaticDataQueryKind;
 	  }
 	| {
 			// Build an `import * as ns` module namespace exotic object. Each export

@@ -974,16 +974,18 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
     const MalRuntimeImage *image = vm->runtime_image;
     if (template_offset < 0 || template_offset >= image->literal_template_data_count - 1 ||
         image->literal_template_data[template_offset] != MAL_LITERAL_ARRAY ||
-        (query_kind != 0 && query_kind != 1)) {
+        query_kind < 0 || query_kind > 3) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid static data query");
         return MAL_VALUE_UNDEFINED;
     }
     u32 length = image->literal_template_data[template_offset + 1];
-    if (query_kind == 0 && length == 0) return MAL_VALUE_FALSE;
+    bool returns_index = query_kind >= 2;
+    MalValue absent = returns_index ? mal_value_from_i32(-1) : MAL_VALUE_FALSE;
+    if (query_kind != 1 && length == 0) return absent;
     MalValue roots[2] = { needle, from_index };
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
-    u32 start = 0;
+    u32 start = 0, end = length;
     if (query_kind == 1) {
         MalKey key;
         if (!mal_vm_to_property_key(vm, needle, &key)) {
@@ -997,11 +999,18 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
             mal_gc_unroot(&span);
             return MAL_VALUE_UNDEFINED;
         }
-        start = (u32) mal_ops_number_clamp_relative(number, length);
+        if (query_kind == 3) {
+            f64 integer = isnan(number) ? 0 : trunc(number);
+            if (integer < 0) integer += length;
+            if (integer < 0) end = 0;
+            else if (integer < length) end = (u32) integer + 1;
+        } else {
+            start = (u32) mal_ops_number_clamp_relative(number, length);
+        }
     }
-    if (start == length) {
+    if (start >= end) {
         mal_gc_unroot(&span);
-        return MAL_VALUE_FALSE;
+        return absent;
     }
     // Coercion can adopt an image; offsets still name the retained prefix of its relocated pools.
     MalLiteralCursor cursor = {
@@ -1009,10 +1018,11 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
         .count = (u32) vm->runtime_image->literal_template_data_count,
         .pos = (u32) template_offset + 2,
     };
-    bool found = false, valid = true;
-    bool numeric_needle = query_kind == 0 && mal_ops_is_number(roots[0]);
+    i32 found = -1;
+    bool valid = true;
+    bool numeric_needle = query_kind != 1 && mal_ops_is_number(roots[0]);
     f64 number_needle = numeric_needle ? mal_ops_number_as_f64(roots[0]) : 0;
-    for (u32 index = 0; index < length; index++) {
+    for (u32 index = 0; index < end; index++) {
         if (cursor.pos >= cursor.count) { valid = false; break; }
         u32 tag = cursor.data[cursor.pos];
         if ((tag >= MAL_LITERAL_ARRAY && tag != MAL_LITERAL_UNDEFINED) ||
@@ -1043,10 +1053,15 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
             u32 children;
             if (!mal_literal_decode_value(vm, &cursor, &element, &container, &object, &children)) { valid = false; break; }
             if (tag == MAL_LITERAL_HOLE) element = MAL_VALUE_UNDEFINED;
-            equal = mal_ops_strict_equal_bool(element, roots[0]) ||
-                (mal_value_is_nan(element) && mal_value_is_nan(roots[0]));
+            equal = (!returns_index || tag != MAL_LITERAL_HOLE) &&
+                (mal_ops_strict_equal_bool(element, roots[0]) ||
+                    (query_kind == 0 && mal_value_is_nan(element) && mal_value_is_nan(roots[0])));
         }
-        if (index >= start && equal) { found = true; break; }
+        if (index >= start && equal) {
+            found = (i32) index;
+            // Primitive comparisons are effect-free; retaining the last match avoids a reverse offset table.
+            if (query_kind != 3) break;
+        }
         if (((index + 1) & 1023u) == 0 && mal_gc_poll) {
             mal_gc_safepoint(vm);
             cursor.data = vm->runtime_image->literal_template_data;
@@ -1062,7 +1077,7 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid static query payload");
         return MAL_VALUE_UNDEFINED;
     }
-    return mal_value_new_boolean(found);
+    return returns_index ? mal_value_from_i32(found) : mal_value_new_boolean(found >= 0);
 }
 
 void mal_op_query_static_data(MalCallable *callable, const MalInstruction *instruction) {

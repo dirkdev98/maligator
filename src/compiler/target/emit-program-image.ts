@@ -1,6 +1,7 @@
 import type { IncludedAsset } from "../../assets.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
+import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
 import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
@@ -306,10 +307,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 		switch (instruction.opcode) {
 			case "QUERY_STATIC_DATA":
 				offsets[index] = data.length;
-				data.push(
-					instruction.templateOffset,
-					instruction.queryKind === "includes" ? 0 : 1,
-				);
+				data.push(instruction.templateOffset, staticDataQueryTag(instruction.queryKind));
 				break;
 			case "CALL_REST_ARGUMENTS":
 				offsets[index] = data.length;

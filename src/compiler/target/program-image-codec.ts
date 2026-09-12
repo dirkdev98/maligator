@@ -7,6 +7,7 @@ import {
 import { knownOperationFlags, knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { staticDataQueryKinds, staticDataQueryTag } from "../shared/static-data-query.ts";
 import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -32,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 51;
+export const WIRE_VERSION = 52;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -865,7 +866,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.needle);
 			w.i32(i.fromIndex);
 			w.i32(i.templateOffset);
-			w.i32(i.queryKind === "includes" ? 0 : 1);
+			w.i32(staticDataQueryTag(i.queryKind));
 			return;
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
@@ -1672,7 +1673,8 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				fromIndex = r.i32(),
 				templateOffset = r.i32(),
 				kind = r.i32();
-			if (kind !== 0 && kind !== 1)
+			const queryKind = staticDataQueryKinds[kind];
+			if (queryKind === undefined)
 				throw new RangeError("program-image-codec: invalid static query kind");
 			return {
 				opcode,
@@ -1680,7 +1682,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				needle,
 				fromIndex,
 				templateOffset,
-				queryKind: kind === 0 ? "includes" : "has-own",
+				queryKind,
 			};
 		}
 		case "CREATE_MODULE_NAMESPACE":

@@ -152,7 +152,7 @@ const PROFILE_ALLOCATION_OPCODES = new Set<BytecodeInstruction["opcode"]>([
 export function profileOperationForInstruction(instruction: BytecodeInstruction): string {
 	const opcode = instruction.opcode;
 	if (instruction.opcode === "QUERY_STATIC_DATA")
-		return instruction.queryKind === "includes" ? "call" : "property";
+		return instruction.queryKind === "has-own" ? "property" : "call";
 	if (opcode.startsWith("CALL") || opcode === "GUARD_FUNCTION_INDEX") return "call";
 	if (opcode.startsWith("CONSTRUCT")) return "call";
 	if (

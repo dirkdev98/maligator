@@ -1,6 +1,6 @@
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import { coreStaticIncludesPlan } from "./core-known-operation-results.ts";
+import { coreStaticArraySearchPlan } from "./core-known-operation-results.ts";
 import {
 	literalDefinition,
 	literalResult,
@@ -99,7 +99,7 @@ export const reuseLiteralConstants: CoreFunctionPass = {
 							coreStaticDataQueryPlan(program, fn, analysis, demand.instruction) !==
 								undefined ||
 							(shallowTemplate(literal.words) &&
-								coreStaticIncludesPlan(program, fn, analysis, demand.instruction) !==
+								coreStaticArraySearchPlan(program, fn, analysis, demand.instruction) !==
 									undefined),
 					)
 			)

@@ -50,7 +50,7 @@ it("executes static queries across image growth during coercion", () => {
 			fn.instructions.filter((instruction) => instruction.opcode === "QUERY_STATIC_DATA"),
 		);
 		expect(new Set(queries.map((query) => query.queryKind))).toEqual(
-			new Set(["includes", "has-own"]),
+			new Set(["includes", "has-own", "index-of", "last-index-of"]),
 		);
 		for (const binary of [pair.compiled, pair.interpreted])
 			expect(

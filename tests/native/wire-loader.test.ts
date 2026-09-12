@@ -341,13 +341,30 @@ describe("wire loader side-data validation", () => {
 		};
 		const wire = serializeRuntimeImage(queryDefinition, { debugInfo: false });
 		acceptsWire("static-query", wire);
+		for (const queryKind of ["index-of", "last-index-of"] as const) {
+			acceptsWire(
+				`static-query-${queryKind}`,
+				serializeRuntimeImage({
+					...queryDefinition,
+					literalTemplateData: [8, 2, 7, 11],
+					functions: queryDefinition.functions.map((fn) => ({
+						...fn,
+						instructions: fn.instructions.map((instruction) =>
+							instruction.opcode === "QUERY_STATIC_DATA"
+								? { ...instruction, queryKind }
+								: instruction,
+						),
+					})),
+				}),
+			);
+		}
 		const encoded = [WIRE_OPCODES.indexOf("QUERY_STATIC_DATA"), 0, 2, 4, 0, 0];
 		const offset = wire.findIndex((_, index) =>
 			encoded.every((byte, operand) => wire[index + operand] === byte),
 		);
 		expect(offset).toBeGreaterThan(0);
 		for (const [name, operand, byte] of [
-			["kind", 5, 4],
+			["kind", 5, 8],
 			["register", 2, 6],
 			["offset", 4, 126],
 		] as const) {

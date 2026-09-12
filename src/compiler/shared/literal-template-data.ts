@@ -1,3 +1,5 @@
+import type { StaticDataQueryKind } from "./static-data-query.ts";
+
 export interface LiteralTemplateReference {
 	readonly position: number;
 	readonly index: number;
@@ -12,7 +14,7 @@ export interface LiteralTemplateSegment {
 export function validateStaticQueryTemplate(
 	data: ReadonlyArray<number>,
 	offset: number,
-	kind: "includes" | "has-own",
+	kind: StaticDataQueryKind,
 ): LiteralTemplateSegment {
 	const segment = scanLiteralTemplateSegment(data, offset, "static query");
 	if (data[offset] !== 8) throw new RangeError("static query requires an array payload");

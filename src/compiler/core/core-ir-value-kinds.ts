@@ -175,7 +175,6 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 			return COMPILER_VALUE_KIND_OBJECT;
 		case "isEmpty":
 		case "typeofCompare":
-		case "queryStaticData":
 			return COMPILER_VALUE_KIND_BOOLEAN;
 		default:
 			return undefined;
@@ -250,6 +249,18 @@ function addOperationTransfer(
 	const staticKind = staticOpcodeKind(opcode);
 	if (staticKind !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, staticKind);
+		return;
+	}
+	if (opcode === "queryStaticData") {
+		const kind = fn.instructionAttributes(instruction).queryKind;
+		addKindTransfer(
+			buffer,
+			KIND_TRANSFER_CONSTANT,
+			output,
+			kind === "index-of" || kind === "last-index-of"
+				? COMPILER_VALUE_KIND_NUMBER
+				: COMPILER_VALUE_KIND_BOOLEAN,
+		);
 		return;
 	}
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {

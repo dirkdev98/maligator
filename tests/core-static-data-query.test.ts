@@ -23,6 +23,20 @@ function inspect(body: string) {
 }
 
 describe("static-data query representation", () => {
+	it.each(["indexOf", "lastIndexOf"])(
+		"compares dynamic elements directly for a short %s receiver",
+		(method) => {
+			const inspected = inspect(`return [x, , undefined, x].${method}(from);`);
+			expect(inspected.structure.allocations).toBe(0);
+			expect(inspected.structure.genericLookups).toBe(0);
+			expect(inspected.structure.genericCalls).toBe(0);
+			expect(inspected.structure.operations).toHaveLength(0);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(false);
+		},
+	);
+
 	it("refreshes pooled payload references after immutable pool replacement", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: [[120]],
@@ -84,6 +98,41 @@ describe("static-data query representation", () => {
 		expect(inspected.c.source.length).toBeLessThan(12000);
 	});
 
+	it.each([
+		["indexOf", "index-of"],
+		["lastIndexOf", "last-index-of"],
+	])("lowers %s to an allocation-free ordered table search", (method, kind) => {
+		const inspected = inspect(
+			`return [1, , undefined, NaN, -0, 1, "equal", 5n].${method}(x, from);`,
+		);
+		expect(inspected.structure.allocations).toBe(0);
+		expect(inspected.structure.genericLookups).toBe(0);
+		expect(inspected.structure.genericCalls).toBe(0);
+		const queries = inspected.fn.instructions.filter(
+			(instruction) => instruction.opcode === "QUERY_STATIC_DATA",
+		);
+		expect(queries).toHaveLength(1);
+		expect(queries[0]?.queryKind).toBe(kind);
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(inspected.image),
+		);
+		expect(restored.runtime.functions).toEqual(inspected.image.runtime.functions);
+	});
+
+	it("keeps holes distinct from explicit undefined in indexed searches", () => {
+		const inspected = inspect("return [, undefined].indexOf(x, from);");
+		const query = inspected.fn.instructions.find(
+			(instruction) => instruction.opcode === "QUERY_STATIC_DATA",
+		);
+		if (query?.opcode !== "QUERY_STATIC_DATA") throw new Error("missing static query");
+		expect(
+			inspected.image.runtime.literalTemplateData.slice(
+				query.templateOffset,
+				query.templateOffset + 4,
+			),
+		).toEqual([8, 2, 7, 11]);
+	});
+
 	it("rebases data and its string/bigint references through merges and codec round trips", () => {
 		const prefix = inspect('return ["prefix", 999n].includes(x, from);').image;
 		const original = inspect('return ["needle", 5n].includes(x, from);').image;
@@ -137,4 +186,207 @@ describe("static-data query representation", () => {
 			}),
 		).toThrow(/operands/);
 	});
+});
+
+describe("constant static-array search results", () => {
+	it.each(["includes", "indexOf", "lastIndexOf"])(
+		"keeps native BigInt literal wrapping in %s comparisons",
+		(method) => {
+			for (const operands of [
+				"[340282366920938463463374607431768211456n].METHOD(0n)",
+				"[0n].METHOD(340282366920938463463374607431768211456n)",
+			]) {
+				const output = inspect(`return ${operands.replace("METHOD", method)};`);
+				expect(
+					output.core.some(
+						(operation) =>
+							operation.opcode === "queryStaticData" ||
+							(operation.opcode === "binary" && operation.attributes.operator === "==="),
+					),
+				).toBe(true);
+			}
+		},
+	);
+
+	it.each([
+		["includes", "Infinity", false],
+		["indexOf", "99", -1],
+		["lastIndexOf", "-Infinity", -1],
+	] as const)(
+		"folds the empty %s range with an effectful needle",
+		(method, from, expected) => {
+			const values = Array.from({ length: 32 }, (_, index) => index).join(",");
+			const output = inspect(`return [${values}].${method}(x(), ${from});`);
+			expect(output.structure.genericCalls).toBe(1);
+			expect(
+				output.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(false);
+			expect(
+				output.core
+					.filter(
+						(operation) =>
+							operation.opcode ===
+							(typeof expected === "boolean" ? "createBoolean" : "createNumber"),
+					)
+					.map((operation) => operation.attributes.value),
+			).toContain(expected);
+		},
+	);
+
+	it.each([
+		["[NaN].includes(NaN)", true],
+		["[NaN].includes(0)", false],
+		["[-0].includes(0)", true],
+		["[0].includes(-0)", true],
+		["[,].includes()", true],
+		["[,].includes(null)", false],
+		["[undefined].includes()", true],
+		["[5].includes(5n)", false],
+		["[5n].includes(5n)", true],
+		['["equal", "different"].includes("equal")', true],
+		["[false, 0].includes(null)", false],
+		["[1, 2, 1].includes(2, undefined)", true],
+		["[1, 2, 1].includes(2, true)", true],
+		["[1, 2, 1].includes(2, null)", true],
+		['[1, 2, 1].includes(2, " 1.9 ")', true],
+		['[1, 2, 1].includes(2, "-1")', false],
+		['[1, 2, 1].includes(1, "Infinity")', false],
+		['[1, 2, 1].includes(1, "-Infinity")', true],
+		["[1, 2, 1].includes(1, NaN)", true],
+		["[].includes(1, 1n)", false],
+		[`[${Array.from({ length: 32 }, (_, index) => index).join(",")}].includes(31)`, true],
+		[
+			`[${Array.from({ length: 32 }, (_, index) => index).join(",")}].includes(32)`,
+			false,
+		],
+		[`[${",".repeat(32)}].includes(undefined, 31)`, true],
+	])("selects the SameValueZero result of %s", (expression, expected) => {
+		const inspected = inspect(`return ${expression};`);
+		expect(inspected.structure.allocations).toBe(0);
+		expect(
+			inspected.core.some((operation) =>
+				["queryStaticData", "callKnown"].includes(operation.opcode),
+			),
+		).toBe(false);
+		expect(
+			inspected.core
+				.filter((operation) => operation.opcode === "createBoolean")
+				.map((operation) => operation.attributes.value),
+		).toEqual([expected]);
+	});
+
+	it.each(['"1"', '"0b1"', "true", "null", "undefined"])(
+		"uses the bounded includes chain for a dynamic needle and primitive offset %s",
+		(from) => {
+			const inspected = inspect(`return [1, 2, 1].includes(x, ${from});`);
+			expect(inspected.structure.allocations).toBe(0);
+			expect(inspected.structure.genericCalls).toBe(0);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(false);
+		},
+	);
+
+	it.each(["1n", "Symbol.iterator", "{ valueOf() { return 1; } }"])(
+		"preserves nonempty includes offset coercion for %s",
+		(from) => {
+			const inspected = inspect(`return [1, 2, 1].includes(1, ${from});`);
+			expect(
+				inspected.core.filter((operation) => operation.opcode === "queryStaticData"),
+			).toHaveLength(1);
+		},
+	);
+
+	it.each([
+		["[1, 2, 1].indexOf(1)", 0],
+		["[1, 2, 1].lastIndexOf(1)", 2],
+		["[1, 2, 1].lastIndexOf(1, undefined)", 0],
+		["[1, 2, 1].lastIndexOf(1, NaN)", 0],
+		["[1, 2, 1].indexOf(1, true)", 2],
+		["[1, 2, 1].lastIndexOf(1, true)", 0],
+		["[1, 2, 1].indexOf(1, false)", 0],
+		["[1, 2, 1].lastIndexOf(1, false)", 0],
+		["[1, 2, 1].indexOf(1, null)", 0],
+		["[1, 2, 1].lastIndexOf(1, null)", 0],
+		['[1, 2, 1].indexOf(1, "1")', 2],
+		['[1, 2, 1].lastIndexOf(1, "2")', 2],
+		['[1, 2, 1].indexOf(1, " -1.9 ")', 2],
+		['[1, 2, 1].lastIndexOf(1, " -1.9 ")', 2],
+		['[1, 2, 1].indexOf(1, "0x1")', 2],
+		['[1, 2, 1].indexOf(1, "0b10")', 2],
+		['[1, 2, 1].lastIndexOf(1, "")', 0],
+		['[1, 2, 1].lastIndexOf(1, "invalid")', 0],
+		['[1, 2, 1].indexOf(1, "Infinity")', -1],
+		['[1, 2, 1].lastIndexOf(1, "-Infinity")', -1],
+		["[1, 2, 1].indexOf(1, 0.9)", 0],
+		["[1, 2, 1].indexOf(1, -1.9)", 2],
+		["[1, 2, 1].lastIndexOf(1, -1.9)", 2],
+		["[1, 2, 1].lastIndexOf(1, -2)", 0],
+		["[1, 2, 1].indexOf(1, Infinity)", -1],
+		["[1, 2, 1].indexOf(1, -Infinity)", 0],
+		["[1, 2, 1].lastIndexOf(1, Infinity)", 2],
+		["[1, 2, 1].lastIndexOf(1, -Infinity)", -1],
+		["[1, 2, 1].lastIndexOf(1, -4)", -1],
+		["[, undefined].indexOf()", 1],
+		["[undefined, ,].lastIndexOf()", 0],
+		["[, ,].indexOf(undefined)", -1],
+		["[NaN, NaN].indexOf(NaN)", -1],
+		["[NaN, NaN].lastIndexOf(NaN)", -1],
+		["[-0, 0].indexOf(0)", 0],
+		["[0, -0].lastIndexOf(0)", 1],
+		["[5, 5n].indexOf(5n)", 1],
+		["[5n, 5].lastIndexOf(5n)", 0],
+		['["equal", "different", "equal"].lastIndexOf("equal")', 2],
+		["[false, null, undefined].indexOf(null)", 1],
+		["[false, 0].indexOf(0)", 1],
+	])("selects the numeric result of %s", (expression, expected) => {
+		const inspected = inspect(`return ${expression};`);
+		expect(inspected.structure.allocations).toBe(0);
+		expect(
+			inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+		).toBe(false);
+		expect(inspected.core.some((operation) => operation.opcode === "callKnown")).toBe(
+			false,
+		);
+		expect(
+			inspected.core
+				.filter((operation) => ["createNumber", "createF64"].includes(operation.opcode))
+				.map((operation) => operation.attributes.value),
+		).toEqual([expected]);
+	});
+
+	it.each(["includes", "indexOf", "lastIndexOf"])(
+		"preserves %s argument producer effects",
+		(method) => {
+			const inspected = inspect(
+				`return [1, 2, 1].${method}((x(), 1), (x(), undefined), x());`,
+			);
+			expect(inspected.structure.genericCalls).toBe(3);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(false);
+		},
+	);
+
+	it.each(["includes", "indexOf", "lastIndexOf"])(
+		"skips %s offset coercion for empty arrays",
+		(method) => {
+			const inspected = inspect(`return [].${method}(x(), from);`);
+			expect(inspected.structure.genericCalls).toBe(1);
+			expect(inspected.structure.allocations).toBe(0);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "queryStaticData"),
+			).toBe(false);
+		},
+	);
+
+	it.each(["from", "1n", "Symbol.iterator", "{ valueOf() { return 1; } }"])(
+		"retains coercion for unsupported offset %s",
+		(from) => {
+			const inspected = inspect(`return [1, 2, 1].indexOf(1, ${from});`);
+			expect(
+				inspected.core.filter((operation) => operation.opcode === "queryStaticData"),
+			).toHaveLength(1);
+		},
+	);
 });
