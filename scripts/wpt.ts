@@ -196,6 +196,7 @@ interface ExecutionReport extends WptExecutionKey {
 
 rmSync(buildRoot, { recursive: true, force: true });
 mkdirSync(buildRoot, { recursive: true });
+mkdirSync(outputRoot, { recursive: true });
 if (!keepArtifacts) {
 	process.once("exit", () => rmSync(buildRoot, { recursive: true, force: true }));
 }
