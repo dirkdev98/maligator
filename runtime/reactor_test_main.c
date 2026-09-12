@@ -743,29 +743,6 @@ static bool dns_localhost_owned_addresses(void) {
     return ok && (ipv4 || ipv6) && !mal_host_has_pending_work(host);
 }
 
-static bool dns_nxdomain_is_structured(void) {
-    MalHost *host = g_cross_thread_host;
-    MalHostHandle operation = 0;
-    MalHostTask task = {0};
-    bool ok = mal_dns_start(
-        host, "maligator-dns-test.invalid", "443", &operation) == MAL_DNS_START_OK &&
-        dns_next_terminal(host, operation, &task) &&
-        task.result == MAL_HOST_TERMINAL_ERROR;
-    if (ok) {
-        MalDnsResult *result = task.data;
-        MalDnsError error = mal_dns_result_error(result);
-        ok = error.kind == MAL_DNS_ERROR_RESOLVER && error.resolver_code != 0 &&
-            error.system_errno == 0 &&
-            strcmp(mal_dns_result_hostname(result), "maligator-dns-test.invalid") == 0 &&
-            strcmp(mal_dns_result_service(result), "443") == 0 &&
-            mal_dns_result_address_count(result) == 0;
-    }
-    if (task._node != nullptr) {
-        mal_host_task_release(&host->tasks, &task);
-    }
-    return ok && !mal_host_has_pending_work(host);
-}
-
 typedef struct DnsResolverGate {
     pthread_mutex_t mutex;
     pthread_cond_t ready;
@@ -827,6 +804,9 @@ static int dns_test_resolver(
         errno = EIO;
         return EAI_SYSTEM;
     }
+    if (strcmp(hostname, "nxdomain.test") == 0) {
+        return EAI_NONAME;
+    }
 
     struct addrinfo *ipv6 = calloc(1, sizeof(struct addrinfo));
     struct addrinfo *ipv4 = calloc(1, sizeof(struct addrinfo));
@@ -886,6 +866,35 @@ static bool dns_test_host_init(DnsTestHost *context, DnsResolverGate *gate) {
 
 static void dns_test_host_free(DnsTestHost *context) {
     mal_host_free(context->host);
+}
+
+static bool dns_nxdomain_is_structured(void) {
+    DnsResolverGate gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&gate, false);
+    bool ok = dns_test_host_init(&context, &gate);
+    MalHostHandle operation = 0;
+    MalHostTask task = {0};
+    ok = ok && mal_dns_start(context.host, "nxdomain.test", "443", &operation) ==
+        MAL_DNS_START_OK && dns_next_terminal(context.host, operation, &task) &&
+        task.result == MAL_HOST_TERMINAL_ERROR;
+    if (ok) {
+        MalDnsResult *result = task.data;
+        MalDnsError error = mal_dns_result_error(result);
+        ok = error.kind == MAL_DNS_ERROR_RESOLVER && error.resolver_code == EAI_NONAME &&
+            error.system_errno == 0 &&
+            strcmp(mal_dns_result_hostname(result), "nxdomain.test") == 0 &&
+            strcmp(mal_dns_result_service(result), "443") == 0 &&
+            mal_dns_result_address_count(result) == 0;
+    }
+    if (task._node != nullptr) {
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    ok = ok && gate.calls == 1 && gate.releases == 0 && gate.valid_hints &&
+        !mal_host_has_pending_work(context.host);
+    dns_test_host_free(&context);
+    dns_gate_free(&gate);
+    return ok;
 }
 
 static bool dns_saturation_cancellation_and_wake(void) {
