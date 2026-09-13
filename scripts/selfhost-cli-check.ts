@@ -437,7 +437,7 @@ setTimeout(() => {
 	unlinkSync(projectNodeModules);
 
 	writeFileSync(
-		path.join(project, "minimal-runner.test.ts"),
+		path.join(project, "minimal-runner.test.mts"),
 		`import { expect, test } from "maligator:test";
 
 test("runs one assertion", () => {
@@ -445,11 +445,11 @@ test("runs one assertion", () => {
 });
 `,
 	);
-	const minimalTest = invokeCaptured(["test", "minimal-runner.test.ts"], testOnlyEnv);
+	const minimalTest = invokeCaptured(["test", "minimal-runner.test.mts"], testOnlyEnv);
 	if (
 		minimalTest.signal !== null ||
 		minimalTest.status !== 0 ||
-		!minimalTest.stdout.includes("minimal-runner.test.ts") ||
+		!minimalTest.stdout.includes("minimal-runner.test.mts") ||
 		!minimalTest.stdout.includes("1 passed, 0 failed")
 	) {
 		throw new Error(
@@ -459,6 +459,10 @@ test("runs one assertion", () => {
 	console.log("ok   test runner executes and reports a minimal explicit test");
 
 	writeFileSync(path.join(project, "package.json"), `{"type":"module"}\n`);
+	renameSync(
+		path.join(project, "minimal-runner.test.mts"),
+		path.join(project, "minimal-runner.test.ts"),
+	);
 	const esmTest = invokeCaptured(["test", "minimal-runner.test.ts"], testOnlyEnv);
 	if (
 		esmTest.signal !== null ||
