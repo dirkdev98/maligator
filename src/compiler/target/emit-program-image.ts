@@ -1459,8 +1459,12 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		depth: number,
 	): void => {
 		if (functions.length === 0) return;
-		const source = [header, ...functions.map(({ fn }) => fn.source)].join("\n");
-		if (source.length <= maxCodeUnits || functions.length === 1) {
+		const sourceCodeUnits = functions.reduce(
+			(total, { fn }) => total + 1 + fn.source.length,
+			header.length,
+		);
+		if (sourceCodeUnits <= maxCodeUnits || functions.length === 1) {
+			const source = [header, ...functions.map(({ fn }) => fn.source)].join("\n");
 			if (source.length > maxCodeUnits) {
 				throw new RangeError(
 					`generated compiled function '${functions[0]!.fn.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
