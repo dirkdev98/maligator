@@ -928,6 +928,27 @@ describe("emit-program-image instruction packing", () => {
 		expect(stable.length).toBeGreaterThan((names.length * 3) / 4);
 	});
 
+	it("keeps repeated data partition identities within filesystem limits", () => {
+		const units = emitProgramTranslationUnits(
+			{
+				...definition,
+				runtime: {
+					...definition.runtime,
+					stringConstants: Array.from({ length: 400 }, () =>
+						Array.from({ length: 100 }, () => 120),
+					),
+				},
+			},
+			{},
+			{ targetCodeUnits: 10_000, hardMaximumCodeUnits: 500_000 },
+		);
+		const dataUnits = units.filter((unit) => unit.kind === "data");
+
+		expect(dataUnits.length).toBeGreaterThan(1);
+		expect(dataUnits.every((unit) => unit.id.length < 128)).toBe(true);
+		expect(dataUnits.every((unit) => unit.source.length <= 500_000)).toBe(true);
+	});
+
 	it("charges split units only for declarations they reference", () => {
 		const functions = Array.from({ length: 400 }, () => ({
 			...fn,

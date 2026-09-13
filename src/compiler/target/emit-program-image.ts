@@ -1154,6 +1154,8 @@ function stablePartitionHash(value: string, round: number): number {
 	return hash;
 }
 
+const MAX_STABLE_PARTITION_HASH_BITS = 64;
+
 function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
 	const occurrences = new Map<string, number>();
 	return image.runtime.functions.map((fn) => {
@@ -1318,7 +1320,7 @@ export function emitProgramTranslationUnits(
 
 			const left: Array<TranslationUnitPart> = [];
 			const right: Array<TranslationUnitPart> = [];
-			if (depth >= 256) {
+			if (depth >= MAX_STABLE_PARTITION_HASH_BITS) {
 				const ordered = [...parts].sort((a, b) =>
 					a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
 				);
@@ -1487,7 +1489,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		const round = Math.floor(depth / 32);
 		const left: Array<NativeOverlayFunction> = [];
 		const right: Array<NativeOverlayFunction> = [];
-		if (depth >= 256) {
+		if (depth >= MAX_STABLE_PARTITION_HASH_BITS) {
 			const ordered = [...functions].sort((a, b) =>
 				a.partitionKey < b.partitionKey
 					? -1
