@@ -148,7 +148,7 @@ function explicitExitEnvironment(): NodeJS.ProcessEnv {
 describe("process as an EventEmitter", () => {
 	let events: string;
 	let eventsInterpreted: string;
-	let orderProcessFirst: string;
+	let processWithoutEvents: string;
 	let shutdown: string;
 
 	beforeAll(() => {
@@ -167,9 +167,9 @@ describe("process as an EventEmitter", () => {
 			nodeEnabled: true,
 			compiled: false,
 		});
-		orderProcessFirst = buildNativeBinary({
-			fixture: "tests/local/node-process-order-process-first.mts",
-			name: "node-process-order-process-first",
+		processWithoutEvents = buildNativeBinary({
+			fixture: "tests/local/node-process-without-events.mts",
+			name: "node-process-without-events",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
@@ -209,11 +209,8 @@ describe("process as an EventEmitter", () => {
 		]);
 	});
 
-	it.each([
-		["node:events imported first", () => events],
-		["node:process imported first", () => orderProcessFirst],
-	])("shares one EventEmitter graph with %s", (_name, binary) => {
-		assertResultPass(runToStdout(binary()));
+	it("materializes EventEmitter behavior without importing node:events", () => {
+		assertResultPass(runToStdout(processWithoutEvents));
 	});
 
 	it("delivers repeated SIGINT and then SIGTERM to their listeners", async () => {
