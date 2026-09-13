@@ -193,12 +193,12 @@ try {
 		new Uint8Array([0, 0xff, 0xc3, 0x28, 65]),
 	);
 	writeFileSync(
-		path.join(project, "helper.ts"),
+		path.join(project, "helper.mts"),
 		`export interface HelperValue { readonly label: string }\nconst helperDefault: HelperValue = { label: "compact" };\nexport default helperDefault;\nexport const ok = <const ValueType>(value: ValueType) => ({ value });\n`,
 	);
 	writeFileSync(
 		path.join(project, fixture),
-		`import { readFileSync } from "node:fs";\nimport helperDefault, { ok, type HelperValue } from "./helper.ts";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = readFileSync(globalThis.mal.assets.materialize("payload"));\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst genericResult: { value: HelperValue } = ok(helperDefault);\nif (genericResult.value.label !== "compact") process.exit(20);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
+		`import { readFileSync } from "node:fs";\nimport helperDefault, { ok, type HelperValue } from "./helper.mts";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = readFileSync(globalThis.mal.assets.materialize("payload"));\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst genericResult: { value: HelperValue } = ok(helperDefault);\nif (genericResult.value.label !== "compact") process.exit(20);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
 	);
 	writeFileSync(
 		developmentConfigPath,
