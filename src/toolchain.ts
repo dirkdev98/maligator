@@ -259,6 +259,10 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 	);
 }
 
+function requiredProbesPass(probes: ToolchainProbes, needsCxx: boolean): boolean {
+	return probes.c2x && (!needsCxx || probes.cxxLink);
+}
+
 export class ToolchainError extends Error {
 	report: ToolchainReport;
 
@@ -896,7 +900,10 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	let probes: ToolchainProbes | undefined;
 	try {
 		const cached: unknown = JSON.parse(readFileSync(cachePath, "utf-8"));
-		if (isCachedProbes(cached, fingerprint)) {
+		if (
+			isCachedProbes(cached, fingerprint) &&
+			requiredProbesPass(cached.probes, needsCxx)
+		) {
 			probes = cached.probes;
 			report.cacheHit = true;
 		}
@@ -908,10 +915,12 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		const probeDir = mkdtempSync(path.join(cacheDir, "probe-"));
 		try {
 			probes = probeCapabilities(completeTools, probeDir, env, platform, needsCxx);
-			writeFileSync(
-				cachePath,
-				`${JSON.stringify({ schema: CACHE_SCHEMA, fingerprint, probes } satisfies CachedProbes, null, 2)}\n`,
-			);
+			if (requiredProbesPass(probes, needsCxx)) {
+				writeFileSync(
+					cachePath,
+					`${JSON.stringify({ schema: CACHE_SCHEMA, fingerprint, probes } satisfies CachedProbes, null, 2)}\n`,
+				);
+			}
 		} finally {
 			rmSync(probeDir, { recursive: true, force: true });
 		}

@@ -109,12 +109,14 @@ function compilerScript(
 	logPath: string,
 	lto = true,
 	thinLto = true,
+	readinessFile?: string,
 ): string {
 	return `
 printf '%s\n' "$*" >> '${logPath}'
 printf 'cc-env %s\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
 if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
+${readinessFile === undefined ? "" : `[ -f '${readinessFile}' ] || exit 1`}
 ${thinLto ? "" : 'case " $* " in *" -flto=thin "*) exit 1;; esac'}
 ${lto ? "" : 'case " $* " in *" -flto"*) exit 1;; esac'}
 invocation="$*"
@@ -510,6 +512,35 @@ exit 7
 		expect(invalidated.cacheHit).toBe(false);
 		expect(invalidated.fingerprint).not.toBe(first.fingerprint);
 		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
+	});
+
+	it("retries required probes after an ambient linker becomes available", () => {
+		const fake = createFakeToolchain();
+		const readinessFile = path.join(fake.root, "linker-ready");
+		executable(
+			path.join(fake.bin, "fake-cc"),
+			compilerScript("fake cc 1", fake.logPath, true, true, readinessFile),
+		);
+		executable(
+			path.join(fake.bin, "fake-cxx"),
+			compilerScript("fake cxx 1", fake.logPath, true, true, readinessFile),
+		);
+		const options = {
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			platform: "linux" as const,
+			arch: "x64",
+			needsCxx: true,
+		};
+		const unavailable = inspectToolchain(options);
+		expect(unavailable.toolchain).toBeUndefined();
+		expect(unavailable.cacheHit).toBe(false);
+
+		writeFileSync(readinessFile, "");
+		const available = inspectToolchain(options);
+		expect(available.toolchain).toBeDefined();
+		expect(available.cacheHit).toBe(false);
 	});
 
 	it("requires CXX only for builds that include the C++ web runtime", () => {
