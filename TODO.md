@@ -234,13 +234,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       over many clones. Treat measured runtime, analysis time, build memory, and
       code-size tradeoffs as separate acceptance dimensions.
 
-- [ ] Investigate large generated translation units and ThinLTO/link cost with
-      matched cold-cache and warm-cache evidence. Separate the single-unit
-      self-compiler executable build from its multi-unit emitted compiler output.
-      Reuse existing unit partitioning and symbol/dependency information before
-      introducing another build path. Change grouping or linkage only when total
-      toolchain time, memory, and runtime measurements support it.
-
 ## Compiler infrastructure
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand

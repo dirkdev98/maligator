@@ -11,6 +11,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
+	DEFAULT_TRANSLATION_UNIT_POLICY,
 	emitBatch,
 	emitProgramImage,
 	emitProgramTranslationUnits,
@@ -711,6 +712,13 @@ describe("emit-program-image instruction packing", () => {
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_1(MalVm *vm",
 		);
+	});
+
+	it("locks the measured translation-unit policy independently of scheduling", () => {
+		expect(DEFAULT_TRANSLATION_UNIT_POLICY).toEqual({
+			targetCodeUnits: 2 * 1024 * 1024,
+			hardMaximumCodeUnits: 8 * 1024 * 1024,
+		});
 	});
 
 	it("keeps emission behavior fixed while the soft target changes", () => {

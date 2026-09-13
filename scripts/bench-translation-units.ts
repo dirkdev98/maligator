@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import {
+	TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
@@ -38,7 +39,7 @@ import {
 	SELF_COMPILE_CONFIG,
 } from "./self-compile-workload.ts";
 
-const HARD_MAXIMUM_CODE_UNITS = 8 * 1024 * 1024;
+const HARD_MAXIMUM_CODE_UNITS = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS;
 const DEFAULT_TARGETS = [512, 1024, 2048, 4096, 8192].map(
 	(kibibytes) => kibibytes * 1024,
 );

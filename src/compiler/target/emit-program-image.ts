@@ -204,14 +204,12 @@ function directEntryDeclaration(
 	return `${cType(entry.resultRepresentation)} ${entry.symbol}(MalVm *vm, MalValue this_value${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, MalEnv *env, MalValue callee)`;
 }
 
-/** Keep native/self-hosted compiler strings comfortably below the 16 MiB engine limit. */
-// Eight MiB accommodates large indivisible dependency functions while staying
-// below the self-host compiler's 16 MiB string ceiling. Splittable functions and
-// data continue to use separate bounded units for native compiler parallelism.
-export const DEFAULT_TRANSLATION_UNIT_CODE_UNITS = 8 * 1024 * 1024;
+export const DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS = 2 * 1024 * 1024;
+/** Keep indivisible definitions below the self-host compiler's 16 MiB string limit. */
+export const TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS = 8 * 1024 * 1024;
 export const DEFAULT_TRANSLATION_UNIT_POLICY: TranslationUnitPolicy = {
-	targetCodeUnits: DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
-	hardMaximumCodeUnits: DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+	targetCodeUnits: DEFAULT_TRANSLATION_UNIT_TARGET_CODE_UNITS,
+	hardMaximumCodeUnits: TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
 };
 
 function stringCodeUnitsBody(constant: Array<number>): string {
@@ -1376,7 +1374,7 @@ export function emitProgramTranslationUnits(
 export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
-	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+	maxCodeUnits = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
 ): Array<GeneratedTranslationUnit> {
 	if (!/^[0-9a-f]{64}$/.test(wireDigest)) {
 		throw new Error(
