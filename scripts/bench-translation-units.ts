@@ -55,6 +55,8 @@ interface Options {
 	readonly coldRuns: number;
 	readonly runtimeRuns: number;
 	readonly output: string;
+	readonly phase: "all" | "sweep" | "validation";
+	readonly validationTargetCodeUnits?: number;
 }
 
 interface SanitizedObjectMeasurement {
@@ -188,6 +190,8 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 	let runtimeRuns = 3;
 	let output = DEFAULT_OUTPUT;
 	let targets = DEFAULT_TARGETS;
+	let phase: Options["phase"] = "all";
+	let validationTargetCodeUnits: number | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const argument = args[index]!;
 		if (argument === "--cold-runs") {
@@ -207,6 +211,13 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 		} else if (argument === "--quick") {
 			coldRuns = 1;
 			runtimeRuns = 1;
+		} else if (argument === "--sweep-only") {
+			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
+			phase = "sweep";
+		} else if (argument === "--validate-target-kib") {
+			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
+			phase = "validation";
+			validationTargetCodeUnits = positiveInteger(args[++index], argument) * 1024;
 		} else if (argument === "--help") {
 			console.log(`Usage: node scripts/bench-translation-units.ts [options]
 
@@ -214,23 +225,34 @@ function parseOptions(args: ReadonlyArray<string>): Options {
   --runtime-runs N    runtime samples per target/workload (default 3)
   --targets-kib LIST  comma-separated soft targets (default 512,1024,2048,4096,8192)
   --output PATH       report destination (default .cache/translation-units/report.json)
-  --quick             one cold and runtime sample for harness smoke testing`);
+  --quick             one cold and runtime sample for harness smoke testing
+  --sweep-only        stop after target selection and runtime gates
+  --validate-target-kib N
+                      skip the sweep; measure LTO, locality, and giant functions`);
 			process.exit(0);
 		} else {
 			throw new Error(`unknown option ${argument}`);
 		}
 	}
-	if (!targets.includes(HARD_MAXIMUM_CODE_UNITS)) {
+	if (phase !== "validation" && !targets.includes(HARD_MAXIMUM_CODE_UNITS)) {
 		throw new Error("the target sweep must include the current 8192 KiB control");
 	}
 	if (targets.some((target) => target > HARD_MAXIMUM_CODE_UNITS)) {
 		throw new Error("a soft target cannot exceed the 8192 KiB hard maximum");
+	}
+	if (
+		validationTargetCodeUnits !== undefined &&
+		validationTargetCodeUnits > HARD_MAXIMUM_CODE_UNITS
+	) {
+		throw new Error("the validation target cannot exceed the 8192 KiB hard maximum");
 	}
 	return {
 		targets: [...new Set(targets)].sort((a, b) => a - b),
 		coldRuns,
 		runtimeRuns,
 		output,
+		phase,
+		...(validationTargetCodeUnits === undefined ? {} : { validationTargetCodeUnits }),
 	};
 }
 
@@ -1033,80 +1055,103 @@ function run(options: Options): void {
 	};
 	const persist = () =>
 		writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`);
+	let selectedTargetCodeUnits = options.validationTargetCodeUnits;
+	let diagnostic: BuiltSample | undefined;
 	try {
 		persist();
-		for (let sample = 0; sample < options.coldRuns; sample++) {
-			const offset = sample % options.targets.length;
-			const order = [
-				...options.targets.slice(offset),
-				...options.targets.slice(0, offset),
-			];
-			for (const targetCodeUnits of order) {
-				for (const workload of sample % 2 === 0 ? WORKLOADS : [...WORKLOADS].reverse()) {
-					console.log(
-						`cold ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(targetCodeUnits / 1024)} KiB`,
-					);
-					const variant = `cold-${workload}-${String(targetCodeUnits)}-${String(sample)}`;
-					const built = buildSample({
-						workload,
-						fixture: workloadFixture(workload),
-						config: workloadConfig(workload),
-						targetCodeUnits,
-						sample,
-						production: false,
-						cacheDirectory,
-						outputDirectory,
-						objectCacheVariant: variant,
-						linkCacheVariant: variant,
-						includeInvariants: sample === 0,
-					});
-					if (built.report.objects.some((object) => object.cache !== "miss")) {
-						throw new Error("cold build unexpectedly reused a generated object");
+		if (options.phase !== "validation") {
+			for (let sample = 0; sample < options.coldRuns; sample++) {
+				const offset = sample % options.targets.length;
+				const order = [
+					...options.targets.slice(offset),
+					...options.targets.slice(0, offset),
+				];
+				for (const targetCodeUnits of order) {
+					for (const workload of sample % 2 === 0
+						? WORKLOADS
+						: [...WORKLOADS].reverse()) {
+						console.log(
+							`cold ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(targetCodeUnits / 1024)} KiB`,
+						);
+						const variant = `cold-${workload}-${String(targetCodeUnits)}-${String(sample)}`;
+						const built = buildSample({
+							workload,
+							fixture: workloadFixture(workload),
+							config: workloadConfig(workload),
+							targetCodeUnits,
+							sample,
+							production: false,
+							cacheDirectory,
+							outputDirectory,
+							objectCacheVariant: variant,
+							linkCacheVariant: variant,
+							includeInvariants: sample === 0,
+						});
+						if (built.report.objects.some((object) => object.cache !== "miss")) {
+							throw new Error("cold build unexpectedly reused a generated object");
+						}
+						buildSamples.push(built.report);
+						binaries.set(
+							`${workload}:${String(targetCodeUnits)}`,
+							built.result.binaryPath,
+						);
+						persist();
 					}
-					buildSamples.push(built.report);
-					binaries.set(`${workload}:${String(targetCodeUnits)}`, built.result.binaryPath);
-					persist();
 				}
 			}
-		}
-		removeGeneratedBuildFiles(outputDirectory);
-		const runtimeReferences = prepareRuntimeReferences(temporaryDirectory);
-		report.runtimeReferences = Object.fromEntries(
-			WORKLOADS.map((workload) => [workload, runtimeReferences[workload].checksum]),
-		);
-		for (let sample = 0; sample < options.runtimeRuns; sample++) {
-			const offset = sample % options.targets.length;
-			const order = [
-				...options.targets.slice(offset),
-				...options.targets.slice(0, offset),
-			];
-			for (const targetCodeUnits of order) {
-				for (const workload of sample % 2 === 0 ? WORKLOADS : [...WORKLOADS].reverse()) {
-					console.log(
-						`runtime ${String(sample + 1)}/${String(options.runtimeRuns)} ${workload} ${String(targetCodeUnits / 1024)} KiB`,
-					);
-					const binary = binaries.get(`${workload}:${String(targetCodeUnits)}`)!;
-					const measured = runtimeReferences[workload].run(binary, sample);
-					runtimeSamples.push({ ...measured, targetCodeUnits });
-					persist();
+			removeGeneratedBuildFiles(outputDirectory);
+			const runtimeReferences = prepareRuntimeReferences(temporaryDirectory);
+			report.runtimeReferences = Object.fromEntries(
+				WORKLOADS.map((workload) => [workload, runtimeReferences[workload].checksum]),
+			);
+			for (let sample = 0; sample < options.runtimeRuns; sample++) {
+				const offset = sample % options.targets.length;
+				const order = [
+					...options.targets.slice(offset),
+					...options.targets.slice(0, offset),
+				];
+				for (const targetCodeUnits of order) {
+					for (const workload of sample % 2 === 0
+						? WORKLOADS
+						: [...WORKLOADS].reverse()) {
+						console.log(
+							`runtime ${String(sample + 1)}/${String(options.runtimeRuns)} ${workload} ${String(targetCodeUnits / 1024)} KiB`,
+						);
+						const binary = binaries.get(`${workload}:${String(targetCodeUnits)}`)!;
+						const measured = runtimeReferences[workload].run(binary, sample);
+						runtimeSamples.push({ ...measured, targetCodeUnits });
+						persist();
+					}
 				}
 			}
+			const targetSummaries = summarizeTargets(
+				options.targets,
+				buildSamples,
+				runtimeSamples,
+				runtimeReferences,
+			);
+			report.gateThresholds = GATE_THRESHOLDS;
+			report.targetSummaries = targetSummaries;
+			const selected = targetSummaries
+				.filter((summary) => summary.accepted)
+				.sort((left, right) => left.cToObjectWallMs - right.cToObjectWallMs)[0];
+			if (selected === undefined)
+				throw new Error("no translation-unit target passed the gates");
+			selectedTargetCodeUnits = selected.targetCodeUnits;
+			report.selectedTargetCodeUnits = selectedTargetCodeUnits;
+			if (options.phase === "sweep") {
+				report.status = "passed";
+				report.completedAt = new Date().toISOString();
+				persist();
+				console.log(options.output);
+				return;
+			}
+			persist();
 		}
-		const targetSummaries = summarizeTargets(
-			options.targets,
-			buildSamples,
-			runtimeSamples,
-			runtimeReferences,
-		);
-		report.gateThresholds = GATE_THRESHOLDS;
-		report.targetSummaries = targetSummaries;
-		const selected = targetSummaries
-			.filter((summary) => summary.accepted)
-			.sort((left, right) => left.cToObjectWallMs - right.cToObjectWallMs)[0];
-		if (selected === undefined)
-			throw new Error("no translation-unit target passed the gates");
-		report.selectedTargetCodeUnits = selected.targetCodeUnits;
-		persist();
+		if (selectedTargetCodeUnits === undefined) {
+			throw new Error("validation requires a selected translation-unit target");
+		}
+		report.selectedTargetCodeUnits = selectedTargetCodeUnits;
 
 		const ltoSamples: Array<BuildSample> = [];
 		for (let sample = 0; sample < options.coldRuns; sample++) {
@@ -1114,14 +1159,14 @@ function run(options: Options): void {
 				for (const production of sample % 2 === 0 ? [false, true] : [true, false]) {
 					const mode = production ? "production" : "no-lto";
 					console.log(
-						`${mode} ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(selected.targetCodeUnits / 1024)} KiB`,
+						`${mode} ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(selectedTargetCodeUnits / 1024)} KiB`,
 					);
 					const variant = `lto-${mode}-${workload}-${String(sample)}`;
 					const built = buildSample({
 						workload,
 						fixture: workloadFixture(workload),
 						config: workloadConfig(workload),
-						targetCodeUnits: selected.targetCodeUnits,
+						targetCodeUnits: selectedTargetCodeUnits,
 						sample,
 						production,
 						cacheDirectory,
@@ -1130,6 +1175,9 @@ function run(options: Options): void {
 						linkCacheVariant: variant,
 					});
 					ltoSamples.push(built.report);
+					if (!production && sample === 0 && workload === "self-compile") {
+						diagnostic = built;
+					}
 					report.ltoSamples = ltoSamples;
 					persist();
 				}
@@ -1138,25 +1186,18 @@ function run(options: Options): void {
 
 		console.log("incremental locality and ThinLTO relink scenarios");
 		report.incremental = runIncrementalScenarios({
-			targetCodeUnits: selected.targetCodeUnits,
+			targetCodeUnits: selectedTargetCodeUnits,
 			cacheDirectory,
 			temporaryDirectory,
 		});
 		persist();
 
 		console.log("pathological giant-function screening");
-		const diagnostic = buildSample({
-			workload: "self-compile",
-			fixture: SELF_COMPILE_FIXTURE,
-			config: SELF_COMPILE_CONFIG,
-			targetCodeUnits: selected.targetCodeUnits,
-			sample: 0,
-			production: false,
-			cacheDirectory,
-			outputDirectory,
-		});
+		if (diagnostic === undefined) {
+			throw new Error("validation omitted the self-compile development sample");
+		}
 		const selectedPolicy = {
-			targetCodeUnits: selected.targetCodeUnits,
+			targetCodeUnits: selectedTargetCodeUnits,
 			hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
 		};
 		const selectedUnits = emitProgramTranslationUnits(
@@ -1170,10 +1211,11 @@ function run(options: Options): void {
 		);
 		report.giantFunctionExperiment = runGiantFunctionExperiment({
 			units: selectedUnits,
-			measurements: buildSamples.filter(
+			measurements: [...buildSamples, ...ltoSamples].filter(
 				(sample) =>
 					sample.workload === "self-compile" &&
-					sample.targetCodeUnits === selected.targetCodeUnits,
+					sample.targetCodeUnits === selectedTargetCodeUnits &&
+					sample.mode === "development",
 			),
 			context: diagnostic.result.context,
 			temporaryDirectory,
