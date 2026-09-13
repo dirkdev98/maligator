@@ -15,11 +15,15 @@ export interface TestTelemetryEvent {
 	config?: string;
 	unit?: string;
 	role?: "generated" | "driver";
+	generatedKind?: "runtime-image" | "data" | "code";
 	sourceBytes?: number;
 	objectBytes?: number;
 	userCpuMs?: number;
 	systemCpuMs?: number;
 	peakRssBytes?: number;
+	scheduledCompileDurationMs?: number;
+	largestDefinition?: string;
+	largestDefinitionCodeUnits?: number;
 }
 
 /** Emit one completed native-test span when the enclosing gate requests telemetry. */

@@ -779,11 +779,12 @@ function compileAndBuild(
 			maligatorSurface: buildConfig.surface.maligator,
 		}),
 	);
-	if (command.kind === "build" && command.internal.emitC) log.info(output.join("\n"));
+	if (command.kind === "build" && command.internal.emitC)
+		log.info(output.map((unit) => unit.source).join("\n"));
 	reporter.detail("Translation units", output.length);
 	reporter.detail(
 		"Generated C bytes",
-		output.reduce((total, source) => total + source.length, 0),
+		output.reduce((total, unit) => total + unit.source.length, 0),
 	);
 	const binaryPath = reporter.phase(
 		"Build native binary",
@@ -797,8 +798,15 @@ function compileAndBuild(
 				onGeneratedObject: (event) => {
 					generatedObjects++;
 					if (event.cache === "hit") generatedObjectHits++;
+					const largestDefinitions = [...(event.definitions ?? [])]
+						.sort((left, right) => right.sourceCodeUnits - left.sourceCodeUnits)
+						.slice(0, 3)
+						.map(
+							(definition) =>
+								`${definition.symbol} ${formatCacheBytes(definition.sourceCodeUnits)}`,
+						);
 					reporter.detail(
-						`Generated C object · ${event.unit}`,
+						`Generated C object · ${event.generatedKind ?? event.role} · ${event.unit}`,
 						[
 							`${event.cache} · source ${formatCacheBytes(event.sourceBytes)} · object ${formatCacheBytes(event.objectBytes)}`,
 							event.compileDurationMs === null
@@ -809,6 +817,12 @@ function compileAndBuild(
 							event.peakRssBytes === undefined
 								? undefined
 								: `peak RSS ${formatCacheBytes(event.peakRssBytes)}`,
+							event.scheduledCompileDurationMs === undefined
+								? undefined
+								: `scheduled from ${event.scheduledCompileDurationMs.toFixed(1)} ms estimate`,
+							largestDefinitions.length === 0
+								? undefined
+								: `largest definitions ${largestDefinitions.join(", ")}`,
 							event.path,
 						]
 							.filter((part) => part !== undefined)

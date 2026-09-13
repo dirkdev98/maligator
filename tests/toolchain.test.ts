@@ -26,6 +26,7 @@ import { nativeBuildJobs, runNativeCommands } from "../src/native-command.ts";
 import {
 	compilerNativeOverlayEnabled,
 	ensureNativeArtifacts,
+	generatedHeaderDependencyHash,
 	runtimeArtifactKey,
 	runtimeHeaderHash,
 } from "../src/runtime-build.ts";
@@ -356,6 +357,7 @@ exit 7
 			c2x: true,
 			lto: true,
 			ltoFlags: ["-flto=thin"],
+			thinLtoCache: "lld",
 			strip: true,
 			cxxLink: true,
 		});
@@ -595,7 +597,11 @@ exit 7
 		expect(invocations).toContain("runtime/src/vm.c");
 		expect(invocations).toContain("ar rcs");
 		expect(invocations).toContain(`${binary}.c`);
-		expect(invocations).toContain(`${binary}.part-1.c`);
+		expect(invocations).toMatch(
+			new RegExp(
+				`${binary.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.source-[a-f0-9]+\\.c`,
+			),
+		);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
 		expect(phases.map((phase) => phase.phase)).toEqual([
@@ -717,8 +723,8 @@ exit 7
 		build("int second_value;");
 		expect(events.map((event) => event.cache)).toEqual(["miss", "miss", "miss"]);
 		expect(events.map((event) => event.unit)).toEqual([
-			"<generated>/0.c",
-			"<generated>/1.c",
+			expect.stringMatching(/^source-[a-f0-9]{16}$/),
+			expect.stringMatching(/^source-[a-f0-9]{16}$/),
 			"<runtime>/test262_main.c",
 		]);
 		expect(events.every((event) => event.sourceBytes > 0 && event.objectBytes > 0)).toBe(
@@ -749,6 +755,83 @@ exit 7
 		events.length = 0;
 		build("int changed_value;");
 		expect(events.map((event) => event.cache)).toEqual(["hit", "miss", "hit"]);
+	});
+
+	it("keeps generated object cache reuse local to stable typed unit identities", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		writeFileSync(
+			path.join(runtimeDirectory, "src/code-only.h"),
+			"#define CODE_ONLY_ABI 1\n",
+		);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const context = resolveNativeBuildContext({
+			toolchain,
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "stable-unit-cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		const events: Array<GeneratedObjectMeasurement> = [];
+		const build = (codeSource: string) =>
+			buildLocalBinary({
+				context,
+				name: "stable-units",
+				cSource: [
+					{
+						id: "data-010",
+						kind: "data",
+						source: "int data_value;",
+						headerFiles: ["vm.h"],
+						definitions: [
+							{ kind: "data array", symbol: "data_value", sourceCodeUnits: 15 },
+						],
+					},
+					{
+						id: "code-101",
+						kind: "code",
+						source: codeSource,
+						headerFiles: ["vm.h", "code-only.h"],
+						definitions: [
+							{ kind: "compiled function", symbol: "code_value", sourceCodeUnits: 15 },
+						],
+					},
+				],
+				verbose: false,
+				outDir: fake.root,
+				onGeneratedObject: (event) => events.push(event),
+			});
+
+		build("int code_value;");
+		expect(events.map((event) => event.cache)).toEqual(["miss", "miss", "miss"]);
+		events.length = 0;
+		build("int changed_code_value;");
+		expect(events.map((event) => [event.unit, event.cache])).toEqual([
+			["data-010", "hit"],
+			["code-101", "miss"],
+			["<runtime>/test262_main.c", "hit"],
+		]);
+		expect(events[1]!.scheduledCompileDurationMs).toBeGreaterThanOrEqual(0);
+
+		events.length = 0;
+		writeFileSync(
+			path.join(runtimeDirectory, "src/code-only.h"),
+			"#define CODE_ONLY_ABI 2\n",
+		);
+		build("int changed_code_value;");
+		expect(
+			events
+				.filter((event) => event.role === "generated")
+				.map((event) => [event.unit, event.cache]),
+		).toEqual([
+			["data-010", "hit"],
+			["code-101", "miss"],
+		]);
 	});
 
 	it("uses one production plan for archive/final LTO and post-link stripping", () => {
@@ -785,6 +868,7 @@ exit 7
 		const invocations = readFileSync(fake.logPath, "utf-8");
 		expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/vm\.c/);
 		expect(invocations).toContain(`-O2 -g0 -flto=thin`);
+		expect(invocations).toContain("-Wl,--thinlto-cache-dir=");
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
 		const compilations = invocations.split("\n").filter((line) => line.includes(" -c "));
 		expect(compilations.length).toBeGreaterThan(0);
@@ -971,6 +1055,20 @@ exit 7
 		expect(afterInclude).not.toBe(afterHeader);
 		writeFileSync(include, "ENTRY(other)\n");
 		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(afterInclude);
+	});
+
+	it("narrows generated header identity to each transitive include closure", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		writeFileSync(path.join(runtimeDirectory, "src/vm.h"), '#include "value.h"\n');
+		writeFileSync(path.join(runtimeDirectory, "src/value.h"), "#define VALUE_ABI 1\n");
+		writeFileSync(path.join(runtimeDirectory, "src/code-only.h"), "#define CODE_ABI 1\n");
+
+		const initial = generatedHeaderDependencyHash(runtimeDirectory, ["vm.h"]);
+		writeFileSync(path.join(runtimeDirectory, "src/code-only.h"), "#define CODE_ABI 2\n");
+		expect(generatedHeaderDependencyHash(runtimeDirectory, ["vm.h"])).toBe(initial);
+		writeFileSync(path.join(runtimeDirectory, "src/value.h"), "#define VALUE_ABI 2\n");
+		expect(generatedHeaderDependencyHash(runtimeDirectory, ["vm.h"])).not.toBe(initial);
 	});
 
 	it("isolates the SQLite amalgamation from runtime header names", () => {

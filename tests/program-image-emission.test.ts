@@ -35,6 +35,20 @@ import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-im
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+function emitProgramTranslationUnitSources(
+	image: ProgramImage,
+	options: Parameters<typeof emitProgramTranslationUnits>[1] = {},
+	maximum?: number,
+): Array<string> {
+	return emitProgramTranslationUnits(
+		image,
+		options,
+		maximum === undefined
+			? undefined
+			: { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum },
+	).map((unit) => unit.source);
+}
+
 function malFunctionRows(source: string): Array<Array<string>> {
 	return [...source.matchAll(/^\s+MAL_FUNCTION_ROW\((.*)\),$/gm)].map((match) =>
 		match[1]!.split(", "),
@@ -429,12 +443,12 @@ describe("emit-program-image instruction packing", () => {
 		};
 		const interpreted = emitProgramImage(specialized, { compiled: false });
 		const compiled = emitProgramImage(specialized, { compiled: true });
-		const split = emitProgramTranslationUnits(
+		const split = emitProgramTranslationUnitSources(
 			specialized,
 			{ compiled: true },
 			Number.MAX_SAFE_INTEGER,
 		).join("\n");
-		const splitInterpreted = emitProgramTranslationUnits(
+		const splitInterpreted = emitProgramTranslationUnitSources(
 			specialized,
 			{ compiled: false },
 			Number.MAX_SAFE_INTEGER,
@@ -530,7 +544,7 @@ describe("emit-program-image instruction packing", () => {
 			},
 		};
 		expect(() => emitProgramImage(malformed)).toThrow(/invalid known-own-slot access/);
-		expect(() => emitProgramTranslationUnits(malformed)).toThrow(
+		expect(() => emitProgramTranslationUnitSources(malformed)).toThrow(
 			/invalid known-own-slot access/,
 		);
 
@@ -673,7 +687,7 @@ describe("emit-program-image instruction packing", () => {
 			native: createConservativeNativePlan(functions),
 		};
 		const budget = 24_000;
-		const units = emitProgramTranslationUnits(splitDefinition, {}, budget);
+		const units = emitProgramTranslationUnitSources(splitDefinition, {}, budget);
 
 		expect(units.length).toBeGreaterThan(2);
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
@@ -699,6 +713,147 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("keeps emission behavior fixed while the soft target changes", () => {
+		const functions = Array.from({ length: 24 }, () => ({
+			...fn,
+			instructions: [...fn.instructions],
+		}));
+		const image = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+			},
+			native: createConservativeNativePlan(functions),
+		};
+		const emit = (targetCodeUnits: number) =>
+			emitProgramTranslationUnits(
+				image,
+				{},
+				{
+					targetCodeUnits,
+					hardMaximumCodeUnits: 200_000,
+				},
+			);
+		const small = emit(12_000);
+		const large = emit(80_000);
+		const behavior = (units: ReturnType<typeof emit>) => ({
+			runtime: units.find((unit) => unit.kind === "runtime-image")!.source,
+			definitions: units
+				.flatMap((unit) => unit.definitions)
+				.map((item) => `${item.kind}:${item.symbol}:${item.sourceCodeUnits}`)
+				.sort(),
+		});
+
+		expect(behavior(small)).toEqual(behavior(large));
+		expect(small.length).toBeGreaterThan(large.length);
+		expect(small.some((unit) => unit.kind === "data")).toBe(true);
+		expect(small.some((unit) => unit.kind === "code")).toBe(true);
+		for (const unit of small) {
+			expect(
+				unit.definitions.every((definition) =>
+					unit.kind === "code"
+						? definition.kind === "compiled function"
+						: definition.kind === "data array",
+				),
+			).toBe(true);
+		}
+	});
+
+	it("keeps a definition above the soft target native and isolated", () => {
+		const instructions = [
+			...Array.from({ length: 200 }, () => ({
+				opcode: "CALL" as const,
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				argumentCount: 0,
+				arguments: [],
+			})),
+			{ opcode: "RETURN" as const, value: 0 },
+		];
+		const functions = [{ ...fn, capturedCount: 0, registerCount: 3, instructions }];
+		const units = emitProgramTranslationUnits(
+			{
+				...definition,
+				runtime: {
+					...definition.runtime,
+					functionCount: 1,
+					functions,
+				},
+				native: createConservativeNativePlan(functions),
+			},
+			{},
+			{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 200_000 },
+		);
+		const compiledUnit = units.find((unit) =>
+			unit.definitions.some((item) => item.symbol === "mal_compiled_0"),
+		)!;
+
+		expect(compiledUnit.source.length).toBeGreaterThan(20_000);
+		expect(compiledUnit.definitions).toHaveLength(1);
+		expect(compiledUnit.kind).toBe("code");
+		expect(units.map((unit) => unit.source).join("\n")).toContain(
+			"MalValue mal_compiled_0(MalVm *vm",
+		);
+	});
+
+	it("keeps hash-partitioned unit identities local when one function grows", () => {
+		const functions = Array.from({ length: 64 }, () => ({
+			...fn,
+			instructions: [...fn.instructions],
+		}));
+		const image = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+			},
+			native: createConservativeNativePlan(functions),
+		};
+		const changedFunctions = functions.with(10, {
+			...functions[10]!,
+			registerCount: 3,
+			instructions: [
+				...Array.from({ length: 20 }, () => ({
+					opcode: "CALL" as const,
+					dst: 0,
+					callee: 1,
+					thisValue: 2,
+					argumentCount: 0,
+					arguments: [],
+				})),
+				{ opcode: "RETURN" as const, value: 0 },
+			],
+		});
+		const changed = {
+			...image,
+			runtime: { ...image.runtime, functions: changedFunctions },
+			native: createConservativeNativePlan(changedFunctions),
+		};
+		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const locations = (value: ProgramImage) =>
+			new Map(
+				emitProgramTranslationUnits(value, {}, policy).flatMap((unit) =>
+					unit.kind === "code"
+						? unit.definitions.map((item) => [item.symbol, unit.id] as const)
+						: [],
+				),
+			);
+		const before = locations(image);
+		const after = locations(changed);
+		const following = [...before].filter(([symbol]) => {
+			const match = /^mal_compiled_(\d+)$/.exec(symbol);
+			return match !== null && Number(match[1]) > 10;
+		});
+		const stable = following.filter(([symbol, id]) => after.get(symbol) === id);
+
+		expect(stable.length).toBeGreaterThan(0);
+		expect(stable.length).toBeGreaterThan(following.length / 2);
+	});
+
 	it("charges split units only for declarations they reference", () => {
 		const functions = Array.from({ length: 400 }, () => ({
 			...fn,
@@ -711,7 +866,7 @@ describe("emit-program-image instruction packing", () => {
 			[...String(index).padEnd(40, "x")].map((character) => character.charCodeAt(0)),
 		);
 		const budget = 100_000;
-		const units = emitProgramTranslationUnits(
+		const units = emitProgramTranslationUnitSources(
 			{
 				...definition,
 				runtime: {
@@ -751,7 +906,7 @@ describe("emit-program-image instruction packing", () => {
 				{ opcode: "RETURN", value: 0 },
 			],
 		};
-		const units = emitProgramTranslationUnits(
+		const units = emitProgramTranslationUnitSources(
 			{
 				...definition,
 				runtime: {
@@ -790,7 +945,7 @@ describe("emit-program-image instruction packing", () => {
 			native: createConservativeNativePlan(functions),
 		};
 		const budget = 30_000;
-		const units = emitProgramTranslationUnits(
+		const units = emitProgramTranslationUnitSources(
 			splitDefinition,
 			{ compiled: false },
 			budget,
@@ -826,7 +981,7 @@ describe("emit-program-image instruction packing", () => {
 			[...String(index).padEnd(80, "x")].map((character) => character.charCodeAt(0)),
 		);
 		const budget = 100_000;
-		const units = emitProgramTranslationUnits(
+		const units = emitProgramTranslationUnitSources(
 			{
 				...definition,
 				runtime: {
@@ -878,7 +1033,7 @@ describe("emit-program-image instruction packing", () => {
 				instructions,
 			},
 		];
-		const units = emitProgramTranslationUnits(
+		const units = emitProgramTranslationUnitSources(
 			{
 				...definition,
 				runtime: {
@@ -903,7 +1058,7 @@ describe("emit-program-image instruction packing", () => {
 	it("keeps canonical and typed entry size limits independent at call sites", () => {
 		const image = nativeEntryBudgetImage();
 		const emit = (value: ProgramImage, budget: number) =>
-			emitProgramTranslationUnits(value, {}, budget).join("\n");
+			emitProgramTranslationUnitSources(value, {}, budget).join("\n");
 		expect(emit(image, 60_000)).toContain("mal_direct_1_0(vm,");
 		const bounded = emit(image, 15_000);
 		expect(bounded).not.toContain("mal_direct_1_0");
@@ -936,7 +1091,7 @@ describe("emit-program-image instruction packing", () => {
 			directEntries: [],
 		}));
 		const emit = (budget: number) =>
-			emitProgramTranslationUnits(image, {}, budget).join("\n");
+			emitProgramTranslationUnitSources(image, {}, budget).join("\n");
 		expect(emit(60_000)).toMatch(
 			/mal_vm_call_function_call_direct_compiled\(vm, &__cc_\d+, 1, mal_compiled_1,/,
 		);
@@ -981,10 +1136,10 @@ describe("emit-program-image instruction packing", () => {
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
-		expect(() => emitProgramTranslationUnits(definition, {}, 0)).toThrow(
+		expect(() => emitProgramTranslationUnitSources(definition, {}, 0)).toThrow(
 			/positive integer/,
 		);
-		expect(() => emitProgramTranslationUnits(definition, {}, 100)).toThrow(
+		expect(() => emitProgramTranslationUnitSources(definition, {}, 100)).toThrow(
 			/generated runtime-image translation unit/,
 		);
 	});
@@ -1012,9 +1167,9 @@ describe("emit-program-image instruction packing", () => {
 			native: createConservativeNativePlan([relocatableFunction]),
 		};
 		const digest = "a".repeat(64);
-		const output = emitRelocatableNativeOverlayTranslationUnits(relocatable, digest).join(
-			"\n",
-		);
+		const output = emitRelocatableNativeOverlayTranslationUnits(relocatable, digest)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(output).toContain(`.wire_digest = "${digest}"`);
 		expect(output).toContain("mal_eval_compiler_native_entries");

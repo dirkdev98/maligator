@@ -41,6 +41,7 @@ import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "./compiler/target/emit-program-image.ts";
+import type { TranslationUnitPolicy } from "./compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { cacheFrontendWire } from "./frontend-cache.ts";
@@ -176,10 +177,12 @@ export interface BuildOptions {
 	/** Use the probed production native plan (LTO and stripping where supported). */
 	production?: boolean;
 	/**
-	 * Emit bounded translation units for large native fixtures. This uses the same
-	 * parallel, independently cached generated-object path as product builds.
+	 * Emit bounded, independently cached translation units. Defaults to true so
+	 * internal fixtures exercise the same object-cache path as product builds.
 	 */
 	translationUnits?: boolean;
+	/** Override deterministic generated-unit sizing for measurement experiments. */
+	translationUnitPolicy?: TranslationUnitPolicy;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -198,6 +201,10 @@ export interface BuildOptions {
 	coreOptimizationBenchmarkAblation?: CoreOptimizationBenchmarkAblation;
 	/** Override the native artifact root for isolated build-cost measurements. */
 	cacheDirectory?: string;
+	/** Isolate generated-object samples without rebuilding runtime archives. */
+	nativeObjectCacheVariant?: string;
+	/** Isolate final-link samples while retaining generated-object reuse. */
+	nativeLinkCacheVariant?: string;
 	/** Observe native artifact reuse without suppressing harness telemetry. */
 	onNativeCacheEvent?: (event: BuildCacheEvent) => void;
 	/** Observe generated C object measurement and reuse. */
@@ -358,9 +365,10 @@ function linkProgramImage(
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 	};
-	const cSource = options.translationUnits
-		? emitProgramTranslationUnits(image, emitOptions)
-		: emitProgramImage(image, emitOptions);
+	const cSource =
+		options.translationUnits === false
+			? emitProgramImage(image, emitOptions)
+			: emitProgramTranslationUnits(image, emitOptions, options.translationUnitPolicy);
 	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
 	return buildLocalBinary({
 		context,
@@ -370,7 +378,12 @@ function linkProgramImage(
 		mainFile: options.mainFile,
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
+		objectCacheVariant: options.nativeObjectCacheVariant,
+		linkCacheVariant: options.nativeLinkCacheVariant,
 		onGeneratedObject: (event) => {
+			const largestDefinition = [...(event.definitions ?? [])].sort(
+				(left, right) => right.sourceCodeUnits - left.sourceCodeUnits,
+			)[0];
 			recordTestTelemetry({
 				phase: "generated object cache",
 				label: options.fixture,
@@ -380,11 +393,15 @@ function linkProgramImage(
 				config: cacheSuffix || "default",
 				unit: event.unit,
 				role: event.role,
+				generatedKind: event.generatedKind,
 				sourceBytes: event.sourceBytes,
 				objectBytes: event.objectBytes,
 				userCpuMs: event.userCpuMs ?? undefined,
 				systemCpuMs: event.systemCpuMs ?? undefined,
 				peakRssBytes: event.peakRssBytes,
+				scheduledCompileDurationMs: event.scheduledCompileDurationMs,
+				largestDefinition: largestDefinition?.symbol,
+				largestDefinitionCodeUnits: largestDefinition?.sourceCodeUnits,
 			});
 			options.onGeneratedObject?.(event);
 		},

@@ -22,8 +22,13 @@ import { buildDerivationFromConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { createCacheLease } from "./cache-management.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import {
+	GENERATED_DATA_C_HEADER_LINES,
+	NATIVE_C_HEADER_LINES,
+} from "./compiler/target/emit-program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
+import { generatedHeaderDependencyHash } from "./runtime-build.ts";
 import { rustSourceDigest } from "./rust-build.ts";
 import { requireWasmToolchain, toolArguments } from "./toolchain.ts";
 import type { WasmToolchain } from "./toolchain.ts";
@@ -107,7 +112,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 		// Bump a stage protocol when output behavior changes beyond its keyed command recipe.
 		const producers = {
 			"wasm-source": source.producer,
-			"wasm-object": artifactProducer("wasm-object", 3, "clang"),
+			"wasm-object": artifactProducer("wasm-object", 4, "clang"),
 			"wasm-archive": artifactProducer("wasm-archive", 3, "llvm-ar"),
 			"wasm-rust": artifactProducer("wasm-rust", 2, "cargo-build"),
 			"wasm-link": artifactProducer("wasm-link", 3, "clang-link"),
@@ -206,6 +211,21 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			],
 			include: (file) => /\.(?:h|inc)$/.test(file.name),
 		});
+		const directHeaderFiles = (lines: ReadonlyArray<string>): Array<string> =>
+			lines.flatMap((line) => {
+				const match = /^#include "([^"]+)"$/.exec(line);
+				return match === null ? [] : [match[1]!];
+			});
+		const generatedHeaderHashes = {
+			data: generatedHeaderDependencyHash(
+				runtime,
+				directHeaderFiles(GENERATED_DATA_C_HEADER_LINES),
+			),
+			code: generatedHeaderDependencyHash(
+				runtime,
+				directHeaderFiles(NATIVE_C_HEADER_LINES),
+			),
+		};
 		const rustHash = rustSourceDigest(path.join(runtime, "rust"));
 		const { sourceIdentity, compilerHash } = source;
 		const generated = action(
@@ -214,23 +234,28 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			(directory) => {
 				log("Compiling the engine entry to C");
 				const units = source.compile(log);
-				return units.map((source, index) => {
-					const name = `unit-${String(index).padStart(4, "0")}.c`;
+				return units.map((unit) => {
+					const name = `unit-${unit.id}.c`;
 					const file = path.join(directory, name);
-					writeFileSync(file, source);
+					writeFileSync(file, unit.source);
 					return { name, file };
 				});
 			},
 		);
 		log(`Compiling ${generated.outputs.length} generated C units and the engine runtime`);
-		const compileObject = (file: string, digest: string) =>
+		const compileObject = (
+			file: string,
+			digest: string,
+			identity: string,
+			dependencies: string,
+		) =>
 			artifactOutput(
 				action(
 					"wasm-object",
 					{
 						digest,
-						headerHash,
-						file: normalizeRuntimeBuildArgument(runtime, file),
+						headerDependencies: dependencies,
+						identity,
 						toolchain: toolchain.fingerprint,
 						command: [...identityFlags, "-x", "c", "-c", "<source>", "-o", "<object>"],
 					},
@@ -249,7 +274,15 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 				"object.o",
 			);
 		const objects = generated.outputs.map((output, index) => {
-			const object = compileObject(output.path, output.digest);
+			const unitId = output.name.slice("unit-".length, -".c".length);
+			const object = compileObject(
+				output.path,
+				output.digest,
+				unitId,
+				unitId.startsWith("code-")
+					? generatedHeaderHashes.code
+					: generatedHeaderHashes.data,
+			);
 			if ((index + 1) % 10 === 0)
 				log(`Generated C: ${index + 1}/${generated.outputs.length}`);
 			return object;
@@ -259,7 +292,12 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			.sort()
 			.map((name, index) => {
 				const file = path.join(runtime, "src", name);
-				const object = compileObject(file, artifactDigest(readFileSync(file)));
+				const object = compileObject(
+					file,
+					artifactDigest(readFileSync(file)),
+					normalizeRuntimeBuildArgument(runtime, file),
+					headerHash,
+				);
 				if ((index + 1) % 20 === 0) log(`Engine C: ${index + 1} units`);
 				return object;
 			});
@@ -360,7 +398,12 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			"rust.a",
 		);
 		const bridgePath = path.join(runtime, "embedding/wasm.c");
-		const bridge = compileObject(bridgePath, artifactDigest(readFileSync(bridgePath)));
+		const bridge = compileObject(
+			bridgePath,
+			artifactDigest(readFileSync(bridgePath)),
+			normalizeRuntimeBuildArgument(runtime, bridgePath),
+			headerHash,
+		);
 		const linkFlags = [
 			"-mexec-model=reactor",
 			"-Wl,-z,stack-size=16777216",

@@ -36,9 +36,11 @@ describe("checked numeric leaf activation", () => {
 			const mixedSource = emitProgramTranslationUnits(
 				built.programImage,
 				{ compiled: true, debugInfo: false },
-				32768,
+				{ targetCodeUnits: 32768, hardMaximumCodeUnits: 32768 },
 			);
-			expect(mixedSource.join("\n")).toContain("mal_function_0_instructions");
+			expect(mixedSource.map((unit) => unit.source).join("\n")).toContain(
+				"mal_function_0_instructions",
+			);
 			const mixed = buildLocalBinary({
 				context: built.context,
 				name: "leaf-mixed",

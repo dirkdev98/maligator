@@ -25,7 +25,7 @@ function fixture(failure: "none" | "output" | "timeout" = "none") {
 			"src/compiler/frontend/compact-type-strip.ts":
 				"export const stripCompactTypes = (source) => source;",
 			"src/compiler/target/emit-program-image.ts":
-				"export const emitProgramTranslationUnits = (image) => [image];",
+				"export const emitProgramTranslationUnits = (image) => [{ id: 'runtime-image', source: image }];",
 			"src/compiler/pipeline/compile-program.ts": `
 import { readFileSync } from 'node:fs';
 export function compileEntrypoint(input) {
@@ -119,7 +119,10 @@ it("compares both compiler revisions on frozen baseline input, preserving altern
 	]);
 	for (const sample of report.samples) expect(sample.peakRssBytes).toBeGreaterThan(0);
 	expect(
-		readFileSync(path.join(test.output, "pair-1-candidate/output/unit-0.c"), "utf8"),
+		readFileSync(
+			path.join(test.output, "pair-1-candidate/output/unit-runtime-image.c"),
+			"utf8",
+		),
 	).toBe("frozen baseline application input");
 });
 
@@ -129,7 +132,10 @@ it("rejects changed generated output without counting the failed sample as a pai
 	expect(test.report()).toMatchObject({ status: "failed", complete: false, pairs: [] });
 	expect(test.report().error).toContain("output differs");
 	expect(
-		readFileSync(path.join(test.output, "warm-candidate/output/unit-0.c"), "utf8"),
+		readFileSync(
+			path.join(test.output, "warm-candidate/output/unit-runtime-image.c"),
+			"utf8",
+		),
 	).toBe("wrong generated output");
 });
 

@@ -207,7 +207,7 @@ function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): st
 		directories: [path.join(sourceDirectory, "compiler")],
 		include: (entry) => isCompilerSource(entry.name),
 		prefix: [
-			"compiler-native-overlay-v2\0",
+			"compiler-native-overlay-v3\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
 			"\0",
 			sourceKey,
@@ -365,13 +365,15 @@ function ensureSourceArtifacts(
 			outputDigest,
 			COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS,
 		);
-		const files = sources.map(
-			(_source, index) => `compiler-native-${String(index).padStart(4, "0")}.c`,
-		);
-		for (const [index, source] of sources.entries()) {
-			publishFile(directory, files[index]!, source);
+		const files = sources.map((unit) => `compiler-${unit.id}.c`);
+		for (const [index, unit] of sources.entries()) {
+			publishFile(directory, files[index]!, unit.source);
 		}
-		native = { key: nativeKey, digest: nativeArtifactDigest(sources), files };
+		native = {
+			key: nativeKey,
+			digest: nativeArtifactDigest(sources.map((unit) => unit.source)),
+			files,
+		};
 	}
 	requireNonemptyWire(bytes);
 	const outputDigest = hash("sha256", bytes, "hex");

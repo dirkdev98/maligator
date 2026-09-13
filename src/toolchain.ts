@@ -13,7 +13,7 @@ import {
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 
-const CACHE_SCHEMA = 1;
+const CACHE_SCHEMA = 2;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAG_CANDIDATES = [["-flto=thin"], ["-flto"]];
 
@@ -39,6 +39,7 @@ export interface ToolchainProbes {
 	c2x: boolean;
 	lto: boolean;
 	ltoFlags: Array<string>;
+	thinLtoCache: "darwin" | "lld" | null;
 	strip: boolean;
 	cxxLink: boolean;
 	stripArgs: Array<string>;
@@ -246,6 +247,9 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 		typeof probes.lto === "boolean" &&
 		Array.isArray(probes.ltoFlags) &&
 		probes.ltoFlags.every((item) => typeof item === "string") &&
+		(probes.thinLtoCache === null ||
+			probes.thinLtoCache === "darwin" ||
+			probes.thinLtoCache === "lld") &&
 		typeof probes.strip === "boolean" &&
 		typeof probes.cxxLink === "boolean" &&
 		Array.isArray(probes.stripArgs) &&
@@ -514,6 +518,49 @@ function probeCapabilities(
 		}
 	}
 	const lto = ltoFlags.length > 0;
+	let thinLtoCache: ToolchainProbes["thinLtoCache"] = null;
+	if (ltoFlags.includes("-flto=thin")) {
+		const candidates: Array<{
+			kind: Exclude<ToolchainProbes["thinLtoCache"], null>;
+			argument: (directory: string) => string;
+		}> = [
+			...(platform === "darwin"
+				? [
+						{
+							kind: "darwin" as const,
+							argument: (directory: string) => `-Wl,-cache_path_lto,${directory}`,
+						},
+					]
+				: []),
+			{
+				kind: "lld",
+				argument: (directory) => `-Wl,--thinlto-cache-dir=${directory}`,
+			},
+		];
+		for (const candidate of candidates) {
+			const directory = path.join(probeDir, `thinlto-cache-${candidate.kind}`);
+			mkdirSync(directory, { recursive: true });
+			if (
+				compile(
+					tools.cc,
+					[
+						...C2X_FLAGS,
+						...ltoFlags,
+						candidate.argument(directory),
+						"lto-main.o",
+						"liblto-probe.a",
+						"-o",
+						"thinlto-cache-probe",
+					],
+					probeDir,
+					env,
+				)
+			) {
+				thinLtoCache = candidate.kind;
+				break;
+			}
+		}
+	}
 
 	let cxxLink = !needsCxx;
 	let cxxLinkArgs: Array<string> = [];
@@ -580,7 +627,16 @@ function probeCapabilities(
 		}
 	}
 
-	return { c2x, lto, ltoFlags, strip, cxxLink, stripArgs, cxxLinkArgs };
+	return {
+		c2x,
+		lto,
+		ltoFlags,
+		thinLtoCache,
+		strip,
+		cxxLink,
+		stripArgs,
+		cxxLinkArgs,
+	};
 }
 
 function rustHostTarget(
@@ -1035,6 +1091,11 @@ export function formatToolchainReport(
 		lines.push(`[${report.probes.c2x ? "ok" : "required"}] C2x compile/link`);
 		lines.push(`[${report.probes.cxxLink ? "ok" : "required"}] C++ runtime link`);
 		lines.push(`[${report.probes.lto ? "ok" : "optional"}] LTO compile/archive/link`);
+		lines.push(
+			`[${report.probes.thinLtoCache === null ? "optional" : "ok"}] ThinLTO cache${
+				report.probes.thinLtoCache === null ? "" : ` (${report.probes.thinLtoCache})`
+			}`,
+		);
 		lines.push(`[${report.probes.strip ? "ok" : "optional"}] symbol stripping`);
 		lines.push(
 			`Probe cache: ${report.cacheHit ? "hit" : "miss"} (${report.fingerprint})`,

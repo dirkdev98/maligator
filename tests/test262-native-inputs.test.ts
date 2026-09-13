@@ -40,6 +40,7 @@ describe("Test262 native build inputs", () => {
 					c2x: true,
 					lto: false,
 					ltoFlags: [],
+					thinLtoCache: null,
 					strip: false,
 					cxxLink: false,
 					stripArgs: [],

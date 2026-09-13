@@ -399,7 +399,14 @@ test("profile remarks classify closed direct calls as applied compiled calls", (
 		}
 		globalThis.keep = outer;
 	`);
-	emitProgramTranslationUnits(definition, {}, Number.MAX_SAFE_INTEGER);
+	emitProgramTranslationUnits(
+		definition,
+		{},
+		{
+			targetCodeUnits: Number.MAX_SAFE_INTEGER,
+			hardMaximumCodeUnits: Number.MAX_SAFE_INTEGER,
+		},
+	);
 
 	expect(definition.diagnostics.profileRemarks).toContainEqual(
 		expect.objectContaining({

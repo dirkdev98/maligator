@@ -51,6 +51,7 @@ export interface NativeBuildPlan {
 	mode: "development" | "production";
 	lto: boolean;
 	ltoFlags: ReadonlyArray<string>;
+	thinLtoCache: "darwin" | "lld" | null;
 	strip: boolean;
 	warnings: Array<string>;
 }
@@ -221,7 +222,14 @@ export function selectNativeBuildPlan(
 	production: boolean,
 ): NativeBuildPlan {
 	if (!production) {
-		return { mode: "development", lto: false, ltoFlags: [], strip: false, warnings: [] };
+		return {
+			mode: "development",
+			lto: false,
+			ltoFlags: [],
+			thinLtoCache: null,
+			strip: false,
+			warnings: [],
+		};
 	}
 	const warnings: Array<string> = [];
 	if (!toolchain.probes.lto) {
@@ -238,6 +246,7 @@ export function selectNativeBuildPlan(
 		mode: "production",
 		lto: toolchain.probes.lto,
 		ltoFlags: toolchain.probes.ltoFlags,
+		thinLtoCache: toolchain.probes.thinLtoCache,
 		strip: toolchain.probes.strip && toolchain.tools.strip !== undefined,
 		warnings,
 	};

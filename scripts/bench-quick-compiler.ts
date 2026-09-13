@@ -33,12 +33,12 @@ const image = compileEntrypoint(input, {
 });
 const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
 mkdirSync(output, { recursive: true });
-for (const [index, unit] of units.entries()) {
-	writeFileSync(path.join(output, `unit-${index}.c`), unit);
+for (const unit of units) {
+	writeFileSync(path.join(output, `unit-${unit.id}.c`), unit.source);
 }
 console.log(
 	JSON.stringify({
 		units: units.length,
-		codeUnits: units.reduce((sum, unit) => sum + unit.length, 0),
+		codeUnits: units.reduce((sum, unit) => sum + unit.source.length, 0),
 	}),
 );

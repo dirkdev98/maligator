@@ -36,7 +36,9 @@ describe("native body reachability", () => {
 			expect(index).toBeGreaterThan(0);
 			for (const source of [
 				emitProgramImage(image),
-				emitProgramTranslationUnits(image).join("\n"),
+				emitProgramTranslationUnits(image)
+					.map((unit) => unit.source)
+					.join("\n"),
 			]) {
 				expect(source).toContain(`mal_direct_${index}_0(`);
 				expect(source).not.toContain(`mal_compiled_${index}(`);

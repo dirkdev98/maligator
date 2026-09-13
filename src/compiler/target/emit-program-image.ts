@@ -146,6 +146,42 @@ export const NATIVE_C_HEADER_LINES = [
 	"",
 ];
 
+export const GENERATED_DATA_C_HEADER_LINES = [
+	"#include <string.h>",
+	'#include "vm.h"',
+	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
+	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
+	"#define MAL_SOURCE_POS(line_value, column_value, inlined_function_index_value, caller_pos_id_value) { .line = line_value, .column = column_value, .inlined_function_index = inlined_function_index_value, .caller_pos_id = caller_pos_id_value }",
+	"#if MAL_PROFILE",
+	"#define MAL_FUNCTION_PROFILE_SITE(value) .profile_site_ids = value,",
+	"#else",
+	"#define MAL_FUNCTION_PROFILE_SITE(value)",
+	"#endif",
+	MAL_FUNCTION_ROW_MACRO,
+	"",
+];
+
+export type GeneratedTranslationUnitKind = "runtime-image" | "data" | "code";
+
+export interface GeneratedTranslationUnitDefinition {
+	readonly kind: "data array" | "compiled function";
+	readonly symbol: string;
+	readonly sourceCodeUnits: number;
+}
+
+export interface GeneratedTranslationUnit {
+	readonly id: string;
+	readonly kind: GeneratedTranslationUnitKind;
+	readonly source: string;
+	readonly headerFiles: ReadonlyArray<string>;
+	readonly definitions: ReadonlyArray<GeneratedTranslationUnitDefinition>;
+}
+
+export interface TranslationUnitPolicy {
+	readonly targetCodeUnits: number;
+	readonly hardMaximumCodeUnits: number;
+}
+
 const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
@@ -173,6 +209,10 @@ function directEntryDeclaration(
 // below the self-host compiler's 16 MiB string ceiling. Splittable functions and
 // data continue to use separate bounded units for native compiler parallelism.
 export const DEFAULT_TRANSLATION_UNIT_CODE_UNITS = 8 * 1024 * 1024;
+export const DEFAULT_TRANSLATION_UNIT_POLICY: TranslationUnitPolicy = {
+	targetCodeUnits: DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+	hardMaximumCodeUnits: DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+};
 
 function stringCodeUnitsBody(constant: Array<number>): string {
 	return `{ ${constant.length > 0 ? constant.join(", ") : "0"} }`;
@@ -1099,30 +1139,52 @@ function emitProgramImageSource(
 	return { source: lines.join("\n"), compiled };
 }
 
-/**
- * Emit one runtime-image/table translation unit plus bounded data and
- * compiled-function units.
- *
- * The native product compiler cannot materialize strings above 16 MiB. Keeping
- * compiled functions and leaf data arrays out of the runtime-image unit avoids that
- * ceiling and lets the C driver compile large programs as independent translation
- * units. A single generated function or array is indivisible; reject one that
- * exceeds the configured budget with a bounded diagnostic.
- */
+function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {
+	return lines.flatMap((line) => {
+		const match = /^#include "([^"]+)"$/.exec(line);
+		return match === null ? [] : [match[1]!];
+	});
+}
+
+function stablePartitionHash(value: string, round: number): number {
+	let hash = (0x811c9dc5 ^ Math.imul(round + 1, 0x9e3779b1)) >>> 0;
+	for (let index = 0; index < value.length; index++) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash;
+}
+
+/** Emit one runtime-image unit plus edit-local data and compiled-function units. */
 export function emitProgramTranslationUnits(
 	image: ProgramImage,
 	options: EmitOptions = {},
-	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
-): Array<string> {
-	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
-		throw new RangeError("translation-unit code-unit budget must be a positive integer");
-	}
-	const emitted = emitProgramImageSource(image, options, true, maxCodeUnits);
-	const splitData = externalizeDataArrays(emitted.source, maxCodeUnits);
-	if (splitData.source.length > maxCodeUnits) {
+	policy: TranslationUnitPolicy = DEFAULT_TRANSLATION_UNIT_POLICY,
+): Array<GeneratedTranslationUnit> {
+	const { targetCodeUnits, hardMaximumCodeUnits } = policy;
+	if (
+		!Number.isSafeInteger(targetCodeUnits) ||
+		targetCodeUnits <= 0 ||
+		!Number.isSafeInteger(hardMaximumCodeUnits) ||
+		hardMaximumCodeUnits <= 0 ||
+		targetCodeUnits > hardMaximumCodeUnits
+	) {
 		throw new RangeError(
-			`generated runtime-image translation unit has ${splitData.source.length} code units; ` +
-				`maximum is ${maxCodeUnits}`,
+			"translation-unit target and hard maximum must be positive integers with target <= maximum",
+		);
+	}
+	const emitted = emitProgramImageSource(
+		image,
+		{ ...options, includeHeader: false },
+		true,
+		hardMaximumCodeUnits,
+	);
+	const splitData = externalizeDataArrays(emitted.source, hardMaximumCodeUnits);
+	const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, splitData.source].join("\n");
+	if (runtimeSource.length > hardMaximumCodeUnits) {
+		throw new RangeError(
+			`generated runtime-image translation unit has ${runtimeSource.length} code units; ` +
+				`maximum is ${hardMaximumCodeUnits}`,
 		);
 	}
 
@@ -1170,90 +1232,120 @@ export function emitProgramTranslationUnits(
 		return { ...part, declarations };
 	};
 	const unitSource = (
+		headerLines: ReadonlyArray<string>,
 		parts: Array<TranslationUnitPart>,
-		referenced: Set<string>,
 	): string => {
+		const referenced = new Set(parts.flatMap((part) => [...part.declarations]));
 		const declarations = generatedDeclarations
 			.filter((declaration) => referenced.has(declaration.symbol))
 			.map((declaration) => declaration.source);
 		return [
-			...NATIVE_C_HEADER_LINES,
+			...headerLines,
 			...declarations,
 			"",
 			...parts.map((part) => part.source),
 		].join("\n");
 	};
-	const units = [splitData.source];
-	let parts: Array<TranslationUnitPart> = [];
-	let referenced = new Set<string>();
-	let declarationCodeUnits = 0;
-	let bodyCodeUnits = 0;
-	const baseHeaderCodeUnits = NATIVE_C_HEADER_LINES.reduce(
-		(total, line) => total + line.length + 1,
-		0,
-	);
-	const flush = (): void => {
-		if (parts.length === 0) return;
-		units.push(unitSource(parts, referenced));
-		parts = [];
-		referenced = new Set();
-		declarationCodeUnits = 0;
-		bodyCodeUnits = 0;
-	};
-	const additionalDeclarationCodeUnits = (part: TranslationUnitPart): number => {
-		let codeUnits = 0;
-		for (const symbol of part.declarations) {
-			if (!referenced.has(symbol)) {
-				codeUnits += declarationsBySymbol.get(symbol)!.source.length + 1;
+	const partition = (
+		kind: "data" | "code",
+		headerLines: ReadonlyArray<string>,
+		inputs: Array<Omit<TranslationUnitPart, "declarations">>,
+	): Array<GeneratedTranslationUnit> => {
+		const prepared = inputs.map(preparePart);
+		const units: Array<GeneratedTranslationUnit> = [];
+		const visit = (
+			parts: Array<TranslationUnitPart>,
+			prefix: string,
+			depth: number,
+		): void => {
+			if (parts.length === 0) return;
+			const source = unitSource(headerLines, parts);
+			if (source.length <= targetCodeUnits || parts.length === 1) {
+				if (source.length > hardMaximumCodeUnits) {
+					const part = parts[0]!;
+					throw new RangeError(
+						`generated ${part.kind} '${part.symbol}' has ${part.source.length} code units ` +
+							`and requires ${source.length} including its declarations; ` +
+							`translation-unit maximum is ${hardMaximumCodeUnits}`,
+					);
+				}
+				units.push({
+					id: `${kind}-${prefix || "root"}`,
+					kind,
+					source,
+					headerFiles: generatedHeaderFiles(headerLines),
+					definitions: parts.map((part) => ({
+						kind: part.kind,
+						symbol: part.symbol,
+						sourceCodeUnits: part.source.length,
+					})),
+				});
+				return;
 			}
-		}
-		return codeUnits;
+
+			const left: Array<TranslationUnitPart> = [];
+			const right: Array<TranslationUnitPart> = [];
+			if (depth >= 256) {
+				const ordered = [...parts].sort((a, b) =>
+					a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
+				);
+				const middle = Math.floor(ordered.length / 2);
+				visit(ordered.slice(0, middle), `${prefix}0`, depth + 1);
+				visit(ordered.slice(middle), `${prefix}1`, depth + 1);
+				return;
+			}
+			const round = Math.floor(depth / 32);
+			const bit = depth % 32;
+			for (const part of parts) {
+				const target =
+					((stablePartitionHash(`${part.kind}:${part.symbol}`, round) >>> bit) & 1) === 0
+						? left
+						: right;
+				target.push(part);
+			}
+			if (left.length === 0 || right.length === 0) {
+				visit(parts, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
+				return;
+			}
+			visit(left, `${prefix}0`, depth + 1);
+			visit(right, `${prefix}1`, depth + 1);
+		};
+		visit(prepared, "", 0);
+		return units;
 	};
-	const append = (input: Omit<TranslationUnitPart, "declarations">): void => {
-		const part = preparePart(input);
-		let addedDeclarations = additionalDeclarationCodeUnits(part);
-		let candidateCodeUnits =
-			baseHeaderCodeUnits +
-			declarationCodeUnits +
-			addedDeclarations +
-			bodyCodeUnits +
-			part.source.length +
-			1;
-		if (candidateCodeUnits > maxCodeUnits) {
-			flush();
-			addedDeclarations = additionalDeclarationCodeUnits(part);
-			candidateCodeUnits =
-				baseHeaderCodeUnits + addedDeclarations + part.source.length + 1;
-		}
-		if (candidateCodeUnits > maxCodeUnits) {
-			throw new RangeError(
-				`generated ${part.kind} '${part.symbol}' has ${part.source.length} code units ` +
-					`and requires ${candidateCodeUnits} including its declarations; ` +
-					`translation-unit maximum is ${maxCodeUnits}`,
-			);
-		}
-		for (const symbol of part.declarations) referenced.add(symbol);
-		declarationCodeUnits += addedDeclarations;
-		bodyCodeUnits += part.source.length + 1;
-		parts.push(part);
-	};
-	for (const data of splitData.definitions) {
-		append({ kind: "data array", symbol: data.symbol, source: data.source });
-	}
+	const dataParts = splitData.definitions.map((data) => ({
+		kind: "data array" as const,
+		symbol: data.symbol,
+		source: data.source,
+	}));
+	const codeParts: Array<Omit<TranslationUnitPart, "declarations">> = [];
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
 		if (fn.source.length > 0)
-			append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
+			codeParts.push({
+				kind: "compiled function",
+				symbol: fn.symbol,
+				source: fn.source,
+			});
 		for (const entry of fn.directEntries) {
-			append({
+			codeParts.push({
 				kind: "compiled function",
 				symbol: entry.symbol,
 				source: entry.source,
 			});
 		}
 	}
-	flush();
-	return units;
+	return [
+		{
+			id: "runtime-image",
+			kind: "runtime-image",
+			source: runtimeSource,
+			headerFiles: generatedHeaderFiles(GENERATED_DATA_C_HEADER_LINES),
+			definitions: [],
+		},
+		...partition("data", GENERATED_DATA_C_HEADER_LINES, dataParts),
+		...partition("code", NATIVE_C_HEADER_LINES, codeParts),
+	];
 }
 
 /** Emit only relocation-aware native entries for a runtime image loaded from wire. */
@@ -1261,7 +1353,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
 	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
-): Array<string> {
+): Array<GeneratedTranslationUnit> {
 	if (!/^[0-9a-f]{64}$/.test(wireDigest)) {
 		throw new Error(
 			`native overlay wire digest must be lowercase SHA-256: ${wireDigest}`,
@@ -1303,28 +1395,73 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		);
 	}
 
-	const units = [table];
 	const header = NATIVE_C_HEADER_LINES.join("\n");
-	let bodies: Array<string> = [];
-	let codeUnits = header.length + 1;
-	const flush = (): void => {
-		if (bodies.length === 0) return;
-		units.push([header, ...bodies].join("\n"));
-		bodies = [];
-		codeUnits = header.length + 1;
-	};
-	for (const fn of compiled) {
-		if (fn === null) continue;
-		if (codeUnits + fn.source.length + 1 > maxCodeUnits) flush();
-		if (codeUnits + fn.source.length + 1 > maxCodeUnits) {
-			throw new RangeError(
-				`generated compiled function '${fn.symbol}' requires ${codeUnits + fn.source.length + 1} code units; translation-unit maximum is ${maxCodeUnits}`,
+	const headerFiles = generatedHeaderFiles([
+		...NATIVE_C_HEADER_LINES,
+		'#include "compiler_native.h"',
+	]);
+	const units: Array<GeneratedTranslationUnit> = [
+		{
+			id: "native-overlay-table",
+			kind: "code",
+			source: table,
+			headerFiles,
+			definitions: [],
+		},
+	];
+	const bodies = compiled.filter((fn): fn is CompiledFunction => fn !== null);
+	const visit = (
+		functions: Array<CompiledFunction>,
+		prefix: string,
+		depth: number,
+	): void => {
+		if (functions.length === 0) return;
+		const source = [header, ...functions.map((fn) => fn.source)].join("\n");
+		if (source.length <= maxCodeUnits || functions.length === 1) {
+			if (source.length > maxCodeUnits) {
+				throw new RangeError(
+					`generated compiled function '${functions[0]!.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
+				);
+			}
+			units.push({
+				id: `native-overlay-code-${prefix || "root"}`,
+				kind: "code",
+				source,
+				headerFiles,
+				definitions: functions.map((fn) => ({
+					kind: "compiled function",
+					symbol: fn.symbol,
+					sourceCodeUnits: fn.source.length,
+				})),
+			});
+			return;
+		}
+		const bit = depth % 32;
+		const round = Math.floor(depth / 32);
+		const left: Array<CompiledFunction> = [];
+		const right: Array<CompiledFunction> = [];
+		if (depth >= 256) {
+			const ordered = [...functions].sort((a, b) =>
+				a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
+			);
+			const middle = Math.floor(ordered.length / 2);
+			visit(ordered.slice(0, middle), `${prefix}0`, depth + 1);
+			visit(ordered.slice(middle), `${prefix}1`, depth + 1);
+			return;
+		}
+		for (const fn of functions) {
+			(((stablePartitionHash(fn.symbol, round) >>> bit) & 1) === 0 ? left : right).push(
+				fn,
 			);
 		}
-		bodies.push(fn.source);
-		codeUnits += fn.source.length + 1;
-	}
-	flush();
+		if (left.length === 0 || right.length === 0) {
+			visit(functions, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
+			return;
+		}
+		visit(left, `${prefix}0`, depth + 1);
+		visit(right, `${prefix}1`, depth + 1);
+	};
+	visit(bodies, "", 0);
 	return units;
 }
 

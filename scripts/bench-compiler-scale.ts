@@ -777,8 +777,8 @@ async function compileSample(
 			rss: retained.rss,
 		});
 	}
-	const normalizedUnits = units.map((source) =>
-		source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
+	const normalizedUnits = units.map((unit) =>
+		unit.source.split(benchmarkCase.sourceRoot).join("<compiler-scale-source>"),
 	);
 	const codeUnits = normalizedUnits.reduce((total, source) => total + source.length, 0);
 	return {

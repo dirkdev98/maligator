@@ -99,6 +99,52 @@ export function runtimeHeaderHash(
 	).digest;
 }
 
+/** Hash the transitive runtime-owned include closure of generated C headers. */
+export function generatedHeaderDependencyHash(
+	runtimeDirectory: string,
+	headerFiles: ReadonlyArray<string>,
+): string {
+	const root = path.resolve(runtimeDirectory);
+	const includeDirectories = [
+		path.join(root, "src"),
+		path.join(root, "src/host"),
+		path.join(root, "src/runtime"),
+		path.join(root, "rust/include"),
+		path.join(root, "vendor/llhttp/include"),
+		path.join(root, "vendor/sqlite"),
+	].filter(existsSync);
+	const files = new Map<string, string>();
+	const resolveInclude = (name: string, parent?: string): string | undefined => {
+		const candidates = [
+			...(parent === undefined ? [] : [path.resolve(path.dirname(parent), name)]),
+			...includeDirectories.map((directory) => path.resolve(directory, name)),
+		];
+		return candidates.find(
+			(candidate) =>
+				(candidate === root || candidate.startsWith(`${root}${path.sep}`)) &&
+				existsSync(candidate) &&
+				statSync(candidate).isFile(),
+		);
+	};
+	const visit = (name: string, parent?: string): void => {
+		const file = resolveInclude(name, parent);
+		if (file === undefined || files.has(file)) return;
+		const source = readFileSync(file, "utf-8");
+		files.set(file, artifactDigest(source));
+		for (const match of source.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm)) {
+			visit(match[1]!, file);
+		}
+	};
+	for (const header of headerFiles) visit(header);
+	return artifactDigest(
+		JSON.stringify(
+			[...files]
+				.map(([file, digest]) => [path.relative(root, file), digest] as const)
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+		),
+	);
+}
+
 export function runtimeArtifactKey(inputs: {
 	compilerWireDigest?: string;
 	compilerNativeDigest?: string;
@@ -311,16 +357,14 @@ function runtimeSources(
 			logicalPath: path.posix.join("<runtime>", "vendor", "sqlite", "sqlite3.c"),
 		});
 	}
-	for (const [index, compilerSource] of layout.compilerNativeSources.entries()) {
+	for (const compilerSource of layout.compilerNativeSources) {
+		const name = path.basename(compilerSource);
 		sources.push({
-			name: `compiler-native-${String(index).padStart(4, "0")}.c`,
+			name,
 			path: compilerSource,
 			layer: "engine",
 			layerDirectory: sourceRoot,
-			logicalPath: path.posix.join(
-				"<eval-compiler>",
-				`compiler-native-${String(index).padStart(4, "0")}.c`,
-			),
+			logicalPath: path.posix.join("<eval-compiler>", name),
 		});
 	}
 	return sources;

@@ -240,8 +240,12 @@ describe("normal build frontend cache", () => {
 		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -274,8 +278,12 @@ describe("normal build frontend cache", () => {
 		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -304,8 +312,12 @@ describe("normal build frontend cache", () => {
 		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -338,8 +350,12 @@ describe("normal build frontend cache", () => {
 		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -362,8 +378,12 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage)
+			.map((unit) => unit.source)
+			.join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");

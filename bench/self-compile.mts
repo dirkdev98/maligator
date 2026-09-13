@@ -127,14 +127,15 @@ const units = measure("emitMs", () =>
 measure("writeMs", () => {
 	mkdirSync(outputDirectory, { recursive: true });
 	for (let index = 0; index < units.length; index++) {
-		writeFileSync(path.join(outputDirectory, `self-compile-${index}.c`), units[index]!);
+		const unit = units[index]!;
+		writeFileSync(path.join(outputDirectory, `self-compile-${unit.id}.c`), unit.source);
 	}
 });
 
 console.log(
 	JSON.stringify({
 		units: units.length,
-		codeUnits: units.reduce((total, source) => total + source.length, 0),
+		codeUnits: units.reduce((total, unit) => total + unit.source.length, 0),
 		phases,
 		optimizer: optimizationReport,
 		owners: completeCompilerOptimizationOwners(
@@ -143,7 +144,7 @@ console.log(
 			{
 				inputInstructions: optimizationReport.input.instructions,
 				outputInstructions: optimizationReport.output.instructions,
-				generatedCodeUnits: units.reduce((total, source) => total + source.length, 0),
+				generatedCodeUnits: units.reduce((total, unit) => total + unit.source.length, 0),
 			},
 			runtimePhases as CompilerOptimizationOwnerRuntimePhases,
 		),
