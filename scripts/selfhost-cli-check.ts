@@ -504,26 +504,25 @@ test("interprets async tests with host dependencies", async () => {
 });
 `,
 	);
-	const coldTestOutput = invoke(["test", "example.test.ts"], testOnlyEnv);
+	const repeatedTestArgs = [
+		"test",
+		"example.test.ts",
+		"--run",
+		"interprets async",
+		"--shuffle",
+		"18492",
+		"--repeat",
+		"2",
+	];
+	const coldTestOutput = invoke(repeatedTestArgs, testOnlyEnv);
 	if (
-		!coldTestOutput.includes("1 passed, 0 failed") ||
+		!coldTestOutput.includes("Shuffle seed: 18492") ||
+		!coldTestOutput.includes("2 passed, 0 failed") ||
 		!coldTestOutput.includes("cache miss")
 	) {
 		throw new Error(`cold interpreted test run was not successful:\n${coldTestOutput}`);
 	}
-	const warmTestOutput = invoke(
-		[
-			"test",
-			"example.test.ts",
-			"--run",
-			"interprets async",
-			"--shuffle",
-			"18492",
-			"--repeat",
-			"2",
-		],
-		testOnlyEnv,
-	);
+	const warmTestOutput = invoke(repeatedTestArgs, testOnlyEnv);
 	if (
 		!warmTestOutput.includes("Shuffle seed: 18492") ||
 		!warmTestOutput.includes("2 passed, 0 failed") ||
