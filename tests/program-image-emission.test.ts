@@ -1255,6 +1255,73 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).not.toContain("mal_direct_");
 	});
 
+	it("keeps native-overlay partition identities local across an insertion", () => {
+		const firstNameIndex = definition.runtime.stringConstants.length;
+		const names = Array.from({ length: 64 }, (_, index) => `overlay_${String(index)}`);
+		const stringConstants = [
+			...definition.runtime.stringConstants,
+			...names.map((name) => [...name].map((character) => character.charCodeAt(0))),
+			[..."inserted"].map((character) => character.charCodeAt(0)),
+		];
+		const functions = names.map((_name, index) => ({
+			...fn,
+			nameStringIndex: firstNameIndex + index,
+			instructions: [...fn.instructions],
+		}));
+		const image = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+				stringConstants,
+			},
+			native: createConservativeNativePlan(functions),
+		};
+		const insertedFunctions = [
+			...functions.slice(0, 10),
+			{
+				...fn,
+				nameStringIndex: stringConstants.length - 1,
+				instructions: [...fn.instructions],
+			},
+			...functions.slice(10),
+		];
+		const changed = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				functionCount: insertedFunctions.length,
+				functions: insertedFunctions,
+				stringConstants,
+			},
+			native: createConservativeNativePlan(insertedFunctions),
+		};
+		const locations = (value: ProgramImage) => {
+			const byName = new Map<string, string>();
+			for (const unit of emitRelocatableNativeOverlayTranslationUnits(
+				value,
+				"a".repeat(64),
+				30_000,
+			)) {
+				for (const item of unit.definitions) {
+					const match = /^mal_compiled_(\d+)_eval_compiler$/.exec(item.symbol);
+					if (match === null) continue;
+					const runtimeFunction = value.runtime.functions[Number(match[1])]!;
+					const codeUnits =
+						value.runtime.stringConstants[runtimeFunction.nameStringIndex]!;
+					byName.set(String.fromCharCode(...codeUnits), unit.id);
+				}
+			}
+			return byName;
+		};
+		const before = locations(image);
+		const after = locations(changed);
+		const stable = names.filter((name) => before.get(name) === after.get(name));
+
+		expect(stable.length).toBeGreaterThan((names.length * 3) / 4);
+	});
+
 	it("emits trusted portable root tables only for verified in-process lowering", () => {
 		const source = `
 			function* keep(flag) {

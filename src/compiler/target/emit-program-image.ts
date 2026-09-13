@@ -1448,18 +1448,22 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			definitions: [],
 		},
 	];
-	const bodies = compiled.filter((fn): fn is CompiledFunction => fn !== null);
+	type NativeOverlayFunction = { fn: CompiledFunction; partitionKey: string };
+	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
+	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) =>
+		fn === null ? [] : [{ fn, partitionKey: functionPartitionKeys[index]! }],
+	);
 	const visit = (
-		functions: Array<CompiledFunction>,
+		functions: Array<NativeOverlayFunction>,
 		prefix: string,
 		depth: number,
 	): void => {
 		if (functions.length === 0) return;
-		const source = [header, ...functions.map((fn) => fn.source)].join("\n");
+		const source = [header, ...functions.map(({ fn }) => fn.source)].join("\n");
 		if (source.length <= maxCodeUnits || functions.length === 1) {
 			if (source.length > maxCodeUnits) {
 				throw new RangeError(
-					`generated compiled function '${functions[0]!.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
+					`generated compiled function '${functions[0]!.fn.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
 				);
 			}
 			units.push({
@@ -1467,7 +1471,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				kind: "code",
 				source,
 				headerFiles,
-				definitions: functions.map((fn) => ({
+				definitions: functions.map(({ fn }) => ({
 					kind: "compiled function",
 					symbol: fn.symbol,
 					sourceCodeUnits: fn.source.length,
@@ -1477,11 +1481,19 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		}
 		const bit = depth % 32;
 		const round = Math.floor(depth / 32);
-		const left: Array<CompiledFunction> = [];
-		const right: Array<CompiledFunction> = [];
+		const left: Array<NativeOverlayFunction> = [];
+		const right: Array<NativeOverlayFunction> = [];
 		if (depth >= 256) {
 			const ordered = [...functions].sort((a, b) =>
-				a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
+				a.partitionKey < b.partitionKey
+					? -1
+					: a.partitionKey > b.partitionKey
+						? 1
+						: a.fn.symbol < b.fn.symbol
+							? -1
+							: a.fn.symbol > b.fn.symbol
+								? 1
+								: 0,
 			);
 			const middle = Math.floor(ordered.length / 2);
 			visit(ordered.slice(0, middle), `${prefix}0`, depth + 1);
@@ -1489,9 +1501,10 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			return;
 		}
 		for (const fn of functions) {
-			(((stablePartitionHash(fn.symbol, round) >>> bit) & 1) === 0 ? left : right).push(
-				fn,
-			);
+			(((stablePartitionHash(fn.partitionKey, round) >>> bit) & 1) === 0
+				? left
+				: right
+			).push(fn);
 		}
 		if (left.length === 0 || right.length === 0) {
 			visit(functions, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
