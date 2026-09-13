@@ -40,7 +40,7 @@ import { generatedHeaderDependencyHash, runtimeHeaderHash } from "./runtime-buil
 import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = maligatorBuildDirectory();
-const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 2, "cc");
+const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 3, "cc");
 const GENERATED_OBJECT_COST_PRODUCER = artifactProducer(
 	"generated-object-cost",
 	1,
@@ -176,6 +176,7 @@ interface PendingGeneratedObject {
 	costKey: string;
 	temporaryObject: string;
 	sourcePath: string;
+	logicalSourcePath: string;
 	sourceBytes: number;
 	scheduleCost: number;
 	scheduledCompileDurationMs?: number;
@@ -301,6 +302,8 @@ function ensureGeneratedObjects(
 			costKey,
 			temporaryObject: path.join(temporaryDirectory, `${String(index)}.o`),
 			sourcePath: input.sourcePath,
+			logicalSourcePath:
+				input.role === "generated" ? `<generated>/${input.unitId}.c` : input.unitId,
 			sourceBytes,
 			scheduleCost: scheduledCompileDurationMs ?? sourceBytes,
 			...(scheduledCompileDurationMs === undefined ? {} : { scheduledCompileDurationMs }),
@@ -318,7 +321,7 @@ function ensureGeneratedObjects(
 				tool: context.toolchain.tools.cc.path,
 				args: toolArguments(context.toolchain.tools.cc, [
 					...compileArguments,
-					`-ffile-prefix-map=${path.dirname(entry.sourcePath)}=<generated>`,
+					`-ffile-prefix-map=${entry.sourcePath}=${entry.logicalSourcePath}`,
 					"-c",
 					entry.sourcePath,
 					"-o",

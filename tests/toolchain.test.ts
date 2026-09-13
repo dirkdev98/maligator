@@ -739,6 +739,9 @@ exit 7
 					(event.peakRssBytes ?? 0) > 0,
 			),
 		).toBe(true);
+		const firstCompileLog = readFileSync(fake.logPath, "utf-8");
+		expect(firstCompileLog).toContain("=<generated>/");
+		expect(firstCompileLog).toContain("=<runtime>/test262_main.c");
 
 		events.length = 0;
 		writeFileSync(fake.logPath, "");
