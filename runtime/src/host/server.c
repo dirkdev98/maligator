@@ -597,11 +597,33 @@ static void conn_consume_read(MalHttpConn *c, usize consumed) {
  * status line would desynchronize the peer, so the only safe move left is to close. */
 static void conn_stream_error(MalHttpConn *c) {
     if (!c->response_started && !c->response_ended && !c->response_finished) {
+        MalHttpRequestEndCallback request_end_callback = c->request_end_callback;
+        void *request_data = c->request_data;
         MalHttpResponseCompleteCallback response_callback = c->response_callback;
         void *response_data = c->response_data;
+        bool request_stream_open = c->request_stream_open;
+        c->request_read_credit = 0;
+        c->request_stream_open = false;
+        c->request_message_complete = true;
+        c->request_has_body = false;
+        c->request_autoread = false;
+        c->request_discard = false;
+        c->request_released = true;
+        c->request_data_callback = nullptr;
+        c->request_end_callback = nullptr;
+        c->request_data = nullptr;
         c->response_callback = nullptr;
         c->response_data = nullptr;
+        c->in_handler = true;
+        if (request_stream_open && request_end_callback != nullptr) {
+            request_end_callback(request_data, false);
+        }
         if (response_callback != nullptr) response_callback(response_data, false);
+        c->in_handler = false;
+        if (c->close_pending) {
+            conn_close(c);
+            return;
+        }
         conn_send_error(c, 400, "Bad Request");
     } else {
         conn_close(c);
