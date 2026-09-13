@@ -455,9 +455,9 @@ unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are
 then compiled to independently content-addressed objects; unchanged objects are
 relinked without invoking their C compilation again. Definitions are assigned to
-content-derived partitions with a 2 MiB soft target and an 8 MiB hard limit for an
-indivisible definition; code and data units remain separate, and worker count affects
-only scheduling. Normal output reports
+deterministic, edit-local hash partitions with a 2 MiB soft target and an 8 MiB hard
+limit for an indivisible definition; code and data units remain separate, and worker
+count affects only scheduling. Normal output reports
 frontend, generated-C, toolchain, and native cache hit/miss status plus the final
 executable path. Removing
 `.cache/mal-build` forces project output materialization without discarding reusable
