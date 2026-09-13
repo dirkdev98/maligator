@@ -1247,17 +1247,33 @@ export function emitProgramTranslationUnits(
 		}
 		return { ...part, declarations };
 	};
+	const unitDeclarations = (parts: ReadonlyArray<TranslationUnitPart>): Array<string> => {
+		const referenced = new Set(parts.flatMap((part) => [...part.declarations]));
+		return generatedDeclarations
+			.filter((declaration) => referenced.has(declaration.symbol))
+			.map((declaration) => declaration.source);
+	};
+	const unitSourceCodeUnits = (
+		headerLines: ReadonlyArray<string>,
+		parts: ReadonlyArray<TranslationUnitPart>,
+	): number => {
+		const declarations = unitDeclarations(parts);
+		const lineCount = headerLines.length + declarations.length + 1 + parts.length;
+		return (
+			headerLines.reduce((total, line) => total + line.length, 0) +
+			declarations.reduce((total, line) => total + line.length, 0) +
+			parts.reduce((total, part) => total + part.source.length, 0) +
+			lineCount -
+			1
+		);
+	};
 	const unitSource = (
 		headerLines: ReadonlyArray<string>,
 		parts: Array<TranslationUnitPart>,
 	): string => {
-		const referenced = new Set(parts.flatMap((part) => [...part.declarations]));
-		const declarations = generatedDeclarations
-			.filter((declaration) => referenced.has(declaration.symbol))
-			.map((declaration) => declaration.source);
 		return [
 			...headerLines,
-			...declarations,
+			...unitDeclarations(parts),
 			"",
 			...parts.map((part) => part.source),
 		].join("\n");
@@ -1275,8 +1291,9 @@ export function emitProgramTranslationUnits(
 			depth: number,
 		): void => {
 			if (parts.length === 0) return;
-			const source = unitSource(headerLines, parts);
-			if (source.length <= targetCodeUnits || parts.length === 1) {
+			const sourceCodeUnits = unitSourceCodeUnits(headerLines, parts);
+			if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
+				const source = unitSource(headerLines, parts);
 				if (source.length > hardMaximumCodeUnits) {
 					const part = parts[0]!;
 					throw new RangeError(
