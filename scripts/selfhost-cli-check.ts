@@ -8,6 +8,7 @@ import {
 	renameSync,
 	rmSync,
 	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -27,6 +28,7 @@ const tools = path.join(root, "tools");
 const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");
 const noTools = path.join(root, "no-tools");
+const projectNodeModules = path.join(project, "node_modules");
 const configPath = path.join(project, "maligator.build.ts");
 const developmentConfigPath = path.join(project, "maligator.development.build.ts");
 const expressFixturePath = "tests/fixtures/express-5";
@@ -49,6 +51,11 @@ cpSync(
 	path.join(repositoryRoot, expressFixturePath),
 	path.join(project, expressFixturePath),
 	{ recursive: true },
+);
+symlinkSync(
+	path.join(repositoryRoot, "node_modules"),
+	projectNodeModules,
+	process.platform === "win32" ? "junction" : "dir",
 );
 
 const rustup = resolvePathExecutable("rustup", originalPath);
@@ -427,6 +434,7 @@ setTimeout(() => {
 		);
 	}
 	console.log("ok   test exercised Express HTTP behavior with project Mal assets");
+	unlinkSync(projectNodeModules);
 
 	writeFileSync(
 		path.join(project, "minimal-runner.test.ts"),
