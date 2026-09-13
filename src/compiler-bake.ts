@@ -217,6 +217,14 @@ function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): st
 	});
 }
 
+function compilerSourceArtifactKey(sourceKey: string, nativeOverlay: boolean): string {
+	return hash(
+		"sha256",
+		`compiler-source-artifacts-v1\0${nativeOverlay ? "native-overlay" : "portable-wire"}\0${sourceKey}`,
+		"hex",
+	);
+}
+
 function cacheRoot(input: CompilerBakeInput): string {
 	if (input.cacheRoot !== undefined) {
 		return requireAbsolute("compiler-wire cache root", input.cacheRoot);
@@ -429,7 +437,15 @@ export function ensureCompilerArtifacts(input: CompilerBakeInput): CompilerArtif
 		input.sourceDirectory,
 	);
 	const entrypoint = requireAbsolute("compiler source entrypoint", input.entrypoint);
-	const sourceKey = compilerSourceHash(sourceDirectory, entrypoint, input.sourceFiles);
+	const sourceIdentity = compilerSourceHash(
+		sourceDirectory,
+		entrypoint,
+		input.sourceFiles,
+	);
+	const sourceKey = compilerSourceArtifactKey(
+		sourceIdentity,
+		input.bakeProgram !== undefined,
+	);
 	return ensureSourceArtifacts(
 		root,
 		sourceKey,

@@ -237,8 +237,17 @@ describe("compiler wire provisioning", () => {
 				return program;
 			},
 		});
+		const portableWire = ensureCompilerWire({
+			kind: "source",
+			sourceDirectory: fixture.sourceDirectory,
+			entrypoint: fixture.entrypoint,
+			sourceFiles: [fixture.entrypoint, fixture.stripper],
+			cacheRoot,
+			bake: () => new Uint8Array([0x4d, 0x41, 0x4c]),
+		});
 
 		const first = ensureCompilerArtifacts(input());
+		expect(first.wirePath).not.toBe(portableWire);
 		expect(first.nativeSourcePaths.length).toBeGreaterThan(1);
 		expect(programBakes).toBe(1);
 		expect(ensureCompilerArtifacts(input())).toEqual(first);
