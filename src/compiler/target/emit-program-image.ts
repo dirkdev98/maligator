@@ -516,6 +516,7 @@ interface GeneratedDeclaration {
 interface TranslationUnitPart {
 	kind: "data array" | "compiled function";
 	symbol: string;
+	partitionKey: string;
 	source: string;
 	declarations: Set<string>;
 }
@@ -1155,6 +1156,23 @@ function stablePartitionHash(value: string, round: number): number {
 	return hash;
 }
 
+function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
+	const occurrences = new Map<string, number>();
+	return image.runtime.functions.map((fn) => {
+		const name = image.runtime.stringConstants[fn.nameStringIndex] ?? [];
+		const base = JSON.stringify({
+			file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
+			name,
+			async: fn.isAsync,
+			generator: fn.isGenerator,
+			parameters: fn.parameterCount,
+		});
+		const occurrence = occurrences.get(base) ?? 0;
+		occurrences.set(base, occurrence + 1);
+		return `${base}\0${String(occurrence)}`;
+	});
+}
+
 /** Emit one runtime-image unit plus edit-local data and compiled-function units. */
 export function emitProgramTranslationUnits(
 	image: ProgramImage,
@@ -1298,7 +1316,9 @@ export function emitProgramTranslationUnits(
 			const bit = depth % 32;
 			for (const part of parts) {
 				const target =
-					((stablePartitionHash(`${part.kind}:${part.symbol}`, round) >>> bit) & 1) === 0
+					((stablePartitionHash(`${part.kind}:${part.partitionKey}`, round) >>> bit) &
+						1) ===
+					0
 						? left
 						: right;
 				target.push(part);
@@ -1316,21 +1336,25 @@ export function emitProgramTranslationUnits(
 	const dataParts = splitData.definitions.map((data) => ({
 		kind: "data array" as const,
 		symbol: data.symbol,
+		partitionKey: data.source.replaceAll(data.symbol, "<self>"),
 		source: data.source,
 	}));
 	const codeParts: Array<Omit<TranslationUnitPart, "declarations">> = [];
-	for (const fn of emitted.compiled) {
+	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
+	for (const [functionIndex, fn] of emitted.compiled.entries()) {
 		if (fn === null) continue;
 		if (fn.source.length > 0)
 			codeParts.push({
 				kind: "compiled function",
 				symbol: fn.symbol,
+				partitionKey: `${functionPartitionKeys[functionIndex]}\0canonical`,
 				source: fn.source,
 			});
 		for (const entry of fn.directEntries) {
 			codeParts.push({
 				kind: "compiled function",
 				symbol: entry.symbol,
+				partitionKey: `${functionPartitionKeys[functionIndex]}\0direct\0${String(entry.id)}`,
 				source: entry.source,
 			});
 		}
