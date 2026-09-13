@@ -55,7 +55,7 @@ interface Options {
 	readonly coldRuns: number;
 	readonly runtimeRuns: number;
 	readonly output: string;
-	readonly phase: "all" | "sweep" | "validation";
+	readonly phase: "all" | "cold" | "sweep" | "validation";
 	readonly validationPart: "all" | "lto" | "incremental" | "giant";
 	readonly validationTargetCodeUnits?: number;
 }
@@ -213,6 +213,9 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 		} else if (argument === "--quick") {
 			coldRuns = 1;
 			runtimeRuns = 1;
+		} else if (argument === "--cold-only") {
+			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
+			phase = "cold";
 		} else if (argument === "--sweep-only") {
 			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
 			phase = "sweep";
@@ -234,6 +237,7 @@ function parseOptions(args: ReadonlyArray<string>): Options {
   --targets-kib LIST  comma-separated soft targets (default 512,1024,2048,4096,8192)
   --output PATH       report destination (default .cache/translation-units/report.json)
   --quick             one cold and runtime sample for harness smoke testing
+  --cold-only         stop after cold generated-object samples
   --sweep-only        stop after target selection and runtime gates
   --validate-target-kib N
                       skip the sweep; measure LTO, locality, and giant functions
@@ -1136,6 +1140,13 @@ function run(options: Options): void {
 						persist();
 					}
 				}
+			}
+			if (options.phase === "cold") {
+				report.status = "passed";
+				report.completedAt = new Date().toISOString();
+				persist();
+				console.log(options.output);
+				return;
 			}
 			removeGeneratedBuildFiles(outputDirectory);
 			const runtimeReferences = prepareRuntimeReferences(temporaryDirectory);
