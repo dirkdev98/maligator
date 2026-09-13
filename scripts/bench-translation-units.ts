@@ -56,6 +56,7 @@ interface Options {
 	readonly runtimeRuns: number;
 	readonly output: string;
 	readonly phase: "all" | "sweep" | "validation";
+	readonly validationPart: "all" | "lto" | "incremental" | "giant";
 	readonly validationTargetCodeUnits?: number;
 }
 
@@ -191,6 +192,7 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 	let output = DEFAULT_OUTPUT;
 	let targets = DEFAULT_TARGETS;
 	let phase: Options["phase"] = "all";
+	let validationPart: Options["validationPart"] = "all";
 	let validationTargetCodeUnits: number | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const argument = args[index]!;
@@ -218,6 +220,12 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
 			phase = "validation";
 			validationTargetCodeUnits = positiveInteger(args[++index], argument) * 1024;
+		} else if (argument === "--validation-part") {
+			const value = args[++index];
+			if (value !== "lto" && value !== "incremental" && value !== "giant") {
+				throw new Error("--validation-part requires lto, incremental, or giant");
+			}
+			validationPart = value;
 		} else if (argument === "--help") {
 			console.log(`Usage: node scripts/bench-translation-units.ts [options]
 
@@ -228,7 +236,9 @@ function parseOptions(args: ReadonlyArray<string>): Options {
   --quick             one cold and runtime sample for harness smoke testing
   --sweep-only        stop after target selection and runtime gates
   --validate-target-kib N
-                      skip the sweep; measure LTO, locality, and giant functions`);
+                      skip the sweep; measure LTO, locality, and giant functions
+  --validation-part PART
+                      run only lto, incremental, or giant validation`);
 			process.exit(0);
 		} else {
 			throw new Error(`unknown option ${argument}`);
@@ -246,12 +256,16 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 	) {
 		throw new Error("the validation target cannot exceed the 8192 KiB hard maximum");
 	}
+	if (validationPart !== "all" && phase !== "validation") {
+		throw new Error("--validation-part requires --validate-target-kib");
+	}
 	return {
 		targets: [...new Set(targets)].sort((a, b) => a - b),
 		coldRuns,
 		runtimeRuns,
 		output,
 		phase,
+		validationPart,
 		...(validationTargetCodeUnits === undefined ? {} : { validationTargetCodeUnits }),
 	};
 }
@@ -938,7 +952,8 @@ function replaceOptimizationLevel(
 }
 
 function runGiantFunctionExperiment(options: {
-	readonly units: ReadonlyArray<GeneratedTranslationUnit>;
+	readonly selectedUnits: ReadonlyArray<GeneratedTranslationUnit>;
+	readonly screeningUnits: ReadonlyArray<GeneratedTranslationUnit>;
 	readonly measurements: ReadonlyArray<BuildSample>;
 	readonly context: NativeBuildContext;
 	readonly temporaryDirectory: string;
@@ -948,7 +963,7 @@ function runGiantFunctionExperiment(options: {
 	readonly units?: ReadonlyArray<unknown>;
 } {
 	const compileMedians = new Map<string, number>();
-	for (const unit of options.units) {
+	for (const unit of options.selectedUnits) {
 		const samples = options.measurements.flatMap((sample) =>
 			sample.objects
 				.filter((object) => object.unit === unit.id && object.compileDurationMs !== null)
@@ -956,17 +971,39 @@ function runGiantFunctionExperiment(options: {
 		);
 		if (samples.length > 0) compileMedians.set(unit.id, median(samples));
 	}
-	const candidates = options.units
-		.filter(
-			(unit) =>
-				unit.kind === "code" &&
-				unit.definitions.length === 1 &&
-				((unit.definitions[0]?.sourceCodeUnits ?? 0) >= 1024 * 1024 ||
-					(compileMedians.get(unit.id) ?? 0) >= 5000),
-		)
+	const candidates = options.selectedUnits
+		.flatMap((unit) => {
+			if (unit.kind !== "code") return [];
+			const definitions = [...unit.definitions].sort(
+				(left, right) => right.sourceCodeUnits - left.sourceCodeUnits,
+			);
+			const large = definitions.filter(
+				(definition) => definition.sourceCodeUnits >= 1024 * 1024,
+			);
+			const selected =
+				large.length > 0
+					? large
+					: unit.definitions.length === 1 && (compileMedians.get(unit.id) ?? 0) >= 5000
+						? definitions
+						: [];
+			return selected.map((definition) => {
+				const isolated = options.screeningUnits.find(
+					(candidate) =>
+						candidate.kind === "code" &&
+						candidate.definitions.length === 1 &&
+						candidate.definitions[0]?.symbol === definition.symbol,
+				);
+				if (isolated === undefined) {
+					throw new Error(`cannot isolate giant generated function ${definition.symbol}`);
+				}
+				return { unit, definition, isolated };
+			});
+		})
 		.sort(
 			(left, right) =>
-				(compileMedians.get(right.id) ?? 0) - (compileMedians.get(left.id) ?? 0),
+				(compileMedians.get(right.unit.id) ?? 0) -
+					(compileMedians.get(left.unit.id) ?? 0) ||
+				right.definition.sourceCodeUnits - left.definition.sourceCodeUnits,
 		)
 		.slice(0, 3);
 	if (candidates.length === 0) {
@@ -977,9 +1014,9 @@ function runGiantFunctionExperiment(options: {
 		};
 	}
 	const baseArguments = generatedCCompileArguments(options.context);
-	const results = candidates.map((unit) => {
+	const results = candidates.map(({ unit, definition, isolated }) => {
 		const sourcePath = path.join(options.temporaryDirectory, `giant-${unit.id}.c`);
-		writeFileSync(sourcePath, unit.source);
+		writeFileSync(sourcePath, isolated.source);
 		const levels = (["-O2", "-O1"] as const).map((level) => {
 			const samples = [];
 			for (let sample = 0; sample < 3; sample++) {
@@ -1013,7 +1050,8 @@ function runGiantFunctionExperiment(options: {
 		});
 		return {
 			unit: unit.id,
-			definition: unit.definitions[0],
+			isolatedUnit: isolated.id,
+			definition,
 			selectedTargetCompileMedianMs: compileMedians.get(unit.id),
 			levels,
 			conclusion:
@@ -1154,72 +1192,102 @@ function run(options: Options): void {
 		report.selectedTargetCodeUnits = selectedTargetCodeUnits;
 
 		const ltoSamples: Array<BuildSample> = [];
-		for (let sample = 0; sample < options.coldRuns; sample++) {
-			for (const workload of sample % 2 === 0 ? WORKLOADS : [...WORKLOADS].reverse()) {
-				for (const production of sample % 2 === 0 ? [false, true] : [true, false]) {
-					const mode = production ? "production" : "no-lto";
-					console.log(
-						`${mode} ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(selectedTargetCodeUnits / 1024)} KiB`,
-					);
-					const variant = `lto-${mode}-${workload}-${String(sample)}`;
-					const built = buildSample({
-						workload,
-						fixture: workloadFixture(workload),
-						config: workloadConfig(workload),
-						targetCodeUnits: selectedTargetCodeUnits,
-						sample,
-						production,
-						cacheDirectory,
-						outputDirectory,
-						objectCacheVariant: variant,
-						linkCacheVariant: variant,
-					});
-					ltoSamples.push(built.report);
-					if (!production && sample === 0 && workload === "self-compile") {
-						diagnostic = built;
+		if (options.validationPart === "all" || options.validationPart === "lto") {
+			for (let sample = 0; sample < options.coldRuns; sample++) {
+				for (const workload of sample % 2 === 0 ? WORKLOADS : [...WORKLOADS].reverse()) {
+					for (const production of sample % 2 === 0 ? [false, true] : [true, false]) {
+						const mode = production ? "production" : "no-lto";
+						console.log(
+							`${mode} ${String(sample + 1)}/${String(options.coldRuns)} ${workload} ${String(selectedTargetCodeUnits / 1024)} KiB`,
+						);
+						const variant = `lto-${mode}-${workload}-${String(sample)}`;
+						const built = buildSample({
+							workload,
+							fixture: workloadFixture(workload),
+							config: workloadConfig(workload),
+							targetCodeUnits: selectedTargetCodeUnits,
+							sample,
+							production,
+							cacheDirectory,
+							outputDirectory,
+							objectCacheVariant: variant,
+							linkCacheVariant: variant,
+						});
+						ltoSamples.push(built.report);
+						if (!production && sample === 0 && workload === "self-compile") {
+							diagnostic = built;
+						}
+						report.ltoSamples = ltoSamples;
+						persist();
 					}
-					report.ltoSamples = ltoSamples;
-					persist();
 				}
 			}
 		}
 
-		console.log("incremental locality and ThinLTO relink scenarios");
-		report.incremental = runIncrementalScenarios({
-			targetCodeUnits: selectedTargetCodeUnits,
-			cacheDirectory,
-			temporaryDirectory,
-		});
-		persist();
-
-		console.log("pathological giant-function screening");
-		if (diagnostic === undefined) {
-			throw new Error("validation omitted the self-compile development sample");
+		if (options.validationPart === "all" || options.validationPart === "incremental") {
+			console.log("incremental locality and ThinLTO relink scenarios");
+			report.incremental = runIncrementalScenarios({
+				targetCodeUnits: selectedTargetCodeUnits,
+				cacheDirectory,
+				temporaryDirectory,
+			});
+			persist();
 		}
-		const selectedPolicy = {
-			targetCodeUnits: selectedTargetCodeUnits,
-			hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
-		};
-		const selectedUnits = emitProgramTranslationUnits(
-			diagnostic.result.programImage,
-			{
+
+		if (options.validationPart === "all" || options.validationPart === "giant") {
+			console.log("pathological giant-function screening");
+			if (diagnostic === undefined) {
+				diagnostic = buildSample({
+					workload: "self-compile",
+					fixture: SELF_COMPILE_FIXTURE,
+					config: SELF_COMPILE_CONFIG,
+					targetCodeUnits: selectedTargetCodeUnits,
+					sample: 0,
+					production: false,
+					cacheDirectory,
+					outputDirectory,
+					objectCacheVariant: "giant-diagnostic",
+					linkCacheVariant: "giant-diagnostic",
+				});
+				report.giantDiagnostic = diagnostic.report;
+				persist();
+			}
+			const emitOptions = {
 				sourcePath: nativeSourcePath,
 				compiled: true,
 				maligatorSurface: SELF_COMPILE_CONFIG.surface.maligator,
-			},
-			selectedPolicy,
-		);
-		report.giantFunctionExperiment = runGiantFunctionExperiment({
-			units: selectedUnits,
-			measurements: [...buildSamples, ...ltoSamples].filter(
+			};
+			const selectedUnits = emitProgramTranslationUnits(
+				diagnostic.result.programImage,
+				emitOptions,
+				{
+					targetCodeUnits: selectedTargetCodeUnits,
+					hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+				},
+			);
+			const screeningUnits = emitProgramTranslationUnits(
+				diagnostic.result.programImage,
+				emitOptions,
+				{
+					targetCodeUnits: Math.min(selectedTargetCodeUnits, 512 * 1024),
+					hardMaximumCodeUnits: HARD_MAXIMUM_CODE_UNITS,
+				},
+			);
+			const measurements = [...buildSamples, ...ltoSamples].filter(
 				(sample) =>
 					sample.workload === "self-compile" &&
 					sample.targetCodeUnits === selectedTargetCodeUnits &&
 					sample.mode === "development",
-			),
-			context: diagnostic.result.context,
-			temporaryDirectory,
-		});
+			);
+			if (!measurements.includes(diagnostic.report)) measurements.push(diagnostic.report);
+			report.giantFunctionExperiment = runGiantFunctionExperiment({
+				selectedUnits,
+				screeningUnits,
+				measurements,
+				context: diagnostic.result.context,
+				temporaryDirectory,
+			});
+		}
 		report.status = "passed";
 		report.completedAt = new Date().toISOString();
 		persist();
