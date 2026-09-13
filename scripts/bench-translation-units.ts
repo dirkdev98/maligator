@@ -56,7 +56,7 @@ interface Options {
 	readonly coldRuns: number;
 	readonly runtimeRuns: number;
 	readonly output: string;
-	readonly phase: "all" | "cold" | "sweep" | "validation";
+	readonly phase: "all" | "cold" | "runtime" | "sweep" | "validation";
 	readonly validationPart: "all" | "lto" | "incremental" | "giant";
 	readonly validationTargetCodeUnits?: number;
 }
@@ -217,6 +217,9 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 		} else if (argument === "--cold-only") {
 			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
 			phase = "cold";
+		} else if (argument === "--runtime-only") {
+			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
+			phase = "runtime";
 		} else if (argument === "--sweep-only") {
 			if (phase !== "all") throw new Error("benchmark phases are mutually exclusive");
 			phase = "sweep";
@@ -239,6 +242,7 @@ function parseOptions(args: ReadonlyArray<string>): Options {
   --output PATH       report destination (default .cache/translation-units/report.json)
   --quick             one cold and runtime sample for harness smoke testing
   --cold-only         stop after cold generated-object samples
+  --runtime-only      measure raw build and runtime samples without target selection
   --sweep-only        stop after target selection and runtime gates
   --validate-target-kib N
                       skip the sweep; measure LTO, locality, and giant functions
@@ -249,7 +253,11 @@ function parseOptions(args: ReadonlyArray<string>): Options {
 			throw new Error(`unknown option ${argument}`);
 		}
 	}
-	if (phase !== "validation" && !targets.includes(HARD_MAXIMUM_CODE_UNITS)) {
+	if (
+		phase !== "validation" &&
+		phase !== "runtime" &&
+		!targets.includes(HARD_MAXIMUM_CODE_UNITS)
+	) {
 		throw new Error("the target sweep must include the current 8192 KiB control");
 	}
 	if (targets.some((target) => target > HARD_MAXIMUM_CODE_UNITS)) {
@@ -1173,6 +1181,13 @@ function run(options: Options): void {
 						persist();
 					}
 				}
+			}
+			if (options.phase === "runtime") {
+				report.status = "passed";
+				report.completedAt = new Date().toISOString();
+				persist();
+				console.log(options.output);
+				return;
 			}
 			const targetSummaries = summarizeTargets(
 				options.targets,
