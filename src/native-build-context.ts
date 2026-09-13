@@ -47,7 +47,10 @@ export interface NativeBuildCommandEvent {
 }
 
 export interface NativeBuildCommandResourceEvent extends NativeBuildCommandEvent {
-	peakRssBytes: number;
+	durationMs: number;
+	userCpuMs: number;
+	systemCpuMs: number;
+	peakRssBytes?: number;
 }
 
 /** Every resolved input shared by the C archive, Rust archive, and final linker. */

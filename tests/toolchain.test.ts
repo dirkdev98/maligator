@@ -16,6 +16,7 @@ import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-fla
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
+import type { GeneratedObjectMeasurement } from "../src/local-build.ts";
 import {
 	nativeBuildEnvironmentFingerprint,
 	resolveNativeBuildContext,
@@ -553,7 +554,13 @@ exit 7
 			cache?: "hit" | "miss";
 		}> = [];
 		const commands: Array<{ tool: string; args: ReadonlyArray<string> }> = [];
-		const commandResources: Array<{ tool: string; peakRssBytes: number }> = [];
+		const commandResources: Array<{
+			tool: string;
+			durationMs: number;
+			userCpuMs: number;
+			systemCpuMs: number;
+			peakRssBytes?: number;
+		}> = [];
 		const binaryEvents: Array<{ hit: boolean; path: string }> = [];
 		const context = resolveNativeBuildContext({
 			toolchain,
@@ -622,7 +629,17 @@ exit 7
 			),
 		).toBe(true);
 		expect(commandResources.length).toBeGreaterThan(0);
-		expect(commandResources.every((event) => event.peakRssBytes > 0)).toBe(true);
+		expect(commandResources.every((event) => event.durationMs >= 0)).toBe(true);
+		expect(commandResources.every((event) => (event.peakRssBytes ?? 0) > 0)).toBe(true);
+		expect(result.measurements.objects).toHaveLength(3);
+		expect(result.measurements.objects.map((event) => event.role)).toEqual([
+			"generated",
+			"generated",
+			"driver",
+		]);
+		expect(result.measurements.cToObjectDurationMs).toBeGreaterThanOrEqual(0);
+		expect(result.measurements.linkDurationMs).toBeGreaterThanOrEqual(0);
+		expect(result.measurements.linkCache).toBe("miss");
 		expect(binaryEvents.map((event) => event.hit)).toEqual([false]);
 
 		phases.length = 0;
@@ -686,7 +703,7 @@ exit 7
 			cacheDirectory: path.join(fake.root, "cache"),
 			features: { evalEnabled: false, webPlatformEnabled: false },
 		});
-		const events: Array<{ hit: boolean; path: string }> = [];
+		const events: Array<GeneratedObjectMeasurement> = [];
 		const build = (secondSource: string) =>
 			buildLocalBinary({
 				context,
@@ -694,26 +711,44 @@ exit 7
 				cSource: ["int first_value;", secondSource],
 				verbose: false,
 				outDir: fake.root,
-				onGeneratedObjectCacheEvent: (event) => events.push(event),
+				onGeneratedObject: (event) => events.push(event),
 			});
 
 		build("int second_value;");
-		expect(events.map((event) => event.hit)).toEqual([false, false, false]);
+		expect(events.map((event) => event.cache)).toEqual(["miss", "miss", "miss"]);
+		expect(events.map((event) => event.unit)).toEqual([
+			"<generated>/0.c",
+			"<generated>/1.c",
+			"<runtime>/test262_main.c",
+		]);
+		expect(events.every((event) => event.sourceBytes > 0 && event.objectBytes > 0)).toBe(
+			true,
+		);
+		expect(
+			events.every(
+				(event) =>
+					event.compileDurationMs !== null &&
+					event.userCpuMs !== null &&
+					event.systemCpuMs !== null &&
+					(event.peakRssBytes ?? 0) > 0,
+			),
+		).toBe(true);
 
 		events.length = 0;
 		writeFileSync(fake.logPath, "");
 		build("int second_value;");
-		expect(events.map((event) => event.hit)).toEqual([true, true, true]);
+		expect(events.map((event) => event.cache)).toEqual(["hit", "hit", "hit"]);
+		expect(events.every((event) => event.compileDurationMs === null)).toBe(true);
 		expect(readFileSync(fake.logPath, "utf-8")).not.toContain(" -c ");
 
 		writeFileSync(events[0]!.path, "corrupt");
 		events.length = 0;
 		build("int second_value;");
-		expect(events.map((event) => event.hit)).toEqual([false, true, true]);
+		expect(events.map((event) => event.cache)).toEqual(["miss", "hit", "hit"]);
 
 		events.length = 0;
 		build("int changed_value;");
-		expect(events.map((event) => event.hit)).toEqual([true, false, true]);
+		expect(events.map((event) => event.cache)).toEqual(["hit", "miss", "hit"]);
 	});
 
 	it("uses one production plan for archive/final LTO and post-link stripping", () => {

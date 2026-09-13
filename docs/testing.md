@@ -34,6 +34,12 @@ materialized runners live under `<shared-cache>/work/test262`; repository `.cach
 contains reports and retained failure evidence only. Native fixture, WPT, and
 self-hosted gate materializations likewise use process-scoped shared-cache work roots.
 
+Generated-object telemetry records each generated C unit and driver independently:
+source bytes, compile wall and CPU time, peak compiler RSS when the host exposes it,
+object bytes, and shared-cache hit or miss. The enclosing native phases report the
+parallel C-to-object wall time and final-link wall time separately; a cache hit has no
+compile-resource sample rather than attributing cached work to the current build.
+
 ## Worker budgets
 
 Use `npm run test:check -- --workers 4` to set a total allocation, or set

@@ -13,6 +13,13 @@ export interface TestTelemetryEvent {
 	cache?: "hit" | "miss";
 	units?: number;
 	config?: string;
+	unit?: string;
+	role?: "generated" | "driver";
+	sourceBytes?: number;
+	objectBytes?: number;
+	userCpuMs?: number;
+	systemCpuMs?: number;
+	peakRssBytes?: number;
 }
 
 /** Emit one completed native-test span when the enclosing gate requests telemetry. */

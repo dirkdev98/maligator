@@ -45,7 +45,7 @@ import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts"
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { cacheFrontendWire } from "./frontend-cache.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
-import type { LocalBuildResult } from "./local-build.ts";
+import type { GeneratedObjectMeasurement, LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type {
 	BuildCacheEvent,
@@ -200,11 +200,13 @@ export interface BuildOptions {
 	cacheDirectory?: string;
 	/** Observe native artifact reuse without suppressing harness telemetry. */
 	onNativeCacheEvent?: (event: BuildCacheEvent) => void;
+	/** Observe generated C object measurement and reuse. */
+	onGeneratedObject?: (event: GeneratedObjectMeasurement) => void;
 	/** Observe native build phase time, unit, and byte attribution. */
 	onNativeBuildPhase?: (event: NativeBuildPhaseEvent) => void;
-	/** Measure peak RSS for native tool invocations. Benchmark-only due to wrapper cost. */
+	/** Measure non-generated native tools too; generated object compiles are always measured. */
 	measureNativeBuildResources?: boolean;
-	/** Observe measured native command peak RSS, attributed to the built subject. */
+	/** Observe measured native command time, CPU, and peak RSS attributed to the subject. */
 	onNativeCommandResource?: (
 		event: NativeBuildCommandResourceEvent & { readonly subject: string },
 	) => void;
@@ -368,15 +370,24 @@ function linkProgramImage(
 		mainFile: options.mainFile,
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
-		onGeneratedObjectCacheEvent: (event) =>
+		onGeneratedObject: (event) => {
 			recordTestTelemetry({
 				phase: "generated object cache",
 				label: options.fixture,
-				startedAtMs: Date.now(),
-				durationMs: 0,
-				cache: event.hit ? "hit" : "miss",
+				startedAtMs: Date.now() - (event.compileDurationMs ?? 0),
+				durationMs: event.compileDurationMs ?? 0,
+				cache: event.cache,
 				config: cacheSuffix || "default",
-			}),
+				unit: event.unit,
+				role: event.role,
+				sourceBytes: event.sourceBytes,
+				objectBytes: event.objectBytes,
+				userCpuMs: event.userCpuMs ?? undefined,
+				systemCpuMs: event.systemCpuMs ?? undefined,
+				peakRssBytes: event.peakRssBytes,
+			});
+			options.onGeneratedObject?.(event);
+		},
 	});
 }
 

@@ -28,6 +28,7 @@ import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
+import type { NativeCommandMeasurement } from "./native-command.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
 import { runtimeHeaderHash } from "./runtime-build.ts";
@@ -49,6 +50,26 @@ function runnerWorkDirectory(context: NativeBuildContext): string {
 
 export type { BuildCacheEvent } from "./native-build-context.ts";
 
+export interface GeneratedObjectMeasurement {
+	unit: string;
+	role: "generated" | "driver";
+	cache: "hit" | "miss";
+	sourceBytes: number;
+	objectBytes: number;
+	compileDurationMs: number | null;
+	userCpuMs: number | null;
+	systemCpuMs: number | null;
+	peakRssBytes?: number;
+	path: string;
+}
+
+export interface LocalBuildMeasurements {
+	objects: ReadonlyArray<GeneratedObjectMeasurement>;
+	cToObjectDurationMs: number;
+	linkDurationMs: number;
+	linkCache: "hit" | "miss";
+}
+
 export interface LocalBuildOptions {
 	/** The fully resolved native inputs shared by archive construction and this link. */
 	context: NativeBuildContext;
@@ -65,7 +86,7 @@ export interface LocalBuildOptions {
 	/** Human-facing binary filename decoration only; never part of archive identity. */
 	cacheSuffix?: string;
 	onWarning?: (message: string) => void;
-	onGeneratedObjectCacheEvent?: (event: { hit: boolean; path: string }) => void;
+	onGeneratedObject?: (event: GeneratedObjectMeasurement) => void;
 }
 
 /** Exact inputs and output of one final native link. */
@@ -73,6 +94,7 @@ export interface LocalBuildResult {
 	binaryPath: string;
 	artifacts: NativeArtifacts;
 	context: NativeBuildContext;
+	measurements: LocalBuildMeasurements;
 }
 
 function applicationCompileArguments(context: NativeBuildContext): Array<string> {
@@ -103,6 +125,7 @@ interface GeneratedObjectInput {
 	sourcePath: string;
 	logicalPath: string;
 	source: string;
+	role: GeneratedObjectMeasurement["role"];
 }
 
 interface PendingGeneratedObject {
@@ -110,12 +133,14 @@ interface PendingGeneratedObject {
 	key: string;
 	temporaryObject: string;
 	sourcePath: string;
-	sourceSize: number;
+	sourceBytes: number;
+	measurement?: NativeCommandMeasurement;
 }
 
 interface GeneratedObject {
 	path: string;
 	digest: string;
+	measurement: GeneratedObjectMeasurement;
 }
 
 function ensureGeneratedObjects(
@@ -123,13 +148,12 @@ function ensureGeneratedObjects(
 	inputs: ReadonlyArray<GeneratedObjectInput>,
 	compileArguments: Array<string>,
 	verbose: boolean,
-	onCacheEvent?: (event: { hit: boolean; path: string }) => void,
+	onObject?: (event: GeneratedObjectMeasurement) => void,
 ): Array<GeneratedObject> {
 	const parent = path.join(context.cacheDirectory, "work", "generated-object");
 	mkdirSync(parent, { recursive: true });
 	const temporaryDirectory = mkdtempSync(path.join(parent, "build-"));
 	const results = new Array<GeneratedObject | undefined>(inputs.length);
-	const cacheHits = new Array<boolean | undefined>(inputs.length);
 	const pending: Array<PendingGeneratedObject> = [];
 	const runtimeHeaders = runtimeHeaderHash(
 		context.runtimeDirectory,
@@ -156,8 +180,21 @@ function ensureGeneratedObjects(
 		);
 		if (cached !== undefined) {
 			const output = artifactOutput(cached, "unit.o");
-			results[index] = { path: output.path, digest: output.digest };
-			cacheHits[index] = true;
+			results[index] = {
+				path: output.path,
+				digest: output.digest,
+				measurement: {
+					unit: input.logicalPath,
+					role: input.role,
+					cache: "hit",
+					sourceBytes: Buffer.byteLength(input.source),
+					objectBytes: statSync(output.path).size,
+					compileDurationMs: null,
+					userCpuMs: null,
+					systemCpuMs: null,
+					path: output.path,
+				},
+			};
 			continue;
 		}
 		pending.push({
@@ -165,29 +202,41 @@ function ensureGeneratedObjects(
 			key,
 			temporaryObject: path.join(temporaryDirectory, `${String(index)}.o`),
 			sourcePath: input.sourcePath,
-			sourceSize: input.source.length,
+			sourceBytes: Buffer.byteLength(input.source),
 		});
 	}
 
 	try {
-		runNativeCommands(
-			context,
-			[...pending]
-				.sort((left, right) => right.sourceSize - left.sourceSize)
-				.map((entry) => ({
-					tool: context.toolchain.tools.cc.path,
-					args: toolArguments(context.toolchain.tools.cc, [
-						...compileArguments,
-						`-ffile-prefix-map=${path.dirname(entry.sourcePath)}=<generated>`,
-						"-c",
-						entry.sourcePath,
-						"-o",
-						entry.temporaryObject,
-					]),
-				})),
-			{ verbose },
+		const orderedPending = [...pending].sort(
+			(left, right) => right.sourceBytes - left.sourceBytes,
 		);
+		const measurements = runNativeCommands(
+			context,
+			orderedPending.map((entry) => ({
+				tool: context.toolchain.tools.cc.path,
+				args: toolArguments(context.toolchain.tools.cc, [
+					...compileArguments,
+					`-ffile-prefix-map=${path.dirname(entry.sourcePath)}=<generated>`,
+					"-c",
+					entry.sourcePath,
+					"-o",
+					entry.temporaryObject,
+				]),
+			})),
+			{ verbose, measureResources: true },
+		);
+		for (const [index, entry] of orderedPending.entries()) {
+			const measurement = measurements[index];
+			if (measurement === undefined) {
+				throw new Error(`generated object measurement missing for ${entry.sourcePath}`);
+			}
+			entry.measurement = measurement;
+		}
 		for (const entry of pending) {
+			const measurement = entry.measurement;
+			if (measurement === undefined) {
+				throw new Error(`generated object measurement missing for ${entry.sourcePath}`);
+			}
 			const published = publishArtifactAction(
 				context.cacheDirectory,
 				"generated-object",
@@ -196,8 +245,25 @@ function ensureGeneratedObjects(
 				[{ name: "unit.o", file: entry.temporaryObject }],
 			);
 			const output = artifactOutput(published, "unit.o");
-			results[entry.index] = { path: output.path, digest: output.digest };
-			cacheHits[entry.index] = false;
+			const input = inputs[entry.index]!;
+			results[entry.index] = {
+				path: output.path,
+				digest: output.digest,
+				measurement: {
+					unit: input.logicalPath,
+					role: input.role,
+					cache: "miss",
+					sourceBytes: entry.sourceBytes,
+					objectBytes: statSync(output.path).size,
+					compileDurationMs: measurement.durationMs,
+					userCpuMs: measurement.userCpuMs,
+					systemCpuMs: measurement.systemCpuMs,
+					...(measurement.peakRssBytes === undefined
+						? {}
+						: { peakRssBytes: measurement.peakRssBytes }),
+					path: output.path,
+				},
+			};
 		}
 	} finally {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -206,7 +272,7 @@ function ensureGeneratedObjects(
 		if (object === undefined) {
 			throw new Error(`generated object result missing for ${inputs[index]?.sourcePath}`);
 		}
-		onCacheEvent?.({ hit: cacheHits[index]!, path: object.path });
+		onObject?.(object.measurement);
 		return object;
 	});
 }
@@ -295,22 +361,25 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				sourcePath,
 				logicalPath: `<generated>/${String(index)}.c`,
 				source: sources[index]!,
+				role: "generated" as const,
 			})),
 			{
 				sourcePath: mainFile,
 				logicalPath: normalizeRuntimeBuildArgument(context.runtimeDirectory, mainFile),
 				source: readFileSync(mainFile, "utf-8"),
+				role: "driver" as const,
 			},
 		],
 		compileArguments,
 		options.verbose,
-		options.onGeneratedObjectCacheEvent,
+		options.onGeneratedObject,
 	);
 	const mainObject = generatedObjects.at(-1)!;
 	const objects = generatedObjects.slice(0, -1);
+	const cToObjectDurationMs = performance.now() - phaseStartedAt;
 	context.onBuildPhase?.({
 		phase: "generated C objects",
-		durationMs: performance.now() - phaseStartedAt,
+		durationMs: cToObjectDurationMs,
 		units: objects.length + 1,
 		bytes: [...objects, mainObject].reduce(
 			(total, object) => total + statSync(object.path).size,
@@ -350,15 +419,28 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		const binary = artifactOutput(cached, "binary");
 		context.onCacheEvent?.({ artifact: "binary", hit: true, path: binary.path });
 		materializeArtifact(binary, binaryPath);
+		const linkDurationMs = performance.now() - phaseStartedAt;
 		context.onBuildPhase?.({
 			phase: "link",
-			durationMs: performance.now() - phaseStartedAt,
+			durationMs: linkDurationMs,
 			cache: "hit",
 			path: binary.path,
 		});
-		return { binaryPath, artifacts, context };
+		return {
+			binaryPath,
+			artifacts,
+			context,
+			measurements: {
+				objects: generatedObjects.map((object) => object.measurement),
+				cToObjectDurationMs,
+				linkDurationMs,
+				linkCache: "hit",
+			},
+		};
 	}
 	context.onCacheEvent?.({ artifact: "binary", hit: false, path: linkKey });
+	let linkDurationMs = 0;
+	let linkCache: "hit" | "miss" = "miss";
 	withArtifactActionLock(
 		context.cacheDirectory,
 		"linked-binary",
@@ -373,6 +455,14 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			);
 			if (raced !== undefined) {
 				materializeArtifact(artifactOutput(raced, "binary"), binaryPath);
+				linkCache = "hit";
+				linkDurationMs = performance.now() - phaseStartedAt;
+				context.onBuildPhase?.({
+					phase: "link",
+					durationMs: linkDurationMs,
+					cache: "hit",
+					path: binaryPath,
+				});
 				return;
 			}
 			const linkWorkRoot = path.join(context.cacheDirectory, "work", "link");
@@ -412,9 +502,10 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			} finally {
 				rmSync(linkDirectory, { recursive: true, force: true });
 			}
+			linkDurationMs = performance.now() - phaseStartedAt;
 			context.onBuildPhase?.({
 				phase: "link",
-				durationMs: performance.now() - phaseStartedAt,
+				durationMs: linkDurationMs,
 				cache: "miss",
 				path: binaryPath,
 			});
@@ -464,5 +555,15 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		},
 	);
 
-	return { binaryPath, artifacts, context };
+	return {
+		binaryPath,
+		artifacts,
+		context,
+		measurements: {
+			objects: generatedObjects.map((object) => object.measurement),
+			cToObjectDurationMs,
+			linkDurationMs,
+			linkCache,
+		},
+	};
 }

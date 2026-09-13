@@ -411,6 +411,7 @@ function nativeBuildRecorder(): {
 			bySubject.set(event.subject, events);
 		},
 		observeResource(event) {
+			if (event.peakRssBytes === undefined) return;
 			peakRssBySubject.set(
 				event.subject,
 				Math.max(peakRssBySubject.get(event.subject) ?? 0, event.peakRssBytes),

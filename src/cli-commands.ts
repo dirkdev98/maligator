@@ -794,12 +794,25 @@ function compileAndBuild(
 				cSource: output,
 				verbose,
 				onWarning: (warning) => reporter.warning(warning),
-				onGeneratedObjectCacheEvent: (event) => {
+				onGeneratedObject: (event) => {
 					generatedObjects++;
-					if (event.hit) generatedObjectHits++;
+					if (event.cache === "hit") generatedObjectHits++;
 					reporter.detail(
-						"Generated object cache",
-						`${event.hit ? "hit" : "miss"} (${event.path})`,
+						`Generated C object · ${event.unit}`,
+						[
+							`${event.cache} · source ${formatCacheBytes(event.sourceBytes)} · object ${formatCacheBytes(event.objectBytes)}`,
+							event.compileDurationMs === null
+								? undefined
+								: `compile ${event.compileDurationMs.toFixed(1)} ms · CPU ${(
+										event.userCpuMs! + event.systemCpuMs!
+									).toFixed(1)} ms`,
+							event.peakRssBytes === undefined
+								? undefined
+								: `peak RSS ${formatCacheBytes(event.peakRssBytes)}`,
+							event.path,
+						]
+							.filter((part) => part !== undefined)
+							.join(" · "),
 					);
 				},
 				mainFile: applicationDriverPath(

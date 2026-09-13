@@ -11,11 +11,19 @@ export interface NativeCommandOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	verbose: boolean;
+	measureResources?: boolean;
 }
 
 export interface NativeCommand {
 	tool: string;
 	args: ReadonlyArray<string>;
+}
+
+export interface NativeCommandMeasurement {
+	durationMs: number;
+	userCpuMs: number;
+	systemCpuMs: number;
+	peakRssBytes?: number;
 }
 
 export function nativeBuildJobs(environment: NodeJS.ProcessEnv): number {
@@ -46,29 +54,98 @@ function parallelShellScript(
 	return `${starts.join("\n")}\nstatus=0\n${waits.join("\n")}\nexit "$status"\n`;
 }
 
-function measuredCommand(
-	context: NativeBuildContext,
-	tool: string,
-	args: ReadonlyArray<string>,
-	options: NativeCommandOptions & { input?: string },
-): Buffer {
-	const reportPath = path.join(
+function resourceReportPath(context: NativeBuildContext): string {
+	return path.join(
 		context.cacheDirectory,
 		`.native-resource-${process.pid}-${resourceReportSerial++}.txt`,
 	);
-	const timeArguments =
+}
+
+function timeArguments(reportPath: string, command: NativeCommand): Array<string> {
+	return process.platform === "darwin"
+		? ["-l", "-o", reportPath, command.tool, ...command.args]
+		: ["-v", "-o", reportPath, command.tool, ...command.args];
+}
+
+function durationSeconds(value: string): number {
+	const parts = value.split(":").map(Number);
+	if (parts.some((part) => !Number.isFinite(part))) return Number.NaN;
+	if (parts.length === 1) return parts[0]!;
+	if (parts.length === 2) return parts[0]! * 60 + parts[1]!;
+	if (parts.length === 3) return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!;
+	return Number.NaN;
+}
+
+function readResourceReport(reportPath: string, tool: string): NativeCommandMeasurement {
+	const report = readFileSync(reportPath, "utf8");
+	const timing =
 		process.platform === "darwin"
-			? ["-l", "-o", reportPath, tool, ...args]
-			: ["-v", "-o", reportPath, tool, ...args];
+			? report.match(
+					/(^|\n)\s*([0-9.]+)\s+real\s+([0-9.]+)\s+user\s+([0-9.]+)\s+sys(?:\n|$)/,
+				)
+			: undefined;
+	const elapsedSeconds =
+		process.platform === "darwin"
+			? Number(timing?.[2])
+			: durationSeconds(
+					report.match(
+						/Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*([^\n]+)/,
+					)?.[1] ?? "",
+				);
+	const userSeconds =
+		process.platform === "darwin"
+			? Number(timing?.[3])
+			: Number(report.match(/User time \(seconds\):\s*([0-9.]+)/)?.[1]);
+	const systemSeconds =
+		process.platform === "darwin"
+			? Number(timing?.[4])
+			: Number(report.match(/System time \(seconds\):\s*([0-9.]+)/)?.[1]);
+	if (![elapsedSeconds, userSeconds, systemSeconds].every(Number.isFinite)) {
+		throw new Error(`native resource measurement omitted timing for ${tool}`);
+	}
+	const rssMatch =
+		process.platform === "darwin"
+			? report.match(/(^|\n)\s*([0-9]+)\s+maximum resident set size(?:\n|$)/)
+			: report.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
+	const rawRss = Number(rssMatch?.[process.platform === "darwin" ? 2 : 1]);
+	return {
+		durationMs: elapsedSeconds * 1000,
+		userCpuMs: userSeconds * 1000,
+		systemCpuMs: systemSeconds * 1000,
+		...(Number.isSafeInteger(rawRss) && rawRss > 0
+			? { peakRssBytes: process.platform === "darwin" ? rawRss : rawRss * 1024 }
+			: {}),
+	};
+}
+
+function reportMeasurement(
+	context: NativeBuildContext,
+	command: NativeCommand,
+	options: NativeCommandOptions,
+	measurement: NativeCommandMeasurement,
+): void {
+	context.onCommandResource?.({
+		tool: command.tool,
+		args: command.args,
+		cwd: options.cwd,
+		...measurement,
+	});
+}
+
+function measuredCommand(
+	context: NativeBuildContext,
+	command: NativeCommand,
+	options: NativeCommandOptions,
+): NativeCommandMeasurement {
+	const reportPath = resourceReportPath(context);
 	let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 	let failure:
 		| (Error & { status?: number | null; stdout?: Buffer; stderr?: Buffer })
 		| undefined;
 	try {
-		stdout = execFileSync("/usr/bin/time", timeArguments, {
+		stdout = execFileSync("/usr/bin/time", timeArguments(reportPath, command), {
 			cwd: options.cwd,
 			env: options.env ?? context.environment,
-			input: options.input,
 			maxBuffer: 64 * 1024 * 1024,
 			stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
 		});
@@ -76,32 +153,23 @@ function measuredCommand(
 		failure = error as typeof failure;
 		stdout = failure?.stdout ?? stdout;
 	}
-	const report = readFileSync(reportPath, "utf8");
-	rmSync(reportPath, { force: true });
-	const match =
-		process.platform === "darwin"
-			? report.match(/(^|\n)\s*([0-9]+)\s+maximum resident set size(?:\n|$)/)
-			: report.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
-	const raw = Number(match?.[process.platform === "darwin" ? 2 : 1]);
-	if (!Number.isSafeInteger(raw) || raw <= 0) {
-		throw new Error(`native resource measurement omitted peak RSS for ${tool}`);
+	let measurement: NativeCommandMeasurement;
+	try {
+		measurement = readResourceReport(reportPath, command.tool);
+	} finally {
+		rmSync(reportPath, { force: true });
 	}
-	context.onCommandResource?.({
-		tool,
-		args,
-		cwd: options.cwd,
-		peakRssBytes: process.platform === "darwin" ? raw : raw * 1024,
-	});
+	reportMeasurement(context, command, options, measurement);
 	if (failure !== undefined) {
 		const stderr = (failure.stderr ?? Buffer.alloc(0)).toString();
 		throw new Error(
-			`${tool} failed (${String(failure.status)}):\n${stdout.toString()}\n${stderr}`,
+			`${command.tool} failed (${String(failure.status)}):\n${stdout.toString()}\n${stderr}`,
 		);
 	}
 	if (options.verbose) {
 		if (stdout.length > 0) process.stderr.write(stdout);
 	}
-	return stdout;
+	return measurement;
 }
 
 /** Execute independent commands concurrently through one synchronous coordinator. */
@@ -135,11 +203,11 @@ export function runNativeCommand(
 	tool: string,
 	args: ReadonlyArray<string>,
 	options: NativeCommandOptions,
-): void {
-	context.onCommand?.({ tool, args, cwd: options.cwd });
-	if (context.measureCommandResources) {
-		measuredCommand(context, tool, args, options);
-		return;
+): NativeCommandMeasurement | undefined {
+	const command = { tool, args };
+	context.onCommand?.({ ...command, cwd: options.cwd });
+	if (context.measureCommandResources || options.measureResources === true) {
+		return measuredCommand(context, command, options);
 	}
 	const stdout = execFileSync(tool, [...args], {
 		cwd: options.cwd,
@@ -147,6 +215,7 @@ export function runNativeCommand(
 		stdio: options.verbose ? ["ignore", "pipe", "inherit"] : "pipe",
 	});
 	if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
+	return undefined;
 }
 
 /** Run independent native commands in bounded POSIX-shell batches. */
@@ -154,28 +223,43 @@ export function runNativeCommands(
 	context: NativeBuildContext,
 	commands: ReadonlyArray<NativeCommand>,
 	options: NativeCommandOptions,
-): void {
-	if (commands.length === 0) return;
+): Array<NativeCommandMeasurement | undefined> {
+	if (commands.length === 0) return [];
 	const jobs = Math.min(
 		commands.length,
 		nativeBuildJobs(options.env ?? context.environment),
 	);
 	if (jobs === 1) {
-		for (const command of commands) {
-			runNativeCommand(context, command.tool, command.args, options);
-		}
-		return;
+		return commands.map((command) =>
+			runNativeCommand(context, command.tool, command.args, options),
+		);
 	}
 
 	for (const command of commands) {
 		context.onCommand?.({ tool: command.tool, args: command.args, cwd: options.cwd });
 	}
-	if (context.measureCommandResources) {
-		measuredCommand(context, "/bin/sh", [], {
-			...options,
-			input: parallelShellScript(commands, jobs),
-		});
-		return;
+	if (context.measureCommandResources || options.measureResources === true) {
+		const reportPaths = commands.map(() => resourceReportPath(context));
+		try {
+			const timedCommands = commands.map((command, index) => ({
+				tool: "/usr/bin/time",
+				args: timeArguments(reportPaths[index]!, command),
+			}));
+			const stdout = execFileSync("/bin/sh", [], {
+				cwd: options.cwd,
+				env: options.env ?? context.environment,
+				input: parallelShellScript(timedCommands, jobs),
+				stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
+			});
+			if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
+			return commands.map((command, index) => {
+				const measurement = readResourceReport(reportPaths[index]!, command.tool);
+				reportMeasurement(context, command, options, measurement);
+				return measurement;
+			});
+		} finally {
+			for (const reportPath of reportPaths) rmSync(reportPath, { force: true });
+		}
 	}
 	const stdout = execFileSync("/bin/sh", [], {
 		cwd: options.cwd,
@@ -184,4 +268,5 @@ export function runNativeCommands(
 		stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
 	});
 	if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
+	return commands.map(() => undefined);
 }
