@@ -27,6 +27,12 @@ const required = ["cc", "ar", "rustup", "cargo"];
 const optional = ["c++", "clang", "ranlib", "make", "ninja", "vm_stat"];
 const rustup = resolvePathExecutable("rustup", originalPath);
 for (const name of [...required, ...optional]) {
+	const executable =
+		name === "cc"
+			? process.env.CC?.trim() || name
+			: name === "c++"
+				? process.env.CXX?.trim() || name
+				: name;
 	let source: string;
 	try {
 		source =
@@ -35,7 +41,9 @@ for (const name of [...required, ...optional]) {
 						cwd: "runtime/rust",
 						encoding: "utf-8",
 					}).trim()
-				: resolvePathExecutable(name, originalPath);
+				: executable.includes(path.sep)
+					? executable
+					: resolvePathExecutable(executable, originalPath);
 	} catch (error) {
 		if (required.includes(name)) throw error;
 		continue;
@@ -43,7 +51,12 @@ for (const name of [...required, ...optional]) {
 	symlinkSync(source, path.join(tools, name));
 }
 
-const isolatedEnv = { ...process.env, PATH: tools };
+const isolatedEnv = {
+	...process.env,
+	PATH: tools,
+	CC: path.join(tools, "cc"),
+	CXX: path.join(tools, "c++"),
+};
 let nodeResolved = true;
 try {
 	execFileSync("node", ["--version"], { env: isolatedEnv, stdio: "ignore" });
