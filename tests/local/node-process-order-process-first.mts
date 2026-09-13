@@ -1,6 +1,4 @@
-// Install-order independence, arm B: node:process is imported before node:events,
-// so the process installer is the one that has to materialize %EventEmitter%.
-// Mirrors tests/local/node-process-order-events-first.mts assertion for assertion.
+// The process installer must materialize %EventEmitter% when node:process is first.
 
 import { EventEmitter } from "node:events";
 import importedProcess, { on as importedOn } from "node:process";

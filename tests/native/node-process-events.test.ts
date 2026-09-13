@@ -13,11 +13,6 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// Acceptance coverage for `process` as an EventEmitter: export identity and
-// install-order independence, ordinary event dispatch, `beforeExit` at real
-// event-loop idle, POSIX signal delivery on the main VM thread, and the
-// Express-shaped graceful shutdown that ties all three together.
-
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-process-events-"));
 
 interface Session {
@@ -121,12 +116,39 @@ async function withFixture(
 	}
 }
 
+function expectTermination(
+	session: Session,
+	expected: { status: number | null; signal: NodeJS.Signals | null },
+): void {
+	const detail = `stdout=${JSON.stringify(session.lines)} stderr=${JSON.stringify(session.stderr)}`;
+	expect(session.status, detail).toBe(expected.status);
+	expect(session.signal, detail).toBe(expected.signal);
+}
+
+function expectSpawnTermination(
+	run: ReturnType<typeof spawnSync>,
+	expectedStatus: number,
+): void {
+	const detail = `signal=${String(run.signal)} stdout=${JSON.stringify(run.stdout)} stderr=${JSON.stringify(run.stderr)}`;
+	expect(run.status, detail).toBe(expectedStatus);
+}
+
+function explicitExitEnvironment(): NodeJS.ProcessEnv {
+	const asanOptions = process.env.ASAN_OPTIONS;
+	return {
+		...process.env,
+		NODE_SIGNAL_MODE: "no-before-exit-on-exit",
+		// Forced exit bypasses MAL_GC_AT_EXIT; only this child skips leak classification.
+		...(asanOptions === undefined
+			? {}
+			: { ASAN_OPTIONS: `${asanOptions}:detect_leaks=0` }),
+	};
+}
+
 describe("process as an EventEmitter", () => {
 	let events: string;
 	let eventsInterpreted: string;
-	let orderEventsFirst: string;
 	let orderProcessFirst: string;
-	let signals: string;
 	let shutdown: string;
 
 	beforeAll(() => {
@@ -145,23 +167,9 @@ describe("process as an EventEmitter", () => {
 			nodeEnabled: true,
 			compiled: false,
 		});
-		orderEventsFirst = buildNativeBinary({
-			fixture: "tests/local/node-process-order-events-first.mts",
-			name: "node-process-order-events-first",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
 		orderProcessFirst = buildNativeBinary({
 			fixture: "tests/local/node-process-order-process-first.mts",
 			name: "node-process-order-process-first",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-		signals = buildNativeBinary({
-			fixture: "tests/local/node-process-signals.mts",
-			name: "node-process-signals",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
@@ -202,7 +210,7 @@ describe("process as an EventEmitter", () => {
 	});
 
 	it.each([
-		["node:events imported first", () => orderEventsFirst],
+		["node:events imported first", () => events],
 		["node:process imported first", () => orderProcessFirst],
 	])("shares one EventEmitter graph with %s", (_name, binary) => {
 		assertResultPass(runToStdout(binary()));
@@ -210,7 +218,7 @@ describe("process as an EventEmitter", () => {
 
 	it("delivers repeated SIGINT and then SIGTERM to their listeners", async () => {
 		const session = await withFixture(
-			signals,
+			events,
 			{ NODE_SIGNAL_MODE: "deliver" },
 			async (f) => {
 				await f.line("READY");
@@ -222,14 +230,13 @@ describe("process as an EventEmitter", () => {
 				await f.line("DONE");
 			},
 		);
-		expect(session.status).toBe(0);
-		expect(session.signal).toBeNull();
+		expectTermination(session, { status: 0, signal: null });
 		expect(session.lines).toContain("DONE SIGINT,SIGINT,SIGTERM");
 	});
 
 	it("delivers signals under MAL_GC_STRESS + MAL_GC_VERIFY", async () => {
 		const session = await withFixture(
-			signals,
+			events,
 			{ ...STRESS_ENV, NODE_SIGNAL_MODE: "deliver" },
 			async (f) => {
 				await f.line("READY");
@@ -237,23 +244,19 @@ describe("process as an EventEmitter", () => {
 				await f.line("DONE");
 			},
 		);
-		expect(session.status).toBe(0);
+		expectTermination(session, { status: 0, signal: null });
 		expect(session.lines).toContain("DONE SIGTERM");
 	});
 
 	it("runs a once() signal listener exactly once, then restores the default action", async () => {
-		const session = await withFixture(
-			signals,
-			{ NODE_SIGNAL_MODE: "once" },
-			async (f) => {
-				await f.line("READY");
-				f.send("SIGINT");
-				await f.line("SIGNAL SIGINT 1");
-				f.send("SIGINT");
-			},
-		);
+		const session = await withFixture(events, { NODE_SIGNAL_MODE: "once" }, async (f) => {
+			await f.line("READY");
+			f.send("SIGINT");
+			await f.line("SIGNAL SIGINT 1");
+			f.send("SIGINT");
+		});
 		// The second SIGINT finds no listener, so the default action terminates.
-		expect(session.signal).toBe("SIGINT");
+		expectTermination(session, { status: null, signal: "SIGINT" });
 		expect(session.lines.filter((line) => line.startsWith("SIGNAL "))).toEqual([
 			"SIGNAL SIGINT 1",
 		]);
@@ -262,51 +265,47 @@ describe("process as an EventEmitter", () => {
 	it.each(["removed", "remove-all"])(
 		"restores the default action after %s clears the listener",
 		async (mode) => {
-			const session = await withFixture(
-				signals,
-				{ NODE_SIGNAL_MODE: mode },
-				async (f) => {
-					expect(await f.line("LISTENERS")).toBe("LISTENERS 0");
-					await f.line("READY");
-					f.send("SIGTERM");
-				},
-			);
-			expect(session.signal).toBe("SIGTERM");
+			const session = await withFixture(events, { NODE_SIGNAL_MODE: mode }, async (f) => {
+				expect(await f.line("LISTENERS")).toBe("LISTENERS 0");
+				await f.line("READY");
+				f.send("SIGTERM");
+			});
+			expectTermination(session, { status: null, signal: "SIGTERM" });
 			expect(session.lines.some((line) => line.startsWith("SIGNAL "))).toBe(false);
 		},
 	);
 
 	it("does not emit beforeExit when a fatal signal terminates the process", async () => {
 		const session = await withFixture(
-			signals,
+			events,
 			{ NODE_SIGNAL_MODE: "no-before-exit-on-signal" },
 			async (f) => {
 				await f.line("READY");
 				f.send("SIGTERM");
 			},
 		);
-		expect(session.signal).toBe("SIGTERM");
+		expectTermination(session, { status: null, signal: "SIGTERM" });
 		expect(session.lines).not.toContain("BEFORE_EXIT");
 	});
 
 	it("does not emit beforeExit for an explicit process.exit()", () => {
-		const run = spawnSync(signals, [], {
+		const run = spawnSync(events, [], {
 			encoding: "utf-8",
 			timeout: 20000,
-			env: { ...process.env, NODE_SIGNAL_MODE: "no-before-exit-on-exit" },
+			env: explicitExitEnvironment(),
 		});
-		expect(run.status).toBe(7);
+		expectSpawnTermination(run, 7);
 		expect(run.stdout).toContain("EXITING");
 		expect(run.stdout).not.toContain("BEFORE_EXIT");
 	});
 
 	it("does not emit beforeExit after an uncaught top-level exception", () => {
-		const run = spawnSync(signals, [], {
+		const run = spawnSync(events, [], {
 			encoding: "utf-8",
 			timeout: 20000,
 			env: { ...process.env, NODE_SIGNAL_MODE: "no-before-exit-on-throw" },
 		});
-		expect(run.status).toBe(1);
+		expectSpawnTermination(run, 1);
 		expect(run.stdout).not.toContain("BEFORE_EXIT");
 	});
 
@@ -319,8 +318,7 @@ describe("process as an EventEmitter", () => {
 			f.send("SIGTERM");
 			await f.line("CLOSED");
 		});
-		expect(session.status).toBe(0);
-		expect(session.signal).toBeNull();
+		expectTermination(session, { status: 0, signal: null });
 		expect(session.lines).toContain("SHUTDOWN SIGTERM");
 		expect(session.lines).toContain("CLOSED");
 		expect(session.lines).toContain("BEFORE_EXIT after-shutdown");
