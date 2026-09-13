@@ -234,6 +234,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       over many clones. Treat measured runtime, analysis time, build memory, and
       code-size tradeoffs as separate acceptance dimensions.
 
+- [ ] Validate a stable per-function optimization policy for pathological generated
+      bodies. A 4.1 MiB self-compile body compiled about 47% faster at `-O1` than
+      `-O2`, but its object grew and linked runtime behavior was not measured. Use
+      source-stable diagnostics rather than generated ordinals, and require matched
+      runtime, startup, binary-size, and correctness evidence before adoption.
+
 ## Compiler infrastructure
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
