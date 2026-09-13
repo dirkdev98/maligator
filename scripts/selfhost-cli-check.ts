@@ -64,6 +64,7 @@ const requestedTools: Array<[string, string, boolean]> = [
 	["cc", process.env.CC?.trim() || "cc", true],
 	["c++", process.env.CXX?.trim() || "c++", true],
 	["ar", "ar", true],
+	["ld", "ld", true],
 	["rustup", rustup, true],
 	["cargo", selectedCargo, true],
 	["rustc", selectedRustc, true],
