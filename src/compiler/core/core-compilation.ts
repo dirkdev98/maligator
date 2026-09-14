@@ -53,6 +53,23 @@ export interface CoreCompilationContext {
 	readonly data: CoreProgramData;
 }
 
+const closedGlobalSlotMembershipBySource = new WeakMap<
+	ReadonlyArray<number>,
+	ReadonlySet<number>
+>();
+
+export function coreClosedGlobalSlotMembership(
+	context: CoreCompilationContext,
+): ReadonlySet<number> {
+	const slots = context.data.singleAssignmentGlobalSlots;
+	let membership = closedGlobalSlotMembershipBySource.get(slots);
+	if (membership === undefined) {
+		membership = new Set(slots);
+		closedGlobalSlotMembershipBySource.set(slots, membership);
+	}
+	return membership;
+}
+
 /** Mutable construction boundary consumed only by Core optimization. */
 export interface ConstructedCoreCompilation {
 	readonly program: CoreProgram;

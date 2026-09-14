@@ -2532,7 +2532,7 @@ export class CoreProgramFlowEngine {
 			closureQueue.push(functionId);
 		};
 		if (previous === undefined) {
-			for (const functionId of functions) markAffected(functionId);
+			for (const functionId of functions) affected[functionId] = 1;
 		} else {
 			const previousFunctionMembership = new Uint8Array(this.#program.functionCapacity);
 			for (const functionId of previous.targets.graph.functions) {
@@ -2571,21 +2571,32 @@ export class CoreProgramFlowEngine {
 					markAffected(target);
 				}
 			}
-		}
-		for (let cursor = 0; cursor < closureQueue.length; cursor++) {
-			const functionId = closureQueue[cursor]!;
-			for (const graph of [targets.graph, previous?.targets.graph]) {
-				if (graph === undefined) continue;
-				for (const callee of graph.exactOutgoing(functionId)) markAffected(callee);
-				if (graph.isWildcardCaller(functionId)) {
-					for (const callee of graph.functions) markAffected(callee);
+			let previousWildcardExpanded = false;
+			const previousGraph = previous.targets.graph;
+			for (let cursor = 0; cursor < closureQueue.length; cursor++) {
+				const functionId = closureQueue[cursor]!;
+				for (const callee of targets.graph.exactOutgoing(functionId)) {
+					markAffected(callee);
 				}
-			}
-			for (const rows of [
-				structuralMasks.get(functionId),
-				previous?.structuralMasks.get(functionId),
-			]) {
-				for (const target of rows?.keys() ?? []) markAffected(target);
+				if (targets.graph.isWildcardCaller(functionId)) {
+					for (const callee of targets.graph.functions) markAffected(callee);
+					break;
+				}
+				if (previousGraph !== targets.graph) {
+					for (const callee of previousGraph.exactOutgoing(functionId)) {
+						markAffected(callee);
+					}
+					if (!previousWildcardExpanded && previousGraph.isWildcardCaller(functionId)) {
+						previousWildcardExpanded = true;
+						for (const callee of previousGraph.functions) markAffected(callee);
+					}
+				}
+				for (const rows of [
+					structuralMasks.get(functionId),
+					previous.structuralMasks.get(functionId),
+				]) {
+					for (const target of rows?.keys() ?? []) markAffected(target);
+				}
 			}
 		}
 

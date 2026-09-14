@@ -905,22 +905,6 @@ export function coreCanonicalValueRoots(
 		fn.valueCapacity,
 	);
 	const nodes: Array<CoreValueId> = [];
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "move"
-		)
-			continue;
-		if (
-			fn.kernel.instructionOperandCount(instruction) !== 1 ||
-			fn.kernel.instructionResultCount(instruction) !== 1
-		)
-			continue;
-		const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		dependencies[output] = [input];
-		nodes.push(output);
-	}
 	for (const block of fn.blockIds()) {
 		const incoming = cfg.predecessors[block] ?? [];
 		if (incoming.length === 0) continue;
@@ -937,6 +921,22 @@ export function coreCanonicalValueRoots(
 			dependencies[parameter] = sources as ReadonlyArray<CoreValueId>;
 			nodes.push(parameter);
 		}
+	}
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "move"
+		)
+			continue;
+		if (
+			fn.kernel.instructionOperandCount(instruction) !== 1 ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		dependencies[output] = [input];
+		nodes.push(output);
 	}
 	if (nodes.length === 0) return new SparseCanonicalValueRoots();
 	const reverse = new Array<Array<CoreValueId> | undefined>(fn.valueCapacity);
@@ -974,35 +974,35 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	const componentOf = new Int32Array(fn.valueCapacity);
-	componentOf.fill(-1);
 	const components: Array<Array<CoreValueId>> = [];
 	for (let index = postorder.length - 1; index >= 0; index--) {
 		const start = postorder[index]!;
-		if (componentOf[start]! >= 0) continue;
+		if (componentOf[start] !== 0) continue;
 		const component = components.length;
 		const members: Array<CoreValueId> = [];
 		components.push(members);
-		componentOf[start] = component;
+		componentOf[start] = component + 1;
 		const pending = [start];
 		while (pending.length > 0) {
 			const value = pending.pop()!;
 			members.push(value);
 			for (const user of reverse[value] ?? []) {
-				if (componentOf[user]! >= 0) continue;
-				componentOf[user] = component;
+				if (componentOf[user] !== 0) continue;
+				componentOf[user] = component + 1;
 				pending.push(user);
 			}
 		}
 	}
 	const canonical = new Int32Array(fn.valueCapacity);
-	for (const value of fn.valueIds()) canonical[value] = value;
+	for (const value of nodes) canonical[value] = value;
 	for (let component = components.length - 1; component >= 0; component--) {
 		let externalRoot: number | undefined;
 		let singleRoot = true;
 		for (const value of components[component]!) {
 			for (const dependency of dependencies[value]!) {
-				if (componentOf[dependency] === component) continue;
-				const root = canonical[dependency]!;
+				if (componentOf[dependency] === component + 1) continue;
+				const root =
+					dependencies[dependency] === undefined ? dependency : canonical[dependency]!;
 				if (externalRoot === undefined) externalRoot = root;
 				else if (externalRoot !== root) singleRoot = false;
 			}
@@ -1012,7 +1012,7 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	const roots = new SparseCanonicalValueRoots();
-	for (const value of fn.valueIds()) {
+	for (const value of nodes) {
 		const root = coreValueId(canonical[value]!);
 		if (root !== value) roots.set(value, root);
 	}

@@ -1,4 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,
@@ -340,7 +341,7 @@ export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreSh
 				program,
 				request.function,
 				get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance,
-				new Set(context.data.singleAssignmentGlobalSlots),
+				coreClosedGlobalSlotMembership(context),
 			);
 		},
 	};

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { coreClosedGlobalSlotMembership } from "../src/compiler/core/core-compilation.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
@@ -52,6 +53,27 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it("shares closed-global membership only for the same captured slot list", () => {
+		const slots = Object.freeze([1, 3]);
+		const first = {
+			...context,
+			data: { ...context.data, singleAssignmentGlobalSlots: slots },
+		};
+		const second = { ...first, data: { ...first.data } };
+		const different = {
+			...context,
+			data: { ...context.data, singleAssignmentGlobalSlots: Object.freeze([1, 3]) },
+		};
+
+		expect(coreClosedGlobalSlotMembership(first)).toBe(
+			coreClosedGlobalSlotMembership(second),
+		);
+		expect(coreClosedGlobalSlotMembership(first)).not.toBe(
+			coreClosedGlobalSlotMembership(different),
+		);
+		expect([...coreClosedGlobalSlotMembership(different)]).toEqual([1, 3]);
+	});
+
 	it.each(["union", "arithmetic", "unknown"])(
 		"preserves %s kinds through a closed global dependency in either block order",
 		(form) => {

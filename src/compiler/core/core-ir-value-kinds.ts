@@ -19,6 +19,7 @@ import type {
 	CompilerValueKindMask,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -181,7 +182,6 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 	}
 }
 
-const KIND_TRANSFER_CONSTANT = 0;
 const KIND_TRANSFER_JOIN = 1;
 const KIND_TRANSFER_COPY = 2;
 const KIND_TRANSFER_NUMERIC_UNARY = 3;
@@ -235,6 +235,7 @@ function addOperationKindTransfer(
 
 function addOperationTransfer(
 	buffer: KindTransferBuffer,
+	masks: Uint16Array,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	output: CoreValueId,
@@ -242,34 +243,31 @@ function addOperationTransfer(
 ): void {
 	const representation = representationKind(fn, output);
 	if (representation !== undefined) {
-		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, representation);
+		masks[output] = masks[output]! | representation;
 		return;
 	}
 	const opcode = fn.instructionOpcodeName(instruction);
 	const staticKind = staticOpcodeKind(opcode);
 	if (staticKind !== undefined) {
-		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, staticKind);
+		masks[output] = masks[output]! | staticKind;
 		return;
 	}
 	if (opcode === "queryStaticData") {
 		const kind = fn.instructionAttributes(instruction).queryKind;
-		addKindTransfer(
-			buffer,
-			KIND_TRANSFER_CONSTANT,
-			output,
-			kind === "index-of" || kind === "last-index-of"
+		masks[output] =
+			masks[output]! |
+			(kind === "index-of" || kind === "last-index-of"
 				? COMPILER_VALUE_KIND_NUMBER
-				: COMPILER_VALUE_KIND_BOOLEAN,
-		);
+				: COMPILER_VALUE_KIND_BOOLEAN);
 		return;
 	}
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {
-		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, inputs.receiverMask);
+		masks[output] = masks[output]! | inputs.receiverMask;
 		return;
 	}
 	const supplied = inputs?.operationResultMask?.(instruction, output);
 	if (supplied !== undefined) {
-		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, supplied);
+		masks[output] = masks[output]! | supplied;
 		return;
 	}
 	if (opcode === "callKnown") {
@@ -280,7 +278,7 @@ function addOperationTransfer(
 				: undefined;
 		const mask = result === undefined ? undefined : BUILTIN_RESULT_KIND_MASKS[result];
 		if (mask !== undefined) {
-			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, mask);
+			masks[output] = masks[output]! | mask;
 			return;
 		}
 	}
@@ -310,7 +308,7 @@ function addOperationTransfer(
 							? COMPILER_VALUE_KIND_UNDEFINED
 							: undefined;
 		if (constant !== undefined) {
-			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, constant);
+			masks[output] = masks[output]! | constant;
 		} else if (NUMERIC_UNARY_OPERATORS.has(operator)) {
 			addOperationKindTransfer(
 				buffer,
@@ -320,28 +318,23 @@ function addOperationTransfer(
 				instruction,
 			);
 		} else {
-			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
+			masks[output] = COMPILER_VALUE_KIND_TOP;
 		}
 		return;
 	}
 	if (opcode === "binary" && operandCount === 2 && typeof operator === "string") {
 		if (COMPARISON_OPERATORS.has(operator)) {
-			addKindTransfer(
-				buffer,
-				KIND_TRANSFER_CONSTANT,
-				output,
-				COMPILER_VALUE_KIND_BOOLEAN,
-			);
+			masks[output] = masks[output]! | COMPILER_VALUE_KIND_BOOLEAN;
 		} else if (operator === "+") {
 			addOperationKindTransfer(buffer, KIND_TRANSFER_ADD, output, fn, instruction);
 		} else if (NUMERIC_BINARY_OPERATORS.has(operator)) {
 			addOperationKindTransfer(buffer, KIND_TRANSFER_BINARY, output, fn, instruction);
 		} else {
-			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
+			masks[output] = COMPILER_VALUE_KIND_TOP;
 		}
 		return;
 	}
-	addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
+	masks[output] = COMPILER_VALUE_KIND_TOP;
 }
 
 export function analyzeCoreValueKinds(
@@ -349,6 +342,7 @@ export function analyzeCoreValueKinds(
 	cfg: CoreControlFlow,
 	inputs?: CoreValueKindInputs,
 ): CoreValueKindAnalysis {
+	const masks = new Uint16Array(fn.valueCapacity);
 	const transfers: KindTransferBuffer = {
 		kinds: [],
 		outputs: [],
@@ -384,7 +378,7 @@ export function analyzeCoreValueKinds(
 					(formalIndex < 0
 						? COMPILER_VALUE_KIND_TOP
 						: (inputs?.parameterMasks?.[formalIndex] ?? COMPILER_VALUE_KIND_TOP));
-				addKindTransfer(transfers, KIND_TRANSFER_CONSTANT, parameter, kind);
+				masks[parameter] = masks[parameter]! | kind;
 				continue;
 			}
 			const incomingValues: Array<CoreValueId> = [];
@@ -405,7 +399,7 @@ export function analyzeCoreValueKinds(
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			for (let index = 0; index < resultCount; index++) {
 				const output = fn.kernel.resultAt(resultStart + index);
-				addOperationTransfer(transfers, fn, instruction, output, inputs);
+				addOperationTransfer(transfers, masks, fn, instruction, output, inputs);
 			}
 		}
 	}
@@ -430,7 +424,6 @@ export function analyzeCoreValueKinds(
 	const transferInputStarts = Uint32Array.from(transfers.inputStarts);
 	const transferInputCounts = Uint32Array.from(transfers.inputCounts);
 	const transferInputs = Uint32Array.from(transfers.inputs);
-	const masks = new Uint16Array(fn.valueCapacity);
 	const mask = (value: CoreValueId): number => masks[value] ?? 0;
 	const wakeDependents = (
 		value: CoreValueId,
@@ -595,7 +588,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			if (context.data.singleAssignmentGlobalSlots.length === 0)
 				return analyzeCoreValueKinds(fn, cfg);
-			const closedGlobals = new Set(context.data.singleAssignmentGlobalSlots);
+			const closedGlobals = coreClosedGlobalSlotMembership(context);
 			const stores = new Map<
 				number,
 				{

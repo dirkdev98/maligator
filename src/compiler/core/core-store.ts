@@ -2552,6 +2552,8 @@ export class CoreProgram {
 	readonly #programFlowDomainMasks: Array<number> = [];
 	#stringConstants: ReadonlyArray<ReadonlyArray<number>> = [];
 	#bigintConstants: ReadonlyArray<bigint> = [];
+	#stringConstantSlots: Map<string, number> | undefined;
+	#bigintConstantSlots: Map<string, number> | undefined;
 	#literalTemplateData: ReadonlyArray<number> = [];
 	#literalTemplates: Map<string, number> | undefined;
 	#literalPoolSlots = new Map<number, number>();
@@ -2621,6 +2623,24 @@ export class CoreProgram {
 
 	get bigintConstants(): ReadonlyArray<bigint> {
 		return this.#bigintConstants;
+	}
+
+	stringConstantSlot(codeUnits: ReadonlyArray<number>): number | undefined {
+		if (this.#stringConstantSlots === undefined) {
+			this.#stringConstantSlots = new Map(
+				this.#stringConstants.map((units, index) => [units.join(","), index]),
+			);
+		}
+		return this.#stringConstantSlots.get(codeUnits.join(","));
+	}
+
+	bigintConstantSlot(decimal: string): number | undefined {
+		if (this.#bigintConstantSlots === undefined) {
+			this.#bigintConstantSlots = new Map(
+				this.#bigintConstants.map((value, index) => [String(value), index]),
+			);
+		}
+		return this.#bigintConstantSlots.get(decimal);
 	}
 
 	get literalTemplateData(): ReadonlyArray<number> {
@@ -2789,6 +2809,11 @@ export class CoreProgram {
 			...this.#stringConstants,
 			...values.map((units) => Object.freeze([...units])),
 		]);
+		if (this.#stringConstantSlots !== undefined) {
+			for (const [offset, units] of values.entries()) {
+				this.#stringConstantSlots.set(units.join(","), start + offset);
+			}
+		}
 		return start;
 	}
 
@@ -2800,6 +2825,11 @@ export class CoreProgram {
 		if (this.#sealed) throw new Error("Core program is sealed");
 		const start = this.#bigintConstants.length;
 		this.#bigintConstants = Object.freeze([...this.#bigintConstants, ...values]);
+		if (this.#bigintConstantSlots !== undefined) {
+			for (const [offset, value] of values.entries()) {
+				this.#bigintConstantSlots.set(String(value), start + offset);
+			}
+		}
 		return start;
 	}
 
@@ -2846,6 +2876,8 @@ export class CoreProgram {
 			(data.stringConstants ?? []).map((units) => Object.freeze([...units])),
 		);
 		this.#bigintConstants = Object.freeze([...(data.bigintConstants ?? [])]);
+		this.#stringConstantSlots = undefined;
+		this.#bigintConstantSlots = undefined;
 		this.#literalTemplateData = Object.freeze([...(data.literalTemplateData ?? [])]);
 		this.#literalTemplates = undefined;
 		this.#literalPoolSlots.clear();

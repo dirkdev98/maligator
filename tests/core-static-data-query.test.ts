@@ -84,6 +84,11 @@ describe("static-data query representation", () => {
 		editor.appendBigintConstants([5n]);
 		editor.commit();
 		expect(query()?.words).toEqual([8, 2, 5, 1, 6, 1]);
+		CoreEditor.configureProgram(program, {
+			stringConstants: [[120], [121]],
+			bigintConstants: [5n, 6n],
+		});
+		expect(query()?.words).toEqual([8, 2, 5, 0, 6, 0]);
 	});
 
 	it.each([32, 4096])("keeps executable code bounded for %s elements", (count) => {
