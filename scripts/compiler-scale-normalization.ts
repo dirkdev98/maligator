@@ -1,3 +1,24 @@
+import path from "node:path";
+import type { ProgramImage } from "../src/compiler/target/program-image.ts";
+import { nativeSourcePath } from "../src/native-source-path.ts";
+
+export function normalizeCompilerScaleEmissionImage(
+	image: ProgramImage,
+	sourceRoot: string,
+): ProgramImage {
+	return {
+		...image,
+		runtime: {
+			...image.runtime,
+			files: image.runtime.files.map((file) =>
+				file.startsWith(`${sourceRoot}${path.sep}`)
+					? path.relative(sourceRoot, file)
+					: nativeSourcePath(file),
+			),
+		},
+	};
+}
+
 export interface CompilerScaleNormalizationInput {
 	readonly medianWallMs: number;
 	readonly medianOptimizeCoreMs: number;

@@ -26,13 +26,15 @@ import type {
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
-import { nativeSourcePath } from "../src/native-source-path.ts";
 import {
 	sampledCompilerAllocationSummary,
 	topCompilerProfileHotspots,
 } from "./compiler-profile-summary.ts";
 import type { CompilerProfileHotspot } from "./compiler-profile-summary.ts";
-import { normalizeCompilerScaleMetrics } from "./compiler-scale-normalization.ts";
+import {
+	normalizeCompilerScaleEmissionImage,
+	normalizeCompilerScaleMetrics,
+} from "./compiler-scale-normalization.ts";
 import {
 	prepareSelfCompileSource,
 	SELF_COMPILE_CONFIG,
@@ -717,11 +719,11 @@ async function compileSample(
 	});
 	if (report === undefined) throw new Error("optimizer did not publish its report");
 	const emitStartedAt = performance.now();
-	const units = emitProgramTranslationUnits(image, {
-		sourcePath: (file) =>
-			file.startsWith(`${benchmarkCase.sourceRoot}${path.sep}`)
-				? path.relative(benchmarkCase.sourceRoot, file)
-				: nativeSourcePath(file),
+	const emissionImage = normalizeCompilerScaleEmissionImage(
+		image,
+		benchmarkCase.sourceRoot,
+	);
+	const units = emitProgramTranslationUnits(emissionImage, {
 		maligatorSurface: true,
 	});
 	phases.emitMs = performance.now() - emitStartedAt;
