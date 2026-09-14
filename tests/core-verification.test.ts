@@ -82,6 +82,18 @@ describe("Core verification", () => {
 		expect(() => verifyCoreProgram(program)).toThrow(/appears twice in block order/);
 	});
 
+	it("retains exact range diagnostics on the invalid path", () => {
+		const { program, fn, entry } = validBranchProgram();
+		const instruction = fn.kernel.blockFirstInstruction(entry);
+		const originalStart = fn.kernel.instructionOperandStart.bind(fn.kernel);
+		const invalidStart = fn.operandCapacity + 1;
+		fn.kernel.instructionOperandStart = (candidate) =>
+			candidate === instruction ? invalidStart : originalStart(candidate);
+		expect(() => verifyCoreProgram(program)).toThrow(
+			`instruction @${instruction} operand range ${invalidStart}..${invalidStart} exceeds capacity ${fn.operandCapacity}`,
+		);
+	});
+
 	it("rejects a cyclic value-use chain", () => {
 		const { program, fn, condition } = validBranchProgram();
 		const first = fn.kernel.valueFirstUse(condition);

@@ -810,7 +810,7 @@ function lowerCoreSpecializations(
 				innerInitialize,
 				innerSteps: [loweredInnerSteps[0]!, loweredInnerSteps[1]!],
 				innerCloses: loweredInnerCloses,
-				runtimeGuard: "exact-map-or-set-entry-cursor",
+				runtimeGuard: "exact-entry-pair-cursor",
 				correspondence: "entry-pair-elements",
 				stateSynchronization: "authoritative-language-object",
 				fallback: "materialize-entry-pair-then-iterate",
@@ -1716,6 +1716,7 @@ function lowerFunctionToTarget(
 		{ target: CoreFunctionId; guarded: boolean }
 	>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
+	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
@@ -2056,6 +2057,11 @@ function lowerFunctionToTarget(
 			const numericCallback = numericSortCallbacks.get(instruction);
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
+			const directCallback = directBuiltinCallbacks.get(instruction);
+			if (directCallback !== undefined && rebuilt.type === "call") {
+				rebuilt.directCallbackFunctionIndex =
+					functionMap.coreToExecution[directCallback]!;
+			}
 			const reserveLength = denseReserveLengths.get(instruction);
 			if (reserveLength !== undefined && rebuilt.type !== "createArray") {
 				throw new Error(`Core dense-array plan lost allocation @${instruction}`);
@@ -2546,6 +2552,10 @@ export function lowerCoreCompilationToExecutionProgram(
 		number,
 		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
 	>();
+	const directBuiltinCallbacks = new Map<
+		number,
+		Map<CoreInstructionId, CoreFunctionId>
+	>();
 	const specializationRows = new Map<CoreFunctionId, Array<number>>();
 	const blockOrders = new Map(
 		compilation.plan.blockOrders.map(({ function: functionId, blocks }) => [
@@ -2607,6 +2617,13 @@ export function lowerCoreCompilationToExecutionProgram(
 			directEntryTargets.set(site.caller, targets);
 		}
 	}
+	for (const callback of compilation.plan.directBuiltinCallbacks ?? []) {
+		const calls =
+			directBuiltinCallbacks.get(callback.caller) ??
+			new Map<CoreInstructionId, CoreFunctionId>();
+		calls.set(callback.instruction, callback.target);
+		directBuiltinCallbacks.set(callback.caller, calls);
+	}
 	const unsignedArithmetic = new Map<CoreFunctionId, Set<CoreInstructionId>>();
 	for (const operation of compilation.plan.unsignedArithmetic ?? []) {
 		let instructions = unsignedArithmetic.get(operation.function);
@@ -2651,6 +2668,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			numericSortCallbacks.get(core) ?? new Map(),
 			directEntryTargets.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
+			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
 			operatorInputs.get(core) ?? new Map(),

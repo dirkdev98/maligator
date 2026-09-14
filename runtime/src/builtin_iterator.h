@@ -38,6 +38,7 @@ bool mal_vm_iterator_step_protocol_cursor(
     MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out);
 
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
+	MalVm *vm,
     const MalIteratorRecord *record,
     MalValue *first_out,
     MalValue *second_out,

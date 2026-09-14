@@ -553,7 +553,7 @@ export type VmIteratorEntryPairVirtualizationRegion = VmRegionEnvelope<
 	readonly innerInitializeIp: number;
 	readonly innerStepIps: readonly [number, number];
 	readonly innerCloseIps: ReadonlyArray<number>;
-	readonly runtimeGuard: "exact-map-or-set-entry-cursor";
+	readonly runtimeGuard: "exact-entry-pair-cursor";
 	readonly correspondence: "entry-pair-elements";
 	readonly stateSynchronization: "authoritative-language-object";
 	readonly fallback: "materialize-entry-pair-then-iterate";
@@ -2214,7 +2214,7 @@ function lowerExecutionFunctionToNativePlan(
 				region.license.admission.mode !== "capture" ||
 				region.representation !== "virtual-iterator-entry-pair" ||
 				region.composition !== "overlay" ||
-				region.runtimeGuard !== "exact-map-or-set-entry-cursor" ||
+				region.runtimeGuard !== "exact-entry-pair-cursor" ||
 				region.correspondence !== "entry-pair-elements" ||
 				region.stateSynchronization !== "authoritative-language-object" ||
 				region.fallback !== "materialize-entry-pair-then-iterate" ||
@@ -2296,7 +2296,7 @@ function lowerExecutionFunctionToNativePlan(
 				innerInitializeIp,
 				innerStepIps: resolvedInnerStepIps,
 				innerCloseIps: resolvedInnerCloseIps,
-				runtimeGuard: "exact-map-or-set-entry-cursor",
+				runtimeGuard: "exact-entry-pair-cursor",
 				correspondence: "entry-pair-elements",
 				stateSynchronization: "authoritative-language-object",
 				fallback: "materialize-entry-pair-then-iterate",

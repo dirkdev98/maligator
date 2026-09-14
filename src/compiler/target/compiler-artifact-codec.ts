@@ -1230,7 +1230,7 @@ function writeCompilerArtifact(
 					w.i32(region.innerInitializeIp);
 					w.i32Array([...region.innerStepIps]);
 					w.i32Array([...region.innerCloseIps]);
-					w.u8(region.runtimeGuard === "exact-map-or-set-entry-cursor" ? 1 : 0);
+					w.u8(region.runtimeGuard === "exact-entry-pair-cursor" ? 1 : 0);
 					w.u8(region.correspondence === "entry-pair-elements" ? 1 : 0);
 					w.u8(region.stateSynchronization === "authoritative-language-object" ? 1 : 0);
 					w.u8(region.fallback === "materialize-entry-pair-then-iterate" ? 1 : 0);
@@ -2005,7 +2005,7 @@ function validateIteratorEntryPairVirtualizationRegion(
 	if (
 		region.representation !== "virtual-iterator-entry-pair" ||
 		region.composition !== "overlay" ||
-		region.runtimeGuard !== "exact-map-or-set-entry-cursor" ||
+		region.runtimeGuard !== "exact-entry-pair-cursor" ||
 		region.correspondence !== "entry-pair-elements" ||
 		region.stateSynchronization !== "authoritative-language-object" ||
 		region.fallback !== "materialize-entry-pair-then-iterate" ||
@@ -4240,7 +4240,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						innerInitializeIp,
 						innerStepIps: [innerStepIps[0]!, innerStepIps[1]!],
 						innerCloseIps,
-						runtimeGuard: "exact-map-or-set-entry-cursor",
+						runtimeGuard: "exact-entry-pair-cursor",
 						correspondence: "entry-pair-elements",
 						stateSynchronization: "authoritative-language-object",
 						fallback: "materialize-entry-pair-then-iterate",

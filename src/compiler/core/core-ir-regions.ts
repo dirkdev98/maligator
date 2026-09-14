@@ -368,6 +368,12 @@ export interface CoreDirectEntryCallSite {
 	readonly fieldObject?: CoreInstructionId;
 }
 
+export interface CoreDirectBuiltinCallbackPlan {
+	readonly caller: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+	readonly target: CoreFunctionId;
+}
+
 export interface CoreEntryFields {
 	readonly keys: ReadonlyArray<number>;
 	readonly loads: ReadonlyArray<{
@@ -424,6 +430,7 @@ export interface CoreOptimizationPlan {
 		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
+	readonly directBuiltinCallbacks?: ReadonlyArray<CoreDirectBuiltinCallbackPlan>;
 	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
 	readonly builtinInputs?: ReadonlyArray<CoreBuiltinInputPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;
@@ -785,7 +792,7 @@ export interface CoreAllocatedIteratorEntryPairVirtualizationRegion extends Core
 	readonly innerCloses: ReadonlyArray<
 		Extract<CompilerInstruction, { type: "iteratorClose" }>
 	>;
-	readonly runtimeGuard: "exact-map-or-set-entry-cursor";
+	readonly runtimeGuard: "exact-entry-pair-cursor";
 	readonly correspondence: "entry-pair-elements";
 	readonly stateSynchronization: "authoritative-language-object";
 	readonly fallback: "materialize-entry-pair-then-iterate";

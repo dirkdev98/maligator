@@ -452,6 +452,7 @@ bool mal_vm_iterator_step_protocol_cursor(
 }
 
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
+	MalVm *vm,
     const MalIteratorRecord *record,
     MalValue *first_out,
     MalValue *second_out,
@@ -462,11 +463,33 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
     if (cursor == nullptr) {
         cursor = mal_vm_iterator_protocol_cursor(record, MAL_ITERATOR_CURSOR_SET);
     }
-    if (cursor == nullptr) return false;
-    if ((cursor->kind != MAL_ITERATOR_MAP_ENTRIES ||
-         !mal_value_is_map_object(cursor->target)) &&
-        (cursor->kind != MAL_ITERATOR_SET_ENTRIES ||
-         !mal_value_is_set_object(cursor->target))) {
+    if (cursor != nullptr &&
+        ((cursor->kind == MAL_ITERATOR_MAP_ENTRIES &&
+          mal_value_is_map_object(cursor->target)) ||
+         (cursor->kind == MAL_ITERATOR_SET_ENTRIES &&
+          mal_value_is_set_object(cursor->target)))) {
+        if (cursor->done) {
+            *first_out = mal_value_new_undefined();
+            *second_out = mal_value_new_undefined();
+            *done_out = true;
+            return true;
+        }
+        MalValue mapped;
+        mal_builtin_iterator_map_take_entry(cursor, first_out, &mapped, done_out);
+        *second_out = cursor->kind == MAL_ITERATOR_MAP_ENTRIES ? mapped : *first_out;
+        return true;
+    }
+
+    if (!mal_value_is_iterator_object(record->iterator) ||
+        !mal_value_is_native_function_object(record->next_method)) {
+        return false;
+    }
+    cursor = mal_value_to_iterator_object(record->iterator);
+    if (cursor->kind != MAL_ITERATOR_ARRAY_ENTRIES ||
+        !mal_value_is_array_object(cursor->target) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(record->next_method)) !=
+            mal_builtin_iterator_expected_next(cursor->kind)) {
         return false;
     }
     if (cursor->done) {
@@ -475,9 +498,24 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
         *done_out = true;
         return true;
     }
-    MalValue mapped;
-    mal_builtin_iterator_map_take_entry(cursor, first_out, &mapped, done_out);
-    *second_out = cursor->kind == MAL_ITERATOR_MAP_ENTRIES ? mapped : *first_out;
+    MalArrayObject *array = mal_value_to_array_object(cursor->target);
+    u64 index = cursor->index;
+    if (index >= array->length) {
+        cursor->done = true;
+        *first_out = mal_value_new_undefined();
+        *second_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    cursor->index++;
+    MalValue element;
+    if (!mal_array_object_dense_get(array, (u32) index, &element) &&
+        !mal_vm_get_property(vm, cursor->target, mal_key_index(index), &element)) {
+        return false;
+    }
+    *first_out = mal_ops_number_value((f64) index);
+    *second_out = element;
+    *done_out = false;
     return true;
 }
 

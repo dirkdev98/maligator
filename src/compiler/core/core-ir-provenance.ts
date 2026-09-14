@@ -2713,6 +2713,7 @@ function iteratorResultVirtualizationCandidates(
 }
 
 function iteratorEntryPairVirtualizationCandidates(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -2750,12 +2751,34 @@ function iteratorEntryPairVirtualizationCandidates(
 			sourceDefinition === undefined
 				? undefined
 				: fn.instructionOpcodeName(sourceDefinition);
+		const knownEntryCall = sourceAttributes.knownBuiltinCall as
+			| { readonly operation?: unknown }
+			| undefined;
+		let arrayEntries =
+			(sourceOpcode === "callKnown" &&
+				sourceAttributes.operation === "Array.prototype.entries") ||
+			(sourceOpcode === "call" &&
+				knownEntryCall?.operation === "Array.prototype.entries");
+		if (!arrayEntries && sourceOpcode === "call" && sourceDefinition !== undefined) {
+			const callee = instructionOperand(fn, sourceDefinition, 0);
+			const property =
+				callee === undefined ? undefined : specializationDefinition(fn, roots, callee);
+			const stringIndex =
+				property !== undefined &&
+				fn.instructionOpcodeName(property) === "loadPropertyStatic"
+					? fn.instructionAttributes(property).stringIndex
+					: undefined;
+			arrayEntries =
+				typeof stringIndex === "number" &&
+				decodeCoreString(program, stringIndex) === "entries";
+		}
 		// Construction bounds candidate search; the runtime cursor guard proves the collection kind.
 		if (
 			sourceAttributes.exactCollectionReceiver !== "Map" &&
 			sourceAttributes.exactCollectionReceiver !== "Set" &&
 			sourceOpcode !== "construct" &&
-			!(sourceOpcode === "callKnown" && sourceAttributes.construct === true)
+			!(sourceOpcode === "callKnown" && sourceAttributes.construct === true) &&
+			!arrayEntries
 		)
 			continue;
 		const pair = instructionResult(fn, outerStep, 0)!;
@@ -3848,7 +3871,7 @@ function discoverCandidates(
 		...indexedLengthLoopCandidates(program, fn, control, roots, index),
 		...iteratorCursorCandidates(fn, control, roots, index),
 		...iteratorResultVirtualizationCandidates(fn, control, index),
-		...iteratorEntryPairVirtualizationCandidates(fn, control, roots, index),
+		...iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index),
 		...stringCharCodeAtCandidates(program, fn, control, loops, roots, index),
 		...functionCallChainCandidates(program, fn, control, roots, index),
 		...stringSplitCursorCandidates(program, fn, control, loops, roots, index),

@@ -303,7 +303,7 @@ export function coreValueIsLoadedGlobalProperty(
 	return input !== undefined && coreValueIsLoadedGlobalProperty(fn, input, seen);
 }
 
-function directCreatedFunction(
+export function coreDirectCreatedFunction(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 	seen = new Set<CoreValueId>(),
@@ -315,13 +315,51 @@ function directCreatedFunction(
 	const opcode = fn.instructionOpcodeName(definition);
 	if (opcode === "move") {
 		const input = instructionOperand(fn, definition, 0);
-		return input === undefined ? undefined : directCreatedFunction(fn, input, seen);
+		return input === undefined ? undefined : coreDirectCreatedFunction(fn, input, seen);
 	}
 	if (opcode !== "createFunction") return undefined;
 	const target = fn.instructionAttributes(definition).functionIndex;
 	return typeof target === "number" && Number.isSafeInteger(target) && target >= 0
 		? (target as CoreFunctionId)
 		: undefined;
+}
+
+const DIRECT_CALLBACK_BUILTINS: ReadonlySet<string> = new Set([
+	"Array.prototype.forEach",
+	"Array.prototype.some",
+	"Array.prototype.every",
+	"Array.prototype.find",
+	"Array.prototype.findIndex",
+	"Array.prototype.map",
+	"Array.prototype.filter",
+	"Array.prototype.reduce",
+	"Array.prototype.reduceRight",
+	"Array.prototype.findLast",
+	"Array.prototype.findLastIndex",
+	"Array.prototype.flatMap",
+]);
+
+export function coreDirectBuiltinCallbackTarget(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreFunctionId | undefined {
+	if (fn.instructionKind(instruction) !== "operation") return undefined;
+	const opcode = fn.instructionOpcodeName(instruction);
+	const attributes = fn.instructionAttributes(instruction);
+	const known = attributes.knownBuiltinCall as
+		| { readonly operation?: unknown }
+		| undefined;
+	const operation =
+		opcode === "callKnown"
+			? attributes.operation
+			: opcode === "call" && known !== undefined
+				? known.operation
+				: undefined;
+	if (typeof operation !== "string" || !DIRECT_CALLBACK_BUILTINS.has(operation)) {
+		return undefined;
+	}
+	const callback = instructionOperand(fn, instruction, opcode === "callKnown" ? 1 : 2);
+	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 
 function directReturnedFunctionTargets(
@@ -336,7 +374,7 @@ function directReturnedFunctionTargets(
 		if (fn.instructionKind(terminator) !== "return") continue;
 		returns++;
 		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
-		const target = directCreatedFunction(fn, returned);
+		const target = coreDirectCreatedFunction(fn, returned);
 		if (target === undefined || target >= program.functionCapacity) return undefined;
 		targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(target));
 	}
@@ -370,7 +408,7 @@ function collectKnownFunctionProperties(
 		if (opcode !== "storeGlobal" && opcode !== "storeGlobalProperty") continue;
 		const value = instructionOperand(fn, instruction, 0);
 		if (value === undefined) continue;
-		const target = directCreatedFunction(fn, value);
+		const target = coreDirectCreatedFunction(fn, value);
 		if (target === undefined || target >= functionCapacity) continue;
 		const attributes = fn.instructionAttributes(instruction);
 		const key = opcode === "storeGlobal" ? attributes.index : attributes.nameStringIndex;
@@ -390,7 +428,7 @@ function collectKnownFunctionProperties(
 	): CoreCalleeTargets => {
 		if (seen.has(value)) return CORE_CALLEE_TARGETS_BOTTOM;
 		seen.add(value);
-		const direct = directCreatedFunction(fn, value);
+		const direct = coreDirectCreatedFunction(fn, value);
 		if (direct !== undefined && direct < functionCapacity) {
 			return coreCalleeTargetsFunction(direct);
 		}

@@ -172,6 +172,48 @@ assert(
 	"TypedArray iterator entries",
 );
 
+const arrayEntryLoop = [7, 11];
+let arrayEntryTotal = 0;
+for (const [index, value] of arrayEntryLoop.entries()) {
+	arrayEntryTotal += index + value;
+	if (index === 0) arrayEntryLoop.push(13);
+}
+assert(arrayEntryTotal === 34, "Array entry loop observes live length");
+
+const sparseEntryLoop = [2, , 6];
+const sparseEntryPrototype = Object.create(Array.prototype);
+Object.defineProperty(sparseEntryPrototype, "1", {
+	configurable: true,
+	get() {
+		return 10;
+	},
+});
+Object.setPrototypeOf(sparseEntryLoop, sparseEntryPrototype);
+let sparseEntryTotal = 0;
+for (const [index, value] of sparseEntryLoop.entries()) {
+	sparseEntryTotal += index + value;
+}
+assert(sparseEntryTotal === 21, "Array entry loop observes inherited holes");
+
+const originalArrayEntries = Array.prototype.entries;
+let overriddenArrayEntryCalls = 0;
+Array.prototype.entries = function () {
+	const iterator = originalArrayEntries.call(this);
+	const next = iterator.next;
+	iterator.next = function () {
+		overriddenArrayEntryCalls++;
+		return next.call(this);
+	};
+	return iterator;
+};
+let overriddenArrayEntryTotal = 0;
+for (const [index, value] of [3, 5].entries()) {
+	overriddenArrayEntryTotal += index + value;
+}
+Array.prototype.entries = originalArrayEntries;
+assert(overriddenArrayEntryTotal === 9, "overridden Array entry values");
+assert(overriddenArrayEntryCalls === 3, "overridden Array entry next calls");
+
 const mapEntries = new Map([
 	["a", 1],
 	["b", 2],

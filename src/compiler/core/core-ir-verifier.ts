@@ -87,7 +87,35 @@ function withContext<T>(context: CoreVerificationContext | undefined, run: () =>
 	}
 }
 
-function checkRange(name: string, start: number, count: number, capacity: number): void {
+type RangeLabel =
+	| "block-parameter"
+	| "instruction-operand"
+	| "instruction-result"
+	| "terminator-edge"
+	| "block-handler-argument";
+
+function rangeName(label: RangeLabel, owner: number): string {
+	switch (label) {
+		case "block-parameter":
+			return `block b${owner} parameter`;
+		case "instruction-operand":
+			return `instruction @${owner} operand`;
+		case "instruction-result":
+			return `instruction @${owner} result`;
+		case "terminator-edge":
+			return `terminator @${owner} edge`;
+		case "block-handler-argument":
+			return `block b${owner} handler argument`;
+	}
+}
+
+function checkRange(
+	label: RangeLabel,
+	owner: number,
+	start: number,
+	count: number,
+	capacity: number,
+): void {
 	if (
 		!Number.isSafeInteger(start) ||
 		!Number.isSafeInteger(count) ||
@@ -95,6 +123,7 @@ function checkRange(name: string, start: number, count: number, capacity: number
 		count < 0 ||
 		start + count > capacity
 	) {
+		const name = rangeName(label, owner);
 		fail(`${name} range ${start}..${start + count} exceeds capacity ${capacity}`);
 	}
 }
@@ -254,7 +283,8 @@ function verifyBlockRows(fn: CoreFunctionStore): void {
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
 		checkRange(
-			`block b${block} parameter`,
+			"block-parameter",
+			block,
 			parameterStart,
 			parameterCount,
 			fn.blockParameterCapacity,
@@ -339,13 +369,15 @@ function verifyInstructionRows(
 		const resultStart = fn.kernel.instructionResultStart(instruction);
 		const resultCount = fn.kernel.instructionResultCount(instruction);
 		checkRange(
-			`instruction @${instruction} operand`,
+			"instruction-operand",
+			instruction,
 			operandStart,
 			operandCount,
 			fn.operandCapacity,
 		);
 		checkRange(
-			`instruction @${instruction} result`,
+			"instruction-result",
+			instruction,
 			resultStart,
 			resultCount,
 			fn.resultCapacity,
@@ -720,7 +752,8 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 		const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
 		const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
 		checkRange(
-			`terminator @${instruction} edge`,
+			"terminator-edge",
+			instruction,
 			edgeStart,
 			edgeCount,
 			fn.terminatorEdgeCapacity,
@@ -776,7 +809,8 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
 			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
 			checkRange(
-				`block b${block} handler argument`,
+				"block-handler-argument",
+				block,
 				argumentStart,
 				argumentCount,
 				fn.handlerArgumentCapacity,

@@ -7305,7 +7305,8 @@ function emitInstruction(
 				return [
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 					`MalValue ${val} = MAL_VALUE_UNDEFINED; bool ${done};`,
-					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(&${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
+					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(vm, &${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
+					`if (!__iter_entry_pair_${ip}_fast && vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`if (__iter_entry_pair_${ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
 					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
 					`r${instruction.valueDst} = __iter_entry_pair_${ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,

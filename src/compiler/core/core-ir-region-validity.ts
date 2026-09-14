@@ -3,7 +3,10 @@ import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-fac
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { analyzeCoreCallGraph } from "./core-ir-call-targets.ts";
+import {
+	analyzeCoreCallGraph,
+	coreDirectBuiltinCallbackTarget,
+} from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -1874,6 +1877,33 @@ export function verifyCoreOptimizationPlan(
 	for (const operation of plan.unsignedArithmetic ?? []) {
 		if (!coreUnsignedArithmeticProofIsCurrent(program, operation))
 			fail("unsigned arithmetic has no current range proof");
+	}
+	const directCallbackSites = new Set<string>();
+	for (const callback of plan.directBuiltinCallbacks ?? []) {
+		const key = `${callback.caller}:${callback.instruction}`;
+		if (directCallbackSites.has(key))
+			fail(`direct callback callsite ${key} is duplicated`);
+		directCallbackSites.add(key);
+		if (!plan.liveFunctions.includes(callback.caller)) {
+			fail(`direct callback callsite ${key} is dead`);
+		}
+		const caller = program.function(callback.caller);
+		requireInstruction(caller, callback.instruction, "direct callback callsite", key);
+		if (
+			!blockProofs
+				.get(callback.caller)!
+				.included.has(caller.instructionBlock(callback.instruction))
+		) {
+			fail(`direct callback callsite ${key} is omitted from target lowering`);
+		}
+		if (
+			coreDirectBuiltinCallbackTarget(caller, callback.instruction) !== callback.target
+		) {
+			fail(`direct callback callsite ${key} has no current exact target proof`);
+		}
+		if (!plan.liveFunctions.includes(callback.target)) {
+			fail(`direct callback callsite ${key} targets dead function ${callback.target}`);
+		}
 	}
 	const entriesByFunction = new Map<CoreFunctionId, number>();
 	const callSites = new Map<

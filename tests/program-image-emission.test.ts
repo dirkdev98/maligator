@@ -2245,7 +2245,7 @@ describe("native update-expression representation", () => {
 		expect(regions[0]).toMatchObject({
 			representation: "virtual-iterator-entry-pair",
 			composition: "overlay",
-			runtimeGuard: "exact-map-or-set-entry-cursor",
+			runtimeGuard: "exact-entry-pair-cursor",
 			correspondence: "entry-pair-elements",
 			stateSynchronization: "authoritative-language-object",
 			fallback: "materialize-entry-pair-then-iterate",
@@ -2261,6 +2261,30 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("mal_vm_iterator_step_entry_pair_protocol_cursor(");
 		expect(output).toContain("__iter_entry_pair_");
+		expect(output).toContain("mal_vm_iterator_step(vm,");
+	});
+
+	it("virtualizes Array entries while retaining the authoritative iterator", () => {
+		const definition = lower(`
+			function visit() {
+				const values = [2, 4, 8];
+				let total = 0;
+				for (const [index, value] of values.entries()) total += index + value;
+				return total;
+			}
+			globalThis.visit = visit;
+		`);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "iterator-entry-pair-virtualization",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			runtimeGuard: "exact-entry-pair-cursor",
+			stateSynchronization: "authoritative-language-object",
+			fallback: "materialize-entry-pair-then-iterate",
+		});
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_iterator_step_entry_pair_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step(vm,");
 	});
 

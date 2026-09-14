@@ -17,7 +17,10 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { coreValueIsLoadedGlobalProperty } from "./core-ir-call-targets.ts";
+import {
+	coreDirectBuiltinCallbackTarget,
+	coreValueIsLoadedGlobalProperty,
+} from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
@@ -1755,6 +1758,25 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
+		directBuiltinCallbacks: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => {
+				const fn = program.function(input.function);
+				return input.blocks.flatMap((block) =>
+					[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
+						const target = coreDirectBuiltinCallbackTarget(fn, instruction);
+						return target === undefined || !live.has(target)
+							? []
+							: [
+									Object.freeze({
+										caller: input.function,
+										instruction,
+										target,
+									}),
+								];
+					}),
+				);
+			}),
+		),
 		specializedOnlyFunctions: Object.freeze(
 			coreSpecializedOnlyFunctions(
 				program,
