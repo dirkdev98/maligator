@@ -1500,10 +1500,9 @@ export interface CoreLocalFactIndex {
 		readonly operations: number;
 		readonly memoryOperations: number;
 	};
-	readonly location: ReadonlyMap<
-		CoreInstructionId,
-		{ readonly block: CoreBlockId; readonly index: number }
-	>;
+	/** A negative block marks an instruction absent from this immutable snapshot. */
+	readonly locationBlocks: ArrayLike<number>;
+	readonly locationIndices: ArrayLike<number>;
 	readonly uses: ReadonlyMap<
 		CoreValueId,
 		ReadonlyArray<{ readonly instruction: CoreInstructionId; readonly position: number }>
@@ -1541,10 +1540,10 @@ export function buildCoreLocalFactIndex(
 		MEMORY_OPCODE_FLAGS.set(fn.registry, memoryOpcodes);
 	}
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const location = new Map<
-		CoreInstructionId,
-		{ readonly block: CoreBlockId; readonly index: number }
-	>();
+	const locationBlocks = new Int32Array(fn.instructionCapacity);
+	locationBlocks.fill(-1);
+	const locationIndices = new Int32Array(fn.instructionCapacity);
+	let instructionVisits = 0;
 	const uses = new Map<
 		CoreValueId,
 		Array<{ readonly instruction: CoreInstructionId; readonly position: number }>
@@ -1575,7 +1574,9 @@ export function buildCoreLocalFactIndex(
 			const instruction = instructionIndex as CoreInstructionId;
 			if (fn.kernel.instructionOpcode(instruction) < 0) continue;
 			const index = bodyIndex++;
-			location.set(instruction, { block, index });
+			locationBlocks[instruction] = block;
+			locationIndices[instruction] = index;
+			instructionVisits++;
 			const opcode = fn.instructionOpcode(instruction);
 			const instructions = mutableOpcodes[opcode] ?? [];
 			instructions.push(instruction);
@@ -1604,10 +1605,9 @@ export function buildCoreLocalFactIndex(
 			}
 		}
 		const terminator = fn.blockTerminator(block);
-		location.set(terminator, {
-			block,
-			index: bodyIndex,
-		});
+		locationBlocks[terminator] = block;
+		locationIndices[terminator] = bodyIndex;
+		instructionVisits++;
 		const terminatorOperandStart = fn.kernel.instructionOperandStart(terminator);
 		const terminatorOperandCount = fn.kernel.instructionOperandCount(terminator);
 		for (let index = 0; index < terminatorOperandCount; index++) {
@@ -1630,11 +1630,12 @@ export function buildCoreLocalFactIndex(
 	const opcodes = mutableOpcodes.map((instructions) => Object.freeze(instructions ?? []));
 	return Object.freeze({
 		statistics: Object.freeze({
-			instructionVisits: location.size,
+			instructionVisits,
 			operations: operations.length,
 			memoryOperations: memoryOperations.length,
 		}),
-		location,
+		locationBlocks,
+		locationIndices,
 		uses,
 		controlUses,
 		handlerTargets,
@@ -1651,12 +1652,12 @@ function specializationInstructionDominates(
 	producer: CoreInstructionId,
 	consumer: CoreInstructionId,
 ): boolean {
-	const left = index.location.get(producer);
-	const right = index.location.get(consumer);
-	if (left === undefined || right === undefined) return false;
-	return left.block === right.block
-		? left.index < right.index
-		: control.dominates(left.block, right.block);
+	const leftBlock = index.locationBlocks[producer]!;
+	const rightBlock = index.locationBlocks[consumer]!;
+	if (leftBlock < 0 || rightBlock < 0) return false;
+	return leftBlock === rightBlock
+		? index.locationIndices[producer]! < index.locationIndices[consumer]!
+		: control.dominates(leftBlock as CoreBlockId, rightBlock as CoreBlockId);
 }
 
 function specializationDefinition(
@@ -1860,13 +1861,14 @@ function stringCharCodeAtCandidates(
 					)
 				)
 					continue;
-				const updateLocation = index.location.get(induction.updateInstruction);
-				const callLocation = index.location.get(call);
+				const updateBlock = index.locationBlocks[induction.updateInstruction]!;
+				const callBlock = index.locationBlocks[call]!;
 				if (
-					updateLocation === undefined ||
-					callLocation === undefined ||
-					(updateLocation.block === callLocation.block &&
-						callLocation.index >= updateLocation.index)
+					updateBlock < 0 ||
+					callBlock < 0 ||
+					(updateBlock === callBlock &&
+						index.locationIndices[call]! >=
+							index.locationIndices[induction.updateInstruction]!)
 				)
 					continue;
 				bounded = Object.freeze({
@@ -2454,12 +2456,12 @@ function indexedLengthLoopCandidates(
 				fn.valueRepresentation(induction) !== "f64")
 		)
 			continue;
-		const loadLocation = index.location.get(load);
-		const comparisonLocation = index.location.get(comparison);
+		const loadBlock = index.locationBlocks[load]!;
+		const comparisonBlock = index.locationBlocks[comparison]!;
 		if (
-			loadLocation === undefined ||
-			comparisonLocation === undefined ||
-			loadLocation.index + 1 !== comparisonLocation.index
+			loadBlock < 0 ||
+			comparisonBlock < 0 ||
+			index.locationIndices[load]! + 1 !== index.locationIndices[comparison]!
 		)
 			continue;
 		const receiver = instructionOperand(fn, load, 0)!;
@@ -2471,19 +2473,19 @@ function indexedLengthLoopCandidates(
 			...indexedOpcodeInstructions(fn, index, "loadProperty"),
 			...indexedOpcodeInstructions(fn, index, "storeProperty"),
 		].sort((left, right) => {
-			const leftLocation = index.location.get(left)!;
-			const rightLocation = index.location.get(right)!;
 			return (
-				leftLocation.block - rightLocation.block ||
-				leftLocation.index - rightLocation.index
+				index.locationBlocks[left]! - index.locationBlocks[right]! ||
+				index.locationIndices[left]! - index.locationIndices[right]!
 			);
 		});
 		for (const instruction of indexedAccesses) {
-			const location = index.location.get(instruction)!;
+			const instructionBlock = index.locationBlocks[instruction]! as CoreBlockId;
+			const instructionIndex = index.locationIndices[instruction]!;
 			if (
-				!loop.blocks.has(location.block) ||
-				!control.dominates(block, location.block) ||
-				(location.block === block && location.index <= comparisonLocation.index) ||
+				!loop.blocks.has(instructionBlock) ||
+				!control.dominates(block, instructionBlock) ||
+				(instructionBlock === block &&
+					instructionIndex <= index.locationIndices[comparison]) ||
 				instructionOperand(fn, instruction, 0) !== receiver ||
 				instructionOperand(fn, instruction, 1) !== induction
 			)
@@ -3037,10 +3039,10 @@ function stringSplitProjectionCandidates(
 		if (!safe || projectedIndices.size === 0 || projectedIndices.size > 8) continue;
 		loads.sort(
 			(left, right) =>
-				index.location.get(left.instruction)!.block -
-					index.location.get(right.instruction)!.block ||
-				index.location.get(left.instruction)!.index -
-					index.location.get(right.instruction)!.index,
+				index.locationBlocks[left.instruction]! -
+					index.locationBlocks[right.instruction]! ||
+				index.locationIndices[left.instruction]! -
+					index.locationIndices[right.instruction]!,
 		);
 		const instructions = Object.freeze([
 			...(property === undefined ? [] : [property]),
@@ -3595,10 +3597,10 @@ function regexpExecProjectionCandidates(
 			continue;
 		loads.sort(
 			(left, right) =>
-				index.location.get(left.instruction)!.block -
-					index.location.get(right.instruction)!.block ||
-				index.location.get(left.instruction)!.index -
-					index.location.get(right.instruction)!.index,
+				index.locationBlocks[left.instruction]! -
+					index.locationBlocks[right.instruction]! ||
+				index.locationIndices[left.instruction]! -
+					index.locationIndices[right.instruction]!,
 		);
 		const key = `regexp-exec-projection:${fn.id}:${call}:${instructions.join(",")}`;
 		candidates.push(
@@ -3634,7 +3636,7 @@ function regexpIteratorProjectionCandidates(
 		if (!control.reachable.has(block)) continue;
 		const doneBranch = fn.blockTerminator(block);
 		if (
-			index.location.get(step)!.index + 1 !== index.location.get(doneBranch)!.index ||
+			index.locationIndices[step]! + 1 !== index.locationIndices[doneBranch]! ||
 			instructionOperandCount(fn, step) !== 2 ||
 			instructionResultCount(fn, step) !== 2 ||
 			fn.instructionKind(doneBranch) !== "branch" ||
@@ -3731,10 +3733,10 @@ function regexpIteratorProjectionCandidates(
 		if (!safe || loads.length === 0 || loads.length > 8) continue;
 		loads.sort(
 			(left, right) =>
-				index.location.get(left.instruction)!.block -
-					index.location.get(right.instruction)!.block ||
-				index.location.get(left.instruction)!.index -
-					index.location.get(right.instruction)!.index,
+				index.locationBlocks[left.instruction]! -
+					index.locationBlocks[right.instruction]! ||
+				index.locationIndices[left.instruction]! -
+					index.locationIndices[right.instruction]!,
 		);
 		const claimed = new Set<CoreInstructionId>([step, doneBranch]);
 		for (const load of loads) {
@@ -3902,8 +3904,8 @@ function discoverCandidates(
 		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
 		const user = uses.length === 1 ? uses[0]!.instruction : undefined;
 		if (user === undefined) continue;
-		const startLocation = index.location.get(instruction);
-		const finishLocation = index.location.get(user);
+		const startBlock = index.locationBlocks[instruction]!;
+		const finishBlock = index.locationBlocks[user]!;
 		let matchingOperands = 0;
 		const userOperandCount = instructionOperandCount(fn, user);
 		for (let position = 0; position < userOperandCount; position++) {
@@ -3914,10 +3916,10 @@ function discoverCandidates(
 			fn.instructionOpcodeName(user) !== "binary" ||
 			!control.reachable.has(fn.instructionBlock(user)) ||
 			matchingOperands !== 1 ||
-			startLocation === undefined ||
-			finishLocation === undefined ||
-			startLocation.block !== finishLocation.block ||
-			startLocation.index >= finishLocation.index ||
+			startBlock < 0 ||
+			finishBlock < 0 ||
+			startBlock !== finishBlock ||
+			index.locationIndices[instruction]! >= index.locationIndices[user]! ||
 			!coreTargetSupportsNumericFusionOperator(
 				fn.instructionAttributes(user).operator,
 				"finish",

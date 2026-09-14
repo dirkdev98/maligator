@@ -1482,8 +1482,11 @@ function scalarizeRootedLayout(
 	}
 	if (!valid) return undefined;
 	for (const { instruction, position } of operationUses) {
-		const location = index.location.get(instruction);
-		if (location === undefined || !control.reachable.has(location.block)) continue;
+		const rawBlock = index.locationBlocks[instruction]!;
+		if (rawBlock < 0) continue;
+		const block = rawBlock as CoreBlockId;
+		if (!control.reachable.has(block)) continue;
+		const locationIndex = index.locationIndices[instruction]!;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (
 			position === 0 &&
@@ -1511,18 +1514,18 @@ function scalarizeRootedLayout(
 		if (
 			key === undefined ||
 			accessValue === undefined ||
-			fn.kernel.blockHandlerBlock(location.block) !== undefined ||
-			(location.block === allocationBlock
-				? location.index <= allocationIndex
-				: !control.instructionDominatesBlock(allocationBlock, location.block))
+			fn.kernel.blockHandlerBlock(block) !== undefined ||
+			(block === allocationBlock
+				? locationIndex <= allocationIndex
+				: !control.instructionDominatesBlock(allocationBlock, block))
 		) {
 			valid = false;
 			break;
 		}
 		(mode === "read" ? loads : stores).push({
 			instruction,
-			block: location.block,
-			index: location.index,
+			block,
+			index: locationIndex,
 			key,
 			value: accessValue,
 		});
