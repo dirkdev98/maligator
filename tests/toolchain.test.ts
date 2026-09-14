@@ -198,6 +198,7 @@ printf 'cargo-env %s\\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
 printf 'cargo-cc %s\\n' "$CC" >> '${logPath}'
 printf 'cargo-cxx %s\\n' "$CXX" >> '${logPath}'
 printf 'cargo-ar %s\\n' "$AR" >> '${logPath}'
+printf 'cargo-arflags %s\\n' "$ARFLAGS" >> '${logPath}'
 cargo_output="$CARGO_TARGET_DIR/release"
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "--target" ]; then shift; cargo_output="$CARGO_TARGET_DIR/$1/release"; fi
@@ -419,6 +420,8 @@ exit 7
 		);
 		expect(artifacts.linkArgs).toEqual([artifacts.library, "-lm", "-lunwind"]);
 		expect(artifacts.nativeToolEnvironment).toMatchObject({
+			AR: realpathSync(path.join(fake.bin, "zig")),
+			ARFLAGS: "ar",
 			CC_KNOWN_WRAPPER_CUSTOM: "zig",
 			CRATE_CC_NO_DEFAULTS: "1",
 			CFLAGS: "-fno-sanitize=undefined",
@@ -442,9 +445,8 @@ exit 7
 		expect(invocations).toContain(
 			`cargo-cc ${realpathSync(path.join(fake.bin, "zig"))} cc -target x86_64-linux-gnu`,
 		);
-		expect(invocations).toContain(
-			`cargo-ar ${realpathSync(path.join(fake.bin, "zig"))} ar`,
-		);
+		expect(invocations).toContain(`cargo-ar ${realpathSync(path.join(fake.bin, "zig"))}`);
+		expect(invocations).toContain("cargo-arflags ar");
 		expect(invocations).toContain(
 			`cargo-cxx ${realpathSync(path.join(fake.bin, "zig"))} c++ -target x86_64-linux-gnu`,
 		);

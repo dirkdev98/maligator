@@ -84,8 +84,15 @@ export interface RustArtifacts {
 function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string, string> {
 	const environment: Record<string, string> = {
 		CC: formatToolCommand(context.toolchain.tools.cc),
-		AR: formatToolCommand(context.toolchain.tools.ar),
+		AR: context.toolchain.tools.ar.path,
 	};
+	// cc-rs misparses "zig ar" once Zig is registered as the compiler wrapper below.
+	const arArguments = context.toolchain.tools.ar.args ?? [];
+	if (arArguments.length > 0) {
+		environment.ARFLAGS = [...arArguments, context.environment.ARFLAGS]
+			.filter((value) => value !== undefined && value !== "")
+			.join(" ");
+	}
 	if (context.toolchain.tools.cxx !== undefined) {
 		environment.CXX = formatToolCommand(context.toolchain.tools.cxx);
 	}
