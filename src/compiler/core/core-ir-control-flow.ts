@@ -260,9 +260,13 @@ function buildExceptionalStructural(
 	const { successors, predecessors } = runOwner(
 		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
 		() => {
-			const successors = ordinary.successors.map((edges) => [...edges]);
-			const predecessors = ordinary.predecessors.map((edges) => [...edges]);
-			for (const block of fn.blockIds()) {
+			const successors = ordinary.successors.slice() as Array<Array<CoreControlEdge>>;
+			const predecessors = ordinary.predecessors.slice() as Array<Array<CoreControlEdge>>;
+			const mutablePredecessors = new Set<CoreBlockId>();
+			const handlerBlocks = Array.from({ length: fn.handlerBlockCount }, (_, index) =>
+				fn.handlerBlockAt(index),
+			).sort((left, right) => left - right);
+			for (const block of handlerBlocks) {
 				const handler = fn.kernel.blockHandlerBlock(block);
 				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
 				const start = fn.kernel.blockHandlerArgumentStart(block);
@@ -294,7 +298,11 @@ function buildExceptionalStructural(
 						},
 					};
 				}
-				successors[block]!.push(edge);
+				successors[block] = [...(successors[block] ?? []), edge];
+				if (!mutablePredecessors.has(handler)) {
+					predecessors[handler] = [...(predecessors[handler] ?? [])];
+					mutablePredecessors.add(handler);
+				}
 				predecessors[handler]!.push(edge);
 			}
 			return { successors, predecessors };
@@ -738,9 +746,14 @@ function buildFromStructural(
 		uniqueEntryEdges.set(from, cache);
 		return unique;
 	};
-	const { loopProducts, irreducibleCycles } = runOwner(
-		CORE_OPTIMIZATION_OWNER.loopsAndDominanceFrontiers,
-		() => {
+	let loopAnalysis:
+		| {
+				readonly loops: ReadonlyArray<CoreNaturalLoop>;
+				readonly irreducibleCycles: ReadonlyArray<CoreIrreducibleCycle>;
+		  }
+		| undefined;
+	const loopsAndCycles = () =>
+		(loopAnalysis ??= runOwner(CORE_OPTIMIZATION_OWNER.loopsAndDominanceFrontiers, () => {
 			const loopProducts = naturalLoops(
 				fn,
 				successors,
@@ -749,12 +762,21 @@ function buildFromStructural(
 				reversePostorder,
 				dominates,
 			);
-			const irreducibleCycles = loopProducts.hasNonNaturalRetreatingEdge
-				? findIrreducibleCycles(fn.entry, successors, predecessors, reachable, dominates)
-				: [];
-			return { loopProducts, irreducibleCycles };
-		},
-	);
+			return Object.freeze({
+				loops: Object.freeze(loopProducts.loops),
+				irreducibleCycles: Object.freeze(
+					loopProducts.hasNonNaturalRetreatingEdge
+						? findIrreducibleCycles(
+								fn.entry,
+								successors,
+								predecessors,
+								reachable,
+								dominates,
+							)
+						: [],
+				),
+			});
+		}));
 	return Object.freeze({
 		function: fn.id,
 		cfgVersion: fn.version("cfg"),
@@ -764,8 +786,12 @@ function buildFromStructural(
 		reachable: Object.freeze(reachable),
 		reversePostorder: Object.freeze(reversePostorder),
 		immediateDominators: Object.freeze(parents),
-		loops: Object.freeze(loopProducts.loops),
-		irreducibleCycles: Object.freeze(irreducibleCycles),
+		get loops() {
+			return loopsAndCycles().loops;
+		},
+		get irreducibleCycles() {
+			return loopsAndCycles().irreducibleCycles;
+		},
 		dominates,
 		instructionDominatesBlock(dominator: CoreBlockId, block: CoreBlockId) {
 			return (instructionDominatesBlock ??= buildInstructionDominance())(

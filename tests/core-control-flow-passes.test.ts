@@ -17,6 +17,7 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
@@ -59,6 +60,32 @@ function definingInstruction(fn: CoreFunctionStore, value: CoreValueId) {
 }
 
 describe("Core control-flow analyses and passes", () => {
+	it("defers loop products until a consumer requests them", () => {
+		const ownerWork = (readLoops: boolean) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createUndefined", []);
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			const functionId = builder.finish(entry).function;
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			const control = analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})
+				.exceptional();
+			if (readLoops) expect(control.loops).toEqual([]);
+			return report.finish(program, { directEntries: [], specializations: [] }).owners[
+				CORE_OPTIMIZATION_OWNER.loopsAndDominanceFrontiers
+			]!.workUnits;
+		};
+
+		expect(ownerWork(false)).toBe(0);
+		expect(ownerWork(true)).toBe(1);
+	});
+
 	it.each([
 		{
 			name: "successive diamonds",
@@ -227,6 +254,8 @@ describe("Core control-flow analyses and passes", () => {
 
 		expect(exceptional.successors).toBe(bundle.structural.successors);
 		expect(exceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
+		expect(exceptional.successors[normal]).toBe(ordinary.successors[normal]);
+		expect(exceptional.predecessors[entry]).toBe(ordinary.predecessors[entry]);
 		expect(exceptional.successors[entry]![1]).toMatchObject({
 			from: entry,
 			to: handler,

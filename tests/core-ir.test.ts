@@ -292,6 +292,32 @@ describe("Core IR", () => {
 		expect(memory.statistics.stateEntries).toBe(exactReadCount * 2);
 	});
 
+	it("does not materialize write-only memory events", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		for (let index = 0; index < 32; index++) {
+			builder.appendInstruction(entry, "storeLocal", [stored!], {
+				attributes: { index },
+			});
+		}
+		builder.setTerminator(entry, { kind: "return", value: stored! });
+		const { function: functionId } = builder.finish(entry);
+
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+
+		expect(memory.statistics).toMatchObject({
+			accesses: 32,
+			touchedBlocks: 0,
+			stateRows: 0,
+			stateEntries: 0,
+			familyWidenings: 0,
+		});
+	});
+
 	it("indexes memory work independently of unrelated operations", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);

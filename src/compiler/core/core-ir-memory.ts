@@ -448,6 +448,26 @@ function memoryVersions(
 		if (!coreMemoryLocationIsExact(access.location)) return undefined;
 		return slotByLocation.get(locationTable.id(access.location));
 	};
+	const demandedSlots = new Uint8Array(slotCount);
+	for (const accesses of accessesByInstruction.values()) {
+		for (const access of accesses) {
+			const family = coreMemoryLocationFamily(access.location);
+			const exactSlot = slotForAccess(access);
+			if (access.mode === "read") {
+				if (exactSlot === undefined) {
+					for (const domain of domainsForFamily(family))
+						demandedSlots[domainSlot.get(domain)!] = 1;
+				} else {
+					demandedSlots[exactSlot] = 1;
+					if (!partitions[exactSlot]!.protectedLocalHeap)
+						demandedSlots[killSlotByFamily.get(family)!] = 1;
+				}
+			} else if (exactSlot !== undefined && !partitions[exactSlot]!.protectedLocalHeap) {
+				demandedSlots[killSlotByFamily.get(family)!] = 1;
+			}
+		}
+	}
+	const slotIsDemanded = (slot: number): boolean => demandedSlots[slot] !== 0;
 	interface SparseMemoryEvent {
 		readonly instruction: CoreInstructionId;
 		readonly reads: ReadonlySet<number>;
@@ -498,10 +518,11 @@ function memoryVersions(
 		definitions: Map<number, number>,
 	): void => {
 		const fallbackSlot = domainSlot.get(domain)!;
-		definitions.set(fallbackSlot, writeIdentity(definitions, fallbackSlot));
+		if (slotIsDemanded(fallbackSlot))
+			definitions.set(fallbackSlot, writeIdentity(definitions, fallbackSlot));
 		for (const family of familiesKilledByDomain.get(domain)!) {
 			const slot = killSlotByFamily.get(family)!;
-			if (definitions.has(slot)) continue;
+			if (!slotIsDemanded(slot) || definitions.has(slot)) continue;
 			familyWidenings++;
 			definitions.set(slot, writeIdentity(definitions, slot));
 		}
@@ -552,7 +573,8 @@ function memoryVersions(
 					killDomain(domain, definitions);
 				} else {
 					const slot = domainSlot.get(domain)!;
-					definitions.set(slot, writeIdentity(definitions, slot));
+					if (slotIsDemanded(slot))
+						definitions.set(slot, writeIdentity(definitions, slot));
 				}
 			}
 		}

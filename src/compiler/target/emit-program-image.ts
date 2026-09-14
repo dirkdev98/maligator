@@ -516,7 +516,14 @@ interface TranslationUnitPart {
 	symbol: string;
 	partitionKey: string;
 	source: string;
-	declarations: Set<string>;
+	declarationIndices: Array<number>;
+}
+
+interface TranslationUnitPartition {
+	parts: Array<TranslationUnitPart>;
+	declarationIndices: Array<number>;
+	declarationSourceCodeUnits: number;
+	partSourceCodeUnits: number;
 }
 
 interface NativeCompilationAvailability {
@@ -1237,65 +1244,96 @@ export function emitProgramTranslationUnits(
 				})),
 			),
 		);
-	const declarationsBySymbol = new Map(
-		generatedDeclarations.map((declaration) => [declaration.symbol, declaration]),
-	);
+	const declarationIndicesBySymbol = new Map<string, Array<number>>();
+	for (const [index, declaration] of generatedDeclarations.entries()) {
+		const indices = declarationIndicesBySymbol.get(declaration.symbol);
+		if (indices === undefined)
+			declarationIndicesBySymbol.set(declaration.symbol, [index]);
+		else indices.push(index);
+	}
 	const preparePart = (
-		part: Omit<TranslationUnitPart, "declarations">,
+		part: Omit<TranslationUnitPart, "declarationIndices">,
 	): TranslationUnitPart => {
-		const declarations = new Set<string>();
+		const declarationIndices = new Set<number>();
 		for (const match of part.source.matchAll(/\bmal_[A-Za-z0-9_]+\b/g)) {
-			if (declarationsBySymbol.has(match[0])) declarations.add(match[0]);
+			const indices = declarationIndicesBySymbol.get(match[0]);
+			if (indices === undefined) continue;
+			for (const index of indices) declarationIndices.add(index);
 		}
-		return { ...part, declarations };
+		return { ...part, declarationIndices: [...declarationIndices] };
 	};
-	const unitDeclarations = (parts: ReadonlyArray<TranslationUnitPart>): Array<string> => {
-		const referenced = new Set(parts.flatMap((part) => [...part.declarations]));
-		return generatedDeclarations
-			.filter((declaration) => referenced.has(declaration.symbol))
-			.map((declaration) => declaration.source);
+	const preparePartition = (
+		parts: Array<TranslationUnitPart>,
+	): TranslationUnitPartition => {
+		const referenced = new Set<number>();
+		let partSourceCodeUnits = 0;
+		for (const part of parts) {
+			partSourceCodeUnits += part.source.length;
+			for (const index of part.declarationIndices) referenced.add(index);
+		}
+		const declarationIndices = [...referenced].sort((a, b) => a - b);
+		return {
+			parts,
+			declarationIndices,
+			declarationSourceCodeUnits: declarationIndices.reduce(
+				(total, index) => total + generatedDeclarations[index]!.source.length,
+				0,
+			),
+			partSourceCodeUnits,
+		};
 	};
 	const unitSourceCodeUnits = (
-		headerLines: ReadonlyArray<string>,
-		parts: ReadonlyArray<TranslationUnitPart>,
+		headerSourceCodeUnits: number,
+		headerLineCount: number,
+		partition: TranslationUnitPartition,
 	): number => {
-		const declarations = unitDeclarations(parts);
-		const lineCount = headerLines.length + declarations.length + 1 + parts.length;
+		const lineCount =
+			headerLineCount + partition.declarationIndices.length + 1 + partition.parts.length;
 		return (
-			headerLines.reduce((total, line) => total + line.length, 0) +
-			declarations.reduce((total, line) => total + line.length, 0) +
-			parts.reduce((total, part) => total + part.source.length, 0) +
+			headerSourceCodeUnits +
+			partition.declarationSourceCodeUnits +
+			partition.partSourceCodeUnits +
 			lineCount -
 			1
 		);
 	};
 	const unitSource = (
 		headerLines: ReadonlyArray<string>,
-		parts: Array<TranslationUnitPart>,
+		partition: TranslationUnitPartition,
 	): string => {
 		return [
 			...headerLines,
-			...unitDeclarations(parts),
+			...partition.declarationIndices.map(
+				(index) => generatedDeclarations[index]!.source,
+			),
 			"",
-			...parts.map((part) => part.source),
+			...partition.parts.map((part) => part.source),
 		].join("\n");
 	};
 	const partition = (
 		kind: "data" | "code",
 		headerLines: ReadonlyArray<string>,
-		inputs: Array<Omit<TranslationUnitPart, "declarations">>,
+		inputs: Array<Omit<TranslationUnitPart, "declarationIndices">>,
 	): Array<GeneratedTranslationUnit> => {
-		const prepared = inputs.map(preparePart);
 		const units: Array<GeneratedTranslationUnit> = [];
+		const headerSourceCodeUnits = headerLines.reduce(
+			(total, line) => total + line.length,
+			0,
+		);
 		const visit = (
-			parts: Array<TranslationUnitPart>,
+			current: TranslationUnitPartition,
 			prefix: string,
 			depth: number,
 		): void => {
+			const { parts } = current;
 			if (parts.length === 0) return;
-			const sourceCodeUnits = unitSourceCodeUnits(headerLines, parts);
+			const sourceCodeUnits = unitSourceCodeUnits(
+				headerSourceCodeUnits,
+				headerLines.length,
+				current,
+			);
 			if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
-				const source = unitSource(headerLines, parts);
+				const source = unitSource(headerLines, current);
 				if (source.length > hardMaximumCodeUnits) {
 					const part = parts[0]!;
 					throw new RangeError(
@@ -1325,8 +1363,8 @@ export function emitProgramTranslationUnits(
 					a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
 				);
 				const middle = Math.floor(ordered.length / 2);
-				visit(ordered.slice(0, middle), `${prefix}0`, depth + 1);
-				visit(ordered.slice(middle), `${prefix}1`, depth + 1);
+				visit(preparePartition(ordered.slice(0, middle)), `${prefix}0`, depth + 1);
+				visit(preparePartition(ordered.slice(middle)), `${prefix}1`, depth + 1);
 				return;
 			}
 			const round = Math.floor(depth / 32);
@@ -1341,13 +1379,13 @@ export function emitProgramTranslationUnits(
 				target.push(part);
 			}
 			if (left.length === 0 || right.length === 0) {
-				visit(parts, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
+				visit(current, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
 				return;
 			}
-			visit(left, `${prefix}0`, depth + 1);
-			visit(right, `${prefix}1`, depth + 1);
+			visit(preparePartition(left), `${prefix}0`, depth + 1);
+			visit(preparePartition(right), `${prefix}1`, depth + 1);
 		};
-		visit(prepared, "", 0);
+		visit(preparePartition(inputs.map(preparePart)), "", 0);
 		return units;
 	};
 	const dataParts = splitData.definitions.map((data) => ({
@@ -1356,7 +1394,7 @@ export function emitProgramTranslationUnits(
 		partitionKey: data.source.replaceAll(data.symbol, "<self>"),
 		source: data.source,
 	}));
-	const codeParts: Array<Omit<TranslationUnitPart, "declarations">> = [];
+	const codeParts: Array<Omit<TranslationUnitPart, "declarationIndices">> = [];
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	for (const [functionIndex, fn] of emitted.compiled.entries()) {
 		if (fn === null) continue;
