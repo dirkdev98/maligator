@@ -16,6 +16,7 @@ import { once } from "node:events";
 import {
 	existsSync,
 	mkdtempSync,
+	mkdirSync,
 	readFileSync,
 	renameSync,
 	rmSync,
@@ -2137,8 +2138,11 @@ if (checkpointPending) {
 	progress.complete();
 	process.exit(0);
 }
-if (options.jsonOut !== undefined)
+if (options.jsonOut !== undefined) {
+	mkdirSync(path.dirname(options.jsonOut), { recursive: true });
 	writeFileSync(options.jsonOut, `${JSON.stringify(entry)}\n`);
+	console.log(`Benchmark snapshot written to ${options.jsonOut}.`);
+}
 report(entry, baseline);
 persistBenchmarkBaseline(BASELINE_FILE, baseline, entry, options.update);
 if (options.update) console.log(`\nUpdated selected sections in ${BASELINE_FILE}.`);
