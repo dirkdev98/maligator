@@ -1279,21 +1279,29 @@ function benchSelfCompileCheckpoint(
 	if (!existsSync(checkpointPath)) {
 		progress.detail("self-compile checkpoint stage: native build");
 		const nativeBuild = nativeBuildRecorder();
-		const binary = buildNativeBinary({
-			fixture: path.resolve("bench/self-compile.mts"),
-			name: "bench-self-compile",
-			config: SELF_COMPILE_CONFIG,
-			cacheDirectory: nativeCacheDirectory,
-			onNativeBuildPhase: nativeBuild.observe,
-			measureNativeBuildResources: true,
-			onNativeCommandResource: nativeBuild.observeResource,
-		});
+		const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-checkpoint-"));
+		let binary: string;
+		try {
+			binary = buildNativeBinary({
+				fixture: path.resolve("bench/self-compile.mts"),
+				name: "bench-self-compile",
+				config: SELF_COMPILE_CONFIG,
+				cacheDirectory: nativeCacheDirectory,
+				outDir: root,
+				onNativeBuildPhase: nativeBuild.observe,
+				measureNativeBuildResources: true,
+				onNativeCommandResource: nativeBuild.observeResource,
+			});
+		} catch (error) {
+			rmSync(root, { recursive: true, force: true });
+			throw error;
+		}
 		checkpoint = {
 			schema: 2,
 			source,
 			runs,
 			nativeCacheDirectory,
-			root: mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-checkpoint-")),
+			root,
 			binary,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
 			coreOptimizationAblation,
