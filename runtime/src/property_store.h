@@ -52,10 +52,25 @@ typedef struct MalPropertyEnsure {
     MalPropertyDesc desc;
 } MalPropertyEnsure;
 
+typedef enum MalPropertyReadKind {
+    MAL_PROPERTY_READ_MISSING,
+    MAL_PROPERTY_READ_DATA,
+    MAL_PROPERTY_READ_ACCESSOR,
+} MalPropertyReadKind;
+
+typedef struct MalPropertyRead {
+    MalPropertyReadKind kind;
+    /** Data value or accessor getter, according to kind. */
+    MalValue value;
+} MalPropertyRead;
+
 /**
  * Look up a property descriptor stored for key.
  */
 MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key);
+
+/** Read only the payload needed by ordinary [[Get]]. */
+MalPropertyRead mal_property_read(const MalTable *table, MalKey key);
 
 /** Ensure a property exists, initializing its descriptor only when inserted. */
 MalPropertyEnsure mal_property_ensure(

@@ -4073,6 +4073,22 @@ static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValu
             if (!mal_vm_get_own_property(vm, mal_value_from_object(cursor), key, &present, &desc)) {
                 return false;
             }
+        } else if (cursor->header.type == MAL_HEAP_OBJECT &&
+                   cursor->shape->inline_count == 0 && cursor->overflow != nullptr) {
+            MalPropertyRead read = mal_property_read(cursor->overflow, key);
+            if (read.kind == MAL_PROPERTY_READ_DATA) {
+                *out = read.value;
+                return true;
+            }
+            if (read.kind == MAL_PROPERTY_READ_ACCESSOR) {
+                desc = (MalPropertyDesc) {
+                    .flags = MAL_PROPERTY_ACCESSOR,
+                    .getter = read.value,
+                };
+                present = true;
+            } else {
+                present = false;
+            }
         } else if (
             cursor->shape->inline_count == 0 && cursor->overflow == nullptr &&
             !(key.kind == MAL_KEY_INDEX && cursor->header.type == MAL_HEAP_ARRAY_OBJECT)

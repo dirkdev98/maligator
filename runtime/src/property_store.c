@@ -82,6 +82,28 @@ MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key) {
     };
 }
 
+MalPropertyRead mal_property_read(const MalTable *table, MalKey key) {
+    MalTableLookup lookup = mal_table_lookup(table, key);
+    if (!lookup.present) {
+        return (MalPropertyRead) {.kind = MAL_PROPERTY_READ_MISSING};
+    }
+
+    MalPropertyFlags flags =
+        (MalPropertyFlags) mal_table_entry_property_flags(table, lookup.entry);
+    if ((flags & MAL_PROPERTY_ACCESSOR) == 0) {
+        return (MalPropertyRead) {
+            .kind = MAL_PROPERTY_READ_DATA,
+            .value = mal_table_entry_value(table, lookup.entry),
+        };
+    }
+
+    MalPropertyAccessors *accessors = mal_table_entry_data(table, lookup.entry);
+    return (MalPropertyRead) {
+        .kind = MAL_PROPERTY_READ_ACCESSOR,
+        .value = accessors->getter,
+    };
+}
+
 MalPropertyEnsure mal_property_ensure(
     MalTable *table, MalKey key, const MalPropertyDesc *initial
 ) {
