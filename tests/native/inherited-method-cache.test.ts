@@ -148,7 +148,7 @@ describe("inherited built-in method and native call caches", () => {
 			compiled: false,
 			outDir,
 		});
-	});
+	}, 600_000);
 
 	it("handles repeated loads/calls, shadows, prototypes, realms, and completions", () => {
 		assertExactLines(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } }), [

@@ -47,7 +47,7 @@ describe("compiled call dispatch and native call caches", () => {
 			mainFile: "runtime/call_cache_test_main.c",
 			outDir,
 		});
-	});
+	}, 600_000);
 
 	it("uses current captures, callee, and this for every fresh closure", () => {
 		assertExactLines(runToStdout(instrumented, { env: { MAL_HOST_GC: "1" } }), expected);
