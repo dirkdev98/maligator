@@ -22,8 +22,8 @@ typedef struct MalShapeFindCacheSet {
     u8 next_victim;
 } MalShapeFindCacheSet;
 
-static_assert(sizeof(MalShapeFindCacheSet) == 64,
-              "two-way shape cache set must stay in one cache line");
+static_assert(sizeof(MalShapeFindCacheSet) == (sizeof(void *) == 8 ? 64 : 56),
+              "two-way shape cache set must retain its pointer-width-specific layout");
 
 static _Thread_local MalShapeFindCacheSet
     mal_shape_find_cache[MAL_SHAPE_FIND_CACHE_SET_COUNT];
