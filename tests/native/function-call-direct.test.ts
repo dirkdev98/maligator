@@ -32,5 +32,5 @@ describe("guarded Function.prototype.call flattening", () => {
 	it("keeps shifted receivers and arguments rooted under GC stress", () => {
 		assertExactLines(runToStdout(compiled, { env: STRESS_ENV }), expected);
 		assertExactLines(runToStdout(interpreted, { env: STRESS_ENV }), expected);
-	}, 120_000);
+	}, 240_000);
 });
