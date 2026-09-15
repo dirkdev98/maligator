@@ -15,7 +15,6 @@
 // with holes. A store beyond this is treated as sparse: the array deoptimizes to
 // table storage rather than allocate a mostly-hole vector.
 #define MAL_ARRAY_DENSE_MAX_GAP 1024u
-#define MAL_ARRAY_DENSE_INITIAL_CAPACITY 2u
 
 void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prototype) {
     mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
@@ -86,8 +85,7 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
     if (needed <= array->capacity) {
         return true;
     }
-    u32 capacity = array->capacity == 0
-        ? MAL_ARRAY_DENSE_INITIAL_CAPACITY : array->capacity;
+    u32 capacity = array->capacity == 0 ? 4 : array->capacity;
     while (capacity < needed) {
         capacity *= 2;
     }
@@ -114,8 +112,7 @@ bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 neede
     u64 geometric_growths = 0;
     if (mal_perf_stats_enabled) {
         while (geometric_capacity < needed) {
-            geometric_capacity = geometric_capacity == 0
-                ? MAL_ARRAY_DENSE_INITIAL_CAPACITY : geometric_capacity * 2;
+            geometric_capacity = geometric_capacity == 0 ? 4 : geometric_capacity * 2;
             geometric_growths++;
         }
     }
@@ -154,8 +151,7 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
     u64 geometric_growths = 0;
     if (mal_perf_stats_enabled) {
         while (geometric_capacity < needed) {
-            geometric_capacity = geometric_capacity == 0
-                ? MAL_ARRAY_DENSE_INITIAL_CAPACITY : geometric_capacity * 2;
+            geometric_capacity = geometric_capacity == 0 ? 4 : geometric_capacity * 2;
             geometric_growths++;
         }
     }
