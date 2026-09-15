@@ -69,6 +69,57 @@ async function main() {
 	check("map", source.map((value) => value * 2).join() === "2,4,6,8,10");
 	check("forEach", forEachSum === 15);
 	check("filter", source.filter((value) => (value & 1) === 1).join() === "1,3,5");
+	const mutableFilterSource = [1, , 3, 4];
+	let filterVisits = 0;
+	const mutableFiltered = mutableFilterSource.filter((value, index, receiver) => {
+		filterVisits++;
+		if (index === 0) delete receiver[3];
+		return value !== 1;
+	});
+	check(
+		"filter compacts selections while observing source mutation",
+		filterVisits === 2 && mutableFiltered.join() === "3",
+	);
+	let exposedFilterResult;
+	class FilterSource extends Array {
+		static get [Symbol.species]() {
+			return class extends Array {
+				constructor(length) {
+					super(length);
+					exposedFilterResult = this;
+				}
+			};
+		}
+	}
+	const speciesFiltered = new FilterSource(1, 2).filter((value, index) => {
+		if (index === 0) exposedFilterResult.push(99);
+		return true;
+	});
+	check(
+		"filter custom species result remains observable during callbacks",
+		speciesFiltered.join() === "1,2",
+	);
+	const filterFailure = {};
+	let filterGetterCallbacks = 0;
+	const throwingFilterSource = new Proxy([1, 2, 3], {
+		get(target, key, receiver) {
+			if (key === "1") throw filterFailure;
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	let caughtFilterFailure;
+	try {
+		throwingFilterSource.filter(() => {
+			filterGetterCallbacks++;
+			return true;
+		});
+	} catch (error) {
+		caughtFilterFailure = error;
+	}
+	check(
+		"filter stops after an abrupt indexed Get",
+		caughtFilterFailure === filterFailure && filterGetterCallbacks === 1,
+	);
 	check("reduce", source.reduce((sum, value) => sum + value, 0) === 15);
 	check("reduceRight", source.reduceRight((sum, value) => sum * 10 + value, 0) === 54321);
 	check("find", source.find((value) => value > 3) === 4);

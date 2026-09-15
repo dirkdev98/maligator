@@ -284,6 +284,8 @@ typedef struct MalPerfStats {
     u64 array_fresh_dense_exact_reserves;
     u64 array_fresh_dense_reserved_slots;
     u64 array_fresh_dense_growths_avoided;
+    u64 array_filter_fresh_dense_results;
+    u64 array_filter_fresh_dense_appends;
     u64 array_indexed_fill_reserves;
     u64 array_indexed_fill_reserved_slots;
     u64 array_indexed_fill_allocations_avoided;
