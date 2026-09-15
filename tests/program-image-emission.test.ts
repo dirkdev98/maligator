@@ -480,6 +480,9 @@ describe("emit-program-image instruction packing", () => {
 			expect(functionRow?.[22]).toBe("13");
 			expect(output).toContain("{ 2, 0, 2, 1, 0, 0, 1, 1, 2, 1, 0, 0, 1 }");
 			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
+			expect(output).toContain(
+				"__builtin_expect(vm->property_cache[0].sites == nullptr || vm->literal_shape_cache[0] == nullptr, 0)",
+			);
 			expect(output).toMatch(
 				/mal_vm_try_load_known_own_slots\(vm,[^\n]+&__property_ic\[0\]/,
 			);

@@ -1040,8 +1040,18 @@ function emitCompiledVariant(
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
+		const cacheMisses = [
+			body.resources.has("propertyCache")
+				? `vm->property_cache[${relocation.functionIndex(index)}].sites == nullptr`
+				: undefined,
+			body.resources.has("literalShapes")
+				? `vm->literal_shape_cache[${relocation.functionIndex(index)}] == nullptr`
+				: undefined,
+		].filter((condition) => condition !== undefined);
 		lines.push(
-			`    mal_vm_ensure_function_caches(vm, ${relocation.functionIndex(index)});`,
+			`    if (__builtin_expect(${cacheMisses.join(" || ")}, 0)) {`,
+			`        mal_vm_ensure_function_caches(vm, ${relocation.functionIndex(index)});`,
+			`    }`,
 		);
 	}
 	if (body.resources.has("propertyCache")) {
@@ -1491,7 +1501,19 @@ function emitResumableFunction(
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
-		lines.push(`    mal_vm_ensure_function_caches(vm, ${index});`);
+		const cacheMisses = [
+			body.resources.has("propertyCache")
+				? `vm->property_cache[${index}].sites == nullptr`
+				: undefined,
+			body.resources.has("literalShapes")
+				? `vm->literal_shape_cache[${index}] == nullptr`
+				: undefined,
+		].filter((condition) => condition !== undefined);
+		lines.push(
+			`    if (__builtin_expect(${cacheMisses.join(" || ")}, 0)) {`,
+			`        mal_vm_ensure_function_caches(vm, ${index});`,
+			`    }`,
+		);
 	}
 	if (body.resources.has("propertyCache")) {
 		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
