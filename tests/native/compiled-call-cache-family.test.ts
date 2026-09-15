@@ -28,7 +28,7 @@ function callCacheReport(stderr: string): string {
 	return line;
 }
 
-describe("compiled call-cache function-index families", () => {
+describe("compiled call dispatch and native call caches", () => {
 	let instrumented: string;
 	let multiVm: string;
 
@@ -70,7 +70,7 @@ describe("compiled call-cache function-index families", () => {
 		]);
 	});
 
-	it("reports exact, family, miss, and fill mechanisms", () => {
+	it("reports direct compiled dispatch and exact native cache mechanisms", () => {
 		const result = spawnSync(instrumented, [], {
 			env: { ...process.env, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
@@ -81,24 +81,20 @@ describe("compiled call-cache function-index families", () => {
 		const report = callCacheReport(result.stderr);
 		const probes = strictField(report, "probes");
 		const exactHits = strictField(report, "exact_identity_hits");
-		const compiledExactHits = strictField(report, "compiled_exact_hits");
-		const familyHits = strictField(report, "compiled_family_hits");
+		const compiledDispatches = strictField(report, "compiled_dispatches");
 		const nativeExactHits = strictField(report, "native_exact_hits");
 		const wayChecks = strictField(report, "way_checks");
 		const misses = strictField(report, "dispatch_misses");
-		const compiledFills = strictField(report, "compiled_fills");
 		const nativeFills = strictField(report, "native_fills");
 
 		expect(exactHits).toBeGreaterThan(0);
-		expect(compiledExactHits).toBeGreaterThan(0);
-		expect(familyHits).toBeGreaterThan(150);
+		expect(compiledDispatches).toBeGreaterThan(150);
 		expect(nativeExactHits).toBeGreaterThan(0);
-		expect(compiledExactHits + nativeExactHits).toBe(exactHits);
-		expect(wayChecks).toBeGreaterThanOrEqual(exactHits + familyHits);
+		expect(nativeExactHits).toBe(exactHits);
+		expect(wayChecks).toBeGreaterThanOrEqual(nativeExactHits);
 		expect(misses).toBeGreaterThan(0);
-		expect(compiledFills).toBeGreaterThan(0);
 		expect(nativeFills).toBeGreaterThan(0);
-		expect(exactHits + familyHits + misses).toBe(probes);
-		expect(compiledFills + nativeFills).toBeLessThanOrEqual(misses);
+		expect(compiledDispatches + nativeExactHits + misses).toBe(probes);
+		expect(nativeFills).toBeLessThanOrEqual(misses);
 	});
 });

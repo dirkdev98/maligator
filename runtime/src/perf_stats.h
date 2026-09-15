@@ -251,12 +251,10 @@ typedef struct MalPerfStats {
 
 	u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;
-    u64 call_cache_compiled_exact_hits;
-    u64 call_cache_compiled_family_hits;
+    u64 call_cache_compiled_dispatches;
     u64 call_cache_native_exact_hits;
     u64 call_cache_way_checks;
     u64 call_cache_dispatch_misses;
-    u64 call_cache_compiled_fills;
     u64 call_cache_native_fills;
     u64 compiled_enter_calls;
     u64 compiled_debug_frame_entries;

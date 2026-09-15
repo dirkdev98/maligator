@@ -4218,43 +4218,25 @@ MalCompletion mal_vm_call_cached(
     const MalFunction *function = nullptr;
     i32 function_index = -1;
 
-    bool exact_identities_valid =
-        cc->heap_identity == vm->heap.identity && cc->epoch == vm->heap.epoch;
-
-    // Compiled closures are a function-index family: each live closure supplies
-    // its own environment, realm, identity, and `this`, so the cached pointer is
-    // only useful for attributing an exact hit. Resolve the current index once
-    // and scan the ways once instead of first failing an identity scan for every
-    // fresh closure and then repeating the scan by function index.
     if (mal_value_is_function_object(callee)) {
         function_object = mal_value_to_function_object(callee);
         function_index = mal_function_object_function_index(function_object);
         if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
             const MalFunction *candidate = &vm->runtime_image->functions[function_index];
-            if (candidate->compiled != nullptr) {
+            if (candidate->compiled != nullptr && !candidate->is_class_constructor) {
                 function = candidate;
-                for (u32 v = 0; v < cc->count; v++) {
-                    MAL_PERF_COUNT(call_cache_way_checks);
-                    if (cc->kind[v] != MAL_CALL_CACHE_COMPILED ||
-                        cc->function_index[v] != function_index) {
-                        continue;
-                    }
-                    if (exact_identities_valid && cc->callee[v] == callee) {
-                        MAL_PERF_COUNT(call_cache_exact_identity_hits);
-                        MAL_PERF_COUNT(call_cache_compiled_exact_hits);
-                    } else {
-                        MAL_PERF_COUNT(call_cache_compiled_family_hits);
-                    }
-                    goto call_compiled;
-                }
+                MAL_PERF_COUNT(call_cache_compiled_dispatches);
+                goto call_compiled;
             }
         }
-    } else if (exact_identities_valid && mal_value_is_native_function_object(callee)) {
+    } else if (cc->heap_identity == vm->heap.identity &&
+               cc->epoch == vm->heap.epoch &&
+               mal_value_is_native_function_object(callee)) {
         // Native callbacks are cacheable only by exact object identity. The
         // cached pointer must never be reused outside its heap lifetime/epoch.
         for (u32 v = 0; v < cc->count; v++) {
             MAL_PERF_COUNT(call_cache_way_checks);
-            if (cc->kind[v] != MAL_CALL_CACHE_NATIVE || cc->callee[v] != callee) {
+            if (cc->callee[v] != callee) {
                 continue;
             }
             MalNativeFunctionObject *native_function =
@@ -4299,33 +4281,7 @@ MalCompletion mal_vm_call_cached(
 
     MAL_PERF_COUNT(call_cache_dispatch_misses);
     MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
-    // Bound/proxy/interpreted callees and class constructors stay on the dispatch
-    // path. Re-read the program row after the call because eval/new Function may
-    // have realloc'd it.
-    if (mal_value_is_function_object(callee)) {
-        i32 index = mal_function_object_function_index(mal_value_to_function_object(callee));
-        if (index >= 0 && index < vm->runtime_image->function_count &&
-            vm->runtime_image->functions[index].compiled != nullptr &&
-            !vm->runtime_image->functions[index].is_class_constructor) {
-            if (cc->heap_identity != vm->heap.identity || cc->epoch != vm->heap.epoch) {
-                cc->count = 0;
-                cc->heap_identity = vm->heap.identity;
-                cc->epoch = vm->heap.epoch;
-            }
-            bool present = false;
-            for (u32 v = 0; v < cc->count; v++) {
-                present = present ||
-                    (cc->kind[v] == MAL_CALL_CACHE_COMPILED && cc->function_index[v] == index);
-            }
-            if (!present && cc->count < MAL_CALL_CACHE_WAYS) {
-                u32 v = cc->count++;
-                cc->callee[v] = callee;
-                cc->function_index[v] = index;
-                cc->kind[v] = MAL_CALL_CACHE_COMPILED;
-                MAL_PERF_COUNT(call_cache_compiled_fills);
-            }
-        }
-    } else if (mal_value_is_native_function_object(callee)) {
+    if (mal_value_is_native_function_object(callee)) {
         if (cc->heap_identity != vm->heap.identity || cc->epoch != vm->heap.epoch) {
             cc->count = 0;
             cc->heap_identity = vm->heap.identity;
@@ -4333,14 +4289,11 @@ MalCompletion mal_vm_call_cached(
         }
         bool present = false;
         for (u32 v = 0; v < cc->count; v++) {
-            present = present ||
-                (cc->kind[v] == MAL_CALL_CACHE_NATIVE && cc->callee[v] == callee);
+            present = present || cc->callee[v] == callee;
         }
         if (!present && cc->count < MAL_CALL_CACHE_WAYS) {
             u32 v = cc->count++;
             cc->callee[v] = callee;
-            cc->function_index[v] = -1;
-            cc->kind[v] = MAL_CALL_CACHE_NATIVE;
             MAL_PERF_COUNT(call_cache_native_fills);
         }
     }
