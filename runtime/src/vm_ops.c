@@ -4995,7 +4995,7 @@ static bool mal_ic_try_record_inherited_slot(
     }
 
     MalObject *object = mal_value_to_object(receiver);
-    bool dictionary_receiver = object->overflow != nullptr;
+    bool dictionary_receiver = mal_object_has_public_overflow(object);
     if ((dictionary_receiver && object->shape->inline_count != 0) ||
         resolution.holder == nullptr ||
         resolution.holder->header.type != MAL_HEAP_OBJECT) {
@@ -5050,7 +5050,7 @@ static bool mal_ic_try_record_inherited_slot(
 
     u8 mode;
     u32 slot;
-    if (resolution.holder->overflow == nullptr) {
+    if (!mal_object_has_public_overflow(resolution.holder)) {
         i32 index = mal_shape_find(
             resolution.holder->shape, key, MAL_SHAPE_FIND_LOAD_IC);
         if (index < 0) {
@@ -5093,7 +5093,7 @@ static bool mal_ic_try_record_missing(
         return false;
     }
     MalObject *object = mal_value_to_object(receiver);
-    if (object->overflow != nullptr) {
+    if (mal_object_has_public_overflow(object)) {
         return false;
     }
 
@@ -5104,7 +5104,7 @@ static bool mal_ic_try_record_missing(
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
-        if (cursor->overflow != nullptr || depth >= MAL_IC_POLY_EXTRA) {
+        if (mal_object_has_public_overflow(cursor) || depth >= MAL_IC_POLY_EXTRA) {
             shape_chain = false;
         } else if (shape_chain) {
             prototype_shapes[depth] = cursor->shape;
@@ -5611,7 +5611,7 @@ void mal_vm_op_store_property_ic(
                 mal_gc_card(&object->header, value); // old object -> young value
                 return;
             }
-            if (idx < 0 && object->overflow == nullptr && object->extensible &&
+            if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
                 mal_shape_can_add_property(object->shape, key) &&
                 mal_ic_key_is_stable_string(key_value) &&
                 mal_ic_can_apply_transition_store(object, key)) {
@@ -6859,7 +6859,8 @@ MalValue mal_vm_op_copy_data_properties(
     if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
         MalObject *source_object = mal_value_to_object(source);
         MalShape *source_shape = source_object->shape;
-        if (source_object->overflow == nullptr && source_shape->inline_count > 0) {
+        if (!mal_object_has_public_overflow(source_object) &&
+            source_shape->inline_count > 0) {
             MalShape *result_shape = mal_shape_root(&vm->heap);
             MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
             u32 count = 0;
@@ -7305,7 +7306,7 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
     // SATB: PrivateSet overwrites an already-installed data field (checked above),
     // so shade the old value that mal_property_set_value is about to replace.
     mal_gc_write_barrier(lookup.desc.value);
-    mal_property_set_value(mal_object_properties(object), key, value);
+    mal_property_set_value(object->overflow, key, value);
     mal_gc_card(&object->header, value); // old instance -> young private field value
 }
 

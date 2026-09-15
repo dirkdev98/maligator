@@ -9,8 +9,9 @@
 /**
  * Ordinary object (and the base of every exotic subtype). Named properties live
  * in one of two states:
- *   - shaped: `shape` (non-empty) describes the layout; the values are in
- *     `slots[0 .. shape->inline_count)`; `overflow` is null.
+ *   - shaped: `shape` describes the public string layout; the values are in
+ *     `slots[0 .. shape->inline_count)`. `overflow` may contain only private
+ *     names, which cannot affect public property resolution.
  *   - dictionary: `shape` is the empty shape and all properties live in the
  *     `overflow` MalTable (exactly the pre-shapes behavior).
  * Index (integer) keys are never in a shape; they always live in `overflow`,
@@ -63,6 +64,8 @@ typedef struct MalObject {
     bool primordial_locked : 1;
     /** DFS marker used only while a Realm's primordial graph is finalized. */
     bool primordial_locking : 1;
+    /** A non-null overflow table contains private names only. */
+    bool overflow_private_only : 1;
     MalShape *shape;
     struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
@@ -70,6 +73,10 @@ typedef struct MalObject {
     /** Dictionary/overflow table (named + index props); null until needed. */
     MalTable *overflow;
 } MalObject;
+
+static inline bool mal_object_has_public_overflow(const MalObject *object) {
+    return object->overflow != nullptr && !object->overflow_private_only;
+}
 
 // Size-class guard: MalObject is the base of ~30 heap types, so it must stay in
 // the 48-byte class (4 pointers + a 3-byte header + a flag byte = 40). A new

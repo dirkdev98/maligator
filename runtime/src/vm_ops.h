@@ -1259,7 +1259,7 @@ static inline bool mal_vm_local_inherited_value_try_load_static(
 ) {
     if (object == nullptr || ic->mode != MAL_IC_MODE_INHERITED_VALUE ||
         ic->poly_count == 0 || object->shape != ic->shape ||
-        object->prototype != ic->proto_object[0] || object->overflow != nullptr) {
+        object->prototype != ic->proto_object[0] || mal_object_has_public_overflow(object)) {
         return false;
     }
     *out = ic->value;
@@ -1284,7 +1284,7 @@ static inline bool mal_vm_local_watched_inherited_value_try_load_static(
     }
     const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
     if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
-        object->prototype != ic->obj || object->overflow != nullptr) {
+        object->prototype != ic->obj || mal_object_has_public_overflow(object)) {
         return false;
     }
     *out = ic->value;
@@ -1343,8 +1343,8 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
             if (object->shape != ic->shape ||
                 object->prototype != ic->proto_object[0] ||
                 (dictionary_receiver
-                     ? object != ic->obj || object->overflow == nullptr
-                     : object->overflow != nullptr)) {
+                     ? object != ic->obj || !mal_object_has_public_overflow(object)
+                     : mal_object_has_public_overflow(object))) {
                 return false;
             }
             *out = ic->value;
@@ -1356,7 +1356,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
         }
         const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
         if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
-            object->prototype != ic->obj || object->overflow != nullptr) {
+            object->prototype != ic->obj || mal_object_has_public_overflow(object)) {
             return false;
         }
         *out = ic->value;
@@ -1369,7 +1369,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
             return false;
         }
         const MalObject *object = mal_value_to_object(receiver);
-        if (object->shape != ic->shape || object->overflow != nullptr) {
+        if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
             return false;
         }
         if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
@@ -1390,7 +1390,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                 cursor = cursor->prototype;
                 if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT ||
                     cursor->shape != ic->poly_shape[depth] ||
-                    cursor->overflow != nullptr) {
+                    mal_object_has_public_overflow(cursor)) {
                     return false;
                 }
             }
@@ -1410,7 +1410,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     }
 
     const MalObject *object = mal_value_to_object(receiver);
-    if (object->shape != ic->shape || object->overflow != nullptr) {
+    if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
         return false;
     }
     const MalObject *holder;
@@ -1602,7 +1602,7 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
     // Structural mutations eagerly invalidate it, leaving an O(1) hit guard.
     if (ic->mode == MAL_IC_MODE_TRANSITION && object->shape == ic->shape &&
         key == ic->key && object->prototype == ic->obj &&
-        object->overflow == nullptr && object->extensible) {
+        !mal_object_has_public_overflow(object) && object->extensible) {
         const MalShape *child = ic->poly_shape[0];
         u32 old_count = object->shape->inline_count;
         if (object->watched_method_proto) {

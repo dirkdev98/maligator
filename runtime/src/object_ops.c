@@ -153,6 +153,7 @@ static MalTable *mal_object_ensure_overflow(MalObject *object) {
  */
 static void mal_object_dictionarize(MalObject *object) {
     if (object->shape->inline_count == 0) {
+        object->overflow_private_only = false;
         return;
     }
     if (mal_object_note_prototype_mutation(object)) {
@@ -166,6 +167,7 @@ static void mal_object_dictionarize(MalObject *object) {
         mal_property_define(table, mal_key_from_value(prop->key), &desc);
     }
     object->shape = mal_shape_dictionary_empty();
+    object->overflow_private_only = false;
     // The values now live in the table. Separately-owned buffers are freed;
     // coallocated storage remains part of the managed object cell.
     mal_object_record_slot_dictionary_migration(object);
@@ -208,7 +210,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     }
     bool has_shape_properties = object->shape->inline_count != 0;
     bool has_overflow_properties =
-        object->overflow != nullptr && mal_table_size(object->overflow) != 0;
+        mal_object_has_public_overflow(object) && mal_table_size(object->overflow) != 0;
     bool noted_prototype_mutation = false;
     if (changed_dense_elements) {
         if (object->watched_method_proto) {
@@ -224,7 +226,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     if (object->watched_method_proto && !changed_dense_elements) {
         mal_invalidate_primitive_method_protector();
     }
-    if (has_shape_properties && object->overflow == nullptr) {
+    if (has_shape_properties && !mal_object_has_public_overflow(object)) {
         // Shaped storage contains data properties only. Seal/freeze changes their
         // attributes uniformly, so move to the canonical integrity variant without
         // allocating a per-object dictionary or moving any values.
@@ -399,7 +401,10 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
         }
     }
     // Index/symbol keys and dictionary-mode objects live in the overflow table.
-    if (object->overflow != nullptr) {
+    bool private_key = key.kind == MAL_KEY_SYMBOL &&
+        mal_symbol_is_private(mal_value_to_symbol(key.value));
+    if (object->overflow != nullptr &&
+        (!object->overflow_private_only || private_key)) {
         return mal_property_lookup(object->overflow, key);
     }
     return (MalPropertyLookup){.present = false, .entry = nullptr};
@@ -448,6 +453,27 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     // primitive-method cache (a new/changed method could shadow a cached lookup).
     if (object->watched_method_proto) {
         mal_invalidate_primitive_method_protector();
+    }
+
+    if (key.kind == MAL_KEY_SYMBOL &&
+        mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+        bool private_only = !mal_object_has_public_overflow(object);
+        MalTable *table = mal_object_ensure_overflow(object);
+        MalPropertyEnsure ensured = mal_property_ensure(table, key, desc);
+        object->overflow_private_only = private_only;
+        if (ensured.inserted) {
+            mal_gc_card_desc(&object->header, desc);
+            mal_gc_card(&object->header, key.value);
+            return MAL_DEFINE_OWN_APPLIED;
+        }
+        if (!mal_object_define_is_compatible(ensured.desc, *desc)) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        MalPropertyDesc stored = *desc;
+        stored.flags |= ensured.desc.flags & MAL_PROPERTY_INTERNAL_FLAGS;
+        mal_property_write_entry(table, ensured.entry, &stored);
+        mal_gc_card_desc(&object->header, &stored);
+        return MAL_DEFINE_OWN_APPLIED;
     }
 
     // Dense array element fast path. A default-data store at an integer index goes
@@ -507,7 +533,8 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             }
             // An attribute transition needs the dictionary's full descriptor
             // compatibility machinery.
-        } else if (mal_object_desc_is_default_data(desc) && object->overflow == nullptr
+        } else if (mal_object_desc_is_default_data(desc) &&
+            !mal_object_has_public_overflow(object)
             && mal_shape_can_add_property(object->shape, key)) {
             // Pure shaped (or empty) object with no dictionary props: grow the
             // shape and the inline slots. Coallocated managed cells cannot move,
@@ -618,7 +645,7 @@ bool mal_object_try_append_shaped_values(
     if (object == nullptr || plan == nullptr || plan->source == nullptr
         || plan->final == nullptr || values == nullptr || count == 0
         || object->header.type != MAL_HEAP_OBJECT || object->shape != plan->source
-        || object->overflow != nullptr || !object->extensible) {
+        || mal_object_has_public_overflow(object) || !object->extensible) {
         return false;
     }
 

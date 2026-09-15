@@ -258,6 +258,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->has_error_data = false;
     object->primordial_locked = false;
     object->primordial_locking = false;
+    object->overflow_private_only = false;
     mal_object_mark_as_prototype(prototype);
 }
 
