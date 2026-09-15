@@ -4896,7 +4896,8 @@ void mal_vm_property_cache_invalidate(void *cache) {
  * identity; mutations eagerly clear the dependent row.
  */
 static bool mal_ic_record_local_prototype_chain(
-    MalObject *receiver, MalObject *holder, MalInlineCache *ic
+    MalObject *receiver, MalObject *holder, MalInlineCache *ic,
+    bool include_receiver
 ) {
     if (receiver->prototype == nullptr) {
         return false;
@@ -4907,7 +4908,10 @@ static bool mal_ic_record_local_prototype_chain(
          ic->mode == MAL_IC_MODE_INHERITED_TABLE) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == receiver->prototype &&
-        ic->proto_object[1] == holder;
+        ic->proto_object[1] == holder &&
+        (!include_receiver ||
+         (ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY &&
+          ic->obj == receiver));
     bool same_missing_chain =
         ic->mode == MAL_IC_MODE_MISSING &&
         ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
@@ -4915,7 +4919,8 @@ static bool mal_ic_record_local_prototype_chain(
         ic->proto_object[0] == receiver->prototype &&
         holder == nullptr;
     if (!same_positive_chain && !same_missing_chain &&
-        !mal_object_register_prototype_cache(receiver, holder, ic)) {
+        !mal_object_register_prototype_cache(
+            receiver, holder, ic, include_receiver)) {
         return false;
     }
     ic->proto_object[0] = receiver->prototype;
@@ -4938,7 +4943,8 @@ static bool mal_ic_record_transition(
         mal_ic_detach_prototype_cache(ic);
     } else if (!(ic->mode == MAL_IC_MODE_TRANSITION &&
                  ic->obj == object->prototype) &&
-               !mal_object_register_prototype_cache(object, nullptr, ic)) {
+               !mal_object_register_prototype_cache(
+                   object, nullptr, ic, false)) {
         mal_vm_property_cache_invalidate(ic);
         return false;
     }
@@ -4989,8 +4995,15 @@ static bool mal_ic_try_record_inherited_slot(
     }
 
     MalObject *object = mal_value_to_object(receiver);
-    if (object->overflow != nullptr || resolution.holder == nullptr ||
+    bool dictionary_receiver = object->overflow != nullptr;
+    if ((dictionary_receiver && object->shape->inline_count != 0) ||
+        resolution.holder == nullptr ||
         resolution.holder->header.type != MAL_HEAP_OBJECT) {
+        return false;
+    }
+
+    MalKey key = mal_key_from_value(key_value);
+    if (dictionary_receiver && mal_object_get_own(object, key).present) {
         return false;
     }
 
@@ -5011,14 +5024,14 @@ static bool mal_ic_try_record_inherited_slot(
         return false;
     }
 
-    MalKey key = mal_key_from_value(key_value);
     MalPropertyLookup own = mal_object_get_own(resolution.holder, key);
     if (!own.present || (own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         own.desc.value != resolution.desc.value) {
         return false;
     }
 
-    if (mal_ic_record_local_prototype_chain(object, resolution.holder, ic)) {
+    if (mal_ic_record_local_prototype_chain(
+            object, resolution.holder, ic, dictionary_receiver)) {
         mal_perf_ic_note_replacement(ic, MAL_IC_MODE_INHERITED_VALUE);
         ic->shape = object->shape;
         ic->key = key_value;
@@ -5027,7 +5040,10 @@ static bool mal_ic_try_record_inherited_slot(
         ic->prim_kind = 0;
         ic->megamorphic = false;
         ic->mode = MAL_IC_MODE_INHERITED_VALUE;
-        ic->receiver_type = MAL_HEAP_OBJECT;
+        ic->receiver_type = dictionary_receiver
+            ? MAL_IC_RECEIVER_DICTIONARY
+            : MAL_HEAP_OBJECT;
+        if (dictionary_receiver) ic->obj = object;
         if (count_fill) MAL_PERF_COUNT(ic_inherited_fills);
         return true;
     }
@@ -5119,7 +5135,8 @@ static bool mal_ic_try_record_missing(
         ic->poly_count = (u8) depth;
         ic->receiver_type = MAL_IC_MISSING_SHAPE_CHAIN;
     } else {
-        if (!mal_ic_record_local_prototype_chain(object, nullptr, ic)) {
+        if (!mal_ic_record_local_prototype_chain(
+                object, nullptr, ic, false)) {
             if (mal_prototype_chain_epoch == 0) {
                 return false;
             }
@@ -5148,10 +5165,6 @@ static void mal_ic_try_record_inherited(
     }
 
     MalObject *object = mal_value_to_object(receiver);
-    if (object->overflow != nullptr) {
-        MAL_PERF_COUNT(ic_inherited_reject_receiver);
-        return;
-    }
     MalKey key;
     if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
         MAL_PERF_COUNT(ic_inherited_reject_resolution);
@@ -5396,6 +5409,10 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             } else if (object->prototype != nullptr) {
                 mal_vm_get_property_with_receiver(
                     vm, mal_value_from_object(object->prototype), key, object_value, &result);
+            }
+            if (!own.present && vm->completion.kind != MAL_COMPLETION_THROW) {
+                mal_ic_try_record_inherited(
+                    vm, object_value, key_value, result, ic);
             }
             return result;
         }

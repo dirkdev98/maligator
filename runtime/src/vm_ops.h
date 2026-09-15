@@ -908,6 +908,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
+#define MAL_IC_RECEIVER_DICTIONARY UINT8_MAX
 
 // Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
 enum {
@@ -1337,9 +1338,13 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                 return false;
             }
             const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+            bool dictionary_receiver =
+                ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
             if (object->shape != ic->shape ||
                 object->prototype != ic->proto_object[0] ||
-                object->overflow != nullptr) {
+                (dictionary_receiver
+                     ? object != ic->obj || object->overflow == nullptr
+                     : object->overflow != nullptr)) {
                 return false;
             }
             *out = ic->value;

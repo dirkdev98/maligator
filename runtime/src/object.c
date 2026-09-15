@@ -185,11 +185,13 @@ void mal_object_invalidate_prototype_dependents(MalObject *object) {
 }
 
 bool mal_object_register_prototype_cache(
-    MalObject *receiver, MalObject *holder, void *cache
+    MalObject *receiver, MalObject *holder, void *cache,
+    bool include_receiver
 ) {
     MAL_PERF_COUNT(prototype_dependency_register_calls);
     mal_object_unregister_prototype_cache(cache);
-    for (MalObject *cursor = receiver->prototype;
+    if (include_receiver) mal_object_mark_as_prototype(receiver);
+    for (MalObject *cursor = include_receiver ? receiver : receiver->prototype;
          cursor != nullptr; cursor = cursor->prototype) {
         MalPrototypeCacheDependency *dependency = mal_prototype_dependency_alloc();
         MAL_PERF_COUNT(prototype_dependency_register_nodes);

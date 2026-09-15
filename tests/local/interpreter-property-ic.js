@@ -134,6 +134,85 @@ check(
 	"holder accessor invalidates inherited load",
 );
 
+function loadDictionaryInherited(object) {
+	return object.method;
+}
+const dictionaryPrototypeA = {
+	method() {
+		return 21;
+	},
+};
+const dictionaryPrototypeB = {
+	method() {
+		return 22;
+	},
+};
+const dictionaryReceiver = Object.create(dictionaryPrototypeA);
+Object.defineProperty(dictionaryReceiver, "marker", {
+	configurable: true,
+	writable: true,
+	value: 1,
+});
+for (let i = 0; i < 1000; i++) {
+	check(
+		loadDictionaryInherited(dictionaryReceiver)() === 21,
+		"dictionary receiver inherited load",
+	);
+}
+dictionaryReceiver.marker = 2;
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 21,
+	"unrelated dictionary value update preserves resolution",
+);
+dictionaryReceiver.method = () => 23;
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 23,
+	"dictionary shadow invalidates inherited load",
+);
+delete dictionaryReceiver.method;
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 21,
+	"dictionary shadow deletion refills inherited load",
+);
+let dictionaryGetterCalls = 0;
+Object.defineProperty(dictionaryReceiver, "method", {
+	configurable: true,
+	get() {
+		dictionaryGetterCalls++;
+		return () => 24;
+	},
+});
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 24 &&
+		loadDictionaryInherited(dictionaryReceiver)() === 24 &&
+		dictionaryGetterCalls === 2,
+	"dictionary accessor remains observable",
+);
+delete dictionaryReceiver.method;
+Object.setPrototypeOf(dictionaryReceiver, dictionaryPrototypeB);
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 22,
+	"dictionary prototype replacement invalidates inherited load",
+);
+dictionaryPrototypeB.method = () => 25;
+check(
+	loadDictionaryInherited(dictionaryReceiver)() === 25,
+	"dictionary prototype mutation invalidates inherited load",
+);
+
+const alternateDictionaryReceiver = Object.create(dictionaryPrototypeA);
+Object.defineProperty(alternateDictionaryReceiver, "marker", {
+	configurable: true,
+	value: 2,
+});
+for (let i = 0; i < 20; i++) {
+	const receiver = i % 2 === 0 ? dictionaryReceiver : alternateDictionaryReceiver;
+	check(
+		loadDictionaryInherited(receiver)() === (i % 2 === 0 ? 25 : 21),
+		"dictionary cache keeps exact receiver identity",
+	);
+}
+
 function loadDeepMissing(object) {
 	return object.__mal_deep_missing_ic__;
 }

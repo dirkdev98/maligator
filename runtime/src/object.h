@@ -43,11 +43,8 @@ typedef struct MalObject {
      * rejects any change to a different prototype (SetImmutablePrototype).
      */
     bool immutable_prototype : 1;
-    /**
-     * Monotonic marker: this object has served as another object's [[Prototype]].
-     * Structural mutations then invalidate the prototype-chain epoch used by
-     * inherited and negative property caches. It never needs to be cleared.
-     */
+    /** Structural mutations of this object can invalidate a dependent property
+     * cache because it is a prototype or an exact dictionary receiver. */
     bool is_prototype : 1;
     /**
      * Set on built-in prototypes and watched namespace/constructor objects at
@@ -110,7 +107,8 @@ void mal_object_bump_prototype_chain_epoch(void);
 
 /** Register/remove VM-owned cache rows from chain-local mutation dependencies. */
 bool mal_object_register_prototype_cache(
-    MalObject *receiver, MalObject *holder, void *cache);
+    MalObject *receiver, MalObject *holder, void *cache,
+    bool include_receiver);
 void mal_object_unregister_prototype_cache(void *cache);
 void mal_object_invalidate_prototype_dependents(MalObject *object);
 /** Release pooled dependency storage when the current thread has no live rows. */

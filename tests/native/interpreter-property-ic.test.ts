@@ -88,7 +88,7 @@ describe("localized interpreter property inline caches", () => {
 			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
 		expect(icLine).toBeDefined();
 		const icStats = icLine ?? "";
-		expect(field(icStats, "load_inherited_hits")).toBeGreaterThan(1500);
+		expect(field(icStats, "load_inherited_hits")).toBeGreaterThan(2500);
 		expect(field(icStats, "load_missing_hits")).toBeGreaterThan(1800);
 		expect(field(icStats, "load_missing_fills")).toBeGreaterThan(0);
 		expect(field(icStats, "prototype_epoch_invalidations")).toBeGreaterThan(0);
