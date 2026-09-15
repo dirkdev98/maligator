@@ -843,8 +843,7 @@ typedef struct MalInlineCache {
     // exact prototype objects: [0] is the receiver's first prototype and [1] is
     // the resolved holder. Missing mode either retains a short all-shaped chain
     // here (polymorphic across equal-layout prototype objects) or one exact
-    // deep/dictionary first prototype. Dictionary-missing rows additionally use
-    // `obj` for the exact managed receiver. Exact identity matters because equal
+    // deep/dictionary first prototype. Exact identity matters because equal
     // receiver shapes do not imply equal prototype objects or dictionary state.
     union {
         const struct MalShape *poly_shape[MAL_IC_POLY_EXTRA];
@@ -909,7 +908,6 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
-#define MAL_IC_MISSING_DICTIONARY 2u
 #define MAL_IC_RECEIVER_DICTIONARY UINT8_MAX
 
 // Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
@@ -1375,17 +1373,10 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
             return false;
         }
         const MalObject *object = mal_value_to_object(receiver);
-        bool dictionary_receiver =
-            ic->receiver_type == MAL_IC_MISSING_DICTIONARY;
-        if (object->shape != ic->shape ||
-            (dictionary_receiver
-                 ? ic->poly_count == 0 || object != ic->obj ||
-                     !mal_object_has_public_overflow(object)
-                 : mal_object_has_public_overflow(object))) {
+        if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
             return false;
         }
-        if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN ||
-            dictionary_receiver) {
+        if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
             if (ic->poly_count > 0) {
                 if (object->prototype != ic->proto_object[0]) {
                     return false;
