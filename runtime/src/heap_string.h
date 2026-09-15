@@ -123,10 +123,6 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
     return mal_string_flatten((MalString *) string);
 }
 
-/** Copy a valid range without flattening a lazy concatenation; destination holds length units. */
-void mal_string_copy_range_to(
-    MalString *string, usize offset, usize length, c16 *destination);
-
 /**
  * Return the string UTF-16 code unit length.
  */
