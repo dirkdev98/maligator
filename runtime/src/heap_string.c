@@ -253,20 +253,26 @@ typedef struct MalStringRangePart {
     usize offset;
 } MalStringRangePart;
 
-static MalString *mal_string_copy_range(
-    MalHeap *heap,
+void mal_string_copy_range_to(
     MalString *parent,
     usize offset,
-    usize length
+    usize length,
+    c16 *code_units
 ) {
+    mal_string_require_valid_length(length);
+    usize end;
+    if (parent == nullptr || (length != 0 && code_units == nullptr) ||
+        !mal_checked_size_add(offset, length, parent->length, &end) ||
+        end > parent->length) {
+        abort();
+    }
+    if (length == 0) return;
+
     MalStringRangePart inline_stack[64];
     usize capacity = sizeof(inline_stack) / sizeof(inline_stack[0]);
     MalStringRangePart *stack = inline_stack;
 
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize count = 0;
-    usize end = offset + length;
     stack[count++] = (MalStringRangePart) {.string = parent, .offset = 0};
 
     while (count > 0) {
@@ -320,6 +326,17 @@ static MalString *mal_string_copy_range(
     }
 
     if (stack != inline_stack) free(stack);
+}
+
+static MalString *mal_string_copy_range(
+    MalHeap *heap,
+    MalString *parent,
+    usize offset,
+    usize length
+) {
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    mal_string_copy_range_to(parent, offset, length, code_units);
     return mal_string_new_owned(heap, code_units, length);
 }
 
