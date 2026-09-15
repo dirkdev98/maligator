@@ -26,7 +26,7 @@ typedef struct MalTableEntry {
         void *data;
         MalValue value;
     } payload;
-    u32 hash_fingerprint;
+    u32 hash;
     u8 property_flags;
     bool live;
     bool owns_data;
@@ -110,24 +110,23 @@ static u64 mal_table_hash_value(MalValue value) {
     return mal_table_hash_mix(value);
 }
 
-static inline u32 mal_table_hash_fingerprint(u64 hash) {
-    return (u32) (hash >> 32);
+static inline u32 mal_table_stored_hash(u64 hash) {
+    return (u32) hash;
 }
 
 // The hash slot for `key`: either the slot holding a live entry equal to `key`,
 // or the first empty slot on its probe chain (slots only ever reference live
 // entries — a delete rebuilds the chains — so probing stops at the first empty).
-static usize mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) {
+static usize mal_table_find_slot(const MalTable *table, MalValue key, u32 hash) {
     if (table->slot_capacity == 0) return 0;
     usize mask = table->slot_capacity - 1;
     usize index = hash & mask;
-    u32 fingerprint = mal_table_hash_fingerprint(hash);
     u64 probes = 0;
 
     while (table->slots[index] != MAL_TABLE_EMPTY) {
         probes++;
         MalTableEntry *entry = &table->entries[table->slots[index]];
-        if (entry->live && entry->hash_fingerprint == fingerprint &&
+        if (entry->live && entry->hash == hash &&
             mal_key_value_equals(entry->key, key)) {
             break;
         }
@@ -197,7 +196,7 @@ static void mal_table_close_delete_hole(MalTable *table, usize hole) {
     while (table->slots[scan] != MAL_TABLE_EMPTY) {
         MAL_PERF_COUNT(tables[table->role].delete_cluster_scans);
         i32 entry_index = table->slots[scan];
-        usize home = mal_table_hash_value(table->entries[entry_index].key) & mask;
+        usize home = table->entries[entry_index].hash & mask;
         if (((hole - home) & mask) < ((scan - home) & mask)) {
             table->slots[hole] = entry_index;
             hole = scan;
@@ -225,7 +224,7 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         if (!table->entries[e].live) {
             continue;
         }
-        usize index = mal_table_hash_value(table->entries[e].key) & mask;
+        usize index = table->entries[e].hash & mask;
         while (slots[index] != MAL_TABLE_EMPTY) {
             index = (index + 1) & mask;
         }
@@ -431,7 +430,7 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
             }
         }
     }
-    u64 hash = mal_table_hash_value(key.value);
+    u32 hash = mal_table_stored_hash(mal_table_hash_value(key.value));
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry = table->slots[index];
 
@@ -455,7 +454,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     }
     if (mal_table_should_compact(table)) mal_table_compact(table);
     mal_table_allocate_storage(table);
-    u64 hash = mal_table_hash_value(key.value);
+    u32 hash = mal_table_stored_hash(mal_table_hash_value(key.value));
     usize index = mal_table_find_slot(table, key.value, hash);
     if (table->slots[index] != MAL_TABLE_EMPTY) {
         if (stats != nullptr) {
@@ -476,7 +475,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     MalTableEntry *entry = &table->entries[entry_index];
     entry->key = key.value;
     entry->payload.value = mal_value_new_undefined();
-    entry->hash_fingerprint = mal_table_hash_fingerprint(hash);
+    entry->hash = hash;
     entry->property_flags = 0;
     entry->live = true;
     entry->owns_data = false;
@@ -497,7 +496,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
         stats->deletes++;
     }
     if (table->size == 0) return false;
-    u64 hash = mal_table_hash_value(key.value);
+    u32 hash = mal_table_stored_hash(mal_table_hash_value(key.value));
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry_index = table->slots[index];
 
@@ -707,9 +706,9 @@ bool mal_table_entry_matches(
         return false;
     }
     const MalTableEntry *candidate = &table->entries[index];
-    u64 hash = mal_table_hash_value(key.value);
+    u32 hash = mal_table_stored_hash(mal_table_hash_value(key.value));
     return candidate->live &&
-        candidate->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
+        candidate->hash == hash &&
         mal_key_value_equals(candidate->key, key.value);
 }
 
