@@ -129,10 +129,8 @@ static MalValue mal_builtin_map_construct(
     // iterable again; custom/advanced iterators retain ordinary growth.
     usize size_hint;
     if (direct_adder &&
-        mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
-        size_hint != 0) {
-        (void) mal_table_reserve(
-            mal_map_object_ensure_entries(map), size_hint);
+        mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
+        (void) mal_table_reserve(map->entries, size_hint);
     }
 
     // Each step, the entry index Gets, and the adder all re-enter JS and can
@@ -356,8 +354,7 @@ static MalValue mal_builtin_map_set_value(
         vm, this_value, map, canonical_key);
 
     if (entry == nullptr) {
-        entry = mal_table_upsert_entry(
-            mal_map_object_ensure_entries(map), canonical_key, nullptr);
+        entry = mal_table_upsert_entry(map->entries, canonical_key, nullptr);
     }
     mal_table_entry_set_value(map->entries, entry, value);
     mal_gc_card(&map->object.header, key);
@@ -678,7 +675,7 @@ static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalV
     MalKey canonical_key = mal_map_key_from_value(key);
     bool inserted;
     void *entry = mal_table_upsert_entry(
-        mal_map_object_ensure_entries(map), canonical_key, &inserted);
+        map->entries, canonical_key, &inserted);
     if (!inserted) {
         return mal_table_entry_value(map->entries, entry);
     }

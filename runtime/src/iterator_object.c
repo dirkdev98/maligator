@@ -25,8 +25,7 @@ void mal_iterator_object_init(
     iterator->done = false;
     iterator->table_pinned = mal_iterator_kind_uses_table(kind);
     if (iterator->table_pinned) {
-        iterator->pinned_table = mal_map_object_ensure_entries(
-            mal_value_to_map_object(target));
+        iterator->pinned_table = mal_value_to_map_object(target)->entries;
         mal_table_pin(iterator->pinned_table);
     } else {
         iterator->pinned_table = nullptr;

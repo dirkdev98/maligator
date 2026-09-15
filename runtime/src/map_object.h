@@ -33,9 +33,6 @@ void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, Mal
  */
 MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *prototype, bool weak);
 
-/** Materialize the ordered table for a strong collection on first mutation or iterator. */
-MalTable *mal_map_object_ensure_entries(MalMapObject *map);
-
 /**
  * Build the canonical table key for a JS value under SameValueZero: int32-
  * boxed numbers fold into their f64 encoding, every zero (raw +/-0 and the

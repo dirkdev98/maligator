@@ -93,10 +93,8 @@ static MalValue mal_builtin_set_construct(
 
     usize size_hint;
     if (direct_adder &&
-        mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
-        size_hint != 0) {
-        (void) mal_table_reserve(
-            mal_map_object_ensure_entries(set), size_hint);
+        mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
+        (void) mal_table_reserve(set->entries, size_hint);
     }
 
     // Each step and the adder re-enter JS and can collect. A callable Proxy may
@@ -555,10 +553,7 @@ static MalMapObject *mal_builtin_set_new_result(
     if (seed != nullptr && reserve_size < mal_map_object_size(seed)) {
         reserve_size = mal_map_object_size(seed);
     }
-    if (reserve_size != 0) {
-        (void) mal_table_reserve(
-            mal_map_object_ensure_entries(result), reserve_size);
-    }
+    (void) mal_table_reserve(result->entries, reserve_size);
 
     if (seed != nullptr) {
         MalTableIter iter;

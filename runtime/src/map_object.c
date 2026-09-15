@@ -6,9 +6,7 @@
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
     mal_object_init(heap, &map->object, type, prototype);
-    map->entries = weak
-        ? mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP)
-        : nullptr;
+    map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
     map->weak = weak;
 }
 
@@ -17,13 +15,6 @@ MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *pro
     mal_map_object_init(heap, map, type, prototype, weak);
 
     return map;
-}
-
-MalTable *mal_map_object_ensure_entries(MalMapObject *map) {
-    if (map->entries == nullptr) {
-        map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
-    }
-    return map->entries;
 }
 
 MalKey mal_map_key_from_value(MalValue value) {
@@ -74,9 +65,8 @@ MalKey mal_map_key_from_value(MalValue value) {
 }
 
 void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value) {
-    MalTable *entries = mal_map_object_ensure_entries(map);
-    void *entry = mal_table_upsert_entry(entries, key, nullptr);
-    mal_table_entry_set_value(entries, entry, value);
+    void *entry = mal_table_upsert_entry(map->entries, key, nullptr);
+    mal_table_entry_set_value(map->entries, entry, value);
     // Old map gaining a young key/value: remember it so the minor collector traces
     // its entries table. For a WeakMap this also re-registers it for the weak pass
     // (its young keys are weak), so a dead young key's entry is still cleaned and the
