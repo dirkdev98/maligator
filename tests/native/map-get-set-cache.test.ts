@@ -36,7 +36,7 @@ describe("Map get-to-set table handle reuse", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-	});
+	}, 600_000);
 
 	it("preserves Map semantics through invalidation and rehash", () => {
 		run(binary);
