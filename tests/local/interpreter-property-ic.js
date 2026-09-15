@@ -213,6 +213,80 @@ for (let i = 0; i < 20; i++) {
 	);
 }
 
+function loadDictionaryMissing(object) {
+	return object.__mal_dictionary_missing_ic__;
+}
+const dictionaryMissingPrototype = {};
+const dictionaryMissingReceiver = Object.create(dictionaryMissingPrototype);
+Object.defineProperty(dictionaryMissingReceiver, "marker", {
+	configurable: true,
+	value: 1,
+});
+for (let i = 0; i < 1000; i++) {
+	check(
+		loadDictionaryMissing(dictionaryMissingReceiver) === undefined,
+		"dictionary missing load",
+	);
+}
+let dictionaryMissingGetterCalls = 0;
+Object.defineProperty(dictionaryMissingPrototype, "getterMissing", {
+	configurable: true,
+	get() {
+		dictionaryMissingGetterCalls++;
+		return undefined;
+	},
+});
+function loadDictionaryUndefinedGetter(object) {
+	return object.getterMissing;
+}
+check(
+	loadDictionaryUndefinedGetter(dictionaryMissingReceiver) === undefined &&
+		loadDictionaryUndefinedGetter(dictionaryMissingReceiver) === undefined &&
+		dictionaryMissingGetterCalls === 2,
+	"dictionary getter returning undefined remains observable",
+);
+dictionaryMissingReceiver.__mal_dictionary_missing_ic__ = 31;
+check(
+	loadDictionaryMissing(dictionaryMissingReceiver) === 31,
+	"dictionary own addition invalidates missing load",
+);
+delete dictionaryMissingReceiver.__mal_dictionary_missing_ic__;
+check(
+	loadDictionaryMissing(dictionaryMissingReceiver) === undefined,
+	"dictionary own deletion refills missing load",
+);
+dictionaryMissingPrototype.__mal_dictionary_missing_ic__ = 32;
+check(
+	loadDictionaryMissing(dictionaryMissingReceiver) === 32,
+	"dictionary prototype addition invalidates missing load",
+);
+delete dictionaryMissingPrototype.__mal_dictionary_missing_ic__;
+const otherDictionaryMissing = Object.create(null);
+Object.defineProperty(otherDictionaryMissing, "marker", {
+	configurable: true,
+	value: 2,
+});
+otherDictionaryMissing.__mal_dictionary_missing_ic__ = 33;
+check(
+	loadDictionaryMissing(otherDictionaryMissing) === 33 &&
+		loadDictionaryMissing(dictionaryMissingReceiver) === undefined,
+	"dictionary missing cache keeps exact receiver identity",
+);
+const nullDictionaryMissing = Object.create(null);
+Object.defineProperty(nullDictionaryMissing, "marker", {
+	configurable: true,
+	value: 3,
+});
+function loadNullDictionaryMissing(object) {
+	return object.__mal_null_dictionary_missing_ic__;
+}
+for (let i = 0; i < 100; i++) {
+	check(
+		loadNullDictionaryMissing(nullDictionaryMissing) === undefined,
+		"null-prototype dictionary missing load",
+	);
+}
+
 function loadDeepMissing(object) {
 	return object.__mal_deep_missing_ic__;
 }

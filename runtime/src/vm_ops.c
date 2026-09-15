@@ -4775,7 +4775,8 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
 		ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
 		(ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
 		(ic->mode == MAL_IC_MODE_MISSING &&
-         ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
+         (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN ||
+          ic->receiver_type == MAL_IC_MISSING_DICTIONARY) &&
          ic->poly_count > 0)) {
         mal_object_unregister_prototype_cache(ic);
     }
@@ -5103,13 +5104,22 @@ static bool mal_ic_try_record_inherited_slot(
 }
 
 static bool mal_ic_try_record_missing(
-    MalValue receiver, MalValue key_value, MalInlineCache *ic, bool count_fill
+    MalValue receiver, MalValue key_value, MalKey key,
+    MalInlineCache *ic, bool count_fill
 ) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
         return false;
     }
     MalObject *object = mal_value_to_object(receiver);
-    if (mal_object_has_public_overflow(object)) {
+    bool dictionary_receiver = mal_object_has_public_overflow(object);
+    if (dictionary_receiver &&
+        (object->header.storage != MAL_HEAP_STORAGE_DYNAMIC ||
+         object->shape->inline_count != 0 || key.kind != MAL_KEY_STRING)) {
+        return false;
+    }
+    if (ic->mode == MAL_IC_MODE_MISSING &&
+        (dictionary_receiver ||
+         ic->receiver_type == MAL_IC_MISSING_DICTIONARY)) {
         return false;
     }
 
@@ -5126,6 +5136,27 @@ static bool mal_ic_try_record_missing(
             prototype_shapes[depth] = cursor->shape;
         }
         depth++;
+    }
+
+    if (dictionary_receiver) {
+        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_MISSING);
+        if (!mal_object_register_prototype_cache(
+                object, nullptr, ic, true)) {
+            return false;
+        }
+        ic->shape = object->shape;
+        ic->key = key_value;
+        ic->obj = object;
+        ic->proto_object[0] = object->prototype;
+        ic->proto_object[1] = nullptr;
+        ic->slot = MAL_IC_VALUE_SLOT;
+        ic->prim_kind = 0;
+        ic->poly_count = 1;
+        ic->megamorphic = false;
+        ic->mode = MAL_IC_MODE_MISSING;
+        ic->receiver_type = MAL_IC_MISSING_DICTIONARY;
+        if (count_fill) MAL_PERF_COUNT(ic_load_missing_fills);
+        return true;
     }
 
     // An exact-chain entry is deliberately monomorphic. Replacing it at a site
@@ -5189,7 +5220,10 @@ static void mal_ic_try_record_inherited(
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
     if (!resolution.found) {
         if (result == mal_value_new_undefined() &&
-            mal_ic_try_record_missing(receiver, key_value, ic, true)) {
+            mal_ic_try_record_missing(receiver, key_value, key, ic, true)) {
+            if (ic->receiver_type == MAL_IC_MISSING_DICTIONARY) {
+                return;
+            }
             MalObject *object = mal_value_to_object(receiver);
             MalInlineCache *stub =
                 &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
@@ -5201,7 +5235,7 @@ static void mal_ic_try_record_inherited(
                 mal_ic_detach_prototype_cache(stub);
                 *stub = (MalInlineCache) {0};
                 (void) mal_ic_try_record_missing(
-                    receiver, key_value, stub, false);
+                    receiver, key_value, key, stub, false);
             }
             return;
         }
