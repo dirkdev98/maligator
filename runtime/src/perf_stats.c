@@ -724,6 +724,7 @@ static void mal_perf_stats_print(void) {
         "store_slow_mono_hits=%llu store_poly_hits=%llu "
         "store_mega_hits=%llu store_mega_misses=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu "
+        "store_own_table_hits=%llu store_own_table_fills=%llu "
         "store_transition_hits=%llu store_transition_fills=%llu store_plain_generic=%llu "
         "store_other_generic=%llu\n",
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
@@ -772,6 +773,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_shape_hits,
         (unsigned long long) mal_perf_stats.ic_store_shape_fills,
         (unsigned long long) mal_perf_stats.ic_store_shape_uncacheable,
+        (unsigned long long) mal_perf_stats.ic_store_own_table_hits,
+        (unsigned long long) mal_perf_stats.ic_store_own_table_fills,
         (unsigned long long) mal_perf_stats.ic_store_transition_hits,
         (unsigned long long) mal_perf_stats.ic_store_transition_fills,
         (unsigned long long) mal_perf_stats.ic_store_plain_generic,

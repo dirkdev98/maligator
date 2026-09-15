@@ -4800,6 +4800,35 @@ bool mal_vm_own_table_try_load(
     return true;
 }
 
+bool mal_vm_own_table_try_store(
+    MalObject *object, MalValue key, MalValue value, const MalInlineCache *ic
+) {
+    if (object->header.type != MAL_HEAP_OBJECT || object->primordial_locked ||
+        key != ic->key || object->shape->inline_count != 0 ||
+        object->overflow == nullptr) {
+        return false;
+    }
+    MalTable *table = object->overflow;
+    void *entry = ic->entry;
+    MalValue current;
+    u8 flags;
+    if (!mal_table_read_entry_hint(table, entry, key, &current, &flags) ||
+        (flags & (MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_PRIMORDIAL)) ||
+        !(flags & MAL_PROPERTY_WRITABLE)) {
+        return false;
+    }
+    if (object->watched_method_proto) {
+        mal_invalidate_primitive_method_protector();
+    }
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
+    mal_table_entry_set_value(table, entry, value);
+    mal_gc_card(&object->header, value);
+    MAL_PERF_COUNT(ic_store_own_table_hits);
+    return true;
+}
+
 static void mal_ic_record_own_table(MalInlineCache *ic, MalValue key, void *entry) {
     mal_perf_ic_note_replacement(ic, MAL_IC_MODE_OWN_TABLE);
     mal_ic_detach_prototype_cache(ic);
@@ -4808,7 +4837,6 @@ static void mal_ic_record_own_table(MalInlineCache *ic, MalValue key, void *entr
         .entry = entry,
         .mode = MAL_IC_MODE_OWN_TABLE,
     };
-    MAL_PERF_COUNT(ic_load_own_table_fills);
 }
 
 static void mal_ic_record_special(
@@ -5468,6 +5496,7 @@ static MalValue mal_vm_op_load_property_ic_impl(
                 if (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
                     if (mal_ic_key_is_stable_string(key_value)) {
                         mal_ic_record_own_table(ic, key_value, own.entry);
+                        MAL_PERF_COUNT(ic_load_own_table_fills);
                     }
                     return own.desc.value;
                 }
@@ -5717,6 +5746,22 @@ void mal_vm_op_store_property_ic(
                     MAL_PERF_COUNT(ic_store_transition_fills);
                 }
                 return;
+            }
+            if (object->shape->inline_count == 0 && object->overflow != nullptr &&
+                !object->primordial_locked) {
+                MalPropertyLookup own = mal_property_lookup(object->overflow, key);
+                if (own.present && own.entry != nullptr &&
+                    (own.desc.flags & MAL_PROPERTY_WRITABLE) &&
+                    !(own.desc.flags &
+                      (MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_PRIMORDIAL)) &&
+                    mal_ic_key_is_stable_string(key.value)) {
+                    mal_ic_record_own_table(ic, key.value, own.entry);
+                    MAL_PERF_COUNT(ic_store_own_table_fills);
+                    if (mal_vm_own_table_try_store(
+                            object, key.value, value, ic)) {
+                        return;
+                    }
+                }
             }
         }
         // Prototype setter / overflow / index / symbol key: store with the

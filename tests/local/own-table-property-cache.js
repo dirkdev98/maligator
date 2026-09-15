@@ -24,6 +24,14 @@ function indexed(object, key) {
 	return object[key];
 }
 
+function write(object, value) {
+	object.target = value;
+}
+
+function indexedWrite(object, key, value) {
+	object[key] = value;
+}
+
 const object = dictionary({ target: 0 });
 let sum = 0;
 for (let index = 0; index < 512; index++) {
@@ -34,6 +42,87 @@ check("cached reads observe current values", sum === 130816);
 for (let index = 0; index < 128; index++) object["extra" + index] = index;
 object.target = 513;
 check("growth retains the current property", read(object) === 513);
+
+const writeTarget = dictionary({ target: 0 });
+for (let index = 0; index < 512; index++) write(writeTarget, index);
+check("cached static writes update dictionary data", writeTarget.target === 511);
+Object.defineProperty(writeTarget, "target", {
+	value: 700,
+	writable: true,
+	enumerable: false,
+	configurable: false,
+});
+write(writeTarget, 701);
+check(
+	"cached writes preserve non-enumerable non-configurable attributes",
+	writeTarget.target === 701 && !Object.keys(writeTarget).includes("target"),
+);
+Object.preventExtensions(writeTarget);
+write(writeTarget, 702);
+check("non-extensible dictionaries retain writable updates", writeTarget.target === 702);
+
+let setterReceiver;
+let setterValue = 0;
+const accessorWriteTarget = dictionary({ target: 0 });
+for (let index = 0; index < 4; index++) write(accessorWriteTarget, index);
+Object.defineProperty(accessorWriteTarget, "target", {
+	configurable: true,
+	get() {
+		return setterValue;
+	},
+	set(value) {
+		setterReceiver = this;
+		setterValue = value;
+	},
+});
+write(accessorWriteTarget, 703);
+check(
+	"data-to-accessor changes invoke the setter with the receiver",
+	setterReceiver === accessorWriteTarget && setterValue === 703,
+);
+
+const computedWriteTarget = dictionary({ target: 0 });
+let writeCoercions = 0;
+const writeKey = {
+	toString() {
+		writeCoercions++;
+		return "target";
+	},
+};
+indexedWrite(computedWriteTarget, writeKey, 704);
+check(
+	"computed write keys are converted exactly once",
+	computedWriteTarget.target === 704 && writeCoercions === 1,
+);
+
+const readonlyWriteTarget = dictionary({ target: 705 });
+Object.defineProperty(readonlyWriteTarget, "target", { writable: false });
+let readonlyThrew = false;
+try {
+	write(readonlyWriteTarget, 706);
+} catch (error) {
+	readonlyThrew = error instanceof TypeError;
+}
+check(
+	"alternating receivers recheck write permissions",
+	readonlyThrew && readonlyWriteTarget.target === 705,
+);
+write(computedWriteTarget, 707);
+check(
+	"writable receivers remain cacheable after a rejection",
+	computedWriteTarget.target === 707,
+);
+
+const dictionaryPrototype = dictionary({ target: 708 });
+const dictionaryChild = Object.create(dictionaryPrototype);
+for (let index = 0; index < 16; index++) {
+	check("warm inherited dictionary read", read(dictionaryChild) === 708);
+}
+write(dictionaryPrototype, 709);
+check(
+	"cached prototype writes invalidate inherited reads",
+	read(dictionaryChild) === 709,
+);
 
 const reordered = dictionary({ first: -1, target: 17 });
 check("another table can put the key at another index", read(reordered) === 17);
