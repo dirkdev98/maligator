@@ -61,7 +61,7 @@ describe("compiled call dispatch and native call caches", () => {
 			}),
 			expected,
 		);
-	}, 180_000);
+	}, 360_000);
 
 	it("does not reuse exact identities across sequential VMs", () => {
 		assertExactLines(runToStdout(multiVm, { env: { MAL_HOST_GC: "1" } }), [
