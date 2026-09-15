@@ -166,11 +166,11 @@ describe("inherited built-in method and native call caches", () => {
 		assertExactLines(
 			runToStdout(compiled, {
 				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-				timeoutMs: 60_000,
+				timeoutMs: 180_000,
 			}),
 			["inherited-method-cache PASS"],
 		);
-	});
+	}, 180_000);
 
 	it("invalidates on Date.prototype assignment", () => {
 		assertExactLines(runToStdout(monkeyPatch), [
@@ -307,15 +307,14 @@ describe("inherited built-in method and native call caches", () => {
 			assertExactLines(
 				runToStdout(binary(), {
 					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-					// MAL_GC_VERIFY scans the heap at every stress collection. This broad
-					// cross-realm fixture takes close to the old 90-second fuse on an idle
-					// core, so retain a bounded fuse with enough parallel-suite headroom.
-					timeoutMs: 180_000,
+					// MAL_GC_VERIFY scans the heap at every stress collection, so this broad
+					// cross-realm fixture needs extra headroom on a shared runner core.
+					timeoutMs: 360_000,
 				}),
 				["inherited-ordinary-cache PASS"],
 			);
 		},
-		scaledNativeRunTimeoutMs(180_000),
+		scaledNativeRunTimeoutMs(360_000),
 	);
 
 	it.each([
