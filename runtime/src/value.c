@@ -206,10 +206,6 @@ bool mal_value_is_array_buffer_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_BUFFER_OBJECT);
 }
 
-bool mal_value_is_typed_array_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_TYPED_ARRAY_OBJECT);
-}
-
 bool mal_value_is_data_view_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_DATA_VIEW_OBJECT);
 }

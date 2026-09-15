@@ -28,7 +28,9 @@ typedef struct MalProxyObject {
     bool revoked;
 } MalProxyObject;
 
-bool mal_value_is_proxy_object(MalValue value);
+static inline bool mal_value_is_proxy_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_PROXY_OBJECT);
+}
 MalProxyObject *mal_value_to_proxy_object(MalValue value);
 MalValue mal_value_from_proxy_object(MalProxyObject *proxy);
 

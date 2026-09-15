@@ -388,10 +388,10 @@ bool mal_value_is_generator_object(MalValue value);
  */
 bool mal_value_is_array_buffer_object(MalValue value);
 
-/**
- * Check if the value is a TypedArray view.
- */
-bool mal_value_is_typed_array_object(MalValue value);
+/** Check if the value is a TypedArray view. */
+static inline bool mal_value_is_typed_array_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_TYPED_ARRAY_OBJECT);
+}
 
 /**
  * Check if the value is a DataView.
