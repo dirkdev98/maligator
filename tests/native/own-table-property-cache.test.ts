@@ -58,9 +58,5 @@ describe("dictionary own-property cache hints", () => {
 		expect(result.stdout).toBe(expected);
 		const hits = Number(result.stderr.match(/load_own_table_hits=(\d+)/)?.[1] ?? -1);
 		expect(hits).toBeGreaterThanOrEqual(500);
-		const storeHits = Number(
-			result.stderr.match(/store_own_table_hits=(\d+)/)?.[1] ?? -1,
-		);
-		expect(storeHits).toBeGreaterThanOrEqual(500);
 	});
 });

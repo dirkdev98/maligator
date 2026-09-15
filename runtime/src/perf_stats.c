@@ -465,7 +465,6 @@ static void mal_perf_stats_print(void) {
         "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
         "fresh_dense_fallbacks=%llu fresh_dense_exact_reserves=%llu "
         "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu "
-		"filter_fresh_dense_results=%llu filter_fresh_dense_appends=%llu "
 		"indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
 		"indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
 		"indexed_fill_guard_fallbacks=%llu "
@@ -481,8 +480,6 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_fresh_dense_exact_reserves,
         (unsigned long long) mal_perf_stats.array_fresh_dense_reserved_slots,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided,
-        (unsigned long long) mal_perf_stats.array_filter_fresh_dense_results,
-        (unsigned long long) mal_perf_stats.array_filter_fresh_dense_appends,
         (unsigned long long) mal_perf_stats.array_indexed_fill_reserves,
         (unsigned long long) mal_perf_stats.array_indexed_fill_reserved_slots,
 		(unsigned long long) mal_perf_stats.array_indexed_fill_allocations_avoided,
@@ -727,7 +724,6 @@ static void mal_perf_stats_print(void) {
         "store_slow_mono_hits=%llu store_poly_hits=%llu "
         "store_mega_hits=%llu store_mega_misses=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu "
-        "store_own_table_hits=%llu store_own_table_fills=%llu "
         "store_transition_hits=%llu store_transition_fills=%llu store_plain_generic=%llu "
         "store_other_generic=%llu\n",
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
@@ -776,8 +772,6 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_shape_hits,
         (unsigned long long) mal_perf_stats.ic_store_shape_fills,
         (unsigned long long) mal_perf_stats.ic_store_shape_uncacheable,
-        (unsigned long long) mal_perf_stats.ic_store_own_table_hits,
-        (unsigned long long) mal_perf_stats.ic_store_own_table_fills,
         (unsigned long long) mal_perf_stats.ic_store_transition_hits,
         (unsigned long long) mal_perf_stats.ic_store_transition_fills,
         (unsigned long long) mal_perf_stats.ic_store_plain_generic,

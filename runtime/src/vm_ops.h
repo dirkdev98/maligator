@@ -1224,10 +1224,6 @@ bool mal_vm_own_table_try_load(
     const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
 );
 
-bool mal_vm_own_table_try_store(
-    MalObject *object, MalValue key, MalValue value, const MalInlineCache *ic
-);
-
 // Own-data hits run no user code, so property regions can omit the throw check.
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
                                           MalValue *out) {
@@ -1587,10 +1583,6 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
  */
 static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
                                            const MalInlineCache *ic) {
-    if (ic->mode == MAL_IC_MODE_OWN_TABLE &&
-        mal_vm_own_table_try_store(object, key, value, ic)) {
-        return true;
-    }
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
         ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_store_mono_hit();

@@ -1258,15 +1258,9 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result_array = nullptr;
-    MalValue result = mal_value_new_undefined();
-    if (mal_builtin_array_clean_dense(vm, this_value) != nullptr &&
-        mal_array_default_species(vm, this_value)) {
-        result_array = mal_intrinsic_new_array(vm, 0);
-        result = mal_value_from_array_object(result_array);
-        MAL_PERF_COUNT(array_filter_fresh_dense_results);
-    } else if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
-        return result;
+    MalValue result;
+    if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
+        return mal_value_new_undefined();
     }
     u32 result_length = 0;
 
@@ -1295,19 +1289,9 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
         }
 
         if (mal_value_is_truthy(selected)) {
-            if (result_array != nullptr) {
-                if (mal_array_object_fresh_dense_append(result_array, element)) {
-                    MAL_PERF_COUNT(array_filter_fresh_dense_appends);
-                } else {
-                    result_array = nullptr;
-                }
-            }
-            if (result_array == nullptr &&
-                !mal_builtin_array_create_data_property(
-                    vm, result, result_length, element)) {
+            if (!mal_builtin_array_create_data_property(vm, result, result_length++, element)) {
                 goto done;
             }
-            result_length++;
         }
     }
 
