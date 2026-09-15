@@ -56,7 +56,6 @@ static void mal_property_entry_write(
         }
         accessors->getter = desc->getter;
         accessors->setter = desc->setter;
-        mal_table_entry_set_value(table, entry, mal_value_new_undefined());
     } else {
         if (was_accessor) {
             gc_free_raw(mal_gc_current_heap(), data);

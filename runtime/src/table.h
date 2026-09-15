@@ -118,12 +118,14 @@ void mal_table_unpin(MalTable *table);
 MalKey mal_table_entry_key(const MalTable *table, void *entry);
 
 /**
- * Read the data pointer stored for a live entry handle.
+ * Read the active owned-data pointer, or null for a value entry.
  */
 void *mal_table_entry_data(const MalTable *table, void *entry);
 
 /**
- * Replace the owned data pointer stored for a live entry handle.
+ * Replace the owned-data pointer stored for a live entry handle. Clearing it
+ * switches the entry back to an undefined value payload; the caller frees the
+ * prior owned allocation.
  */
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
 
@@ -164,7 +166,7 @@ bool mal_table_entry_matches(
     const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
 );
 
-// Cross-table hints require live key identity; equal strings with different identities miss.
+// Cross-table hints require a live value entry with exact key identity.
 bool mal_table_read_entry_hint(
     const MalTable *table, const void *entry, MalValue key,
     MalValue *value, u8 *property_flags
