@@ -190,6 +190,17 @@ check(
 );
 
 const emptySet = new Set();
+const lateMapIteratorSource = new Map();
+const lateMapIterator = lateMapIteratorSource.entries();
+lateMapIteratorSource.set("late", 41);
+const lateSetIteratorSource = new Set();
+const lateSetIterator = lateSetIteratorSource.values();
+lateSetIteratorSource.add(42);
+check(
+	"Empty collection iterators observe later insertions",
+	lateMapIterator.next().value.join(":") === "late:41" &&
+		lateSetIterator.next().value === 42,
+);
 check(
 	"Set native empty algebra identities",
 	[...emptySet.union(selfSet)].join(",") === "1,2,3" &&

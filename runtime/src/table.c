@@ -331,7 +331,7 @@ MalTableMode mal_table_mode(const MalTable *table) {
 }
 
 usize mal_table_size(const MalTable *table) {
-    return table->size;
+    return table == nullptr ? 0 : table->size;
 }
 
 bool mal_table_reserve(MalTable *table, usize desired_size) {
@@ -408,6 +408,9 @@ bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalVa
 }
 
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
+    if (table == nullptr) {
+        return (MalTableLookup) {.present = false, .entry = nullptr};
+    }
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.tables[table->role] : nullptr;
     if (stats != nullptr) {
         stats->lookups++;
@@ -488,6 +491,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
 }
 
 bool mal_table_delete(MalTable *table, MalKey key) {
+    if (table == nullptr) return false;
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.tables[table->role] : nullptr;
     if (stats != nullptr) {
         stats->deletes++;
@@ -526,6 +530,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
 }
 
 void mal_table_clear(MalTable *table) {
+    if (table == nullptr) return;
     if (mal_perf_stats_enabled) {
         mal_perf_stats.tables[table->role].clears++;
     }
@@ -712,6 +717,7 @@ void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind k
 }
 
 bool mal_table_iter_next(MalTableIter *iter, MalKey *key_out, void **entry_out) {
+    if (iter->table == nullptr) return false;
     while (iter->index < iter->table->entry_count) {
         u32 entry_index = (u32) iter->index++;
         MalTableEntry *entry = &iter->table->entries[entry_index];
