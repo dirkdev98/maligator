@@ -25,6 +25,8 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->dense_count = 0;
     array->dense_deopted = false;
     array->dense_maybe_holey = false;
+    array->dense_elements_writable = true;
+    array->dense_elements_configurable = true;
 }
 
 bool mal_array_object_is_dense(const MalArrayObject *array) {
@@ -541,6 +543,10 @@ u32 mal_array_object_length(const MalArrayObject *array) {
  * new_length when all deletions succeeded).
  */
 static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
+    if (array->elements != nullptr && !array->dense_elements_configurable &&
+        new_length < array->dense_count) {
+        return array->dense_count;
+    }
     MalTable *properties = mal_object_properties(&array->object);
 
     // Collect the index keys at or past new_length.
@@ -594,9 +600,8 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
 
 void mal_array_object_set_length(MalArrayObject *array, u32 length) {
     if (length < array->length) {
-        // Table sparse indices (only present on deopted arrays) may block the shrink
-        // at a non-configurable element; dense elements are always configurable, so
-        // they never block — just truncate the dense region to the achieved length.
+        // Non-configurable elements may block the shrink; otherwise truncate the
+        // dense region to the achieved length.
         length = mal_array_object_shrink(array, length);
         if (array->elements != nullptr && array->dense_count > length) {
             // SATB: shrinking dense_count drops elements [length, dense_count) from

@@ -4373,9 +4373,10 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             // (a) Overwrite of a present element: an own writable data property shadows
             // any inherited accessor, so this is sound regardless of the prototype
             // chain or the protector.
-            if (mal_array_object_dense_has(array, index)) {
-                mal_array_object_dense_store(array, index, value);
-                return true;
+            if (mal_array_object_dense_has(array, index) &&
+                array->dense_elements_writable) {
+                return mal_array_object_dense_store(array, index, value) ==
+                    MAL_ARRAY_DENSE_APPLIED;
             }
             // (b) Fresh-index store (append / hole-fill): sound to store directly only
             // when no inherited indexed setter can intercept — the array keeps the
@@ -5784,8 +5785,10 @@ static void mal_vm_op_store_property_keyed(
         if (index < UINT32_MAX) {
             // Overwrite of a present element: an own writable data property shadows
             // any inherited accessor — sound regardless of the prototype / protector.
-            if (mal_array_object_dense_has(array, index)) {
-                mal_array_object_dense_store(array, index, value);
+            if (mal_array_object_dense_has(array, index) &&
+                array->dense_elements_writable &&
+                mal_array_object_dense_store(array, index, value) ==
+                    MAL_ARRAY_DENSE_APPLIED) {
                 return;
             }
             // Fresh-index store (append / hole-fill): sound to store directly only when

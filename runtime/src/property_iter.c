@@ -58,9 +58,9 @@ static bool mal_property_iter_next_shape(MalPropertyIter *iter, MalKey *key_out,
 /**
  * Emit the next present (non-hole) dense array element in ascending index order,
  * advancing the monotonic `last_index` cursor (so the whole scan is O(dense_count)).
- * Each element is a default-data property. Returns false for a non-dense object or
- * once the dense region is exhausted. In dense mode no index keys live in the table,
- * so callers fall through to shaped/dictionary (string/symbol) keys afterwards.
+ * Each element shares the dense vector's uniform data attributes. Returns false for
+ * a non-dense object or once the dense region is exhausted. In dense mode no index
+ * keys live in the table, so callers fall through to shaped/dictionary keys.
  */
 static bool mal_property_iter_next_dense(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {
     if (iter->object->header.type != MAL_HEAP_ARRAY_OBJECT) {
@@ -80,7 +80,7 @@ static bool mal_property_iter_next_dense(MalPropertyIter *iter, MalKey *key_out,
         iter->has_last_index = true;
         *key_out = mal_key_index(i);
         *desc_out = (MalPropertyDesc){
-            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+            .flags = mal_array_object_dense_element_flags(array),
             .value = value,
             .getter = mal_value_new_undefined(),
             .setter = mal_value_new_undefined(),

@@ -1903,9 +1903,10 @@ static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalVal
         if ((f64) k != index) {
             return false;
         }
-        if (mal_array_object_dense_has(arr, k)) {
-            mal_array_object_dense_store(arr, k, value);
-            return true;
+        if (mal_array_object_dense_has(arr, k) &&
+            arr->dense_elements_writable) {
+            return mal_array_object_dense_store(arr, k, value) ==
+                MAL_ARRAY_DENSE_APPLIED;
         }
         if (!arr->dense_deopted && mal_array_elements_protector && arr->object.extensible &&
             arr->length_writable && arr->object.prototype == mal_array_prototype_object) {

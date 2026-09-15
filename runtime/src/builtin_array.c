@@ -187,7 +187,8 @@ static bool mal_builtin_array_try_store_dense_index(
     MalArrayObject *array, u32 index, MalValue value
 ) {
     bool grows = index >= array->length;
-    if (!array->dense_deopted && array->object.extensible &&
+    if (!array->dense_deopted && array->dense_elements_writable &&
+        array->object.extensible &&
         (!grows || array->length_writable) &&
         mal_array_object_dense_store(array, index, value) ==
             MAL_ARRAY_DENSE_APPLIED) {
@@ -1942,6 +1943,7 @@ static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalV
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && dense->length_writable &&
+        dense->dense_elements_configurable &&
         length == (f64) dense->length) {
         MalValue element = mal_value_new_undefined();
         mal_array_object_dense_get(dense, dense->length - 1, &element);
@@ -2004,6 +2006,8 @@ static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const Ma
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && dense->length_writable &&
+        dense->dense_elements_writable &&
+        dense->dense_elements_configurable &&
         length == dense->length &&
         mal_builtin_array_dense_shift_compatible(dense)) {
         MalValue first = mal_value_new_undefined();
@@ -2490,7 +2494,8 @@ static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const 
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && length <= (f64) UINT32_MAX &&
+    if (dense != nullptr && dense->dense_elements_writable &&
+        length <= (f64) UINT32_MAX &&
         dense->dense_count == (u32) length &&
         mal_builtin_array_dense_reverse_compatible(dense)) {
         mal_array_object_dense_reverse(dense);
@@ -2557,7 +2562,8 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && length == (f64) dense->length &&
+    if (dense != nullptr && dense->dense_elements_writable &&
+        length == (f64) dense->length &&
         dense->dense_count == dense->length &&
         (dense->object.extensible ||
             mal_builtin_array_dense_range_present(
@@ -3309,7 +3315,8 @@ MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *
 
     u32 present_count = sorted.defined_count + sorted.undefined_count;
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && dense->length == length &&
+    if (dense != nullptr && dense->dense_elements_writable &&
+        dense->length == length &&
         (dense->object.extensible ||
             mal_builtin_array_dense_range_present(
                 dense, 0, present_count))) {
@@ -3670,7 +3677,9 @@ static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, co
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && length == (f64) dense->length &&
+    if (dense != nullptr && dense->dense_elements_writable &&
+        dense->dense_elements_configurable &&
+        length == (f64) dense->length &&
         dense->dense_count == dense->length &&
         mal_builtin_array_dense_copy_compatible(
             dense, (u32) target, (u32) start, (u32) count)) {

@@ -14,10 +14,11 @@ typedef struct MalArrayObject {
      * remaining (string/symbol) keys still live in the object's shape/overflow.
      *
      * An array deoptimizes back to pure table storage (the legacy representation:
-     * `elements == nullptr`, every index key in the table) the first time it needs a
-     * per-element attribute the vector cannot express: a non-default-data define, an
-     * accessor index, or a far-sparse write that would waste memory as holes. After
-     * deopt the dense fields stay null/zero forever for that array.
+     * `elements == nullptr`, every index key in the table) the first time it needs
+     * non-uniform element attributes, an accessor index, or a far-sparse write that
+     * would waste memory as holes. Packed seal/freeze transitions stay dense because
+     * writable/configurable are uniform across every present element. After deopt
+     * the dense fields stay null/zero forever for that array.
      */
     MalValue *elements;
     u32 length;
@@ -44,6 +45,10 @@ typedef struct MalArrayObject {
      * [0, dense_count) is present; true may remain set after later hole filling.
      */
     bool dense_maybe_holey : 1;
+
+    /** Uniform attributes synthesized for every present dense element. */
+    bool dense_elements_writable : 1;
+    bool dense_elements_configurable : 1;
 } MalArrayObject;
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
@@ -78,6 +83,16 @@ bool mal_array_object_dense_pair(
 
 /** Whether `index` is a present (non-hole) own element in the dense region. */
 bool mal_array_object_dense_has(const MalArrayObject *array, u32 index);
+
+/** Descriptor flags shared by every present dense element. */
+static inline MalPropertyFlags mal_array_object_dense_element_flags(
+    const MalArrayObject *array
+) {
+    MalPropertyFlags flags = MAL_PROPERTY_ENUMERABLE;
+    if (array->dense_elements_writable) flags |= MAL_PROPERTY_WRITABLE;
+    if (array->dense_elements_configurable) flags |= MAL_PROPERTY_CONFIGURABLE;
+    return flags;
+}
 
 /**
  * Reserve dense element capacity without creating properties or changing length.

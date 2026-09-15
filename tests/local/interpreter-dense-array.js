@@ -102,6 +102,64 @@ const sealedDense = Object.seal([21, 22]);
 check(load(sealedDense, 0) === 21, "sealed element read");
 store(sealedDense, 0, 23);
 check(load(sealedDense, 0) === 23, "sealed element overwrite is observed");
+check(
+	Reflect.defineProperty(sealedDense, "1", { value: 24 }) &&
+		Object.getOwnPropertyDescriptor(sealedDense, "1").configurable === false &&
+		sealedDense[1] === 24,
+	"sealed element accepts a compatible partial define",
+);
+check(
+	Reflect.defineProperty(frozenDense, "2", { value: 19 }) &&
+		!Reflect.defineProperty(frozenDense, "2", { value: 20 }),
+	"frozen element accepts only a SameValue redefine",
+);
+
+const sealedDenseMethods = Object.seal([3, 1, 4]);
+sealedDenseMethods.reverse();
+sealedDenseMethods.fill(2, 1, 2);
+sealedDenseMethods.copyWithin(1, 0, 1);
+sealedDenseMethods.sort();
+check(
+	sealedDenseMethods.join(",") === "3,4,4",
+	"sealed packed elements remain writable through mutating builtins",
+);
+check(
+	throwsTypeError(() => sealedDenseMethods.pop()) &&
+		sealedDenseMethods.join(",") === "3,4,4",
+	"sealed packed elements remain non-configurable",
+);
+
+const sealedDenseShift = Object.seal([5, 6, 7]);
+check(
+	throwsTypeError(() => sealedDenseShift.shift()) &&
+		sealedDenseShift.join(",") === "6,7,7" &&
+		sealedDenseShift.length === 3,
+	"sealed shift preserves writes before its rejected deletion",
+);
+
+for (const mutate of [
+	(array) => array.reverse(),
+	(array) => array.fill(0),
+	(array) => array.copyWithin(0, 1),
+	(array) => array.sort(),
+]) {
+	const array = Object.freeze([8, 9]);
+	check(
+		throwsTypeError(() => mutate(array)) && array.join(",") === "8,9",
+		"frozen packed mutation rejects before changing elements",
+	);
+}
+
+const sealedDenseLength = Object.seal([10, 11, 12]);
+sealedDenseLength.length = 5;
+check(
+	throwsTypeError(() => {
+		sealedDenseLength.length = 1;
+	}) &&
+		sealedDenseLength.length === 3 &&
+		sealedDenseLength.join(",") === "10,11,12",
+	"sealed packed shrink stops after its highest fixed element",
+);
 
 const shiftedFrozen = [31, , 33];
 shiftedFrozen[Symbol("before indices")] = 91;

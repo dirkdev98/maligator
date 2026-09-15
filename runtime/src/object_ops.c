@@ -190,25 +190,46 @@ void mal_object_set_extensible(MalObject *object, bool extensible) {
 
 void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     object->extensible = false;
+    bool changed_dense_elements = false;
     if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) object;
-        // Dense storage cannot represent non-configurable element descriptors.
-        mal_object_array_deoptimize(array);
+        bool packed_dense = array->elements != nullptr &&
+            array->dense_count == array->length && !array->dense_maybe_holey;
+        if (packed_dense) {
+            changed_dense_elements = array->dense_count != 0 &&
+                (array->dense_elements_configurable ||
+                 (clear_writable && array->dense_elements_writable));
+            array->dense_elements_configurable = false;
+            if (clear_writable) array->dense_elements_writable = false;
+        } else {
+            mal_object_array_deoptimize(array);
+        }
         if (clear_writable) array->length_writable = false;
     }
     bool has_shape_properties = object->shape->inline_count != 0;
     bool has_overflow_properties =
         object->overflow != nullptr && mal_table_size(object->overflow) != 0;
+    bool noted_prototype_mutation = false;
+    if (changed_dense_elements) {
+        if (object->watched_method_proto) {
+            mal_invalidate_primitive_method_protector();
+        }
+        noted_prototype_mutation = mal_object_note_prototype_mutation(object);
+        if (noted_prototype_mutation) {
+            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+        }
+    }
     if (!has_shape_properties && !has_overflow_properties) return;
 
-    if (object->watched_method_proto) {
+    if (object->watched_method_proto && !changed_dense_elements) {
         mal_invalidate_primitive_method_protector();
     }
     if (has_shape_properties && object->overflow == nullptr) {
         // Shaped storage contains data properties only. Seal/freeze changes their
         // attributes uniformly, so move to the canonical integrity variant without
         // allocating a per-object dictionary or moving any values.
-        if (mal_object_note_prototype_mutation(object)) {
+        if (!noted_prototype_mutation &&
+            mal_object_note_prototype_mutation(object)) {
             MAL_PERF_COUNT(prototype_epoch_define_invalidations);
         }
         object->shape = mal_shape_set_integrity(object->shape, clear_writable);
@@ -218,7 +239,8 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
         // dictionarize before adding overflow properties, but exotic evolution
         // must not make integrity handling incomplete.
         mal_object_dictionarize(object);
-    } else if (mal_object_note_prototype_mutation(object)) {
+    } else if (!noted_prototype_mutation &&
+               mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
     }
 
@@ -314,6 +336,10 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
     array->dense_count = 0;
     array->dense_deopted = true;
     array->dense_maybe_holey = false;
+    MalPropertyFlags element_flags =
+        mal_array_object_dense_element_flags(array);
+    array->dense_elements_writable = true;
+    array->dense_elements_configurable = true;
     if (buffer == nullptr) {
         return; // lazy-empty array: nothing to migrate
     }
@@ -330,7 +356,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
         if (mal_value_is_array_hole(buffer[i])) {
             continue;
         }
-        MalPropertyDesc desc = mal_object_data_desc(buffer[i], MAL_DEFAULT_DATA_FLAGS);
+        MalPropertyDesc desc = mal_object_data_desc(buffer[i], element_flags);
         MalKey key = mal_key_index(i);
         mal_object_define_own(&array->object, key, &desc);
     }
@@ -352,7 +378,8 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
                 return (MalPropertyLookup){
                     .present = true,
                     .entry = nullptr,
-                    .desc = mal_object_data_desc(value, MAL_DEFAULT_DATA_FLAGS),
+                    .desc = mal_object_data_desc(
+                        value, mal_array_object_dense_element_flags(array)),
                 };
             }
             return (MalPropertyLookup){.present = false, .entry = nullptr};
@@ -431,10 +458,23 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         MalArrayObject *array = (MalArrayObject *) object;
         if (!array->dense_deopted) {
             u32 index = mal_key_index_value(key);
-            if (mal_object_desc_is_default_data(desc)) {
+            bool present = mal_array_object_dense_has(array, index);
+            MalPropertyFlags element_flags =
+                mal_array_object_dense_element_flags(array);
+            if (present) {
+                MalPropertyDesc current = mal_object_data_desc(
+                    array->elements[index], element_flags);
+                if (!mal_object_define_is_compatible(current, *desc)) {
+                    return MAL_DEFINE_OWN_REJECTED;
+                }
+            }
+            bool exact_dense_data =
+                !mal_object_desc_is_accessor(*desc) &&
+                desc->flags == element_flags;
+            if (exact_dense_data) {
                 // Defining a NEW index on a non-extensible array is rejected;
                 // overwriting an existing element is allowed.
-                if (!object->extensible && !mal_array_object_dense_has(array, index)) {
+                if (!object->extensible && !present) {
                     return MAL_DEFINE_OWN_REJECTED;
                 }
                 if (mal_array_object_dense_store(array, index, desc->value) ==
@@ -616,14 +656,17 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
     if (object->watched_method_proto) {
         mal_invalidate_primitive_method_protector();
     }
-    // Dense array element: a present index becomes a hole (dense_delete shades the
-    // dropped reference); dense elements are always configurable, so delete always
-    // succeeds. In dense mode no index keys live in the table, so this is the whole
-    // operation for an in-range index.
+    // Dense array element: a configurable present index becomes a hole. In dense
+    // mode no index keys live in the table, so this is the whole operation.
     if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) object;
         if (mal_array_object_is_dense(array)) {
-            mal_array_object_dense_delete(array, mal_key_index_value(key));
+            u32 index = mal_key_index_value(key);
+            if (mal_array_object_dense_has(array, index) &&
+                !array->dense_elements_configurable) {
+                return false;
+            }
+            mal_array_object_dense_delete(array, index);
             return true;
         }
     }
