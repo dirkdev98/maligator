@@ -1,11 +1,11 @@
 [
 	{
 		"file": "array_object.c",
-		"sha256": "137a3fc1aa9095ded3ce9bead98cb34d2d4112d1da086ddcc4d78d66b8c85f65"
+		"sha256": "76b6c46d0c900050565877b891f71eab9c55868513900875dd0e84495e533f14"
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "6c9712bb567d372aa6333de691c72eb4b6abf0fd2d76575715b9624facba1fcd"
+		"sha256": "0916766ea284c7d089365d6efc970c3d6450a75cf7126064b28b7e3220604111"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -321,7 +321,7 @@
 	},
 	{
 		"file": "object_ops.c",
-		"sha256": "5363e6e4e834a0f313582af9e933cce7f4f4229e6851ed7833e2b790823b14d6"
+		"sha256": "fed25837f4f033de85e917b41a3b7a3e5f3b9c0d979f0d7c0531da1e041c7b9f"
 	},
 	{
 		"file": "object_ops.h",
@@ -333,7 +333,7 @@
 	},
 	{
 		"file": "proxy_object.c",
-		"sha256": "f4bbba9f63c5651276944c9cd169de700503e13b7581053fe41ad7c13db2b6ac"
+		"sha256": "320b1b5b090c31da4f5811b463ce516bb46a350d5e8863a4e95ce8379e280507"
 	},
 	{
 		"file": "runtime/dev_runner.c",
@@ -689,10 +689,10 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "1edee9938662131d9802cc0eb5583682a06b9ee87589e6d8f5850af49b021679"
+		"sha256": "0bdfa05c91ae451c6ed32aaa419699aba46698205fcc423c1bfe1a949c695b88"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "e48f11e544e3d0715cd083d9a0d8a04d91f71a754a4668c7f0cb3f999d1684b0"
+		"sha256": "34fc6a37d5b03db6c5c914dcbaef78c1abf62f534543d72051fa29ad14a81187"
 	}
 ]
