@@ -3910,7 +3910,7 @@ describe("native update-expression representation", () => {
 		);
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("mal_vm_try_capture_collection_method(vm,");
-		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
+		expect(output).toContain("mal_vm_op_load_property_ic_static_miss(vm,");
 		expect(output).toContain("mal_builtin_collection_direct(vm, &__cc_");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_GET");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_SET");
