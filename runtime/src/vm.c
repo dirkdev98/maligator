@@ -665,6 +665,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
     mal_vm_invalidate_map_get_set_cache(vm);
+    vm->exact_script_call = nullptr;
     vm->global_capacity = program->global_count > 0 ? program->global_count : 1;
 #if !MAL_REALMS
     vm->global_environment = (MalGlobalEnvironment) {0};
