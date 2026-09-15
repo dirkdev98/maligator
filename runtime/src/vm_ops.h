@@ -1008,6 +1008,10 @@ static inline u32 mal_inherited_stub_hash(
  */
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
 
+/** Continue immediately after the complete generated static-name cache probe misses. */
+MalValue mal_vm_op_load_property_ic_static_miss(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
+
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
 
 typedef struct MalPropertyCachePool {

@@ -5262,7 +5262,10 @@ static void mal_ic_try_record_inherited(
     MAL_PERF_COUNT(ic_inherited_fills);
 }
 
-MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+static MalValue mal_vm_op_load_property_ic_impl(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic,
+    bool static_probe_missed
+) {
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalKey converted_key;
     bool key_converted = false;
@@ -5278,14 +5281,22 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
     }
     MalValue special_value;
-    if (mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
+    if (!static_probe_missed &&
+        mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
         return special_value;
     }
     MalValue inherited_value;
-    if (mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
+    if (!static_probe_missed &&
+        mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
         return inherited_value;
     }
-    if (vm->inherited_property_stub != nullptr &&
+    bool inherited_stub_already_probed =
+        static_probe_missed &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
+        ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
+        ic->slot != MAL_IC_VALUE_SLOT;
+    if (!inherited_stub_already_probed &&
+        vm->inherited_property_stub != nullptr &&
         mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
         mal_value_is_string(key_value)) {
         const MalObject *object = mal_value_to_object(object_value);
@@ -5312,14 +5323,18 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
     if (slot_object != nullptr) {
         MalObject *object = slot_object;
+        bool ordinary_static_probe_missed =
+            static_probe_missed && object->header.type == MAL_HEAP_OBJECT;
         MalValue own_table_value;
-        if (ic->mode == MAL_IC_MODE_OWN_TABLE &&
+        if (!ordinary_static_probe_missed &&
+            ic->mode == MAL_IC_MODE_OWN_TABLE &&
             mal_vm_own_table_try_load(object, key_value, ic, &own_table_value)) {
             return own_table_value;
         }
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
-        if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {
+        if (!ordinary_static_probe_missed &&
+            ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {
             if (ic->slot == MAL_IC_VALUE_SLOT) {
                 // Watched-intrinsic own overflow property, cached by value. The
                 // shape gate above is NOT sufficient (same-layout intrinsics share
@@ -5338,7 +5353,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
         // (matches the inline fast path in mal_vm_indexed_fast_load).
-        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 &&
+        if (!ordinary_static_probe_missed &&
+            ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 &&
             ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
@@ -5527,6 +5543,20 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
     }
     return result;
+}
+
+MalValue mal_vm_op_load_property_ic(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+) {
+    return mal_vm_op_load_property_ic_impl(
+        vm, object_value, key_value, ic, false);
+}
+
+MalValue mal_vm_op_load_property_ic_static_miss(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+) {
+    return mal_vm_op_load_property_ic_impl(
+        vm, object_value, key_value, ic, true);
 }
 
 void mal_vm_op_store_property_ic(

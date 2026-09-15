@@ -3073,7 +3073,9 @@ function profileDecisionsForInstruction(
 					"runtime-shape-guard-required",
 				),
 			);
-		} else if (/mal_vm_op_(load|store)_property_ic\(/.test(source)) {
+		} else if (
+			/mal_vm_op_(?:load_property_ic(?:_static_miss)?|store_property_ic)\(/.test(source)
+		) {
 			decisions.push(
 				decision(
 					instruction.opcode.endsWith("_STATIC")
@@ -4489,7 +4491,7 @@ function emitInstruction(
 					: [
 							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask)};`,
 						]),
-				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
 				`}`,
 			];
