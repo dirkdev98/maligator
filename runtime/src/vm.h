@@ -1279,7 +1279,7 @@ typedef struct MalGlobalPropertyCacheEntry {
 /** One isolate-wide handle cache for adjacent ordinary Map get/set operations. */
 typedef struct MalMapGetSetCacheEntry {
     MalValue collection;
-    MalValue canonical_key;
+    MalValue stored_key;
     MalTable *table;
     void *entry;
     u64 table_handle_epoch;

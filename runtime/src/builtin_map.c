@@ -46,10 +46,10 @@ static void *mal_builtin_map_cached_entry(
     }
     MAL_PERF_COUNT(map_get_set_cache_checks);
     if (cache->table == map->entries &&
-        cache->table_handle_epoch == mal_table_handle_epoch(map->entries) &&
-        mal_key_value_equals(cache->canonical_key, key.value) &&
-        mal_table_entry_matches(
-            map->entries, cache->entry, cache->table_handle_epoch, key)) {
+        mal_key_value_equals(cache->stored_key, key.value) &&
+        mal_table_entry_matches_stored_key(
+            map->entries, cache->entry, cache->table_handle_epoch,
+            cache->stored_key)) {
         MAL_PERF_COUNT(map_get_set_cache_hits);
         return cache->entry;
     }
@@ -59,11 +59,11 @@ static void *mal_builtin_map_cached_entry(
 
 static void mal_builtin_map_cache_entry(
     MalVm *vm, MalValue collection, MalMapObject *map,
-    MalKey key, void *entry
+    void *entry
 ) {
     vm->map_get_set_cache = (MalMapGetSetCacheEntry) {
         .collection = collection,
-        .canonical_key = key.value,
+        .stored_key = mal_table_entry_key(map->entries, entry).value,
         .table = map->entries,
         .entry = entry,
         .table_handle_epoch = mal_table_handle_epoch(map->entries),
@@ -327,8 +327,7 @@ static MalValue mal_builtin_map_get_value(
         return mal_value_new_undefined();
     }
 
-    mal_builtin_map_cache_entry(
-        vm, this_value, map, key, lookup.entry);
+    mal_builtin_map_cache_entry(vm, this_value, map, lookup.entry);
     return mal_table_entry_value(map->entries, lookup.entry);
 }
 
@@ -341,8 +340,7 @@ static bool mal_builtin_map_has_value(
     }
     MalTableLookup lookup = mal_table_lookup(map->entries, key);
     if (!lookup.present) return false;
-    mal_builtin_map_cache_entry(
-        vm, this_value, map, key, lookup.entry);
+    mal_builtin_map_cache_entry(vm, this_value, map, lookup.entry);
     return true;
 }
 
@@ -359,8 +357,7 @@ static MalValue mal_builtin_map_set_value(
     mal_table_entry_set_value(map->entries, entry, value);
     mal_gc_card(&map->object.header, key);
     mal_gc_card(&map->object.header, value);
-    mal_builtin_map_cache_entry(
-        vm, this_value, map, canonical_key, entry);
+    mal_builtin_map_cache_entry(vm, this_value, map, entry);
 
     return this_value;
 }

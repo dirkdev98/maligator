@@ -166,6 +166,12 @@ bool mal_table_entry_matches(
     const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
 );
 
+/** Validate a cached handle and its exact stored-key identity without hashing. */
+bool mal_table_entry_matches_stored_key(
+    const MalTable *table, const void *entry, u64 handle_epoch,
+    MalValue stored_key
+);
+
 // Cross-table hints require a live value entry with exact key identity.
 bool mal_table_read_entry_hint(
     const MalTable *table, const void *entry, MalValue key,

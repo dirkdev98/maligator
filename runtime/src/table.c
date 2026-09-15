@@ -713,6 +713,21 @@ bool mal_table_entry_matches(
         mal_key_value_equals(candidate->key, key.value);
 }
 
+bool mal_table_entry_matches_stored_key(
+    const MalTable *table, const void *entry, u64 handle_epoch,
+    MalValue stored_key
+) {
+    if (entry == nullptr || handle_epoch != table->handle_epoch) {
+        return false;
+    }
+    u32 index = mal_table_handle_index(entry);
+    if (index >= table->entry_count) {
+        return false;
+    }
+    const MalTableEntry *candidate = &table->entries[index];
+    return candidate->live && candidate->key == stored_key;
+}
+
 bool mal_table_read_entry_hint(
     const MalTable *table, const void *entry, MalValue key,
     MalValue *value, u8 *property_flags

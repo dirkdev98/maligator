@@ -503,7 +503,7 @@ static uptr mal_vm_compute_stack_limit(void) {
 void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
     vm->map_get_set_cache = (MalMapGetSetCacheEntry) {
         .collection = mal_value_new_undefined(),
-        .canonical_key = mal_value_new_undefined(),
+        .stored_key = mal_value_new_undefined(),
     };
 }
 
