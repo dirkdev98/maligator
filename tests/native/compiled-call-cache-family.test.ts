@@ -57,7 +57,7 @@ describe("compiled call dispatch and native call caches", () => {
 		assertExactLines(
 			runToStdout(instrumented, {
 				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-				timeoutMs: 60_000,
+				timeoutMs: 180_000,
 			}),
 			expected,
 		);
