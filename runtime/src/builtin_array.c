@@ -2356,9 +2356,13 @@ static i32 mal_builtin_array_join_dense_strings(
         MalString *part = mal_value_to_string(element);
         usize part_length = mal_string_length(part);
         if (part_length != 0) {
-            memcpy(
-                units + offset, mal_string_code_units(part),
-                sizeof(c16) * part_length);
+            if (mal_string_storage(part) == MAL_STRING_STORAGE_CONS) {
+                mal_string_copy_range_to(part, 0, part_length, units + offset);
+            } else {
+                memcpy(
+                    units + offset, mal_string_code_units(part),
+                    sizeof(c16) * part_length);
+            }
             offset += part_length;
         }
     }

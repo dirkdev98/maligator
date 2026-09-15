@@ -220,6 +220,17 @@ async function main() {
 			["a", , "b"].join() === "a,,b" &&
 			["", "only", ""].join("") === "only",
 	);
+	let deepRope = "rope";
+	for (let index = 0; index < 128; index++) {
+		deepRope += String.fromCharCode(65 + (index % 26));
+	}
+	const ropeJoined = ["prefix", deepRope, "\ud83d\ude00", "suffix"].join("|");
+	check(
+		"join copies rope leaves into the result",
+		ropeJoined.length === deepRope.length + 17 &&
+			ropeJoined.startsWith("prefix|ropeA") &&
+			ropeJoined.endsWith("|\ud83d\ude00|suffix"),
+	);
 	const reversed = [1, , 3, 4];
 	reversed.reverse();
 	check(
