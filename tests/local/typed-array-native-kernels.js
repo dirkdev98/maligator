@@ -53,6 +53,27 @@ for (const [Ctor, bigint] of variants) {
 	);
 }
 
+const uniformInt32Fill = new Int32Array([7, 7, 7, 7, 7]);
+uniformInt32Fill.fill(-1, 1, 4);
+const uniformUint32Fill = new Uint32Array([9, 9, 9, 9, 9]);
+uniformUint32Fill.fill(0, 1, 4);
+const uniformBigIntFill = new BigInt64Array([3n, 3n, 3n]);
+uniformBigIntFill.fill(-1n);
+const negativeZeroFill = new Float64Array(3);
+negativeZeroFill.fill(-0);
+const sharedUniformFill = new Int32Array(
+	new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT),
+);
+sharedUniformFill.fill(-1);
+check(
+	"multi-byte uniform fill preserves element bits and range boundaries",
+	uniformInt32Fill.join() === "7,-1,-1,-1,7" &&
+		uniformUint32Fill.join() === "9,0,0,0,9" &&
+		uniformBigIntFill.join() === "-1,-1,-1" &&
+		negativeZeroFill.every((value) => Object.is(value, -0)) &&
+		sharedUniformFill.join() === "-1,-1,-1",
+);
+
 function dynamicLoad(view, key) {
 	return view[key];
 }

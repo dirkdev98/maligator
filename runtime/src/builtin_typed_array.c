@@ -764,6 +764,24 @@ static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, 
     return mal_typed_array_object_get(vm, array, (u32) actual);
 }
 
+static bool mal_ta_uniform_fill_byte(u64 bits, u32 element_size, u8 *fill_byte) {
+    u8 byte_value = (u8) bits;
+    u64 repeated = (u64) byte_value * UINT64_C(0x0101010101010101);
+    *fill_byte = byte_value;
+    switch (element_size) {
+        case 1:
+            return true;
+        case 2:
+            return (u16) bits == (u16) repeated;
+        case 4:
+            return (u32) bits == (u32) repeated;
+        case 8:
+            return bits == repeated;
+        default:
+            return false;
+    }
+}
+
 static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
@@ -802,8 +820,13 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
     if (end > current) {
         end = current;
     }
-    if (start < end && span.element_size == 1) {
-        memset(span.data + start, (u8) bits, end - start);
+    u8 fill_byte;
+    bool uniform_bytes = mal_ta_uniform_fill_byte(bits, span.element_size, &fill_byte);
+    // Keep shared multi-byte stores element-sized; memset would change write granularity.
+    bool can_memset = uniform_bytes && (span.element_size == 1 || !array->buffer->shared);
+    if (start < end && can_memset) {
+        memset(span.data + (usize) start * span.element_size, fill_byte,
+            (usize) (end - start) * span.element_size);
     } else {
         for (u32 i = start; i < end; i++) {
             mal_typed_array_span_store_bits(&span, i, bits);
