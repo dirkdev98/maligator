@@ -94,6 +94,11 @@ static MalValue mal_builtin_set_construct(
     MalIteratorObject *dense_array_cursor = direct_set_adder
         ? mal_vm_iterator_dense_array_cursor(&record)
         : nullptr;
+    MalIteratorObject *set_values_cursor = direct_set_adder
+        ? mal_vm_iterator_protocol_cursor(&record, MAL_ITERATOR_CURSOR_SET)
+        : nullptr;
+    bool direct_set_values = set_values_cursor != nullptr &&
+        set_values_cursor->kind == MAL_ITERATOR_SET_VALUES;
 
     usize size_hint;
     if (direct_adder &&
@@ -117,10 +122,13 @@ static MalValue mal_builtin_set_construct(
 
     while (true) {
         bool done;
-        bool stepped = dense_array_cursor != nullptr
-            ? mal_vm_iterator_step_dense_array_cursor(
-                vm, dense_array_cursor, &record, &roots[2], &done)
-            : mal_vm_iterator_step(vm, &record, &roots[2], &done);
+        bool stepped = direct_set_values
+            ? mal_vm_iterator_step_protocol_cursor(
+                vm, set_values_cursor, &roots[2], &done)
+            : dense_array_cursor != nullptr
+                ? mal_vm_iterator_step_dense_array_cursor(
+                    vm, dense_array_cursor, &record, &roots[2], &done)
+                : mal_vm_iterator_step(vm, &record, &roots[2], &done);
         if (!stepped) {
             goto done;
         }

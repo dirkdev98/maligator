@@ -143,6 +143,36 @@ check(
 	[...new Set(customSetArrayIterator)].join(",") === "7,8",
 );
 
+const copiedSetObject = { marker: 305 };
+const copiedSetSource = new Set(["first", copiedSetObject, NaN, -0]);
+copiedSetSource.delete("first");
+copiedSetSource.add("first");
+const copiedSet = new Set(copiedSetSource);
+copiedSet.add("copy-only");
+copiedSet.delete(NaN);
+check(
+	"Set constructor copies exact Set values independently in order",
+	copiedSet.size === 4 &&
+		copiedSet.has(copiedSetObject) &&
+		copiedSet.has(0) &&
+		copiedSet.has("first") &&
+		copiedSetSource.size === 4 &&
+		copiedSetSource.has(NaN) &&
+		!copiedSetSource.has("copy-only") &&
+		[...copiedSet].join(",") === "[object Object],0,first,copy-only",
+);
+
+const advancedSetValuesSource = new Set(["skipped", "kept"]);
+const advancedSetValues = advancedSetValuesSource.values();
+advancedSetValues.next();
+const copiedSetRemainder = new Set(advancedSetValues);
+check(
+	"Set constructor consumes and exhausts an advanced exact values cursor",
+	copiedSetRemainder.size === 1 &&
+		copiedSetRemainder.has("kept") &&
+		advancedSetValues.next().done === true,
+);
+
 const weakSetValue = { marker: "weak-set-value" };
 const capturedWeakSetAdderPrototype = Object.create(WeakSet.prototype);
 function CapturedWeakSetAdderTarget() {}
