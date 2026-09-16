@@ -3426,6 +3426,17 @@ function emitInstruction(
 		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
 	const storeBoolean = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "boolean" ? expression : profileCall("boxing", `mal_value_new_boolean(${expression})`)};`;
+	const numericCollectionKey = (operand: number | undefined): string | null => {
+		if (operand === undefined) return null;
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "number") return cF64Literal(decoded.value);
+		if (decoded.kind !== "register") return null;
+		return reps[decoded.register] === "int32"
+			? `(f64) r${decoded.register}`
+			: reps[decoded.register] === "number"
+				? `r${decoded.register}`
+				: null;
+	};
 	const fixedCollectionCall = (
 		operation: string,
 		dst: number,
@@ -3435,21 +3446,49 @@ function emitInstruction(
 		const key = args[0] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]);
 		const value = args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1]);
 		const parameters = `vm, ${boxedOperand(receiver)}, ${key}`;
+		const numericKey = numericCollectionKey(args[0]);
+		const numericParameters = `vm, ${boxedOperand(receiver)}, ${numericKey}`;
 		switch (operation) {
 			case "Map.prototype.get":
-				return `r${dst} = mal_builtin_map_get_key(${parameters});`;
+				return numericKey === null
+					? `r${dst} = mal_builtin_map_get_key(${parameters});`
+					: `r${dst} = mal_builtin_map_get_number(${numericParameters});`;
 			case "Map.prototype.set":
-				return `r${dst} = mal_builtin_map_set_key_value(${parameters}, ${value});`;
+				return numericKey === null
+					? `r${dst} = mal_builtin_map_set_key_value(${parameters}, ${value});`
+					: `r${dst} = mal_builtin_map_set_number_value(${numericParameters}, ${value});`;
 			case "Map.prototype.has":
-				return storeBoolean(dst, `mal_builtin_map_has_key(${parameters})`);
+				return storeBoolean(
+					dst,
+					numericKey === null
+						? `mal_builtin_map_has_key(${parameters})`
+						: `mal_builtin_map_has_number(${numericParameters})`,
+				);
 			case "Map.prototype.delete":
-				return storeBoolean(dst, `mal_builtin_map_delete_key(${parameters})`);
+				return storeBoolean(
+					dst,
+					numericKey === null
+						? `mal_builtin_map_delete_key(${parameters})`
+						: `mal_builtin_map_delete_number(${numericParameters})`,
+				);
 			case "Set.prototype.add":
-				return `r${dst} = mal_builtin_set_add_value(${parameters});`;
+				return numericKey === null
+					? `r${dst} = mal_builtin_set_add_value(${parameters});`
+					: `r${dst} = mal_builtin_set_add_number(${numericParameters});`;
 			case "Set.prototype.has":
-				return storeBoolean(dst, `mal_builtin_set_has_value(${parameters})`);
+				return storeBoolean(
+					dst,
+					numericKey === null
+						? `mal_builtin_set_has_value(${parameters})`
+						: `mal_builtin_set_has_number(${numericParameters})`,
+				);
 			case "Set.prototype.delete":
-				return storeBoolean(dst, `mal_builtin_set_delete_value(${parameters})`);
+				return storeBoolean(
+					dst,
+					numericKey === null
+						? `mal_builtin_set_delete_value(${parameters})`
+						: `mal_builtin_set_delete_number(${numericParameters})`,
+				);
 			default:
 				return null;
 		}
@@ -6864,9 +6903,18 @@ function emitInstruction(
 						: callPlan?.exactCollectionReceiver === "Set"
 							? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET"
 							: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
+				const numericKey = numericCollectionKey(args[0]);
+				const numericArity =
+					guardedBuiltinOperation === "Map.prototype.set"
+						? args.length === 2
+						: args.length === 1;
+				const directCall =
+					numericKey !== null && numericArity
+						? `mal_builtin_collection_direct_number(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${numericKey}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1])}, ${args.length})`
+						: `mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = ${directCall};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,

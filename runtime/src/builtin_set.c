@@ -199,6 +199,14 @@ MalValue mal_builtin_set_add_value(MalVm *vm, MalValue this_value, MalValue valu
     return this_value;
 }
 
+MalValue mal_builtin_set_add_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    MalKey key = mal_map_key_from_number(value);
+    mal_map_object_set_canonical(
+        mal_value_to_map_object(this_value), key, key.value);
+    return this_value;
+}
+
 MalValue mal_builtin_set_add_known(
     MalVm *vm,
     MalValue this_value,
@@ -213,6 +221,12 @@ bool mal_builtin_set_has_value(MalVm *vm, MalValue this_value, MalValue value) {
     return mal_map_object_has(mal_value_to_map_object(this_value), value);
 }
 
+bool mal_builtin_set_has_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    return mal_map_object_has_canonical(
+        mal_value_to_map_object(this_value), mal_map_key_from_number(value));
+}
+
 MalValue mal_builtin_set_has_known(
     MalVm *vm,
     MalValue this_value,
@@ -225,6 +239,12 @@ MalValue mal_builtin_set_has_known(
 bool mal_builtin_set_delete_value(MalVm *vm, MalValue this_value, MalValue value) {
     (void) vm;
     return mal_map_object_delete(mal_value_to_map_object(this_value), value);
+}
+
+bool mal_builtin_set_delete_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    return mal_map_object_delete_canonical(
+        mal_value_to_map_object(this_value), mal_map_key_from_number(value));
 }
 
 MalValue mal_builtin_set_delete_known(

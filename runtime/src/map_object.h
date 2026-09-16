@@ -42,6 +42,13 @@ MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *pro
  */
 MalKey mal_map_key_from_value(MalValue value);
 
+static inline MalKey mal_map_key_from_number(f64 number) {
+    MalValue value = number == 0.0
+        ? mal_value_from_f64(0.0)
+        : mal_value_from_f64_convert_nan(number);
+    return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+}
+
 /**
  * Insert or update an entry (Map.prototype.set / Set.prototype.add).
  */

@@ -34,5 +34,8 @@ MalValue mal_builtin_set_delete_known(
 
 // Fixed-arity native entries require an exact Set receiver.
 MalValue mal_builtin_set_add_value(MalVm *vm, MalValue this_value, MalValue value);
+MalValue mal_builtin_set_add_number(MalVm *vm, MalValue this_value, f64 value);
 bool mal_builtin_set_has_value(MalVm *vm, MalValue this_value, MalValue value);
+bool mal_builtin_set_has_number(MalVm *vm, MalValue this_value, f64 value);
 bool mal_builtin_set_delete_value(MalVm *vm, MalValue this_value, MalValue value);
+bool mal_builtin_set_delete_number(MalVm *vm, MalValue this_value, f64 value);
