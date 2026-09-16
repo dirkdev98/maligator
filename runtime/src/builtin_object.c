@@ -945,12 +945,11 @@ static bool mal_builtin_object_collect_plain_data(
     MalObject *object = mal_value_to_object(target);
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
-    (void) mal_array_object_fresh_dense_reserve_exact(result, capacity);
+    if (!mal_array_object_fresh_dense_reserve_exact(result, capacity)) return false;
     MalPropertyIter iter;
     mal_property_iter_init(
         &iter, object,
         MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
-    u32 index = 0;
     MalKey key;
     MalPropertyDesc desc;
     while (mal_property_iter_next(&iter, &key, &desc)) {
@@ -968,7 +967,7 @@ static bool mal_builtin_object_collect_plain_data(
             mal_array_object_store(entry, mal_key_index(1), value);
             value = mal_value_from_array_object(entry);
         }
-        mal_array_object_store(result, mal_key_index(index++), value);
+        mal_array_object_fresh_dense_append_reserved(result, value);
     }
     return true;
 }
