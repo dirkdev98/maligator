@@ -308,6 +308,64 @@ check(
 			denseFromSource.map((value) => value >>> 0).join(),
 );
 
+const reservationBoundaries = [8, 9, 16, 17].map((length) =>
+	Array.from({ length }, (_, index) => index),
+);
+const partiallyConsumedReservationIterator = Array.from(
+	{ length: 20 },
+	(_, index) => index,
+).values();
+for (let index = 0; index < 11; index++) partiallyConsumedReservationIterator.next();
+check(
+	"TypedArray.from preserves reservation boundaries and remaining iterator length",
+	reservationBoundaries.every(
+		(source) => Uint8Array.from(source).join() === source.join(),
+	) &&
+		Uint8Array.from(partiallyConsumedReservationIterator).join() ===
+			"11,12,13,14,15,16,17,18,19",
+);
+
+const growingReservedFromSource = Array.from({ length: 9 }, (_, index) => index);
+delete growingReservedFromSource[4];
+const growingReservedFromPrototype = Object.create(Array.prototype);
+Object.defineProperty(growingReservedFromPrototype, 4, {
+	configurable: true,
+	get() {
+		while (growingReservedFromSource.length < 19)
+			growingReservedFromSource.push(growingReservedFromSource.length);
+		return 4;
+	},
+});
+Object.setPrototypeOf(growingReservedFromSource, growingReservedFromPrototype);
+check(
+	"TypedArray.from grows a reserved snapshot after an inherited getter extends iteration",
+	Uint8Array.from(growingReservedFromSource).join() ===
+		Array.from({ length: 19 }, (_, index) => index).join(),
+);
+
+const shrinkingReservedFromSource = Array.from({ length: 9 }, (_, index) => index);
+delete shrinkingReservedFromSource[4];
+const shrinkingReservedFromPrototype = Object.create(Array.prototype);
+let shrinkingReservedConversions = 0;
+Object.defineProperty(shrinkingReservedFromPrototype, 4, {
+	configurable: true,
+	get() {
+		shrinkingReservedFromSource.length = 5;
+		return {
+			valueOf() {
+				shrinkingReservedConversions++;
+				return 4;
+			},
+		};
+	},
+});
+Object.setPrototypeOf(shrinkingReservedFromSource, shrinkingReservedFromPrototype);
+check(
+	"TypedArray.from traces only populated reserved snapshot entries after shrink",
+	Uint8Array.from(shrinkingReservedFromSource).join() === "0,1,2,3,4" &&
+		shrinkingReservedConversions === 1,
+);
+
 const partiallyConsumedArrayIterator = [11, 22, 33].values();
 partiallyConsumedArrayIterator.next();
 const exhaustedArrayIterator = [44].values();

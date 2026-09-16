@@ -2117,6 +2117,20 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
         MalIteratorObject *dense_array_cursor = mal_vm_iterator_dense_array_cursor(&record);
         // Select once so generic iterators retain their original per-step path.
         if (dense_array_cursor != nullptr) {
+            MalArrayObject *source_array = mal_value_to_array_object(dense_array_cursor->target);
+            usize size_hint;
+            if (source_array->elements != nullptr &&
+                source_array->dense_count >= source_array->length &&
+                mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
+                size_hint > 8 && size_hint <= INT32_MAX &&
+                size_hint <= SIZE_MAX / sizeof(MalValue)) {
+                MalValue *reserved = malloc(size_hint * sizeof(MalValue));
+                if (reserved != nullptr) {
+                    values = reserved;
+                    capacity = size_hint;
+                    values_span.slots = values;
+                }
+            }
             while (true) {
                 MalValue item;
                 bool done_flag;
