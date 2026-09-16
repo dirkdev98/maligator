@@ -61,24 +61,8 @@ MalCompletion mal_builtin_collection_direct(
     i32 arg_count
 );
 
-MalCompletion mal_builtin_collection_direct_number(
-    MalVm *vm,
-    MalCallCache *fallback_cache,
-    MalGuardedBuiltinCallOp operation,
-    MalBuiltinCollectionReceiverFact receiver_fact,
-    MalValue callee,
-    MalValue this_value,
-    f64 key,
-    MalValue value,
-    i32 arg_count
-);
-
 // Fixed-arity native entries require an exact Map receiver.
 MalValue mal_builtin_map_get_key(MalVm *vm, MalValue this_value, MalValue key);
-MalValue mal_builtin_map_get_number(MalVm *vm, MalValue this_value, f64 key);
 MalValue mal_builtin_map_set_key_value(MalVm *vm, MalValue this_value, MalValue key, MalValue value);
-MalValue mal_builtin_map_set_number_value(MalVm *vm, MalValue this_value, f64 key, MalValue value);
 bool mal_builtin_map_has_key(MalVm *vm, MalValue this_value, MalValue key);
-bool mal_builtin_map_has_number(MalVm *vm, MalValue this_value, f64 key);
 bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key);
-bool mal_builtin_map_delete_number(MalVm *vm, MalValue this_value, f64 key);

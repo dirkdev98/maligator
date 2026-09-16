@@ -125,42 +125,6 @@ ok(
 	special.get(Number("nan")) === "nan" && special.get(0) === "zero",
 );
 
-function exerciseNumericCollections(limit) {
-	const numericMap = new Map();
-	const numericSet = new Set();
-	for (let key = 0; key < limit; key++) {
-		numericMap.set(key, { key });
-		numericSet.add(key);
-	}
-	for (let key = 0; key < limit; key++) {
-		ok("numeric Map get " + key, numericMap.get(key).key === key);
-		ok("numeric collection has " + key, numericMap.has(key) && numericSet.has(key));
-	}
-	for (let key = 1; key < limit; key += 2) {
-		ok(
-			"numeric collection delete " + key,
-			numericMap.delete(key) && numericSet.delete(key),
-		);
-	}
-	numericMap.set(-0, "zero");
-	numericSet.add(-0);
-	ok("numeric zero normalization", numericMap.get(0) === "zero" && numericSet.has(0));
-	numericMap.set(0 / 0, "nan");
-	numericSet.add(0 / 0);
-	ok(
-		"numeric NaN equality",
-		numericMap.get(Number.NaN) === "nan" && numericSet.has(Number.NaN),
-	);
-	numericMap.set(0.5, "fraction");
-	numericSet.add(0.5);
-	ok(
-		"numeric fractional keys",
-		numericMap.get(0.5) === "fraction" && numericSet.has(0.5),
-	);
-	return numericMap.size === numericSet.size;
-}
-ok("numeric collection operations", exerciseNumericCollections(32));
-
 const plain = {
 	value: 1,
 	get(key) {

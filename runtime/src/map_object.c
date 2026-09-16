@@ -1,5 +1,7 @@
 #include "./map_object.h"
 
+#include <math.h>
+
 #include "./gc.h"
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
@@ -29,15 +31,25 @@ MalKey mal_map_key_from_value(MalValue value) {
     }
 
     if (mal_value_is_int32(value)) {
-        return mal_map_key_from_number((f64) mal_value_to_i32(value));
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64((f64) mal_value_to_i32(value))};
     }
 
     if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return mal_map_key_from_number(-0.0);
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
     }
 
     if (mal_value_is_f64(value)) {
-        return mal_map_key_from_number(mal_value_to_f64(value));
+        f64 number = mal_value_to_f64(value);
+
+        if (number == 0.0) {
+            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
+        }
+
+        if (isnan(number)) {
+            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_new_nan()};
+        }
+
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
     }
 
     if (value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {

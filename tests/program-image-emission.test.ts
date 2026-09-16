@@ -3946,27 +3946,6 @@ describe("native update-expression representation", () => {
 		]);
 	});
 
-	it("uses numeric collection entries for unboxed keys", () => {
-		const output = emitLocked(`
-			function updateCollections(limit) {
-				const map = new Map();
-				const set = new Set();
-				for (let key = 0; key < limit; key++) {
-					map.set(key, key);
-					map.get(key);
-					map.has(key);
-					set.add(key);
-					set.has(key);
-				}
-				map.delete(limit);
-				set.delete(limit);
-				return map.size + set.size;
-			}
-			globalThis.result = updateCollections(4);
-		`);
-		expect(output).toContain("mal_builtin_collection_direct_number");
-	});
-
 	it("keeps proven own methods out of collection helper dispatch", () => {
 		const definition = lower(`
 			const plain = {
