@@ -2018,6 +2018,23 @@ static bool mal_ta_create_from_constructor(MalVm *vm, MalValue constructor, u32 
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor is not a function");
         return false;
     }
+    if (vm->completion.kind == MAL_COMPLETION_NORMAL &&
+        mal_primitive_method_protector && length <= INT32_MAX &&
+        mal_value_is_native_function_object(constructor)) {
+        for (i32 index = 0; index < MAL_TA_KIND_COUNT; index++) {
+            if (constructor != vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + index]) {
+                continue;
+            }
+            MalTypedArrayKind kind = (MalTypedArrayKind) index;
+            if ((u64) length * mal_typed_array_element_size(kind) > UINT32_MAX) {
+                break;
+            }
+            vm->gc_native_frames++;
+            *out = mal_ta_create(vm, kind, length);
+            vm->gc_native_frames--;
+            return true;
+        }
+    }
     MalValue arg = mal_value_from_i32((i32) length);
     MalCompletion completion = mal_vm_construct_value(vm, constructor, &arg, 1);
     if (completion.kind != MAL_COMPLETION_NORMAL) {

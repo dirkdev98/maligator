@@ -26,6 +26,9 @@ for (const [Ctor, bigint] of variants) {
 	const seven = bigint ? 7n : 7;
 	const nine = bigint ? 9n : 9;
 	const source = new Ctor([one, two, three, four]);
+	const fromEmpty = Ctor.from([]);
+	const fromShort = Ctor.from([one, two]);
+	const ofShort = Ctor.of(three, four);
 	const copied = new Ctor(source);
 	copied.fill(nine, 1, 3);
 	copied.reverse();
@@ -40,7 +43,12 @@ for (const [Ctor, bigint] of variants) {
 	sub[0] = nine;
 	check(
 		Ctor.name + " raw kernels",
-		copied.join() === [four, nine, nine, one].join() &&
+		fromEmpty.length === 0 &&
+			fromShort.join() === [one, two].join() &&
+			ofShort.join() === [three, four].join() &&
+			Object.getPrototypeOf(fromShort) === Ctor.prototype &&
+			Object.getPrototypeOf(ofShort) === Ctor.prototype &&
+			copied.join() === [four, nine, nine, one].join() &&
 			reversed.join() === [one, nine, nine, four].join() &&
 			sliced.join() === [nine, nine].join() &&
 			replaced.join() === [four, nine, seven, one].join() &&
@@ -464,6 +472,76 @@ try {
 check(
 	"TypedArray.from does not construct after Array iteration throws",
 	throwingFromCaught && fromConstructorCalls === 0,
+);
+
+class DerivedUint16Array extends Uint16Array {}
+const derivedFrom = Uint16Array.from.call(DerivedUint16Array, [3, 5, 8]);
+const BoundUint16Array = Uint16Array.bind(null);
+const boundFrom = Uint16Array.from.call(BoundUint16Array, [13, 21]);
+let proxyConstructorCalls = 0;
+const ProxyUint16Array = new Proxy(Uint16Array, {
+	construct(target, args, newTarget) {
+		proxyConstructorCalls++;
+		return Reflect.construct(target, args, newTarget);
+	},
+});
+const proxyFrom = Uint16Array.from.call(ProxyUint16Array, [34, 55]);
+check(
+	"TypedArray.from preserves non-intrinsic constructor dispatch",
+	derivedFrom instanceof DerivedUint16Array &&
+		derivedFrom.join() === "3,5,8" &&
+		boundFrom.join() === "13,21" &&
+		proxyFrom.join() === "34,55" &&
+		proxyConstructorCalls === 1,
+);
+
+function NonTypedArrayConstructor() {
+	return {};
+}
+function ShortTypedArrayConstructor(length) {
+	return new Uint8Array(Math.max(0, length - 1));
+}
+function ImmutableTypedArrayConstructor(length) {
+	return new Uint8Array(new ArrayBuffer(length).transferToImmutable());
+}
+let nonTypedArrayRejected = false;
+let shortTypedArrayRejected = false;
+let immutableTypedArrayRejected = false;
+try {
+	Uint8Array.of.call(NonTypedArrayConstructor, 1);
+} catch (error) {
+	nonTypedArrayRejected = error instanceof TypeError;
+}
+try {
+	Uint8Array.from.call(ShortTypedArrayConstructor, [1, 2]);
+} catch (error) {
+	shortTypedArrayRejected = error instanceof TypeError;
+}
+try {
+	Uint8Array.of.call(ImmutableTypedArrayConstructor, 1);
+} catch (error) {
+	immutableTypedArrayRejected = error instanceof TypeError;
+}
+check(
+	"TypedArray static construction validates custom constructor results",
+	nonTypedArrayRejected && shortTypedArrayRejected && immutableTypedArrayRejected,
+);
+
+let bigintFromNumberRejected = false;
+let numberFromBigintRejected = false;
+try {
+	BigInt64Array.from([1]);
+} catch (error) {
+	bigintFromNumberRejected = error instanceof TypeError;
+}
+try {
+	Int32Array.of(1n);
+} catch (error) {
+	numberFromBigintRejected = error instanceof TypeError;
+}
+check(
+	"TypedArray intrinsic construction preserves numeric domain errors",
+	bigintFromNumberRejected && numberFromBigintRejected,
 );
 
 const resizable = new ArrayBuffer(4, { maxByteLength: 64 });
