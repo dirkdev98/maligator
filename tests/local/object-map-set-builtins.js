@@ -109,6 +109,40 @@ check(
 		Set.prototype.has.call(capturedSetAdder, "captured-set-value"),
 );
 
+const denseSetObject = { marker: 304 };
+const denseSetSource = [1, 2, 2, "value", denseSetObject];
+const denseSet = new Set(denseSetSource);
+denseSet.add("set-only");
+denseSetSource.push("array-only");
+check(
+	"Set constructor consumes dense arrays with identity and independent mutation",
+	denseSet.size === 5 &&
+		denseSet.has(denseSetObject) &&
+		denseSet.has("set-only") &&
+		!denseSet.has("array-only") &&
+		[...denseSet].join(",") === "1,2,value,[object Object],set-only",
+);
+
+const sparseSetSource = [1, , 3];
+const sparseSetPrototype = Object.create(Array.prototype);
+sparseSetPrototype[1] = "inherited-set-hole";
+Object.setPrototypeOf(sparseSetSource, sparseSetPrototype);
+const sparseSet = new Set(sparseSetSource);
+check(
+	"Set constructor falls back for inherited dense-array holes",
+	[...sparseSet].join(",") === "1,inherited-set-hole,3",
+);
+
+const customSetArrayIterator = [1, 2, 3];
+customSetArrayIterator[Symbol.iterator] = function* () {
+	yield 7;
+	yield 8;
+};
+check(
+	"Set constructor preserves overridden array iteration",
+	[...new Set(customSetArrayIterator)].join(",") === "7,8",
+);
+
 const weakSetValue = { marker: "weak-set-value" };
 const capturedWeakSetAdderPrototype = Object.create(WeakSet.prototype);
 function CapturedWeakSetAdderTarget() {}
