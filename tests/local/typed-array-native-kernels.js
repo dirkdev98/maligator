@@ -666,6 +666,26 @@ const numericPrefixClamped = Uint8ClampedArray.from([-1, 0.5, 1.5, 254.5, 300, N
 const numericPrefixWrapped = Int8Array.from([-129, 128, 257]);
 const numericPrefixFloats = Float64Array.from([NaN, -0, 0]);
 const numericPrefixInfinities = Uint8Array.from([Infinity, -Infinity]);
+let int32TransitionCoercions = 0;
+const int32TransitionSource = [
+	-2147483648,
+	-1,
+	0,
+	2147483647,
+	3.75,
+	-0,
+	4294967297,
+	NaN,
+	Infinity,
+	{
+		valueOf() {
+			int32TransitionCoercions++;
+			return -2.9;
+		},
+	},
+];
+const signedInt32Transition = Int32Array.from(int32TransitionSource);
+const unsignedInt32Transition = Uint32Array.from(int32TransitionSource);
 check(
 	"TypedArray.from numeric prefix preserves scalar conversion edges",
 	numericPrefixClamped.join() === "0,0,2,254,255,0" &&
@@ -673,7 +693,11 @@ check(
 		Number.isNaN(numericPrefixFloats[0]) &&
 		Object.is(numericPrefixFloats[1], -0) &&
 		Object.is(numericPrefixFloats[2], 0) &&
-		numericPrefixInfinities.join() === "0,0",
+		numericPrefixInfinities.join() === "0,0" &&
+		signedInt32Transition.join() === "-2147483648,-1,0,2147483647,3,0,1,0,0,-2" &&
+		unsignedInt32Transition.join() ===
+			"2147483648,4294967295,0,2147483647,3,0,1,0,0,4294967294" &&
+		int32TransitionCoercions === 2,
 );
 
 function BigIntResult(length) {

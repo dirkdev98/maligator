@@ -281,6 +281,14 @@ usize mal_typed_array_object_store_number_prefix(
         return 0;
     }
     usize index = 0;
+    if (array->kind == MAL_TA_INT32 || array->kind == MAL_TA_UINT32) {
+        while (index < count && mal_value_is_int32(values[index])) {
+            mal_scalar_store_native_u32(
+                span.data + index * sizeof(u32),
+                (u32) mal_value_to_i32(values[index]));
+            index++;
+        }
+    }
     while (index < count && mal_ops_is_number(values[index])) {
         u64 bits;
         if (!mal_typed_array_coerce_element_bits(vm, array->kind, values[index], &bits)) {
