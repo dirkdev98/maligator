@@ -702,13 +702,21 @@ done:
 /**
  * Apply the Array.from mapFn when present; returns false when it threw.
  */
-static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, MalValue this_arg, u32 index, MalValue *element) {
+static bool mal_builtin_array_from_map(
+    MalVm *vm,
+    MalCallCache *call_cache,
+    MalValue map_fn,
+    MalValue this_arg,
+    u32 index,
+    MalValue *element
+) {
     if (mal_value_is_undefined(map_fn)) {
         return true;
     }
 
     MalValue mapped_args[] = {*element, mal_value_from_i32((i32) index)};
-    MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, mapped_args, 2);
+    MalCompletion completion = mal_vm_call_cached(
+        vm, call_cache, map_fn, this_arg, mapped_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return false;
@@ -787,6 +795,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     direct_array_copy = direct_array_copy &&
         mal_value_to_native_function_object(method)->realm == vm->current_realm;
 #endif
+    MalCallCache map_call_cache = {0};
 
     if (mal_value_is_callable(method) && !direct_array_copy) {
         MalRootSpan method_span;
@@ -858,7 +867,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             }
 
             roots[1] = element;
-            if (!mal_builtin_array_from_map(vm, map_fn, this_arg, index, &element)) {
+            if (!mal_builtin_array_from_map(
+                    vm, &map_call_cache, map_fn, this_arg, index, &element)) {
                 mal_vm_iterator_close(vm, &record);
                 goto iter_done;
             }
@@ -937,7 +947,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         MalValue element = mal_builtin_array_get(vm, source, index);
         roots[1] = element;
 
-        if (!mal_builtin_array_from_map(vm, map_fn, this_arg, index, &element)) {
+        if (!mal_builtin_array_from_map(
+                vm, &map_call_cache, map_fn, this_arg, index, &element)) {
             goto done;
         }
         roots[1] = element;

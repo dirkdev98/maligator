@@ -135,6 +135,26 @@ async function main() {
 		"Array.from array-like length getter",
 		Array.from(arrayLike, (value) => value * 2).join() === "6,8" && lengthGets === 1,
 	);
+	const mapperReceiver = { offset: 5 };
+	const mapperCalls = [];
+	const mappedArrayLike = Array.from(
+		{ 0: 10, 1: 20, length: 2 },
+		function (value, index) {
+			mapperCalls.push([this, value, index]);
+			return value + index + this.offset;
+		},
+		mapperReceiver,
+	);
+	check(
+		"Array.from mapper preserves receiver and arguments",
+		mappedArrayLike.join() === "15,26" &&
+			mapperCalls.length === 2 &&
+			mapperCalls[0][0] === mapperReceiver &&
+			mapperCalls[0][1] === 10 &&
+			mapperCalls[0][2] === 0 &&
+			mapperCalls[1][1] === 20 &&
+			mapperCalls[1][2] === 1,
+	);
 	const asyncCopy = await Array.fromAsync([1, 2, 3], async (value) => value + 4);
 	check("Array.fromAsync", asyncCopy.join() === "5,6,7");
 
