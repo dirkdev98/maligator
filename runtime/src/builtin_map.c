@@ -124,6 +124,12 @@ static MalValue mal_builtin_map_construct(
         return mal_value_new_undefined();
     }
 
+    MalIteratorObject *map_entries_cursor = direct_map_adder
+        ? mal_vm_iterator_protocol_cursor(&record, MAL_ITERATOR_CURSOR_MAP)
+        : nullptr;
+    bool direct_map_entries = map_entries_cursor != nullptr &&
+        map_entries_cursor->kind == MAL_ITERATOR_MAP_ENTRIES;
+
     // The iterator and adder have already been observed in spec order. An exact,
     // fresh built-in iterator gives a sound count hint without consulting the
     // iterable again; custom/advanced iterators retain ordinary growth.
@@ -151,8 +157,20 @@ static MalValue mal_builtin_map_construct(
     MalValue ret = mal_value_new_undefined();
 
     while (true) {
-        MalValue item;
         bool done;
+        if (direct_map_entries &&
+            mal_vm_iterator_step_entry_pair_protocol_cursor(
+                vm, &record, &roots[3], &roots[4], &done)) {
+            if (done) {
+                ret = roots[0];
+                goto done;
+            }
+            mal_map_object_set_canonical(
+                map, mal_map_key_from_value(roots[3]), roots[4]);
+            continue;
+        }
+
+        MalValue item;
         if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
             goto done;
         }

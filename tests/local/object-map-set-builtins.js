@@ -642,6 +642,44 @@ check(
 		constructedFromFreshEntry.get(freshEntryKey) === "entry-value",
 );
 
+const copiedMapKey = { marker: 506 };
+const copiedMapSource = new Map([
+	["first", { marker: 507 }],
+	[copiedMapKey, "object-key"],
+	[NaN, "nan-key"],
+	[-0, "zero-key"],
+]);
+copiedMapSource.delete("first");
+copiedMapSource.set("first", { marker: 508 });
+const copiedMap = new Map(copiedMapSource);
+copiedMap.set("copy-only", 509);
+copiedMap.delete(NaN);
+check(
+	"Map constructor copies exact Map entries independently in order",
+	copiedMap.size === 4 &&
+		copiedMap.get(copiedMapKey) === "object-key" &&
+		copiedMap.get(0) === "zero-key" &&
+		copiedMap.get("first").marker === 508 &&
+		copiedMapSource.size === 4 &&
+		copiedMapSource.get(NaN) === "nan-key" &&
+		!copiedMapSource.has("copy-only") &&
+		[...copiedMap.keys()].join(",") === "[object Object],0,first,copy-only",
+);
+
+const advancedMapEntriesSource = new Map([
+	["skipped", 1],
+	["kept", 2],
+]);
+const advancedMapEntries = advancedMapEntriesSource.entries();
+advancedMapEntries.next();
+const copiedMapRemainder = new Map(advancedMapEntries);
+check(
+	"Map constructor consumes and exhausts an advanced exact entries cursor",
+	copiedMapRemainder.size === 1 &&
+		copiedMapRemainder.get("kept") === 2 &&
+		advancedMapEntries.next().done === true,
+);
+
 const weakConstructorKey = {};
 const constructedWeakMap = new WeakMap([[weakConstructorKey, 23]]);
 check(
