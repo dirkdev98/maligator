@@ -714,6 +714,67 @@ check(
 		advancedMapEntries.next().done === true,
 );
 
+const denseMapObjectKey = { marker: 510 };
+const denseMapEntrySource = [
+	["first", 1],
+	[denseMapObjectKey, 2],
+	["first", 3],
+	[-0, 4],
+];
+const denseEntryMap = new Map(denseMapEntrySource);
+denseEntryMap.set("map-only", 5);
+denseMapEntrySource.push(["array-only", 6]);
+check(
+	"Map constructor consumes dense entry arrays in order",
+	denseEntryMap.size === 4 &&
+		denseEntryMap.get("first") === 3 &&
+		denseEntryMap.get(denseMapObjectKey) === 2 &&
+		denseEntryMap.get(0) === 4 &&
+		!denseEntryMap.has("array-only") &&
+		[...denseEntryMap.keys()].join(",") === "first,[object Object],0,map-only",
+);
+
+const sparseMapEntrySource = [["first", 1], , ["last", 3]];
+const sparseMapEntryPrototype = Object.create(Array.prototype);
+sparseMapEntryPrototype[1] = ["inherited-map-hole", 2];
+Object.setPrototypeOf(sparseMapEntrySource, sparseMapEntryPrototype);
+const sparseEntryMap = new Map(sparseMapEntrySource);
+check(
+	"Map constructor falls back for inherited entry-array holes",
+	[...sparseEntryMap].map((entry) => entry.join(":")).join(",") ===
+		"first:1,inherited-map-hole:2,last:3",
+);
+
+const customMapArrayIterator = [["ignored", 1]];
+customMapArrayIterator[Symbol.iterator] = function* () {
+	yield ["custom", 7];
+	yield ["custom", 8];
+};
+const customIteratorMap = new Map(customMapArrayIterator);
+check(
+	"Map constructor preserves overridden entry-array iteration",
+	customIteratorMap.size === 1 && customIteratorMap.get("custom") === 8,
+);
+
+const growingMapEntries = [];
+const growingMapFirstEntry = {
+	get 0() {
+		growingMapEntries.push(["appended", 10]);
+		return "first";
+	},
+	get 1() {
+		return 9;
+	},
+};
+growingMapEntries.push(growingMapFirstEntry);
+const growingEntryMap = new Map(growingMapEntries);
+check(
+	"Map constructor observes entry-array growth during pair Gets",
+	growingEntryMap.size === 2 &&
+		growingEntryMap.get("first") === 9 &&
+		growingEntryMap.get("appended") === 10,
+);
+
 const weakConstructorKey = {};
 const constructedWeakMap = new WeakMap([[weakConstructorKey, 23]]);
 check(

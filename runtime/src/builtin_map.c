@@ -129,6 +129,9 @@ static MalValue mal_builtin_map_construct(
         : nullptr;
     bool direct_map_entries = map_entries_cursor != nullptr &&
         map_entries_cursor->kind == MAL_ITERATOR_MAP_ENTRIES;
+    MalIteratorObject *dense_array_cursor = direct_map_adder
+        ? mal_vm_iterator_dense_array_cursor(&record)
+        : nullptr;
 
     // The iterator and adder have already been observed in spec order. An exact,
     // fresh built-in iterator gives a sound count hint without consulting the
@@ -170,8 +173,11 @@ static MalValue mal_builtin_map_construct(
             continue;
         }
 
-        MalValue item;
-        if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
+        bool stepped = dense_array_cursor != nullptr
+            ? mal_vm_iterator_step_dense_array_cursor(
+                vm, dense_array_cursor, &record, &roots[2], &done)
+            : mal_vm_iterator_step(vm, &record, &roots[2], &done);
+        if (!stepped) {
             goto done;
         }
 
@@ -179,9 +185,7 @@ static MalValue mal_builtin_map_construct(
             ret = roots[0];
             goto done;
         }
-        roots[2] = item;
-
-        if (!mal_value_is_object(item)) {
+        if (!mal_value_is_object(roots[2])) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator entry is not an object");
             mal_vm_iterator_close(vm, &record);
             goto done;
