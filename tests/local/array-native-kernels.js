@@ -390,6 +390,30 @@ async function main() {
 			["a", , "b"].join() === "a,,b" &&
 			["", "only", ""].join("") === "only",
 	);
+	let numericJoinSeparatorCoercions = 0;
+	const numericJoinSeparator = {
+		toString() {
+			numericJoinSeparatorCoercions++;
+			return " | ";
+		},
+	};
+	let numericJoinFallbackCoercions = 0;
+	const numericJoinFallback = {
+		toString() {
+			numericJoinFallbackCoercions++;
+			return "object";
+		},
+	};
+	check(
+		"join formats dense int32 values and preserves generic numeric fallbacks",
+		[-2147483648, -1024, -1, 0, 1, 1024, 2147483647].join(numericJoinSeparator) ===
+			"-2147483648 | -1024 | -1 | 0 | 1 | 1024 | 2147483647" &&
+			numericJoinSeparatorCoercions === 1 &&
+			[-0, 0, 0.5, NaN, Infinity, -Infinity].join(":") ===
+				"0:0:0.5:NaN:Infinity:-Infinity" &&
+			[1, numericJoinFallback, 3].join(":") === "1:object:3" &&
+			numericJoinFallbackCoercions === 1,
+	);
 	let deepRope = "rope";
 	for (let index = 0; index < 128; index++) {
 		deepRope += String.fromCharCode(65 + (index % 26));
