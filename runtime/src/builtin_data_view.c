@@ -184,7 +184,16 @@ static MalDataViewObject *mal_data_view_this(MalVm *vm, MalValue this_value) {
 // callers that pass it (matching the spec's optional-argument handling).
 static bool mal_data_view_to_index(MalVm *vm, MalValue value, u64 *out) {
     f64 number;
-    if (mal_ops_is_number(value)) {
+    if (mal_value_is_f64(value)) {
+        number = mal_value_to_f64(value);
+    } else if (mal_value_is_int32(value)) {
+        i32 index = mal_value_to_i32(value);
+        if (index >= 0) {
+            *out = (u64) index;
+            return true;
+        }
+        number = (f64) index;
+    } else if (mal_ops_is_number(value)) {
         number = mal_ops_number_as_f64(value);
     } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
