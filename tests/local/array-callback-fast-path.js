@@ -193,6 +193,62 @@ check(
 	[0, 1, 2].every(() => true),
 );
 
+check(
+	"nested some and every keep independent callback arguments",
+	[1, 2].every((outer) => [3, 4].some((inner) => inner === outer + 2)),
+);
+
+check(
+	"some preserves callable Proxy dispatch and early exit",
+	(() => {
+		let calls = 0;
+		const callback = new Proxy((value) => value === 2, {
+			apply(target, thisArg, args) {
+				calls++;
+				return Reflect.apply(target, thisArg, args);
+			},
+		});
+		return [1, 2, 3].some(callback) && calls === 2;
+	})(),
+);
+
+check(
+	"every roots fresh getter results across callback allocation",
+	(() => {
+		const values = {
+			length: 2,
+			get 0() {
+				return { id: 1 };
+			},
+			get 1() {
+				return { id: 2 };
+			},
+		};
+		let expected = 1;
+		return Array.prototype.every.call(values, (value) => {
+			const allocated = { copy: value };
+			return allocated.copy.id === expected++;
+		});
+	})(),
+);
+
+check(
+	"some stops on abrupt callback completion",
+	(() => {
+		let visits = 0;
+		try {
+			[1, 2, 3].some((value) => {
+				visits++;
+				if (value === 2) throw "some-stop";
+				return false;
+			});
+		} catch (error) {
+			return error === "some-stop" && visits === 2;
+		}
+		return false;
+	})(),
+);
+
 function captureCallbackStack() {
 	return new Error("callback").stack;
 }
