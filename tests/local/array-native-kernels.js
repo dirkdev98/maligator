@@ -36,6 +36,47 @@ async function main() {
 		"Array.from observes iterator Get",
 		Array.from(iterable).join() === "7,8,9" && iteratorGets === 1,
 	);
+	let setIteratorGets = 0;
+	const iterableSet = new Set([10, 20, 30]);
+	Object.defineProperty(iterableSet, Symbol.iterator, {
+		configurable: true,
+		get() {
+			setIteratorGets++;
+			return Set.prototype.values;
+		},
+	});
+	check(
+		"Array.from observes Set iterator Get once",
+		Array.from(iterableSet).join() === "10,20,30" && setIteratorGets === 1,
+	);
+	let capturedIteratorGets = 0;
+	const capturedIteratorSource = new Set([11, 22]);
+	Object.defineProperty(capturedIteratorSource, Symbol.iterator, {
+		configurable: true,
+		get() {
+			capturedIteratorGets++;
+			return Set.prototype.values;
+		},
+	});
+	function ReplacingArrayFromConstructor() {
+		Object.defineProperty(capturedIteratorSource, Symbol.iterator, {
+			configurable: true,
+			value: function* () {
+				yield 99;
+			},
+		});
+	}
+	const capturedIteratorResult = Array.from.call(
+		ReplacingArrayFromConstructor,
+		capturedIteratorSource,
+	);
+	check(
+		"Array.from uses iterator method captured before construction",
+		capturedIteratorGets === 1 &&
+			capturedIteratorResult.length === 2 &&
+			capturedIteratorResult[0] === 11 &&
+			capturedIteratorResult[1] === 22,
+	);
 	const fromHoles = Array.from([, 1]);
 	check(
 		"Array.from materializes iterator holes",

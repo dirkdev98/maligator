@@ -772,6 +772,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
 #endif
 
     if (mal_value_is_callable(method) && !direct_array_copy) {
+        MalRootSpan method_span;
+        mal_gc_root(&method_span, &method, 1);
         MalValue a;
         if (plain_mode) {
             a = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
@@ -779,13 +781,17 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             MalCompletion c = mal_vm_construct_value(vm, ctor, nullptr, 0);
             if (c.kind != MAL_COMPLETION_NORMAL) {
                 vm->completion = c;
+                mal_gc_unroot(&method_span);
                 return mal_value_new_undefined();
             }
             a = c.value;
         }
 
         MalIteratorRecord record;
-        if (!mal_vm_get_iterator(vm, source, &record)) {
+        bool got_iterator = mal_vm_get_iterator_from_method(
+            vm, source, method, &record);
+        mal_gc_unroot(&method_span);
+        if (!got_iterator) {
             return mal_value_new_undefined();
         }
         if (plain_mode) {
