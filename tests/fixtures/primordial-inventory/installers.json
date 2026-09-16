@@ -137,7 +137,7 @@
 	},
 	{
 		"file": "builtin_typed_array.c",
-		"sha256": "8c70851776e32dde3767b5a9bf4a6ef28c499b0f0da01fb2bdd191652011b9ee"
+		"sha256": "29df49d9d0a3841b0ea18f3cbdf53054f5ed2bfd10a758912e56a17bfddd56fc"
 	},
 	{
 		"file": "builtin_uri.c",

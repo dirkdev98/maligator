@@ -110,6 +110,13 @@ bool mal_typed_array_coerce_element_bits(
     MalVm *vm, MalTypedArrayKind kind, MalValue value, u64 *out);
 
 /**
+ * Store leading primitive Numbers from index zero and return their count.
+ * Unsuitable views return zero without writes; this neither allocates nor calls JavaScript.
+ */
+usize mal_typed_array_object_store_number_prefix(
+    MalVm *vm, MalTypedArrayObject *array, const MalValue *values, usize count);
+
+/**
  * Read element `index`. Out-of-bounds (or detached) reads return undefined.
  */
 MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 index);

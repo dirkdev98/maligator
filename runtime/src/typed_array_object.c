@@ -267,6 +267,31 @@ bool mal_typed_array_coerce_element_bits(
     return true;
 }
 
+usize mal_typed_array_object_store_number_prefix(
+    MalVm *vm, MalTypedArrayObject *array, const MalValue *values, usize count) {
+    if (count == 0 ||
+        mal_typed_array_is_bigint(array->kind) ||
+        array->buffer->immutable ||
+        array->buffer->shared ||
+        array->buffer->resizable) {
+        return 0;
+    }
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span) || count > span.length) {
+        return 0;
+    }
+    usize index = 0;
+    while (index < count && mal_ops_is_number(values[index])) {
+        u64 bits;
+        if (!mal_typed_array_coerce_element_bits(vm, array->kind, values[index], &bits)) {
+            break;
+        }
+        mal_typed_array_span_store_bits(&span, (u32) index, bits);
+        index++;
+    }
+    return index;
+}
+
 void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index, MalValue value) {
     if (array->buffer->immutable) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");

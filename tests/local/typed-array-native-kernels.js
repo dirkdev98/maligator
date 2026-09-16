@@ -441,14 +441,266 @@ Object.defineProperty(orderedFromSource, 1, {
 		};
 	},
 });
-const orderedFromResult = Uint8Array.from(orderedFromSource, (value, index) => {
-	fromOrder.push("map-" + index);
-	return value;
-});
+const orderedFromThis = {};
+let orderedFromThisMatches = true;
+const orderedFromResult = Uint8Array.from(
+	orderedFromSource,
+	function (value, index) {
+		orderedFromThisMatches = orderedFromThisMatches && this === orderedFromThis;
+		fromOrder.push("map-" + index);
+		return value;
+	},
+	orderedFromThis,
+);
 check(
 	"TypedArray.from drains Array iteration before mapping and conversion",
 	orderedFromResult.join() === "7,8" &&
+		orderedFromThisMatches &&
 		fromOrder.join() === "collect-1,map-0,convert-0,map-1,convert-1",
+);
+
+let observedPrefixDestination;
+let observedPrefix = "";
+let observedPrefixConversions = 0;
+function ObservedPrefixInt32Array(length) {
+	observedPrefixDestination = new Int32Array(length);
+	return observedPrefixDestination;
+}
+const observedPrefixResult = Int32Array.from.call(ObservedPrefixInt32Array, [
+	11,
+	22,
+	{
+		valueOf() {
+			fromOrder.push("prefix-middle");
+			observedPrefix = observedPrefixDestination.slice(0, 2).join();
+			observedPrefixConversions++;
+			Array.from({ length: 1_024 }, (_, index) => ({ index }));
+			return 33;
+		},
+	},
+	{
+		valueOf() {
+			fromOrder.push("prefix-suffix");
+			return 44;
+		},
+	},
+]);
+check(
+	"TypedArray.from exposes numeric prefix writes before object coercion",
+	observedPrefixResult.join() === "11,22,33,44" &&
+		observedPrefix === "11,22" &&
+		observedPrefixConversions === 1 &&
+		fromOrder.slice(-2).join() === "prefix-middle,prefix-suffix",
+);
+
+let edgePrefixDestination;
+function EdgePrefixInt32Array(length) {
+	edgePrefixDestination = new Int32Array(length);
+	return edgePrefixDestination;
+}
+let firstPrefixObserved = "";
+let lastPrefixObserved = "";
+const firstPrefixResult = Int32Array.from.call(EdgePrefixInt32Array, [
+	{
+		valueOf() {
+			firstPrefixObserved = edgePrefixDestination.join();
+			return 47;
+		},
+	},
+	53,
+	59,
+]);
+const lastPrefixResult = Int32Array.from.call(EdgePrefixInt32Array, [
+	61,
+	67,
+	{
+		valueOf() {
+			lastPrefixObserved = edgePrefixDestination.slice(0, 2).join();
+			return 71;
+		},
+	},
+]);
+check(
+	"TypedArray.from enters object coercion at the first and last snapshot positions",
+	firstPrefixObserved === "0,0,0" &&
+		firstPrefixResult.join() === "47,53,59" &&
+		lastPrefixObserved === "61,67" &&
+		lastPrefixResult.join() === "61,67,71",
+);
+
+let throwingPrefixDestination;
+function ThrowingPrefixInt32Array(length) {
+	throwingPrefixDestination = new Int32Array(length);
+	return throwingPrefixDestination;
+}
+let throwingPrefixCaught = false;
+let coercionAfterThrow = 0;
+try {
+	Int32Array.from.call(ThrowingPrefixInt32Array, [
+		5,
+		6,
+		{
+			valueOf() {
+				throw new Error("prefix conversion");
+			},
+		},
+		{
+			valueOf() {
+				coercionAfterThrow++;
+				return 8;
+			},
+		},
+	]);
+} catch (error) {
+	throwingPrefixCaught = error.message === "prefix conversion";
+}
+check(
+	"TypedArray.from preserves numeric prefix when later coercion throws",
+	throwingPrefixCaught &&
+		throwingPrefixDestination.join() === "5,6,0,0" &&
+		coercionAfterThrow === 0,
+);
+
+let detachedPrefixDestination;
+let transferredPrefixBuffer;
+let coercionAfterDetach = 0;
+function DetachedPrefixInt32Array(length) {
+	detachedPrefixDestination = new Int32Array(length);
+	return detachedPrefixDestination;
+}
+const detachedPrefixResult = Int32Array.from.call(DetachedPrefixInt32Array, [
+	7,
+	8,
+	{
+		valueOf() {
+			transferredPrefixBuffer = detachedPrefixDestination.buffer.transfer();
+			return 9;
+		},
+	},
+	{
+		valueOf() {
+			coercionAfterDetach++;
+			return 10;
+		},
+	},
+]);
+check(
+	"TypedArray.from discards suffix writes after object coercion detaches the destination",
+	detachedPrefixResult.buffer.detached &&
+		new Int32Array(transferredPrefixBuffer).join() === "7,8,0,0" &&
+		coercionAfterDetach === 1,
+);
+
+let offsetBacking;
+function OffsetInt32Array(length) {
+	offsetBacking = new Int32Array(length + 2);
+	offsetBacking[0] = 71;
+	offsetBacking[length + 1] = 73;
+	return new Int32Array(offsetBacking.buffer, Int32Array.BYTES_PER_ELEMENT, length);
+}
+const offsetFrom = Int32Array.from.call(OffsetInt32Array, [13, 17, 19]);
+let oversizedDestination;
+function OversizedInt32Array(length) {
+	oversizedDestination = new Int32Array(length + 2);
+	oversizedDestination.fill(79);
+	return oversizedDestination;
+}
+const oversizedFrom = Int32Array.from.call(OversizedInt32Array, [23, 29, 31]);
+check(
+	"TypedArray.from numeric prefix honors offsets and leaves oversized tails untouched",
+	offsetFrom.join() === "13,17,19" &&
+		offsetBacking.join() === "71,13,17,19,73" &&
+		oversizedFrom.join() === "23,29,31,79,79",
+);
+
+let resizableDestination;
+function ResizableInt32Array(length) {
+	const byteLength = length * Int32Array.BYTES_PER_ELEMENT;
+	resizableDestination = new Int32Array(
+		new ArrayBuffer(byteLength, { maxByteLength: byteLength * 2 }),
+	);
+	return resizableDestination;
+}
+const resizableFrom = Int32Array.from.call(ResizableInt32Array, [37, 41, 43]);
+let resizedDuringCoercion = false;
+const resizingFrom = Int32Array.from.call(ResizableInt32Array, [
+	47,
+	{
+		valueOf() {
+			resizableDestination.buffer.resize(Int32Array.BYTES_PER_ELEMENT);
+			resizableDestination.buffer.resize(3 * Int32Array.BYTES_PER_ELEMENT);
+			resizedDuringCoercion = true;
+			return 53;
+		},
+	},
+	59,
+]);
+let sharedDestination;
+function SharedInt32Array(length) {
+	sharedDestination = new Int32Array(
+		new SharedArrayBuffer(length * Int32Array.BYTES_PER_ELEMENT),
+	);
+	return sharedDestination;
+}
+let sharedPrefixObserved = 0;
+const sharedFrom = Int32Array.from.call(SharedInt32Array, [
+	61,
+	{
+		valueOf() {
+			sharedPrefixObserved = sharedDestination[0];
+			return 67;
+		},
+	},
+	71,
+]);
+check(
+	"TypedArray.from writes numeric snapshots through resizable and shared custom results",
+	resizableFrom.join() === "37,41,43" &&
+		resizedDuringCoercion &&
+		resizingFrom.join() === "47,53,59" &&
+		sharedPrefixObserved === 61 &&
+		sharedFrom.join() === "61,67,71",
+);
+
+const numericPrefixClamped = Uint8ClampedArray.from([-1, 0.5, 1.5, 254.5, 300, NaN]);
+const numericPrefixWrapped = Int8Array.from([-129, 128, 257]);
+const numericPrefixFloats = Float64Array.from([NaN, -0, 0]);
+const numericPrefixInfinities = Uint8Array.from([Infinity, -Infinity]);
+check(
+	"TypedArray.from numeric prefix preserves scalar conversion edges",
+	numericPrefixClamped.join() === "0,0,2,254,255,0" &&
+		numericPrefixWrapped.join() === "127,-128,1" &&
+		Number.isNaN(numericPrefixFloats[0]) &&
+		Object.is(numericPrefixFloats[1], -0) &&
+		Object.is(numericPrefixFloats[2], 0) &&
+		numericPrefixInfinities.join() === "0,0",
+);
+
+function BigIntResult(length) {
+	return new BigInt64Array(length);
+}
+function NumberResult(length) {
+	return new Int32Array(length);
+}
+const customBigIntFrom = Int32Array.from.call(BigIntResult, [73n, 79n]);
+let customBigIntRejectedNumbers = false;
+let customNumberRejectedBigInts = false;
+try {
+	Int32Array.from.call(BigIntResult, [73, 79]);
+} catch (error) {
+	customBigIntRejectedNumbers = error instanceof TypeError;
+}
+try {
+	BigInt64Array.from.call(NumberResult, [73n, 79n]);
+} catch (error) {
+	customNumberRejectedBigInts = error instanceof TypeError;
+}
+check(
+	"TypedArray.from honors custom result numeric domains",
+	customBigIntFrom[0] === 73n &&
+		customBigIntFrom[1] === 79n &&
+		customBigIntRejectedNumbers &&
+		customNumberRejectedBigInts,
 );
 
 const throwingFromSource = [1, 0, 3];

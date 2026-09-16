@@ -2234,7 +2234,10 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
     }
     extra[0] = result;
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
-    for (usize i = 0; i < count; i++) {
+    usize i = mal_value_is_undefined(map_fn)
+        ? mal_typed_array_object_store_number_prefix(vm, array, values, count)
+        : 0;
+    for (; i < count; i++) {
         MalValue element = values[i];
         if (mal_value_is_callable(map_fn)) {
             MalValue call_args[2] = {element, mal_value_from_i32((i32) i)};
