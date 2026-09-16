@@ -298,6 +298,116 @@ check(
 	crossBigInt[0] === 0xffffffffffffffffn && crossBigInt[1] === 2n,
 );
 
+const denseFromSource = [];
+for (let index = 0; index < 65; index++) denseFromSource.push(index * 17 - 200);
+check(
+	"TypedArray.from converts dense numeric arrays across snapshot growth boundaries",
+	Uint8Array.from([]).length === 0 &&
+		Int32Array.from([7])[0] === 7 &&
+		Uint32Array.from(denseFromSource).join() ===
+			denseFromSource.map((value) => value >>> 0).join(),
+);
+
+const partiallyConsumedArrayIterator = [11, 22, 33].values();
+partiallyConsumedArrayIterator.next();
+const exhaustedArrayIterator = [44].values();
+exhaustedArrayIterator.next();
+exhaustedArrayIterator.next();
+check(
+	"TypedArray.from preserves Array iterator cursor state",
+	Uint8Array.from(partiallyConsumedArrayIterator).join() === "22,33" &&
+		Uint8Array.from(exhaustedArrayIterator).length === 0,
+);
+
+const shrinkingFromSource = [1, 0, 3, 4];
+Object.defineProperty(shrinkingFromSource, 1, {
+	configurable: true,
+	get() {
+		shrinkingFromSource.length = 2;
+		return 2;
+	},
+});
+const growingFromSource = [1, 0];
+Object.defineProperty(growingFromSource, 1, {
+	configurable: true,
+	get() {
+		growingFromSource[2] = 3;
+		return 2;
+	},
+});
+check(
+	"TypedArray.from Array cursor observes live source length",
+	Uint8Array.from(shrinkingFromSource).join() === "1,2" &&
+		Uint8Array.from(growingFromSource).join() === "1,2,3",
+);
+
+const overriddenNextIterator = [4, 5, 6].values();
+const builtinArrayIteratorNext = overriddenNextIterator.next;
+let overriddenNextCalls = 0;
+overriddenNextIterator.next = function () {
+	overriddenNextCalls++;
+	return builtinArrayIteratorNext.call(this);
+};
+check(
+	"TypedArray.from honors an overridden Array iterator next",
+	Uint8Array.from(overriddenNextIterator).join() === "4,5,6" && overriddenNextCalls === 4,
+);
+
+const fromOrder = [];
+const orderedFromSource = [
+	{
+		valueOf() {
+			fromOrder.push("convert-0");
+			return 7;
+		},
+	},
+	0,
+];
+Object.defineProperty(orderedFromSource, 1, {
+	configurable: true,
+	get() {
+		fromOrder.push("collect-1");
+		return {
+			valueOf() {
+				fromOrder.push("convert-1");
+				return 8;
+			},
+		};
+	},
+});
+const orderedFromResult = Uint8Array.from(orderedFromSource, (value, index) => {
+	fromOrder.push("map-" + index);
+	return value;
+});
+check(
+	"TypedArray.from drains Array iteration before mapping and conversion",
+	orderedFromResult.join() === "7,8" &&
+		fromOrder.join() === "collect-1,map-0,convert-0,map-1,convert-1",
+);
+
+const throwingFromSource = [1, 0, 3];
+Object.defineProperty(throwingFromSource, 1, {
+	configurable: true,
+	get() {
+		throw new Error("from getter");
+	},
+});
+let fromConstructorCalls = 0;
+function TrackingUint8Array(length) {
+	fromConstructorCalls++;
+	return new Uint8Array(length);
+}
+let throwingFromCaught = false;
+try {
+	Uint8Array.from.call(TrackingUint8Array, throwingFromSource);
+} catch (error) {
+	throwingFromCaught = error.message === "from getter";
+}
+check(
+	"TypedArray.from does not construct after Array iteration throws",
+	throwingFromCaught && fromConstructorCalls === 0,
+);
+
 const resizable = new ArrayBuffer(4, { maxByteLength: 64 });
 new Uint8Array(resizable).fill(0xaa);
 resizable.resize(2);

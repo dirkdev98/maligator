@@ -2097,36 +2097,61 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
     // Every phase below re-enters JS and can collect: iterator.next / array-like
     // index gets during collection, Construct during creation, and the mapfn +
     // element store during the build. Root the growing snapshot (refreshing its
-    // pointer after each realloc, and only scanning filled entries) plus the
-    // result and in-flight mapped element, and lift GC suppression.
+    // pointer after each realloc, and only scanning filled entries), iterator
+    // record, result, and in-flight mapped element, and lift GC suppression.
     MalValue extra[2] = {mal_value_new_undefined(), mal_value_new_undefined()}; // [0]=result, [1]=mapped element
-    MalRootSpan values_span, extra_span;
+    MalIteratorRecord record;
+    MalRootSpan values_span, extra_span, record_span;
+    bool record_rooted = false;
     mal_gc_root(&values_span, values, 0);
     mal_gc_root(&extra_span, extra, 2);
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
 
     if (mal_value_is_callable(iterator_method)) {
-        MalIteratorRecord record;
         if (!mal_vm_get_iterator_from_method(vm, source, iterator_method, &record)) {
             goto done;
         }
-        while (true) {
-            MalValue item;
-            bool done_flag;
-            if (!mal_vm_iterator_step(vm, &record, &item, &done_flag)) {
-                goto done;
+        mal_gc_root(&record_span, &record.iterator, 2);
+        record_rooted = true;
+        MalIteratorObject *dense_array_cursor = mal_vm_iterator_dense_array_cursor(&record);
+        // Select once so generic iterators retain their original per-step path.
+        if (dense_array_cursor != nullptr) {
+            while (true) {
+                MalValue item;
+                bool done_flag;
+                if (!mal_vm_iterator_step_dense_array_cursor(vm, dense_array_cursor, &record, &item, &done_flag)) {
+                    goto done;
+                }
+                if (done_flag) {
+                    break;
+                }
+                if (count == capacity) {
+                    capacity = capacity == 0 ? 8 : capacity * 2;
+                    values = realloc(values, sizeof(MalValue) * capacity);
+                    values_span.slots = values;
+                }
+                values[count++] = item;
+                values_span.count = (i32) count;
             }
-            if (done_flag) {
-                break;
+        } else {
+            while (true) {
+                MalValue item;
+                bool done_flag;
+                if (!mal_vm_iterator_step(vm, &record, &item, &done_flag)) {
+                    goto done;
+                }
+                if (done_flag) {
+                    break;
+                }
+                if (count == capacity) {
+                    capacity = capacity == 0 ? 8 : capacity * 2;
+                    values = realloc(values, sizeof(MalValue) * capacity);
+                    values_span.slots = values;
+                }
+                values[count++] = item;
+                values_span.count = (i32) count;
             }
-            if (count == capacity) {
-                capacity = capacity == 0 ? 8 : capacity * 2;
-                values = realloc(values, sizeof(MalValue) * capacity);
-                values_span.slots = values;
-            }
-            values[count++] = item;
-            values_span.count = (i32) count;
         }
     } else {
         MalValue length_value;
@@ -2202,6 +2227,9 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
 
 done:
     mal_gc_native_rooted_end(vm);
+    if (record_rooted) {
+        mal_gc_unroot(&record_span);
+    }
     mal_gc_unroot(&extra_span);
     mal_gc_unroot(&values_span);
     free(values);
