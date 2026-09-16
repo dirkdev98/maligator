@@ -122,13 +122,17 @@ static MalValue mal_builtin_set_construct(
 
     while (true) {
         bool done;
-        bool stepped = direct_set_values
-            ? mal_vm_iterator_step_protocol_cursor(
-                vm, set_values_cursor, &roots[2], &done)
-            : dense_array_cursor != nullptr
+        bool stepped;
+        if (direct_set_values) {
+            mal_vm_iterator_step_set_values_cursor(
+                set_values_cursor, &roots[2], &done);
+            stepped = true;
+        } else {
+            stepped = dense_array_cursor != nullptr
                 ? mal_vm_iterator_step_dense_array_cursor(
                     vm, dense_array_cursor, &record, &roots[2], &done)
                 : mal_vm_iterator_step(vm, &record, &roots[2], &done);
+        }
         if (!stepped) {
             goto done;
         }

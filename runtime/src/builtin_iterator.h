@@ -52,6 +52,12 @@ void mal_vm_iterator_step_map_entries_cursor(
     MalValue *value_out,
     bool *done_out);
 
+/** Advance an already-validated exact Set values cursor. */
+void mal_vm_iterator_step_set_values_cursor(
+    MalIteratorObject *cursor,
+    MalValue *value_out,
+    bool *done_out);
+
 /**
  * Install %IteratorPrototype% and the Map/Set/Array/String iterator
  * prototypes. Requires the well-known symbols.

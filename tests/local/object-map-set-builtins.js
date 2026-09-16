@@ -173,6 +173,17 @@ check(
 		advancedSetValues.next().done === true,
 );
 
+const exhaustedSetValuesSource = new Set(["done"]);
+const exhaustedSetValues = exhaustedSetValuesSource.values();
+exhaustedSetValues.next();
+exhaustedSetValues.next();
+const copiedExhaustedSetValues = new Set(exhaustedSetValues);
+exhaustedSetValuesSource.add("late");
+check(
+	"Set constructor preserves sticky exhaustion for exact values cursors",
+	copiedExhaustedSetValues.size === 0 && exhaustedSetValues.next().done === true,
+);
+
 const weakSetValue = { marker: "weak-set-value" };
 const capturedWeakSetAdderPrototype = Object.create(WeakSet.prototype);
 function CapturedWeakSetAdderTarget() {}

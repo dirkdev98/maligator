@@ -470,6 +470,22 @@ void mal_vm_iterator_step_map_entries_cursor(
     mal_builtin_iterator_map_take_entry(cursor, key_out, value_out, done_out);
 }
 
+void mal_vm_iterator_step_set_values_cursor(
+    MalIteratorObject *cursor,
+    MalValue *value_out,
+    bool *done_out
+) {
+    assert(cursor->kind == MAL_ITERATOR_SET_VALUES);
+    assert(mal_value_is_set_object(cursor->target));
+    if (cursor->done) {
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return;
+    }
+    MalValue mapped;
+    mal_builtin_iterator_map_take_entry(cursor, value_out, &mapped, done_out);
+}
+
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
 	MalVm *vm,
     const MalIteratorRecord *record,
