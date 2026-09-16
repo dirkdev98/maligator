@@ -109,7 +109,7 @@
 	},
 	{
 		"file": "builtin_regexp.c",
-		"sha256": "8928b7e912336c1409cf8a43416bf151617bd43a0d2c917e0c6bc8bf1ffc3091"
+		"sha256": "d159affefac021897afb11ff444542ce5b54e582c38138c581b39cd6e5bb6b02"
 	},
 	{
 		"file": "builtin_set.c",
@@ -309,7 +309,7 @@
 	},
 	{
 		"file": "generated/primordial_registry.inc",
-		"sha256": "5af55d7da4924fdf59e9437036b50c7049f4d0ee32a225f8e8082c1f21cbcde2"
+		"sha256": "0505a69fc126976f0479b74c75b07814f5b100cfa427522b2ebcee71881b5ff1"
 	},
 	{
 		"file": "intrinsics.c",

@@ -263,7 +263,11 @@ export function exactBuiltinCallDescriptor(
  */
 export const primordialObjectPolicy = {
 	kind: "all-initialized-intrinsics" as const,
-	excludedIntrinsics: ["MAL_INTRINSIC_GLOBAL_THIS", "MAL_INTRINSIC_CONSOLE"] as const,
+	excludedIntrinsics: [
+		"MAL_INTRINSIC_GLOBAL_THIS",
+		"MAL_INTRINSIC_CONSOLE",
+		"MAL_INTRINSIC_REGEXP_LEGACY_STATE",
+	] as const,
 };
 
 export const primordialGlobalBindings: ReadonlyArray<PrimordialGlobalBinding> = [

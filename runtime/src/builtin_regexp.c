@@ -2411,7 +2411,9 @@ static void regexp_define_legacy_accessor(
                 1, regexp_legacy_input_setter));
     }
     MalPropertyDesc desc = mal_intrinsic_accessor_desc(
-        accessors[0], accessors[1], MAL_PROPERTY_CONFIGURABLE);
+        accessors[0], accessors[1],
+        MAL_PROPERTY_CONFIGURABLE |
+            (writable ? MAL_PROPERTY_LOCKED_SETTER : MAL_PROPERTY_NONE));
     mal_object_define_own(
         constructor, mal_intrinsic_string_key(vm, name), &desc);
     mal_gc_unroot(&root);

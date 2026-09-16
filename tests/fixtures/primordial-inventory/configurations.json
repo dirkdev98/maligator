@@ -4,25 +4,19 @@
 	"modes": [
 		{
 			"mode": "full",
-			"sha256": "33302917971c92f882764c84b775ff4b2a8de693849f1788f7dffdeb4cd13ea7",
+			"sha256": "6921c3e9eb1b1e7e1c175d8532482172f6c83e784152ea473ea98b6b257c0dd4",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 997,
 					"descriptors": 2983,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1764,
 					"descriptors": 5353,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
@@ -46,7 +40,7 @@
 		},
 		{
 			"mode": "mutable",
-			"sha256": "b9fc81c37528a6b3c12cdd7a80f774a7f22a6aec33b33b085a208be55e0843d6",
+			"sha256": "587dc45b41f479fdc520cb2fd004e408fbc55f01af80d21ab3b4b6942b6bc4dc",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -100,73 +94,55 @@
 		},
 		{
 			"mode": "diagnostic",
-			"sha256": "a99aeb3ffdd0cb7aaacab3d42549752c8c04c254e812f3fda3878fd903d2e787",
+			"sha256": "35028edd9504476072567bb990fb16d60f090c364e09a7cc684418be23671075",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 1003,
 					"descriptors": 3001,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1772,
 					"descriptors": 5383,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-eval",
-			"sha256": "33302917971c92f882764c84b775ff4b2a8de693849f1788f7dffdeb4cd13ea7",
+			"sha256": "6921c3e9eb1b1e7e1c175d8532482172f6c83e784152ea473ea98b6b257c0dd4",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 997,
 					"descriptors": 2983,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1764,
 					"descriptors": 5353,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-realms",
-			"sha256": "c0308a513dfb4c848ae1cf3fb8ab48e3fc67f14cea34c03f46a017bb9b7a79c9",
+			"sha256": "569831db209cfc5fb2404ad65358635866de5942e58d745a55d2c5b5ddeeadf1",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 993,
 					"descriptors": 2971,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1760,
 					"descriptors": 5341,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
@@ -190,265 +166,199 @@
 		},
 		{
 			"mode": "no-temporal",
-			"sha256": "5815bf305ecfe6716a135e9a1c87427fbebe5a9657b5bf8b97276d45c355edc0",
+			"sha256": "80963cc2e39a434aa88580229f825435755567a4d121ca0c5661f1224884d967",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 754,
 					"descriptors": 2256,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1521,
 					"descriptors": 4626,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-intl",
-			"sha256": "3e949aae65ea6c371b19ea055656d1030d6f65f5c308c6cbfa0506e4d04a95b9",
+			"sha256": "f1e915dd68fe7158f26ed40778ef63d2d7891b34ce332f158601825ad95cd6d2",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 924,
 					"descriptors": 2771,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1691,
 					"descriptors": 5141,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-collator",
-			"sha256": "e803e516197c8094de953d18c26893398238598161051ac401f6976854a6d8f9",
+			"sha256": "ce51c7bfd4e2ea84be8fb5e2292ccb2335de78df34b4d7da07e121c643f5ee8d",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
 					"descriptors": 2838,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1714,
 					"descriptors": 5209,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-number-format",
-			"sha256": "00c522c2d4596c650cc942c6794e06d1d7db911b5788052c3cf95143c2ecf0b2",
+			"sha256": "5c1bb55bb6cd0cbd35be47646d30aaffaf50041f805d3dcfb15ad3d2c356d874",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
 					"descriptors": 2838,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1714,
 					"descriptors": 5209,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-date-time-format",
-			"sha256": "2ca8ec64def92bb06fa4f28e89ddcb4720e011714f2931a37f4138de811e8f0f",
+			"sha256": "cc3cbc5108e9e2e2f6375d9ffa21f4b1d808e3c0060425b4a9ec728da0f1d92f",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 949,
 					"descriptors": 2844,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1716,
 					"descriptors": 5215,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-plural-rules",
-			"sha256": "461be4216a0eb931d3e82c149beae3ce77f37e05bcae65fcc419b110e0a5af8e",
+			"sha256": "746a7135b0b2d4b484f7b833b481af522eea6b52fd16a63c09cd3ee8a5f419ca",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
 					"descriptors": 2838,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1714,
 					"descriptors": 5209,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-list-format",
-			"sha256": "e91ae5bac43a0aced80f9ece0d5e0fba1386c81238338863813551540fcba91e",
+			"sha256": "e4a4268a1da6179a2ece62f9a111dd90920b1dc4c1ee6fb855aa192dc5631c77",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
 					"descriptors": 2841,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1715,
 					"descriptors": 5212,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-segmenter",
-			"sha256": "29427244554610cfa0851ce7abb69fc86b9586bc2daba612aca779a4664ac009",
+			"sha256": "6e497eb01ae81ae3b03379ddbf8c6796b089e6e4fb25bdab77135a46495f7cc4",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 952,
 					"descriptors": 2848,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1719,
 					"descriptors": 5219,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-display-names",
-			"sha256": "56a4aa2c4fa49da337ad3f21c6fa7547c47162eb7e5595d57a828edd2aa7f586",
+			"sha256": "df77746f77282f7634af8f18bb6bca91e6172c271020b539f69757f19ac685e5",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
 					"descriptors": 2838,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1714,
 					"descriptors": 5209,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-relative-time-format",
-			"sha256": "b8d90846cc294aea022edceb3c166ae59e7acfcbf464d7d1d4317b6e825d2330",
+			"sha256": "b8b2c35b7c5f48a9d29c7814fce6807bae306e1a25cc9aeefc537aede6680007",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
 					"descriptors": 2841,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1715,
 					"descriptors": 5212,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-duration-format",
-			"sha256": "ea0e9c63ce3368b6400054c0b63af180219d8fe45ad951861b96e519c85fea3f",
+			"sha256": "3e646ca22faa70ba8fb88553218971ab57ff8e9e5b687fc92dda04c1a2c8aad5",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
 					"descriptors": 2841,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1715,
 					"descriptors": 5212,
-					"repeatedOwnKeys": [
-						{ "owner": "Array.prototype", "keys": ["[\"length\"]"] },
-						{ "owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%", "keys": ["[\"length\"]"] }
-					]
+					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		}
