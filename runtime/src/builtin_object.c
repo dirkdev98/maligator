@@ -884,7 +884,7 @@ static bool mal_builtin_object_collect_plain_keys(
     MalObject *object = mal_value_to_object(target);
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
-    (void) mal_array_object_fresh_dense_reserve_exact(result, capacity);
+    bool reserved = mal_array_object_fresh_dense_reserve_exact(result, capacity);
 
     bool enumerable_only =
         iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
@@ -898,9 +898,13 @@ static bool mal_builtin_object_collect_plain_keys(
             (enumerable_only && !(desc.flags & MAL_PROPERTY_ENUMERABLE))) {
             continue;
         }
-        mal_array_object_store(
-            result, mal_key_index(count++),
-            mal_builtin_object_key_to_string(vm, key));
+        MalValue key_string = mal_builtin_object_key_to_string(vm, key);
+        if (reserved) {
+            mal_array_object_fresh_dense_append_reserved(result, key_string);
+        } else {
+            mal_array_object_store(result, mal_key_index(count), key_string);
+        }
+        count++;
     }
     return true;
 }
