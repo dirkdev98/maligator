@@ -567,6 +567,28 @@ check(
 	"Object.fromEntries preserves observable entry Gets",
 	fromObservableEntry.observed === 17 && fromEntriesGetLog.join(",") === "0,1",
 );
+const liveFromEntriesSource = [
+	[
+		{
+			toString() {
+				liveFromEntriesSource[1] = ["mutated", 33];
+				liveFromEntriesSource.push(["added", 44]);
+				return "first";
+			},
+		},
+		11,
+	],
+	["stale", 22],
+];
+const liveFromEntries = Object.fromEntries(liveFromEntriesSource);
+check(
+	"Object.fromEntries observes dense source mutation between steps",
+	liveFromEntries.first === 11 &&
+		liveFromEntries.mutated === 33 &&
+		liveFromEntries.added === 44 &&
+		!Object.hasOwn(liveFromEntries, "stale") &&
+		Object.keys(liveFromEntries).join(",") === "first,mutated,added",
+);
 
 const rootedEntriesSource = {};
 Object.defineProperty(rootedEntriesSource, "0", {

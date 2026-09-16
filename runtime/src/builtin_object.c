@@ -1889,6 +1889,8 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
     if (!mal_vm_get_iterator(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
         return mal_value_new_undefined();
     }
+    MalIteratorObject *dense_array_cursor =
+        mal_vm_iterator_dense_array_cursor(&record);
 
     MalValue roots[5] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
@@ -1905,7 +1907,11 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
 
     while (true) {
         bool done;
-        if (!mal_vm_iterator_step(vm, &record, &roots[1], &done)) {
+        bool stepped = dense_array_cursor != nullptr
+            ? mal_vm_iterator_step_dense_array_cursor(
+                vm, dense_array_cursor, &record, &roots[1], &done)
+            : mal_vm_iterator_step(vm, &record, &roots[1], &done);
+        if (!stepped) {
             goto done;
         }
 
