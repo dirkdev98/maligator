@@ -1,5 +1,7 @@
 #include "builtin_iterator.h"
 
+#include <assert.h>
+
 #include "array_object.h"
 #include "builtin_array.h"
 #include "builtin_iterator_helpers.h"
@@ -449,6 +451,23 @@ bool mal_vm_iterator_step_protocol_cursor(
     bool ok = mal_builtin_iterator_object_advance(vm, cursor, value_out, done_out);
     vm->gc_native_frames--;
     return ok;
+}
+
+void mal_vm_iterator_step_map_entries_cursor(
+    MalIteratorObject *cursor,
+    MalValue *key_out,
+    MalValue *value_out,
+    bool *done_out
+) {
+    assert(cursor->kind == MAL_ITERATOR_MAP_ENTRIES);
+    assert(mal_value_is_map_object(cursor->target));
+    if (cursor->done) {
+        *key_out = mal_value_new_undefined();
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return;
+    }
+    mal_builtin_iterator_map_take_entry(cursor, key_out, value_out, done_out);
 }
 
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(

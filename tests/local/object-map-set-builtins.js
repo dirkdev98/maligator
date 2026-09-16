@@ -744,6 +744,23 @@ check(
 		advancedMapEntries.next().done === true,
 );
 
+const copiedNegativeZeroValue = new Map(new Map([[-0, -0]])).get(0);
+check(
+	"Map constructor preserves mapped negative zero while canonicalizing its key",
+	1 / copiedNegativeZeroValue === -Infinity,
+);
+
+const exhaustedMapEntriesSource = new Map([["done", 1]]);
+const exhaustedMapEntries = exhaustedMapEntriesSource.entries();
+exhaustedMapEntries.next();
+exhaustedMapEntries.next();
+const copiedExhaustedMapEntries = new Map(exhaustedMapEntries);
+exhaustedMapEntriesSource.set("late", 2);
+check(
+	"Map constructor preserves sticky exhaustion for exact entries cursors",
+	copiedExhaustedMapEntries.size === 0 && exhaustedMapEntries.next().done === true,
+);
+
 const denseMapObjectKey = { marker: 510 };
 const denseMapEntrySource = [
 	["first", 1],

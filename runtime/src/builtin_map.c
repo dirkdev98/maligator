@@ -161,9 +161,9 @@ static MalValue mal_builtin_map_construct(
 
     while (true) {
         bool done;
-        if (direct_map_entries &&
-            mal_vm_iterator_step_entry_pair_protocol_cursor(
-                vm, &record, &roots[3], &roots[4], &done)) {
+        if (direct_map_entries) {
+            mal_vm_iterator_step_map_entries_cursor(
+                map_entries_cursor, &roots[3], &roots[4], &done);
             if (done) {
                 ret = roots[0];
                 goto done;

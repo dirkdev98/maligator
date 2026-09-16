@@ -45,6 +45,13 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
     MalValue *second_out,
     bool *done_out);
 
+/** Advance an already-validated exact Map entries cursor. */
+void mal_vm_iterator_step_map_entries_cursor(
+    MalIteratorObject *cursor,
+    MalValue *key_out,
+    MalValue *value_out,
+    bool *done_out);
+
 /**
  * Install %IteratorPrototype% and the Map/Set/Array/String iterator
  * prototypes. Requires the well-known symbols.
