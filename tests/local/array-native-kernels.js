@@ -302,6 +302,30 @@ async function main() {
 			denseSearch.includes(NaN) &&
 			denseSearch.includes(undefined),
 	);
+	const mixedNumericSearch = [0, -0, 1.5, NaN, Infinity, 1n, "1", { value: 1 }];
+	check(
+		"dense numeric searches preserve Number identity and type boundaries",
+		mixedNumericSearch.indexOf(-0) === 0 &&
+			mixedNumericSearch.lastIndexOf(0) === 1 &&
+			mixedNumericSearch.indexOf(1.5) === 2 &&
+			mixedNumericSearch.indexOf(NaN) === -1 &&
+			mixedNumericSearch.includes(NaN) &&
+			mixedNumericSearch.includes(Infinity) &&
+			mixedNumericSearch.indexOf(1) === -1,
+	);
+	const searchMutation = [1, 2, 3];
+	const mutatingFromIndex = {
+		valueOf() {
+			searchMutation[0] = 9;
+			return 0;
+		},
+	};
+	check(
+		"dense numeric searches observe fromIndex coercion before scanning",
+		searchMutation.includes(9, mutatingFromIndex) &&
+			searchMutation.indexOf(9, mutatingFromIndex) === 0 &&
+			searchMutation.lastIndexOf(9, mutatingFromIndex) === 0,
+	);
 
 	const pushed = [1, 2, 3];
 	check("push", pushed.push(4, 5) === 5 && pushed.join() === "1,2,3,4,5");

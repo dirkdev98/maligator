@@ -537,6 +537,23 @@ static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
     return mal_value_is_nan(left) && mal_value_is_nan(right);
 }
 
+static bool mal_builtin_array_numeric_search_matches(
+    MalValue element,
+    MalValue search,
+    f64 search_number,
+    bool nan_matches
+) {
+    if (element == search) {
+        return nan_matches || !isnan(search_number);
+    }
+    if (!mal_ops_is_number(element)) {
+        return false;
+    }
+    f64 element_number = mal_ops_number_as_f64(element);
+    return element_number == search_number ||
+        (nan_matches && isnan(element_number) && isnan(search_number));
+}
+
 static bool mal_builtin_array_dense_range_present(
     const MalArrayObject *array, u32 start, u32 end
 ) {
@@ -1617,10 +1634,17 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
+        bool numeric_search = mal_ops_is_number(search);
+        f64 search_number = numeric_search
+            ? mal_ops_number_as_f64(search)
+            : 0.0;
         for (u32 index = (u32) start; index < dense->length; index++) {
             MalValue element;
             if (mal_array_object_dense_get(dense, index, &element) &&
-                mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
+                (numeric_search
+                    ? mal_builtin_array_numeric_search_matches(
+                        element, search, search_number, false)
+                    : mal_ops_strict_equal_bool(element, search))) {
                 return mal_value_from_u32(index);
             }
         }
@@ -1679,10 +1703,17 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
+        bool numeric_search = mal_ops_is_number(search);
+        f64 search_number = numeric_search
+            ? mal_ops_number_as_f64(search)
+            : 0.0;
         for (u32 index = (u32) start;; index--) {
             MalValue element;
             if (mal_array_object_dense_get(dense, index, &element) &&
-                mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
+                (numeric_search
+                    ? mal_builtin_array_numeric_search_matches(
+                        element, search, search_number, false)
+                    : mal_ops_strict_equal_bool(element, search))) {
                 return mal_value_from_u32(index);
             }
             if (index == 0) break;
@@ -1729,12 +1760,19 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && dense->length == length) {
+        bool numeric_search = mal_ops_is_number(search);
+        f64 search_number = numeric_search
+            ? mal_ops_number_as_f64(search)
+            : 0.0;
         for (u32 index = start; index < length; index++) {
             MalValue element;
             if (!mal_array_object_dense_get(dense, index, &element)) {
                 element = mal_value_new_undefined();
             }
-            if (mal_builtin_array_same_value_zero(element, search)) {
+            if (numeric_search
+                ? mal_builtin_array_numeric_search_matches(
+                    element, search, search_number, true)
+                : mal_builtin_array_same_value_zero(element, search)) {
                 return mal_value_new_boolean(true);
             }
         }
