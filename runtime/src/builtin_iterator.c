@@ -680,6 +680,37 @@ bool mal_vm_builtin_iterator_size_hint(
     return false;
 }
 
+bool mal_vm_iterator_drain_set_values_to_fresh_dense_array(
+    const MalIteratorRecord *record, MalArrayObject *array
+) {
+    MalIteratorObject *cursor = mal_vm_iterator_protocol_cursor(
+        record, MAL_ITERATOR_CURSOR_SET);
+    if (cursor == nullptr || cursor->kind != MAL_ITERATOR_SET_VALUES ||
+        cursor->done || cursor->index != 0) {
+        return false;
+    }
+
+    MalMapObject *set = mal_value_to_map_object(cursor->target);
+    usize size = mal_map_object_size(set);
+    if (size > UINT32_MAX ||
+        !mal_array_object_fresh_dense_reserve_exact(array, (u32) size)) {
+        return false;
+    }
+
+    MalTableIter iter;
+    mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
+    MalKey key;
+    void *entry;
+    while (mal_table_iter_next(&iter, &key, &entry)) {
+        (void) entry;
+        mal_array_object_fresh_dense_append_reserved(array, key.value);
+        cursor->index = (u64) iter.index;
+    }
+    cursor->done = true;
+    mal_iterator_object_release_table_pin(cursor);
+    return true;
+}
+
 bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     *value_out = mal_value_new_undefined();
     *done_out = false;

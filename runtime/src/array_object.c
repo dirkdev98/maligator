@@ -187,6 +187,24 @@ bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) 
     return true;
 }
 
+void mal_array_object_fresh_dense_append_reserved(
+    MalArrayObject *array, MalValue value
+) {
+    u32 index = array->dense_count;
+    assert(!array->dense_deopted);
+    assert(array->object.extensible);
+    assert(array->length_writable);
+    assert(array->length == index);
+    assert(index < array->capacity);
+    assert(array->elements != nullptr);
+
+    array->elements[index] = value;
+    array->dense_count = index + 1;
+    array->length = index + 1;
+    mal_gc_card(&array->object.header, value);
+    MAL_PERF_COUNT(array_fresh_dense_stores);
+}
+
 bool mal_array_object_dense_append_many(
     MalArrayObject *array, const MalValue *values, u32 count
 ) {

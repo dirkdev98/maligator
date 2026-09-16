@@ -129,6 +129,10 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
  */
 bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value);
 
+/** Append after an exact reserve proved the fresh dense capacity. */
+void mal_array_object_fresh_dense_append_reserved(
+    MalArrayObject *array, MalValue value);
+
 /**
  * Atomically append `count` values to a contiguous ordinary dense Array. This
  * reserves all storage before publishing any element, then applies the required

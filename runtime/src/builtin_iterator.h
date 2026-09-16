@@ -5,6 +5,7 @@
 #include "iterator_object.h"
 
 typedef struct MalVm MalVm;
+typedef struct MalArrayObject MalArrayObject;
 
 /**
  * The builtin Array iterator `next` callback (mal_builtin_array_iterator_next), cached
@@ -74,6 +75,9 @@ bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_ou
  */
 bool mal_vm_builtin_iterator_size_hint(
     const MalIteratorRecord *record, usize *size_out);
+
+bool mal_vm_iterator_drain_set_values_to_fresh_dense_array(
+    const MalIteratorRecord *record, MalArrayObject *array);
 
 /**
  * Spec GetIteratorFromMethod(value, method): call an already-observed iterator

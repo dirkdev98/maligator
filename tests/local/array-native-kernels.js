@@ -77,6 +77,40 @@ async function main() {
 			capturedIteratorResult[0] === 11 &&
 			capturedIteratorResult[1] === 22,
 	);
+	const orderedSet = new Set([1, 2, 3]);
+	orderedSet.delete(2);
+	orderedSet.add(2);
+	const objectKey = { id: 4 };
+	orderedSet.add(objectKey);
+	const orderedCopy = Array.from(orderedSet);
+	check(
+		"Array.from drains Set values in insertion order",
+		orderedCopy.length === 4 &&
+			orderedCopy[0] === 1 &&
+			orderedCopy[1] === 3 &&
+			orderedCopy[2] === 2 &&
+			orderedCopy[3] === objectKey,
+	);
+	let escapedSetIterator;
+	const escapedIteratorSource = {
+		[Symbol.iterator]() {
+			escapedSetIterator = orderedSet.values();
+			return escapedSetIterator;
+		},
+	};
+	check(
+		"Array.from exhausts an escaped exact Set iterator",
+		Array.from(escapedIteratorSource).length === 4 && escapedSetIterator.next().done,
+	);
+	const mutatedSet = new Set([1, 2, 3]);
+	const mutatedCopy = Array.from(mutatedSet, (value, index) => {
+		if (index === 0) {
+			mutatedSet.delete(2);
+			mutatedSet.add(4);
+		}
+		return value;
+	});
+	check("Array.from mapper observes Set mutation", mutatedCopy.join() === "1,3,4");
 	const fromHoles = Array.from([, 1]);
 	check(
 		"Array.from materializes iterator holes",
