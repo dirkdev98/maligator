@@ -686,6 +686,28 @@ const int32TransitionSource = [
 ];
 const signedInt32Transition = Int32Array.from(int32TransitionSource);
 const unsignedInt32Transition = Uint32Array.from(int32TransitionSource);
+let byteTransitionCoercions = 0;
+const byteTransitionSource = [
+	-257,
+	-256,
+	-1,
+	0,
+	255,
+	256,
+	257,
+	3.75,
+	-0,
+	NaN,
+	Infinity,
+	{
+		valueOf() {
+			byteTransitionCoercions++;
+			return -2.9;
+		},
+	},
+];
+const signedByteTransition = Int8Array.from(byteTransitionSource);
+const unsignedByteTransition = Uint8Array.from(byteTransitionSource);
 check(
 	"TypedArray.from numeric prefix preserves scalar conversion edges",
 	numericPrefixClamped.join() === "0,0,2,254,255,0" &&
@@ -697,7 +719,10 @@ check(
 		signedInt32Transition.join() === "-2147483648,-1,0,2147483647,3,0,1,0,0,-2" &&
 		unsignedInt32Transition.join() ===
 			"2147483648,4294967295,0,2147483647,3,0,1,0,0,4294967294" &&
-		int32TransitionCoercions === 2,
+		int32TransitionCoercions === 2 &&
+		signedByteTransition.join() === "-1,0,-1,0,-1,0,1,3,0,0,0,-2" &&
+		unsignedByteTransition.join() === "255,0,255,0,255,0,1,3,0,0,0,254" &&
+		byteTransitionCoercions === 2,
 );
 
 function BigIntResult(length) {

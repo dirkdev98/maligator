@@ -288,6 +288,13 @@ usize mal_typed_array_object_store_number_prefix(
                 (u32) mal_value_to_i32(values[index]));
             index++;
         }
+    } else if (array->kind == MAL_TA_INT8 || array->kind == MAL_TA_UINT8) {
+        while (index < count && mal_value_is_int32(values[index])) {
+            mal_scalar_store_native_u8(
+                span.data + index,
+                (u8) mal_value_to_i32(values[index]));
+            index++;
+        }
     }
     while (index < count && mal_ops_is_number(values[index])) {
         u64 bits;
