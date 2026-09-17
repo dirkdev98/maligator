@@ -190,6 +190,97 @@ const guardedTypeFacts = [
 	String(guardedCoercions),
 ];
 
+const membershipEvents = [];
+const cleanHoley = [];
+cleanHoley.length = 4;
+cleanHoley[0] = undefined;
+cleanHoley[2] = 2;
+const changedHoley = [0, 1, 2];
+delete changedHoley[1];
+changedHoley.length = 1;
+changedHoley.length = 3;
+const accessorArray = [];
+Object.defineProperty(accessorArray, "1", {
+	configurable: true,
+	get() {
+		membershipEvents.push("own-getter");
+		return 1;
+	},
+});
+const customPrototypeArray = [];
+customPrototypeArray.length = 2;
+Object.setPrototypeOf(customPrototypeArray, { 1: 1 });
+const proxyPrototypeArray = [];
+proxyPrototypeArray.length = 2;
+Object.setPrototypeOf(
+	proxyPrototypeArray,
+	new Proxy(
+		{},
+		{
+			has(_target, key) {
+				membershipEvents.push("prototype-has:" + String(key));
+				return key === "1";
+			},
+		},
+	),
+);
+const directProxy = new Proxy([], {
+	has(_target, key) {
+		membershipEvents.push("receiver-has:" + String(key));
+		return key === "3";
+	},
+});
+const unusualKeys = [1];
+unusualKeys["0.5"] = true;
+unusualKeys["-1"] = true;
+unusualKeys["4294967295"] = true;
+let coercionsIn = 0;
+const coerciveKey = {
+	toString() {
+		coercionsIn++;
+		return "0.5";
+	},
+};
+const membershipMarker = {};
+const throwingKey = {
+	toString() {
+		throw membershipMarker;
+	},
+};
+const arrayMembership = [
+	inOperator(0, cleanHoley),
+	inOperator(1, cleanHoley),
+	inOperator(2, cleanHoley),
+	inOperator(3, cleanHoley),
+	inOperator(-0, cleanHoley),
+	inOperator(1, changedHoley),
+	inOperator(2, changedHoley),
+	inOperator(0, Object.freeze([undefined])),
+	inOperator(1, accessorArray),
+	membershipEvents.length,
+	inOperator(1, customPrototypeArray),
+	inOperator(1, proxyPrototypeArray),
+	inOperator(3, directProxy),
+	inOperator("-0", unusualKeys),
+	inOperator(0.5, unusualKeys),
+	inOperator(-1, unusualKeys),
+	inOperator(4294967295, unusualKeys),
+	inOperator(coerciveKey, unusualKeys),
+	coercionsIn,
+	capture(() => inOperator(throwingKey, unusualKeys), membershipMarker),
+];
+Object.defineProperty(Array.prototype, "1", {
+	configurable: true,
+	get() {
+		membershipEvents.push("inherited-getter");
+		return 1;
+	},
+});
+const inheritedHoley = [];
+inheritedHoley.length = 2;
+arrayMembership.push(inOperator(1, inheritedHoley), membershipEvents.length);
+delete Array.prototype[1];
+
 console.log(
 	JSON.stringify({
 		numeric,
@@ -200,5 +291,7 @@ console.log(
 		int32MultiplyEdges,
 		int32ComparisonEdges,
 		guardedTypeFacts,
+		arrayMembership,
+		membershipEvents,
 	}),
 );
