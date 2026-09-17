@@ -1259,7 +1259,6 @@ export type NativeInstructionPlan =
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
-	| { readonly kind: "fresh-array-literal-element"; readonly index: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
@@ -1645,13 +1644,6 @@ function nativeInstructionPlanFromExecution(
 				: {
 						kind: "fresh-dense-reserve",
 						length: instruction.freshDenseReserveLength,
-					};
-		case "defineProperty":
-			return instruction.freshArrayLiteralIndex === undefined
-				? undefined
-				: {
-						kind: "fresh-array-literal-element",
-						index: instruction.freshArrayLiteralIndex,
 					};
 		case "loadPropertyStatic":
 			return instruction.exactOwnSlot !== undefined

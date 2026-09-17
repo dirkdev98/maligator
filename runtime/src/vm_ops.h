@@ -2157,13 +2157,6 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
 
-/** Define a default own element below the pre-established length of a proven fresh,
- * still-dense Array; fallback only handles dense-storage admission failure. */
-void mal_vm_op_define_fresh_array_element(
-    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value,
-    bool enumerable, bool writable, bool configurable
-);
-
 /**
  * Define an own data property (the object-literal / define-semantics path),
  * shared by MAL_OP_DEFINE_PROPERTY and the compiled backend. Like the op, this

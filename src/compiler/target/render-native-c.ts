@@ -4010,11 +4010,6 @@ function emitInstruction(
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
 		case "DEFINE_PROPERTY":
-			if (nativePlan?.kind === "fresh-array-literal-element") {
-				return [
-					`mal_vm_op_define_fresh_array_element(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
-				];
-			}
 			// Object-literal define semantics; cannot run user code, so no
 			// completion check (matching the interpreter's mal_op_define_property).
 			return [

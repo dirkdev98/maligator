@@ -1,7 +1,6 @@
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
-import type { CoreFreshArrayLiteralElementPlan } from "./core-array-literal-analysis.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type {
 	CoreBlockId,
@@ -437,7 +436,6 @@ export interface CoreOptimizationPlan {
 	readonly directBuiltinCallbacks?: ReadonlyArray<CoreDirectBuiltinCallbackPlan>;
 	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
 	readonly builtinInputs?: ReadonlyArray<CoreBuiltinInputPlan>;
-	readonly freshArrayLiteralElements?: ReadonlyArray<CoreFreshArrayLiteralElementPlan>;
 	readonly privateNumericArrayElements?: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
 	readonly privatePackedRestArrayElements?: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;

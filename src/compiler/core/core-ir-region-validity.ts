@@ -2,7 +2,6 @@ import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
-import { coreFreshArrayLiteralElementProofIsCurrent } from "./core-array-literal-analysis.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	analyzeCoreCallGraph,
@@ -1768,7 +1767,6 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	const proofPayloads = new Set<object>([
 		...(plan.operatorInputs ?? []),
 		...(plan.builtinInputs ?? []),
-		...(plan.freshArrayLiteralElements ?? []),
 		...(plan.privateNumericArrayElements ?? []),
 		...(plan.privatePackedRestArrayElements ?? []),
 		...(plan.unsignedArithmetic ?? []),
@@ -1888,10 +1886,6 @@ export function verifyCoreOptimizationPlan(
 	for (const operation of plan.operatorInputs ?? []) {
 		if (!coreOperatorInputProofIsCurrent(program, operation))
 			fail("operator inputs have no current kind proof");
-	}
-	for (const operation of plan.freshArrayLiteralElements ?? []) {
-		if (!coreFreshArrayLiteralElementProofIsCurrent(program, operation, context))
-			fail("fresh array literal element has no current proof");
 	}
 	for (const operation of plan.privateNumericArrayElements ?? []) {
 		if (!corePrivateNumericArrayElementProofIsCurrent(program, operation, context))

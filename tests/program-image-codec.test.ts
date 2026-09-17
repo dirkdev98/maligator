@@ -1552,43 +1552,6 @@ describe("program-image-codec", () => {
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(containedTypedArrayStore)),
 		).toEqual(containedTypedArrayStore);
-		const freshArrayLiteralElement = (index: number, configurable = true) =>
-			withInstruction(
-				{
-					opcode: "DEFINE_PROPERTY",
-					object: 0,
-					key: 1,
-					value: 2,
-					enumerable: true,
-					writable: true,
-					configurable,
-				},
-				{ kind: "fresh-array-literal-element", index },
-			);
-		const literalElement = freshArrayLiteralElement(0);
-		expect(
-			deserializeCompilerArtifact(serializeCompilerArtifact(literalElement)),
-		).toEqual(literalElement);
-		expect(() => serializeCompilerArtifact(freshArrayLiteralElement(-1))).toThrow(
-			/invalid fresh Array literal element metadata/,
-		);
-		expect(() => serializeCompilerArtifact(freshArrayLiteralElement(0, false))).toThrow(
-			/invalid fresh Array literal element metadata/,
-		);
-		const malformedLiteralElement = serializeCompilerArtifact(literalElement, {
-			debugInfo: false,
-		});
-		expect(malformedLiteralElement.at(-3)).toBe(20);
-		expect(malformedLiteralElement.at(-2)).toBe(0);
-		const invalidIndex = [0xff, 0xff, 0xff, 0xff, 0x0f];
-		const malformedLiteralIndex = Uint8Array.from([
-			...malformedLiteralElement.subarray(0, -2),
-			...invalidIndex,
-			...malformedLiteralElement.subarray(-1),
-		]);
-		expect(() => deserializeCompilerArtifact(malformedLiteralIndex)).toThrow(
-			/invalid fresh Array literal element metadata/,
-		);
 		const packedRestArrayLoad = withInstruction(
 			{
 				opcode: "LOAD_PROPERTY",

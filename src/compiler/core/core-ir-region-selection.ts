@@ -10,7 +10,6 @@ import {
 	factObligationEquals,
 } from "../shared/fact-implication.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
-import { coreFreshArrayLiteralElementPlans } from "./core-array-literal-analysis.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
@@ -1815,12 +1814,6 @@ export function buildCoreOptimizationPlan(
 		),
 		operatorInputs: coreOperatorInputPlans(program, analyses, liveFunctions),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, liveFunctions),
-		freshArrayLiteralElements: coreFreshArrayLiteralElementPlans(
-			program,
-			analyses,
-			liveFunctions,
-			options.context,
-		),
 		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
 			program,
 			analyses,
