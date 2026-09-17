@@ -1650,13 +1650,22 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
         f64 search_number = numeric_search
             ? mal_ops_number_as_f64(search)
             : 0.0;
+        if (numeric_search) {
+            u32 end = dense->dense_count < dense->length
+                ? dense->dense_count
+                : dense->length;
+            for (u32 index = (u32) start; index < end; index++) {
+                if (mal_builtin_array_numeric_search_matches(
+                        dense->elements[index], search, search_number, false)) {
+                    return mal_value_from_u32(index);
+                }
+            }
+            return mal_value_from_i32(-1);
+        }
         for (u32 index = (u32) start; index < dense->length; index++) {
             MalValue element;
             if (mal_array_object_dense_get(dense, index, &element) &&
-                (numeric_search
-                    ? mal_builtin_array_numeric_search_matches(
-                        element, search, search_number, false)
-                    : mal_ops_strict_equal_bool(element, search))) {
+                mal_ops_strict_equal_bool(element, search)) {
                 return mal_value_from_u32(index);
             }
         }

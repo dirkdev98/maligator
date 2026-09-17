@@ -346,6 +346,90 @@ async function main() {
 			searchMutation.indexOf(9, mutatingFromIndex) === 0 &&
 			searchMutation.lastIndexOf(9, mutatingFromIndex) === 0,
 	);
+	const trailingSearch = [-0, 1.5, Infinity, 9];
+	trailingSearch.length = 32;
+	check(
+		"numeric indexOf skips only absent trailing indexes",
+		trailingSearch.indexOf(9) === 3 &&
+			trailingSearch.indexOf(9, 4) === -1 &&
+			trailingSearch.indexOf(0) === 0 &&
+			trailingSearch.indexOf(NaN) === -1 &&
+			trailingSearch.indexOf(undefined) === -1,
+	);
+	let emptySearchCoercions = 0;
+	const emptySearchFromIndex = {
+		valueOf() {
+			emptySearchCoercions++;
+			throw new Error("empty indexOf coerced fromIndex");
+		},
+	};
+	check(
+		"empty indexOf returns before coercing fromIndex",
+		[].indexOf(1, emptySearchFromIndex) === -1 && emptySearchCoercions === 0,
+	);
+	const shrinkingSearch = [1, 2, 3];
+	const shrinkingSearchFromIndex = {
+		valueOf() {
+			shrinkingSearch.length = 1;
+			return 0;
+		},
+	};
+	check(
+		"indexOf observes length changes during fromIndex coercion",
+		shrinkingSearch.indexOf(3, shrinkingSearchFromIndex) === -1,
+	);
+	let searchAccessorGets = 0;
+	const accessorSearch = [1, , 3];
+	const accessorSearchFromIndex = {
+		valueOf() {
+			Object.defineProperty(accessorSearch, "1", {
+				configurable: true,
+				get() {
+					searchAccessorGets++;
+					return 7;
+				},
+			});
+			return 0;
+		},
+	};
+	check(
+		"indexOf observes accessors installed during fromIndex coercion",
+		accessorSearch.indexOf(7, accessorSearchFromIndex) === 1 && searchAccessorGets === 1,
+	);
+	let inheritedSearchGets = 0;
+	const inheritedSearchPrototype = {};
+	Object.defineProperty(inheritedSearchPrototype, "2", {
+		configurable: true,
+		get() {
+			inheritedSearchGets++;
+			return 11;
+		},
+	});
+	const inheritedSearch = [1];
+	inheritedSearch.length = 3;
+	Object.setPrototypeOf(inheritedSearch, inheritedSearchPrototype);
+	check(
+		"indexOf observes inherited numeric accessors",
+		Array.prototype.indexOf.call(inheritedSearch, 11) === 2 && inheritedSearchGets === 1,
+	);
+	let proxySearchHas = 0;
+	let proxySearchGets = 0;
+	const proxySearch = new Proxy([1, 2], {
+		has(target, key) {
+			proxySearchHas++;
+			return Reflect.has(target, key);
+		},
+		get(target, key, receiver) {
+			proxySearchGets++;
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	check(
+		"indexOf preserves proxy HasProperty and Get",
+		Array.prototype.indexOf.call(proxySearch, 2) === 1 &&
+			proxySearchHas === 2 &&
+			proxySearchGets >= 3,
+	);
 
 	const pushed = [1, 2, 3];
 	check("push", pushed.push(4, 5) === 5 && pushed.join() === "1,2,3,4,5");
