@@ -628,6 +628,7 @@ function lowerCoreSpecializations(
 						load,
 						comparison,
 						lengthPosition: indexed.lengthPosition,
+						receiverIsArray: indexed.receiverIsArray,
 						elements,
 					},
 				],

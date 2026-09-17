@@ -604,6 +604,7 @@ export type VmIndexedLengthLoopRegion = VmRegionEnvelope<
 		readonly loadIp: number;
 		readonly comparisonIp: number;
 		readonly lengthPosition: 1 | 2;
+		readonly receiverIsArray: boolean;
 		readonly elements: ReadonlyArray<{
 			readonly ip: number;
 			readonly kind: "load" | "store";
@@ -1802,10 +1803,11 @@ function lowerExecutionFunctionToNativePlan(
 				blockStartIps.get(blockIndex),
 			);
 			const sites = region.sites.map(
-				({ load, comparison, lengthPosition, elements }) => ({
+				({ load, comparison, lengthPosition, receiverIsArray, elements }) => ({
 					loadIp: instructionIndexByTargetInstruction.get(load),
 					comparisonIp: instructionIndexByTargetInstruction.get(comparison),
 					lengthPosition,
+					receiverIsArray,
 					elements: elements.map(({ instruction, kind, arrayIndexIsUint32 }) => ({
 						ip: instructionIndexByTargetInstruction.get(instruction),
 						kind,
@@ -1831,6 +1833,7 @@ function lowerExecutionFunctionToNativePlan(
 						site.loadIp === undefined ||
 						site.comparisonIp === undefined ||
 						(site.lengthPosition !== 1 && site.lengthPosition !== 2) ||
+						typeof site.receiverIsArray !== "boolean" ||
 						site.elements.length > 8 ||
 						site.elements.some(
 							(element) =>

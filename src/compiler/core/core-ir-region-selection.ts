@@ -683,6 +683,7 @@ function pendingLocalCandidate(
 							load: candidate.load,
 							comparison: candidate.comparison,
 							lengthPosition: candidate.lengthPosition,
+							receiverIsArray: candidate.receiverIsArray,
 							elements: candidate.elements,
 						}),
 					}
