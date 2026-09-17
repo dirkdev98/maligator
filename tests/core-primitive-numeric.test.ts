@@ -28,9 +28,11 @@ describe("certified primitive numeric lowering", () => {
 				engine: { primordials: "locked", realms: false },
 			}),
 		);
-		const image = compileSemanticProgramToProgramImage(
-			analyzeSourceAndRunSemanticAnalysis(
-				`function holeyArrayTraversal(scale) {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						`function holeyArrayTraversal(scale) {
 					const values = [];
 					for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
 					let checksum = 0;
@@ -43,9 +45,11 @@ describe("certified primitive numeric lowering", () => {
 					return checksum;
 				}
 				globalThis.result = holeyArrayTraversal(1);`,
-				"holey-array.js",
+						"holey-array.js",
+					),
+					{ facts },
+				),
 			),
-			{ facts },
 		);
 		const functionIndex = image.runtime.functions.findIndex((fn) => {
 			const units = image.runtime.stringConstants[fn.nameStringIndex];
@@ -72,6 +76,16 @@ describe("certified primitive numeric lowering", () => {
 				native.instructions[index]?.kind === "exact-contained-array-element",
 		);
 		expect(privateLoad).toBeGreaterThanOrEqual(0);
+		const indexedLoop = native.specializations.find(
+			(region) => region.kind === "indexed-length-loop",
+		);
+		expect(indexedLoop?.kind).toBe("indexed-length-loop");
+		if (indexedLoop?.kind !== "indexed-length-loop") {
+			throw new Error("expected indexed length loop");
+		}
+		expect(indexedLoop.sites[0]!.comparisonIp).toBeGreaterThan(
+			indexedLoop.sites[0]!.loadIp + 1,
+		);
 		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false)!;
 		expect(emitted).not.toBeNull();
 		expect(emitted.source).toContain("mal_vm_private_array_try_get_proven_index");

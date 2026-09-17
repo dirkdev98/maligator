@@ -900,6 +900,14 @@ function verifySpecialization(
 							),
 						),
 					].sort((left, right) => left - right);
+		const cfg = buildCoreControlFlow(program, selection.function);
+		const loadBlock = fn.instructionBlock(indexed.load);
+		const comparisonBlock = fn.instructionBlock(indexed.comparison);
+		const loadDominatesComparison =
+			loadBlock === comparisonBlock
+				? blocks.instructionOrder.get(indexed.load)! <
+					blocks.instructionOrder.get(indexed.comparison)!
+				: cfg.dominates(loadBlock, comparisonBlock);
 		if (
 			candidate?.kind !== "indexed-length-loop" ||
 			selection.anchors.length !== 2 ||
@@ -915,7 +923,7 @@ function verifySpecialization(
 					element.kind !== candidate.elements[index]?.kind ||
 					element.arrayIndexIsUint32 !== candidate.elements[index]?.arrayIndexIsUint32,
 			) ||
-			fn.instructionNext(candidate.load) !== candidate.comparison ||
+			!loadDominatesComparison ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||

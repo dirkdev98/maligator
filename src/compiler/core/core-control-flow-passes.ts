@@ -22,7 +22,10 @@ import type { CoreMemoryLocationId } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
-import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	corePrivateNumericArrays,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -606,7 +609,7 @@ const hoistLoopInvariants: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -614,6 +617,17 @@ const hoistLoopInvariants: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
+		const privateArrays = corePrivateNumericArrays(
+			program,
+			fn,
+			cfg,
+			context.compilationContext,
+		);
+		const privateArrayByLengthLoad = new Map(
+			privateArrays.flatMap((array) =>
+				array.lengthLoads.map((instruction) => [instruction, array] as const),
+			),
+		);
 		const moves: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly preheader: CoreBlockId;
@@ -634,11 +648,16 @@ const hoistLoopInvariants: CoreFunctionPass = {
 					if (fn.instructionKind(instruction) !== "operation") continue;
 					const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 					const effects = coreInstructionEffects(fn, instruction);
-					const containedArrayLength = isContainedArrayLengthRead(
-						fn,
-						provenance,
-						instruction,
-					);
+					const privateArray = privateArrayByLengthLoad.get(instruction);
+					const stablePrivateArrayLength =
+						privateArray !== undefined &&
+						cfg.dominates(fn.instructionBlock(privateArray.allocation), loop.preheader) &&
+						privateArray.elementStores.every(
+							(store) => !loop.blocks.has(fn.instructionBlock(store)),
+						);
+					const containedArrayLength =
+						stablePrivateArrayLength ||
+						isContainedArrayLengthRead(fn, provenance, instruction);
 					const operandStart = fn.kernel.instructionOperandStart(instruction);
 					const operandCount = fn.kernel.instructionOperandCount(instruction);
 					let inputDefinedInLoop = false;

@@ -224,14 +224,30 @@ function isLengthProperty(
 	);
 }
 
-function privateNumericArrayLoads(
+export interface CorePrivateNumericArray {
+	readonly allocation: CoreInstructionId;
+	readonly root: CoreValueId;
+	readonly lengthLoads: ReadonlyArray<CoreInstructionId>;
+	readonly elementLoads: ReadonlyArray<CoreInstructionId>;
+	readonly elementStores: ReadonlyArray<CoreInstructionId>;
+}
+
+function privateNumericArrays(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-): ReadonlySet<CoreInstructionId> {
+): ReadonlyArray<CorePrivateNumericArray> {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const candidates = new Set<CoreValueId>();
+	const candidates = new Map<
+		CoreValueId,
+		{
+			allocation: CoreInstructionId;
+			lengthLoads: Array<CoreInstructionId>;
+			elementLoads: Array<CoreInstructionId>;
+			elementStores: Array<CoreInstructionId>;
+		}
+	>();
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
@@ -241,11 +257,15 @@ function privateNumericArrayLoads(
 		)
 			continue;
 		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		candidates.add(root(result));
+		candidates.set(root(result), {
+			allocation: instruction,
+			lengthLoads: [],
+			elementLoads: [],
+			elementStores: [],
+		});
 	}
-	if (candidates.size === 0) return new Set();
+	if (candidates.size === 0) return [];
 
-	const loads = new Map<CoreValueId, Array<CoreInstructionId>>();
 	const reject = new Set<CoreValueId>();
 	for (const block of fn.blockIds()) {
 		const input = coreTerminatorInput(fn, fn.blockTerminator(block));
@@ -268,7 +288,8 @@ function privateNumericArrayLoads(
 		const operandCount = fn.kernel.instructionOperandCount(instruction);
 		for (let position = 0; position < operandCount; position++) {
 			const valueRoot = root(fn.kernel.operandAt(operandStart + position));
-			if (!candidates.has(valueRoot) || reject.has(valueRoot)) continue;
+			const candidate = candidates.get(valueRoot);
+			if (candidate === undefined || reject.has(valueRoot)) continue;
 			if (
 				position === 0 &&
 				(opcode === "move" || opcode === "rootUse" || opcode === "throwIfTdz")
@@ -278,17 +299,17 @@ function privateNumericArrayLoads(
 				position === 0 &&
 				opcode === "loadPropertyStatic" &&
 				isLengthProperty(program, fn, instruction)
-			)
+			) {
+				candidate.lengthLoads.push(instruction);
 				continue;
+			}
 			if (
 				position === 0 &&
 				opcode === "loadProperty" &&
 				operandCount === 2 &&
 				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1))
 			) {
-				const current = loads.get(valueRoot) ?? [];
-				current.push(instruction);
-				loads.set(valueRoot, current);
+				candidate.elementLoads.push(instruction);
 				continue;
 			}
 			if (
@@ -297,16 +318,40 @@ function privateNumericArrayLoads(
 				operandCount === 3 &&
 				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1)) &&
 				isNumberValue(fn, fn.kernel.operandAt(operandStart + 2))
-			)
+			) {
+				candidate.elementStores.push(instruction);
 				continue;
+			}
 			reject.add(valueRoot);
 		}
 	}
-	return new Set(
-		[...loads].flatMap(([valueRoot, instructions]) =>
-			reject.has(valueRoot) ? [] : instructions,
+	return Object.freeze(
+		[...candidates].flatMap(([valueRoot, candidate]) =>
+			reject.has(valueRoot)
+				? []
+				: [
+						Object.freeze({
+							allocation: candidate.allocation,
+							root: valueRoot,
+							lengthLoads: Object.freeze(candidate.lengthLoads),
+							elementLoads: Object.freeze(candidate.elementLoads),
+							elementStores: Object.freeze(candidate.elementStores),
+						}),
+					],
 		),
 	);
+}
+
+export function corePrivateNumericArrays(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+): ReadonlyArray<CorePrivateNumericArray> {
+	return context.facts.world.primordialPolicy === "locked" &&
+		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
+		? privateNumericArrays(program, fn, cfg)
+		: [];
 }
 
 export function corePrivateNumericArrayLoads(
@@ -315,10 +360,11 @@ export function corePrivateNumericArrayLoads(
 	cfg: CoreControlFlow,
 	context: CoreCompilationContext,
 ): ReadonlySet<CoreInstructionId> {
-	return context.facts.world.primordialPolicy === "locked" &&
-		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
-		? privateNumericArrayLoads(program, fn, cfg)
-		: new Set();
+	return new Set(
+		corePrivateNumericArrays(program, fn, cfg, context).flatMap(
+			(array) => array.elementLoads,
+		),
+	);
 }
 
 interface KindTransferBuffer {

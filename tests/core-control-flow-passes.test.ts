@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
@@ -23,7 +24,10 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
-import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	conservativeCompilerProgramFacts,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreInstructionResults,
@@ -51,6 +55,13 @@ const lockedMathContext: CoreCompilationContext = {
 		...context.facts,
 		world: { ...context.facts.world, primordialPolicy: "locked" },
 	},
+};
+
+const lockedArrayContext: CoreCompilationContext = {
+	...context,
+	facts: compilerProgramFactsFromConfig(
+		resolveBuildConfig({ engine: { primordials: "locked", realms: false } }),
+	),
 };
 
 function definingInstruction(fn: CoreFunctionStore, value: CoreValueId) {
@@ -1039,6 +1050,60 @@ describe("Core control-flow analyses and passes", () => {
 		const loop = buildCoreControlFlow(optimized, function_).loops[0];
 		expect(loop).toBeDefined();
 		expect(loop!.blocks.has(entry)).toBe(false);
+	});
+
+	it("retains a private array length load when the loop can grow it", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[..."length"].map((unit) => unit.codePointAt(0)!)],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boolean" }]);
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [array] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		const [length] = builder.appendInstruction(header, "loadPropertyStatic", [array!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [key] = builder.appendInstruction(body, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [value] = builder.appendInstruction(body, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(body, "storeProperty", [array!, key!, value!]);
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: length! });
+		const function_ = builder.finish(entry).function;
+		const optimized = optimizeCore(
+			{ program, context: lockedArrayContext },
+			{ verification: "per-pass" },
+		).compilation.program;
+		const fn = optimized.function(function_);
+		const load = [...fn.instructionIds()].find(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "loadPropertyStatic",
+		)!;
+		expect(fn.instructionBlock(load)).toBe(
+			buildCoreControlFlow(optimized, function_).loops[0]!.header,
+		);
 	});
 
 	it("eliminates partial redundancy on non-speculative merge edges", () => {

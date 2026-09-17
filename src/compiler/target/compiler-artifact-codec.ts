@@ -1472,6 +1472,41 @@ function validateNumericFusionRegion(
 	}
 }
 
+function bytecodeInstructionDominates(
+	fn: BytecodeFunction,
+	dominatorIp: number,
+	dominatedIp: number,
+): boolean {
+	const reachable = (skippedIp: number | undefined): boolean => {
+		const pending = [0];
+		const visited = new Set<number>();
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (ip === skippedIp || visited.has(ip)) continue;
+			if (ip === dominatedIp) return true;
+			visited.add(ip);
+			const instruction = fn.instructions[ip];
+			if (instruction === undefined) continue;
+			if (instruction.opcode === "JUMP") {
+				pending.push(instruction.targetIp);
+				continue;
+			}
+			if (instruction.opcode === "JUMP_IF") {
+				pending.push(instruction.targetIp, ip + 1);
+				continue;
+			}
+			if (
+				instruction.opcode !== "RETURN" &&
+				instruction.opcode !== "THROW" &&
+				instruction.opcode !== "TERMINAL_YIELD"
+			)
+				pending.push(ip + 1);
+		}
+		return false;
+	};
+	return dominatorIp !== dominatedIp && reachable(undefined) && !reachable(dominatorIp);
+}
+
 function validateIndexedLengthLoopRegion(
 	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "indexed-length-loop" }>,
@@ -1529,7 +1564,7 @@ function validateIndexedLengthLoopRegion(
 				!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
 				(lengthPosition !== 1 && lengthPosition !== 2) ||
 				length !== load.dst ||
-				comparisonIp !== loadIp + 1 ||
+				!bytecodeInstructionDominates(fn, loadIp, comparisonIp) ||
 				(registerRepresentations[other] !== "int32" &&
 					registerRepresentations[other] !== "number") ||
 				elements.length > 8 ||

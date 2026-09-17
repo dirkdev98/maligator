@@ -1897,7 +1897,7 @@ function lowerExecutionFunctionToNativePlan(
 						comparison.operator,
 					) ||
 					length !== load.dst ||
-					site.comparisonIp !== site.loadIp + 1 ||
+					site.loadIp >= site.comparisonIp ||
 					(fn.registerRepresentations[other] !== "int32" &&
 						fn.registerRepresentations[other] !== "number") ||
 					site.elements.some(({ ip, kind, arrayIndexIsUint32 }) => {

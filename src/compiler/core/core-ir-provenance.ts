@@ -2426,11 +2426,6 @@ function indexedLengthLoopCandidates(
 			!control.reachable.has(fn.instructionBlock(load))
 		)
 			continue;
-		const block = fn.instructionBlock(load);
-		const loop = control.loops
-			.filter(({ blocks }) => blocks.has(block))
-			.sort((left, right) => left.blocks.size - right.blocks.size)[0];
-		if (loop === undefined) continue;
 		const output = instructionResult(fn, load, 0)!;
 		if (index.controlUses.has(roots.get(output) ?? output)) continue;
 		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
@@ -2440,11 +2435,16 @@ function indexedLengthLoopCandidates(
 		if (
 			fn.instructionKind(comparison) !== "operation" ||
 			fn.instructionOpcodeName(comparison) !== "binary" ||
-			fn.instructionBlock(comparison) !== block ||
 			typeof operator !== "string" ||
 			!INDEXED_LENGTH_LOOP_OPERATORS.has(operator)
 		)
 			continue;
+		const loadCoreBlock = fn.instructionBlock(load);
+		const comparisonCoreBlock = fn.instructionBlock(comparison);
+		const loop = control.loops
+			.filter(({ blocks }) => blocks.has(comparisonCoreBlock))
+			.sort((left, right) => left.blocks.size - right.blocks.size)[0];
+		if (loop === undefined) continue;
 		const lengthPosition =
 			instructionOperand(fn, comparison, 0) === output
 				? 1
@@ -2464,7 +2464,10 @@ function indexedLengthLoopCandidates(
 		if (
 			loadBlock < 0 ||
 			comparisonBlock < 0 ||
-			index.locationIndices[load]! + 1 !== index.locationIndices[comparison]!
+			(loop.blocks.has(loadCoreBlock)
+				? loadCoreBlock !== comparisonCoreBlock ||
+					index.locationIndices[load]! + 1 !== index.locationIndices[comparison]!
+				: !control.dominates(loadCoreBlock, comparisonCoreBlock))
 		)
 			continue;
 		const receiver = instructionOperand(fn, load, 0)!;
@@ -2486,8 +2489,8 @@ function indexedLengthLoopCandidates(
 			const instructionIndex = index.locationIndices[instruction]!;
 			if (
 				!loop.blocks.has(instructionBlock) ||
-				!control.dominates(block, instructionBlock) ||
-				(instructionBlock === block &&
+				!control.dominates(comparisonCoreBlock, instructionBlock) ||
+				(instructionBlock === comparisonCoreBlock &&
 					instructionIndex <= index.locationIndices[comparison]) ||
 				instructionOperand(fn, instruction, 0) !== receiver ||
 				instructionOperand(fn, instruction, 1) !== induction
