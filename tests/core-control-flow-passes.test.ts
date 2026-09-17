@@ -1099,61 +1099,6 @@ describe("Core control-flow analyses and passes", () => {
 		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
 	});
 
-	it("hoists the stable length of a private rest array", () => {
-		const program = optimizeSource(`
-			function restTraversal(rounds, ...values) {
-				let checksum = 0;
-				for (let round = 0; round < rounds; round++) {
-					for (let index = 0; index < values.length; index++) checksum += values[index];
-				}
-				return checksum;
-			}
-			globalThis.result = restTraversal(2, 1, 2, 3);
-		`);
-		const { fn, load } = sourceLengthLoad(program, "restTraversal");
-		const cfg = buildCoreControlFlow(program, fn.id);
-		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
-	});
-
-	it.each([
-		{
-			name: "is mutated",
-			before: "values[4] = 4;",
-			compilationContext: lockedArrayContext,
-		},
-		{
-			name: "escapes",
-			before: "globalThis.values = values;",
-			compilationContext: lockedArrayContext,
-		},
-		{
-			name: "has mutable primordial policy",
-			before: "",
-			compilationContext: context,
-		},
-	])(
-		"retains a private rest length load when the array $name",
-		({ before, compilationContext }) => {
-			const program = optimizeSource(
-				`function restTraversal(rounds, ...values) {
-					${before}
-					let checksum = 0;
-					for (let round = 0; round < rounds; round++) {
-						for (let index = 0; index < values.length; index++) checksum += values[index];
-					}
-					return checksum;
-				}
-				globalThis.result = restTraversal(2, 1, 2, 3);`,
-				compilationContext,
-			);
-			const { fn, load } = sourceLengthLoad(program, "restTraversal");
-			const inner = buildCoreControlFlow(program, fn.id).loops.reduce(
-				(deepest, loop) => (loop.depth > deepest.depth ? loop : deepest),
-			);
-			expect(inner.blocks.has(load.block)).toBe(true);
-		},
-	);
-
 	it("hoists the stable length of a private array through a same-root alias", () => {
 		const program = optimizeSource(`
 			function arrayTraversal(flag) {

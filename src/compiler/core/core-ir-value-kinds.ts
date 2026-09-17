@@ -444,13 +444,8 @@ export function corePrivateArrayLengthCandidates(
 	if (!privateArrayPolicyIsLocked(context)) return [];
 	return privateArrayUses(program, fn, cfg, [
 		...privateNumericArraySeeds(fn),
-		...privatePackedRestArraySeeds(fn),
 		...privateArrayFromSeeds(program, fn, cfg, context),
-	]).filter(
-		(array) =>
-			fn.instructionOpcodeName(array.allocation) !== "createRestArguments" ||
-			array.elementStores.length === 0,
-	);
+	]);
 }
 
 export function corePrivateNumericArrayLoads(
