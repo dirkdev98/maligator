@@ -2311,7 +2311,6 @@ describe("native update-expression representation", () => {
 		expect(Number.isSafeInteger(region.sites[0]!.loadIp)).toBe(true);
 		expect(Number.isSafeInteger(region.sites[0]!.comparisonIp)).toBe(true);
 		expect(region.sites[0]!.lengthPosition).toBe(2);
-		expect(region.sites[0]!.receiverIsArray).toBe(false);
 		expect(region.sites[0]!.elements).toHaveLength(1);
 		expect(region.sites[0]!.elements[0]!.arrayIndexIsUint32).toBe(true);
 		expect(
@@ -2326,32 +2325,6 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).toContain("mal_vm_admit_numeric_typed_array_length(vm,");
 		expect(output).toContain("mal_typed_array_object_get(vm,");
-	});
-
-	it("emits exact Array dispatch for certified indexed length loops", () => {
-		const definition = lower(
-			`"use strict"; function sum() { const values = []; for (let index = 0; index < 64; index += 2) values[index] = index; const alias = values; let total = 0; for (let index = 0; index < alias.length; ++index) total += alias[index] ?? 0; return total; } globalThis.sum = sum;`,
-		);
-		const region = specializations(definition).find(
-			(region) => region.kind === "indexed-length-loop",
-		);
-		if (region?.kind !== "indexed-length-loop") {
-			throw new Error("expected indexed length loop region");
-		}
-		expect(region.sites[0]!.receiverIsArray).toBe(true);
-		expect(
-			specializations(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
-		).toEqual(specializations(definition));
-		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toMatch(/__indexed_length_\d+_array = mal_value_to_array_object\(/);
-		expect(output).not.toMatch(/__indexed_length_\d+_array = mal_vm_as_array\(/);
-		expect(output).not.toContain("mal_vm_admit_numeric_typed_array_length(vm,");
-		expect(output).toMatch(
-			/if \(mal_vm_array_try_get_proven_index\(__indexed_length_\d+_array/,
-		);
-		expect(output).not.toMatch(
-			/if \(__indexed_length_\d+_kind == 1 && mal_vm_array_try_get/,
-		);
 	});
 
 	it("does not retain raw dense iterator cursors across generator suspension", () => {

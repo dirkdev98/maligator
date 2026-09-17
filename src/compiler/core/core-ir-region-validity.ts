@@ -907,7 +907,6 @@ function verifySpecialization(
 			indexed.load !== candidate.load ||
 			indexed.comparison !== candidate.comparison ||
 			indexed.lengthPosition !== candidate.lengthPosition ||
-			indexed.receiverIsArray !== candidate.receiverIsArray ||
 			indexed.elements.length !== candidate.elements.length ||
 			indexed.elements.some(
 				(element, index) =>

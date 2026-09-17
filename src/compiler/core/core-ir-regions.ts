@@ -301,7 +301,6 @@ export interface CorePlanIndexedLengthLoopSpecialization extends CorePlanSpecial
 		readonly load: CoreInstructionId;
 		readonly comparison: CoreInstructionId;
 		readonly lengthPosition: 1 | 2;
-		readonly receiverIsArray: boolean;
 		readonly elements: ReadonlyArray<{
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
@@ -862,7 +861,6 @@ export interface CoreAllocatedIndexedLengthLoopRegion extends CoreAllocatedRegio
 		readonly load: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly lengthPosition: 1 | 2;
-		readonly receiverIsArray: boolean;
 		readonly elements: ReadonlyArray<{
 			readonly instruction: Extract<
 				CompilerInstruction,

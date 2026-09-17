@@ -925,7 +925,6 @@ export interface CoreIndexedLengthLoopCandidate extends CoreLocalSpecializationC
 	readonly load: CoreInstructionId;
 	readonly comparison: CoreInstructionId;
 	readonly lengthPosition: 1 | 2;
-	readonly receiverIsArray: boolean;
 	readonly elements: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
 		readonly kind: "load" | "store";
@@ -2406,7 +2405,6 @@ const INDEXED_LENGTH_LOOP_OPERATORS: ReadonlySet<string> = new Set([
 function indexedLengthLoopCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
-	provenanceAnalysis: CoreProvenance,
 	control: CoreControlFlow,
 	loops: CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -2470,16 +2468,6 @@ function indexedLengthLoopCandidates(
 		)
 			continue;
 		const receiver = instructionOperand(fn, load, 0)!;
-		const receiverLayout = provenanceAnalysis.allocationOf(receiver);
-		const receiverIsArray =
-			receiverLayout !== undefined &&
-			fn.instructionOpcodeName(receiverLayout.instruction) === "createArray" &&
-			specializationInstructionDominates(
-				control,
-				index,
-				receiverLayout.instruction,
-				load,
-			);
 		const elements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
@@ -2561,7 +2549,6 @@ function indexedLengthLoopCandidates(
 				load,
 				comparison,
 				lengthPosition,
-				receiverIsArray,
 				elements: certifiedElements,
 				exceptionalBlocks,
 				instructions,
@@ -3910,15 +3897,7 @@ function discoverCandidates(
 	}
 	for (const candidate of [
 		...freshArrayLengthCandidates(program, fn, provenanceAnalysis, control, roots, index),
-		...indexedLengthLoopCandidates(
-			program,
-			fn,
-			provenanceAnalysis,
-			control,
-			loops,
-			roots,
-			index,
-		),
+		...indexedLengthLoopCandidates(program, fn, control, loops, roots, index),
 		...iteratorCursorCandidates(fn, control, roots, index),
 		...iteratorResultVirtualizationCandidates(fn, control, index),
 		...iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index),

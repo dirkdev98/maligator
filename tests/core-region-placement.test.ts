@@ -481,55 +481,10 @@ describe("late plan migration gates", () => {
 			}
 			expect(selection.indexedLengthLoop).toMatchObject({
 				lengthPosition,
-				receiverIsArray: false,
 				elements: [{ kind: "load", arrayIndexIsUint32 }],
 			});
 		},
 	);
-
-	it("certifies literal Array identity through aliases", () => {
-		const compilation = optimize(
-			`globalThis.visit = function visit() {
-				const values = [1, 2, 3];
-				const alias = values;
-				let total = 0;
-				for (let index = 0; index < alias.length; index++) total += alias[index];
-				return total;
-			};`,
-			"core-literal-array-length.js",
-		);
-		const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
-			(candidate) => candidate.kind === "indexed-length-loop",
-		);
-		if (selection?.kind !== "indexed-length-loop") {
-			throw new Error("missing indexed-length plan");
-		}
-		expect(selection.indexedLengthLoop.receiverIsArray).toBe(true);
-	});
-
-	it("does not certify joined or proxied receivers as literal Arrays", () => {
-		for (const [name, setup] of [
-			["join", "const receiver = flag ? [1, 2] : { 0: 1, 1: 2, length: 2 };"],
-			["proxy", "const receiver = new Proxy([1, 2], {});"],
-		] as const) {
-			const compilation = optimize(
-				`globalThis.visit = function visit(flag) {
-					${setup}
-					let total = 0;
-					for (let index = 0; index < receiver.length; index++) total += receiver[index];
-					return total;
-				};`,
-				`core-${name}-array-length.js`,
-			);
-			const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
-				(candidate) => candidate.kind === "indexed-length-loop",
-			);
-			if (selection?.kind !== "indexed-length-loop") {
-				throw new Error(`missing ${name} indexed-length plan`);
-			}
-			expect(selection.indexedLengthLoop.receiverIsArray).toBe(false);
-		}
-	});
 
 	it.each([
 		["negative seed", "-1", "index++"],

@@ -4434,16 +4434,6 @@ function emitInstruction(
 					const arrayLoad = indexedLengthLoopAction.element.arrayIndexIsUint32
 						? `mal_vm_array_try_get_proven_index(__indexed_length_${id}_array, (u32) ${num(instruction.key)}, &__indexed_element_${ip})`
 						: `mal_vm_array_try_get_index(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})`;
-					if (indexedLengthLoopAction.site.receiverIsArray) {
-						return [
-							`MalValue __indexed_element_${ip};`,
-							`if (${arrayLoad}) {`,
-							`  r${instruction.dst} = __indexed_element_${ip};`,
-							`} else {`,
-							...ordinary().map((line) => `  ${line}`),
-							`}`,
-						];
-					}
 					return [
 						`MalValue __indexed_element_${ip};`,
 						`if (__indexed_length_${id}_kind == 1 && ${arrayLoad}) {`,
@@ -4516,14 +4506,6 @@ function emitInstruction(
 			];
 			if (indexedLengthLoopAction?.role === "load") {
 				const id = indexedLengthLoopAction.loadIp;
-				if (indexedLengthLoopAction.site.receiverIsArray) {
-					return [
-						`__indexed_length_${id}_kind = 1;`,
-						`__indexed_length_${id}_array = mal_value_to_array_object(${boxed(instruction.object)});`,
-						`__indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
-						`mal_perf_ic_load_array_length_hit();`,
-					];
-				}
 				return [
 					`__indexed_length_${id}_kind = 0;`,
 					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
@@ -4891,9 +4873,6 @@ function emitInstruction(
 					indexedLengthLoopAction.site.lengthPosition === 1
 						? `${length} ${compareOperator} ${num(right)}`
 						: `${num(left)} ${compareOperator} ${length}`;
-				if (indexedLengthLoopAction.site.receiverIsArray) {
-					return [storeBoolean(dst, fast)];
-				}
 				return [
 					`if (__indexed_length_${indexedLengthLoopAction.loadIp}_kind != 0) {`,
 					dstIsBool

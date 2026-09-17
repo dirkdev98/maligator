@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 82;
+export const COMPILER_ARTIFACT_VERSION = 81;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -1039,7 +1039,6 @@ function writeCompilerArtifact(
 						w.i32(site.loadIp);
 						w.i32(site.comparisonIp);
 						w.u8(site.lengthPosition);
-						w.u8(site.receiverIsArray ? 1 : 0);
 						w.u32(site.elements.length);
 						for (const element of site.elements) {
 							w.i32(element.ip);
@@ -1508,7 +1507,7 @@ function validateIndexedLengthLoopRegion(
 		region.cost.score !== region.sites.length * 4 + elementCount * 3 ||
 		region.cost.metadataOperations !== payloadIps.length ||
 		region.sites.some((site) => {
-			const { loadIp, comparisonIp, lengthPosition, receiverIsArray, elements } = site;
+			const { loadIp, comparisonIp, lengthPosition, elements } = site;
 			const load = fn.instructions[loadIp];
 			const comparison = fn.instructions[comparisonIp];
 			const other =
@@ -1529,7 +1528,6 @@ function validateIndexedLengthLoopRegion(
 				comparison?.opcode !== "BINARY" ||
 				!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
 				(lengthPosition !== 1 && lengthPosition !== 2) ||
-				typeof receiverIsArray !== "boolean" ||
 				length !== load.dst ||
 				comparisonIp !== loadIp + 1 ||
 				(registerRepresentations[other] !== "int32" &&
@@ -3968,7 +3966,6 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						const loadIp = r.i32();
 						const comparisonIp = r.i32();
 						const lengthPosition = r.u8();
-						const receiverIsArrayTag = r.u8();
 						const elementCount = r.count(2);
 						const elements: Array<{
 							ip: number;
@@ -3990,19 +3987,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 								arrayIndexIsUint32: arrayIndexTag === 1,
 							});
 						}
-						if (
-							(lengthPosition !== 1 && lengthPosition !== 2) ||
-							receiverIsArrayTag > 1
-						) {
+						if (lengthPosition !== 1 && lengthPosition !== 2) {
 							throw new RangeError(
-								"program-image-codec: invalid array-length site metadata",
+								"program-image-codec: invalid array-length operand position",
 							);
 						}
 						sites.push({
 							loadIp,
 							comparisonIp,
 							lengthPosition,
-							receiverIsArray: receiverIsArrayTag === 1,
 							elements,
 						});
 					}
