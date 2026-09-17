@@ -141,10 +141,15 @@ describe("compiler host-gap ladder", () => {
 		});
 
 		const batched = fixtureOutput("batched-rest-reduction");
+		const batchedCached = fixtureOutput("batched-rest-reduction-cached-length");
 		const batchedControl = fixtureOutput("batched-array-reduction-control");
 		expect(batched).toMatchObject({
 			operations: batchedControl.operations,
 			checksum: batchedControl.checksum,
+		});
+		expect(batchedCached).toMatchObject({
+			operations: batched.operations,
+			checksum: batched.checksum,
 		});
 	});
 

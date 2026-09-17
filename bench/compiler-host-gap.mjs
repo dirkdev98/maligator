@@ -891,6 +891,15 @@ function reduceRestBatch(rounds, ...values) {
 	return checksum;
 }
 
+function reduceRestBatchCachedLength(rounds, ...values) {
+	let checksum = 0;
+	const length = values.length;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < length; index++) checksum += values[index];
+	}
+	return checksum;
+}
+
 function reduceArrayBatch(rounds, first, second, third, fourth) {
 	const values = [];
 	values[0] = first;
@@ -910,6 +919,16 @@ function batchedRestReduction(scale) {
 	const rounds = 256;
 	for (let batch = 0; batch < batches; batch++) {
 		checksum += reduceRestBatch(rounds, batch & 31, 3, 5, 7);
+	}
+	return result(checksum, batches * rounds * 4);
+}
+
+function batchedRestReductionCachedLength(scale) {
+	let checksum = 0;
+	const batches = 250 * scale;
+	const rounds = 256;
+	for (let batch = 0; batch < batches; batch++) {
+		checksum += reduceRestBatchCachedLength(rounds, batch & 31, 3, 5, 7);
 	}
 	return result(checksum, batches * rounds * 4);
 }
@@ -1479,6 +1498,20 @@ const kernels = [
 		{
 			category: "language-features",
 			inputShape: "4-number private array, 256 traversals per call",
+			unit: "element load",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"batched-rest-reduction-cached-length",
+		"runtime",
+		"repeated numeric reduction over a private rest array with cached length",
+		"rest-arguments",
+		"src/compiler/core/core-ir-value-kinds.ts",
+		batchedRestReductionCachedLength,
+		{
+			category: "language-features",
+			inputShape: "4-number rest array, cached length, 256 traversals per call",
 			unit: "element load",
 			sentinel: false,
 		},
