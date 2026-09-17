@@ -33,6 +33,22 @@ function mutated(first, ...rest) {
 	return rest[0];
 }
 
+function exactInline(value) {
+	function read(first = churn(2), ...rest) {
+		first = 99;
+		const noise = churn(1);
+		return rest[0].value + rest[2] + (noise.index === 39 ? 0 : 1000);
+	}
+	return read(undefined, value, 3, 5);
+}
+
+function exactMissingInline(value) {
+	function read(...rest) {
+		return rest[3];
+	}
+	return read(value);
+}
+
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
 check(missing(1, 2) === undefined, "missing argument reads as undefined");
 check(
@@ -44,5 +60,10 @@ check(
 	"default evaluation preserves later argument snapshots",
 );
 check(mutated(1, 23) === 23, "parameter mutation does not alter rest snapshots");
+check(
+	exactInline({ value: 29 }) === 34,
+	"exact inlining preserves defaults, mutation, and rooted snapshots",
+);
+check(exactMissingInline(31) === undefined, "exact inlining preserves missing snapshots");
 
 console.log(`rest-index-scalarization PASS ${passed}`);

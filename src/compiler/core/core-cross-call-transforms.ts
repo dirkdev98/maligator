@@ -6,7 +6,10 @@ import {
 	coreCalleeTargetsAreOpen,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
-import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreTerminatorInput,
+} from "./core-ir-control-flow.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
@@ -22,6 +25,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
@@ -62,6 +66,7 @@ interface AppliedTransform {
 }
 
 interface InlineTarget {
+	readonly argumentSnapshots: boolean;
 	readonly linear: boolean;
 	readonly returnValues: ReadonlyArray<CoreValueId>;
 	readonly function: CoreFunctionStore;
@@ -145,7 +150,6 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
 	"callRestArguments",
-	"loadArgument",
 	"loadArgumentCount",
 	"loadCallee",
 	"loadCaptured",
@@ -165,6 +169,13 @@ function inlineTarget(
 		fn.metadata.isClassConstructor ||
 		fn.metadata.capturedCount !== 0
 	)
+		return undefined;
+	const hasArgumentSnapshots = [...fn.instructionIds()].some(
+		(instruction) =>
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "loadArgument",
+	);
+	if (hasArgumentSnapshots && coreArgumentObservation(fn).kind === "general")
 		return undefined;
 	const functionParameters = new Set<CoreValueId>();
 	for (let index = 0; index < fn.parameterCount; index++)
@@ -248,6 +259,7 @@ function inlineTarget(
 		blocks.push({ id, instructions: [...fn.bodyInstructionIds(id)], parameters });
 	}
 	return {
+		argumentSnapshots: hasArgumentSnapshots,
 		function: fn,
 		linear,
 		returnValue: returns[0]!,
@@ -259,6 +271,7 @@ function inlineTarget(
 
 function offerFunctionCandidates(
 	program: CoreProgram,
+	analyses: CoreAnalysisManager,
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
 	functionId: CoreFunctionId,
@@ -283,13 +296,23 @@ function offerFunctionCandidates(
 		)
 			continue;
 		const target = site.targets.functions[0]!;
-		if (
+		const inline = inlineTarget(program, target);
+		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
-			(globalTargetUses.get(target) ?? 0) < 2
+			(globalTargetUses.get(target) ?? 0) < 2;
+		if (
+			singleUseGlobal &&
+			(!inline?.argumentSnapshots ||
+				!analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.ordinary()
+					.loops.some((loop) => loop.blocks.has(fn.instructionBlock(site.instruction))))
 		) {
 			continue;
 		}
-		const inline = inlineTarget(program, target);
 		const open = coreCalleeTargetsAreOpen(site.targets);
 		const resultCount = fn.kernel.instructionResultCount(site.instruction);
 		const result =
@@ -348,12 +371,13 @@ function canBridgeInlineResult(
 
 export function discoverCoreCrossCallCandidates(
 	program: CoreProgram,
+	analyses: CoreAnalysisManager,
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
 ): void {
 	for (const functionId of functions) {
-		offerFunctionCandidates(program, summaries, service, functionId);
+		offerFunctionCandidates(program, analyses, summaries, service, functionId);
 	}
 }
 
@@ -440,6 +464,32 @@ function applyLinearInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
+			if (opcode === "loadArgument") {
+				const output = materializeInstructionResults(inline.function, instruction)[0];
+				const index = inline.function.instructionAttributes(instruction).index;
+				if (
+					output === undefined ||
+					typeof index !== "number" ||
+					!Number.isSafeInteger(index) ||
+					index < 0
+				)
+					return undefined;
+				const argument = arguments_[index];
+				if (argument !== undefined) {
+					values.set(output, argument);
+					continue;
+				}
+				const created = editor.insertInstruction(
+					block,
+					candidate.site,
+					"createUndefined",
+					[],
+					{ sourcePosition: sourcePositions.get(instruction) },
+				);
+				values.set(output, created.outputs[0]!);
+				introduced++;
+				continue;
+			}
 			if (opcode === "loadThis") {
 				const output =
 					inline.function.kernel.instructionResultCount(instruction) === 0
@@ -684,6 +734,28 @@ function applyGuardedInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
+			if (opcode === "loadArgument") {
+				const output = materializeInstructionResults(inline.function, instruction)[0];
+				const index = inline.function.instructionAttributes(instruction).index;
+				if (
+					output === undefined ||
+					typeof index !== "number" ||
+					!Number.isSafeInteger(index) ||
+					index < 0
+				)
+					throw new Error("Validated guarded inline argument snapshot is invalid");
+				const argument = arguments_[index];
+				if (argument !== undefined) {
+					values.set(output, argument);
+					continue;
+				}
+				const created = editor.appendInstruction(destination, "createUndefined", [], {
+					sourcePosition: sourcePositions.get(instruction),
+				});
+				values.set(output, created.outputs[0]!);
+				introduced++;
+				continue;
+			}
 			if (opcode === "loadThis") {
 				const output =
 					inline.function.kernel.instructionResultCount(instruction) === 0
@@ -914,7 +986,7 @@ export function runCoreCrossCallTransforms(
 			!(wave === 0 && specialized.length > 0)
 		)
 			break;
-		discoverCoreCrossCallCandidates(program, summaries, service);
+		discoverCoreCrossCallCandidates(program, analyses, summaries, service);
 		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);

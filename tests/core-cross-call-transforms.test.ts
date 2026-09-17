@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
@@ -22,6 +23,7 @@ import type {
 } from "../src/compiler/core/core-transform-candidates.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockHandler,
 	inspectCoreBlockParameters,
@@ -292,6 +294,130 @@ describe("bounded Core cross-call transforms", () => {
 		expect(
 			coreOperations(counted).some(({ opcode }) => opcode === "loadArgumentCount"),
 		).toBe(false);
+	});
+
+	it("guards and inlines hot global rest argument snapshots", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function sumRest(...values) {
+					return values[0] + values[1] + values[2] + values[3];
+				}
+				function hot(value) {
+					let checksum = 0;
+					for (let index = 0; index < 10; index++) {
+						checksum += sumRest(value, 3, 5, 7);
+					}
+					return checksum;
+				}
+				hot(1);`,
+				"core-inline-rest-snapshots.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const hot = coreFunctionNamed(optimized!, "hot")!;
+		const operations = coreOperations(hot);
+		const fallback = operations.find(({ opcode }) => opcode === "call");
+		expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadArgument")).toBe(false);
+	});
+
+	it("materializes missing scalarized rest snapshots after exact inlining", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer(value) {
+					function pick(...values) { return values[2]; }
+					return pick(value);
+				}
+				outer(1);`,
+				"core-inline-missing-rest-snapshot.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		const operations = coreOperations(outer);
+		expect(operations.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "loadArgument")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "createUndefined")).toBe(true);
+	});
+
+	it("binds scalarized rest snapshots in guarded inline fast paths", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer(value) {
+					let handler = (...values) => values[0] + values[2];
+					function install(other) { handler = other; }
+					globalThis.install = install;
+					return handler(value);
+				}`,
+				"core-guarded-inline-rest-snapshots.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		const operations = coreOperations(outer);
+		const fallback = operations.find(({ opcode }) => opcode === "call");
+		expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(
+			operations.some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+			),
+		).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "createUndefined")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadArgument")).toBe(false);
+	});
+
+	it("omits unreachable guarded-call sites after non-linear rest inlining", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function identity(value) {
+					for (let index = 0; index < 3; index++) value += index;
+					return value;
+				}
+				function outer(value) {
+					function read(first = identity(1), ...rest) {
+						return identity(rest[0]);
+					}
+					return read(undefined, value);
+				}
+				outer(2);`,
+				"core-inline-rest-guarded-plan.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		expect(coreOperations(outer).some(({ opcode }) => opcode === "loadArgument")).toBe(
+			false,
+		);
 	});
 
 	it("uses generated-code cost rather than a tiny call-count cap", () => {

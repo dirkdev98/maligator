@@ -1085,11 +1085,24 @@ function guardedCallCandidates(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
+	analyses: CoreAnalysisManager,
 ): ReadonlyArray<CorePendingOptimizationCandidate> {
 	const candidates: Array<CorePendingOptimizationCandidate> = [];
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
-		const outgoing = summaries.targets.outgoing(caller);
+		const reachable = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: caller,
+			})
+			.exceptional().reachable;
+		const outgoing = summaries.targets
+			.outgoing(caller)
+			.filter(
+				(site) =>
+					fn.isInstructionLive(site.instruction) &&
+					reachable.has(fn.instructionBlock(site.instruction)),
+			);
 		const globalTargetUses = new Map<CoreFunctionId, number>();
 		for (const site of outgoing) {
 			const target =
@@ -1216,6 +1229,12 @@ function directEntryCandidates(
 	}
 	for (const caller of [...live].sort((left, right) => left - right)) {
 		const fn = program.function(caller);
+		const reachable = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: caller,
+			})
+			.exceptional().reachable;
 		const propertyName = (value: CoreValueId | undefined): string | undefined => {
 			if (value === undefined || fn.kernel.valueDefinitionKind(value) !== 1)
 				return undefined;
@@ -1228,7 +1247,12 @@ function directEntryCandidates(
 				: String.fromCharCode(...units);
 		};
 		for (const site of summaries.targets.outgoing(caller)) {
-			if (fn.instructionOpcodeName(site.instruction) !== "call") continue;
+			if (
+				!fn.isInstructionLive(site.instruction) ||
+				!reachable.has(fn.instructionBlock(site.instruction)) ||
+				fn.instructionOpcodeName(site.instruction) !== "call"
+			)
+				continue;
 
 			if (
 				site.targets.functions.length === 0 &&
@@ -1614,7 +1638,7 @@ export function buildCoreOptimizationPlan(
 		if (options.discoverCandidates !== false) pending.push(...input.pending);
 	}
 	if (options.discoverCandidates !== false) {
-		pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
+		pending.push(...guardedCallCandidates(program, summaries, liveFunctions, analyses));
 		pending.push(...directEntryCandidates(program, summaries, live, analyses));
 	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
