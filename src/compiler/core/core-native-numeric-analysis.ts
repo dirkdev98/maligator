@@ -13,7 +13,7 @@ import {
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
 	CoreFunctionVersions,
@@ -24,6 +24,99 @@ import type {
 export interface CoreUnsignedArithmeticPlan {
 	readonly function: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
+}
+
+export interface CoreInt32BoxingValuePlan {
+	readonly function: CoreFunctionId;
+	readonly value: CoreValueId;
+}
+
+const int32BoxingProofs = new WeakMap<
+	CoreInt32BoxingValuePlan,
+	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
+>();
+
+export function coreInt32BoxingValueProofIsCurrent(
+	program: CoreProgram,
+	plan: CoreInt32BoxingValuePlan,
+): boolean {
+	const proof = int32BoxingProofs.get(plan);
+	return (
+		proof?.fn === program.function(plan.function) &&
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
+	);
+}
+
+export function coreInt32BoxingValuePlans(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	functions: ReadonlyArray<CoreFunctionId>,
+): ReadonlyArray<CoreInt32BoxingValuePlan> {
+	const plans: Array<CoreInt32BoxingValuePlan> = [];
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		const candidates = new Set<CoreValueId>();
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "move" ||
+				fn.kernel.instructionOperandCount(instruction) !== 1 ||
+				fn.kernel.instructionResultCount(instruction) !== 1
+			)
+				continue;
+			const source = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+			const destination = fn.kernel.resultAt(
+				fn.kernel.instructionResultStart(instruction),
+			);
+			if (
+				fn.valueRepresentation(source) === "f64" &&
+				fn.valueRepresentation(destination) === "boxed"
+			) {
+				candidates.add(source);
+			}
+		}
+		for (const block of fn.blockIds()) {
+			const terminator = fn.blockTerminator(block);
+			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+			const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+			for (let edgeIndex = 0; edgeIndex < edgeCount; edgeIndex++) {
+				const edge = edgeStart + edgeIndex;
+				const target = fn.kernel.terminatorEdgeBlock(edge);
+				const parameterStart = fn.kernel.blockParameterStart(target);
+				const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+				const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+				for (let index = 0; index < argumentCount; index++) {
+					const source = fn.kernel.operandAt(argumentStart + index);
+					const destination = fn.kernel.blockParameterValue(parameterStart + index);
+					if (
+						fn.valueRepresentation(source) !== "f64" ||
+						fn.valueRepresentation(destination) !== "boxed"
+					)
+						continue;
+					candidates.add(source);
+				}
+			}
+		}
+		if (candidates.size === 0) continue;
+		const ranges = analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		const admitted = [...candidates].filter((value) => {
+			const range = ranges.range(value);
+			return (
+				range !== undefined &&
+				range.minimum >= -0x8000_0000 &&
+				range.maximum <= 0x7fff_ffff
+			);
+		});
+		for (const value of admitted) {
+			const plan = Object.freeze({ function: functionId, value });
+			int32BoxingProofs.set(plan, { fn, versions: fn.versions });
+			plans.push(plan);
+		}
+	}
+	return Object.freeze(plans);
 }
 
 const proofs = new WeakMap<

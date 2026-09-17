@@ -337,7 +337,10 @@ function verifyRegisterPlan(model: FunctionModel): void {
 	}
 }
 
-function verifyInstructionOperands(model: FunctionModel): void {
+function verifyInstructionOperands(
+	model: FunctionModel,
+	verifyInt32BoxingHints = true,
+): void {
 	const { fn, functionIndex } = model;
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		let previousSemanticInstruction: CompilerInstruction | undefined;
@@ -444,6 +447,16 @@ function verifyInstructionOperands(model: FunctionModel): void {
 				}
 				if (instruction.exactScalarAfterTdz !== undefined && !provenNarrowing) {
 					fail("post-TDZ scalar move carries an invalid narrowing proof", {
+						...context,
+						register: destination,
+					});
+				}
+				if (
+					verifyInt32BoxingHints &&
+					instruction.int32Boxing !== undefined &&
+					(sourceRepresentation !== "number" || destinationRepresentation !== "boxed")
+				) {
+					fail("int32 boxing move has incompatible register classes", {
 						...context,
 						register: destination,
 					});
@@ -1026,7 +1039,7 @@ export function verifyExecutionFunctionRepresentationVariant(
 	functionIndex: number,
 ): void {
 	const model = buildFunctionModel(fn, functionIndex);
-	verifyInstructionOperands(model);
+	verifyInstructionOperands(model, false);
 	verifyParallelCopies(model);
 	verifyGcRoots(model, core);
 }

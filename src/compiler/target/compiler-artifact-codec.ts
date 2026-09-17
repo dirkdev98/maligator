@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 81;
+export const COMPILER_ARTIFACT_VERSION = 82;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -921,6 +921,13 @@ function writeCompilerArtifact(
 				}
 				w.u8(13);
 				w.u32(plan.slot);
+			} else if (
+				plan.kind === "int32-boxing" &&
+				instruction.opcode === "MOVE" &&
+				native.registerRepresentations[instruction.src] === "number" &&
+				native.registerRepresentations[instruction.dst] === "boxed"
+			) {
+				w.u8(20);
 			} else if (
 				plan.kind === "unsigned-arithmetic" &&
 				instruction.opcode === "BINARY" &&
@@ -3212,6 +3219,16 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					elementKind,
 					...(inBounds === 1 ? { inBounds: true } : {}),
 				};
+			} else if (tag === 20 && instruction.opcode === "MOVE") {
+				if (
+					registerRepresentations[instruction.src] !== "number" ||
+					registerRepresentations[instruction.dst] !== "boxed"
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid int32 boxing register classes",
+					);
+				}
+				nativeInstructions[instructionIndex] = { kind: "int32-boxing" };
 			} else if (
 				tag === 18 &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||

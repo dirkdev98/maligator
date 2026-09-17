@@ -155,6 +155,7 @@ function parallelMoves(
 	assignments: ReadonlyArray<{
 		readonly destination: number;
 		readonly source: number;
+		readonly int32Boxing?: true;
 	}>,
 	nextRegister: { value: number },
 	registerRepresentations: Map<number, CoreRepresentation>,
@@ -173,6 +174,7 @@ function parallelMoves(
 			moves.push({
 				type: "move",
 				registers: [assignment!.destination, assignment!.source],
+				...(assignment!.int32Boxing ? { int32Boxing: true } : {}),
 			});
 			continue;
 		}
@@ -1720,6 +1722,7 @@ function lowerFunctionToTarget(
 	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
+	int32BoxingValues: ReadonlySet<CoreValueId>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
 	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
 	recipeTable: CoreSpecializationRecipeTable,
@@ -1952,13 +1955,24 @@ function lowerFunctionToTarget(
 				`Core edge b${target} expects ${parameterCount} arguments, received ${argumentCount}`,
 			);
 		}
-		const assignments = new Array<{ destination: number; source: number }>(
-			parameterCount,
-		);
+		const assignments = new Array<{
+			destination: number;
+			source: number;
+			int32Boxing?: true;
+		}>(parameterCount);
 		for (let index = 0; index < parameterCount; index++) {
+			const sourceValue = kernel.operandAt(argumentStart + index);
+			const destinationValue = kernel.blockParameterValue(parameterStart + index);
+			const source = registerForValue(sourceValue);
+			const destination = registerForValue(destinationValue);
 			assignments[index] = {
-				destination: registerForValue(kernel.blockParameterValue(parameterStart + index)),
-				source: registerForValue(kernel.operandAt(argumentStart + index)),
+				destination,
+				source,
+				...(int32BoxingValues.has(sourceValue) &&
+				registerRepresentations.get(source) === "f64" &&
+				registerRepresentations.get(destination) === "boxed"
+					? { int32Boxing: true as const }
+					: {}),
 			};
 		}
 		const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
@@ -2090,6 +2104,17 @@ function lowerFunctionToTarget(
 				lowered = { ...lowered, exactInputKindMasks: inputMasks };
 			if (lowered.type === "unary" && inputMasks?.length === 1)
 				lowered = { ...lowered, exactInputKindMasks: inputMasks };
+			if (lowered.type === "move") {
+				const sourceValue = kernel.operandAt(kernel.instructionOperandStart(instruction));
+				const [destination, source] = lowered.registers;
+				if (
+					int32BoxingValues.has(sourceValue) &&
+					registerRepresentations.get(source) === "f64" &&
+					registerRepresentations.get(destination) === "boxed"
+				) {
+					lowered = { ...lowered, int32Boxing: true };
+				}
+			}
 			loweredInstructions.set(instruction, lowered);
 			const site = siteFacts.get(
 				coreCompilerSiteId(
@@ -2634,6 +2659,15 @@ export function lowerCoreCompilationToExecutionProgram(
 		}
 		instructions.add(operation.instruction);
 	}
+	const int32BoxingValues = new Map<CoreFunctionId, Set<CoreValueId>>();
+	for (const value of compilation.plan.int32BoxingValues ?? []) {
+		let values = int32BoxingValues.get(value.function);
+		if (values === undefined) {
+			values = new Set();
+			int32BoxingValues.set(value.function, values);
+		}
+		values.add(value.value);
+	}
 	const operatorInputs = new Map<
 		CoreFunctionId,
 		Map<CoreInstructionId, CompilerOperatorInputKindMasks>
@@ -2672,6 +2706,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
+			int32BoxingValues.get(core) ?? new Set(),
 			operatorInputs.get(core) ?? new Map(),
 			builtinInputs.get(core) ?? new Map(),
 			compilation.plan.recipes,

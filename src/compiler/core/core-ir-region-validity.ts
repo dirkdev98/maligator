@@ -41,6 +41,7 @@ import {
 import {
 	coreOperatorInputProofIsCurrent,
 	coreBuiltinInputProofIsCurrent,
+	coreInt32BoxingValueProofIsCurrent,
 	coreUnsignedArithmeticProofIsCurrent,
 } from "./core-native-numeric-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
@@ -1758,6 +1759,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 		...(plan.operatorInputs ?? []),
 		...(plan.builtinInputs ?? []),
 		...(plan.unsignedArithmetic ?? []),
+		...(plan.int32BoxingValues ?? []),
 	]);
 	for (const entry of plan.directEntries) {
 		for (const payload of [
@@ -1878,6 +1880,10 @@ export function verifyCoreOptimizationPlan(
 	for (const operation of plan.unsignedArithmetic ?? []) {
 		if (!coreUnsignedArithmeticProofIsCurrent(program, operation))
 			fail("unsigned arithmetic has no current range proof");
+	}
+	for (const value of plan.int32BoxingValues ?? []) {
+		if (!coreInt32BoxingValueProofIsCurrent(program, value))
+			fail("int32 boxing value has no current range proof");
 	}
 	const directCallbackSites = new Set<string>();
 	for (const callback of plan.directBuiltinCallbacks ?? []) {

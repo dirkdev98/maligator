@@ -96,6 +96,8 @@ export type CompilerInstruction =
 				readonly kind: "int32" | "number" | "boolean" | "string";
 				readonly coreInstruction: number;
 			};
+			/** The f64 source is proven to be an int32-valued Number without negative zero. */
+			int32Boxing?: true;
 	  }
 	| {
 			type: "return";

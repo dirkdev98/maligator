@@ -2385,6 +2385,45 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
+	it("boxes range-certified rest inline results directly as int32", () => {
+		const source = `
+			"use strict";
+			function read(...values) { return values[0] + values[1] + values[2] + values[3]; }
+			function sum(scale) {
+				let total = 0;
+				const operations = 500_000 * scale;
+				for (let index = 0; index < operations; index++) total += read(index & 31, 3, 5, 7);
+				return total;
+			}
+			globalThis.sum = sum;
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"range-certified-rest.js",
+			parseScript(source, { strict: false }),
+		);
+		const options = {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		};
+		const image = compileSemanticProgramToProgramImage(semantic, options);
+		const boxingPlans = image.native.functions.flatMap((fn) =>
+			fn.instructions.filter((plan) => plan?.kind === "int32-boxing"),
+		);
+		expect(boxingPlans).toHaveLength(2);
+
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(image, { debugInfo: false }),
+		);
+		expect(
+			cached.native.functions.flatMap((fn) =>
+				fn.instructions.filter((plan) => plan?.kind === "int32-boxing"),
+			),
+		).toHaveLength(2);
+		expect(emitProgramImage(cached, { compiled: true })).toMatch(
+			/r\d+ = mal_value_from_i32\(\(i32\) r\d+\);/,
+		);
+	});
+
 	it("stores fused arithmetic in its unboxed destination representation", () => {
 		const output = emit(
 			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,
