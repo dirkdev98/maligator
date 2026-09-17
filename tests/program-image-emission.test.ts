@@ -2385,6 +2385,16 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
+	it("preserves boxed int32 payloads through guarded bitwise fusion", () => {
+		const output = emit(
+			`"use strict"; function mix(object, mask) { return (object.left ^ object.right) | mask; } globalThis.mix = mix;`,
+		);
+		expect(output).toContain("mal_ops_number_value_to_i32(");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_BIT_XOR");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_BIT_OR");
+		expect(output).toContain("f64 __nf_");
+	});
+
 	it("stores fused arithmetic in its unboxed destination representation", () => {
 		const output = emit(
 			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,
