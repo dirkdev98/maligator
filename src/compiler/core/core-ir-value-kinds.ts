@@ -212,16 +212,20 @@ function isLengthProperty(
 	instruction: CoreInstructionId,
 ): boolean {
 	const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-	const units =
-		typeof stringIndex === "number" ? program.stringConstants[stringIndex] : undefined;
 	return (
-		units?.length === 6 &&
-		units[0] === 0x6c &&
-		units[1] === 0x65 &&
-		units[2] === 0x6e &&
-		units[3] === 0x67 &&
-		units[4] === 0x74 &&
-		units[5] === 0x68
+		typeof stringIndex === "number" && stringConstantIs(program, stringIndex, "length")
+	);
+}
+
+function stringConstantIs(
+	program: CoreProgram,
+	index: number,
+	expected: string,
+): boolean {
+	const units = program.stringConstants[index];
+	return (
+		units?.length === expected.length &&
+		units.every((unit, offset) => unit === expected.charCodeAt(offset))
 	);
 }
 
@@ -362,17 +366,61 @@ function privateNumericArraySeeds(fn: CoreFunctionStore): Array<CorePrivateArray
 }
 
 function privateArrayFromSeeds(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
 	analysis: CoreStaticValueAnalysis,
 ): Array<CorePrivateArraySeed> {
+	const roots = coreCanonicalValueRoots(fn, cfg);
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const definition = (value: CoreValueId): CoreInstructionId | undefined => {
+		const canonical = root(value);
+		return fn.kernel.valueDefinitionKind(canonical) === 1
+			? coreInstructionId(fn.kernel.valueDefinitionOwner(canonical))
+			: undefined;
+	};
+	const isDirectArrayFromCall = (instruction: CoreInstructionId): boolean => {
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "callKnown")
+			return fn.instructionAttributes(instruction).operation === "Array.from";
+		if (opcode !== "call") return false;
+		const callOperandStart = fn.kernel.instructionOperandStart(instruction);
+		const callee = definition(fn.kernel.operandAt(callOperandStart));
+		if (callee === undefined || fn.instructionKind(callee) !== "operation") return false;
+		const propertyOpcode = fn.instructionOpcodeName(callee);
+		const propertyOperandStart = fn.kernel.instructionOperandStart(callee);
+		const propertyOperandCount = fn.kernel.instructionOperandCount(callee);
+		const propertyName =
+			propertyOpcode === "loadPropertyStatic"
+				? fn.instructionAttributes(callee).stringIndex
+				: propertyOpcode === "loadProperty" && propertyOperandCount === 2
+					? (() => {
+							const key = definition(fn.kernel.operandAt(propertyOperandStart + 1));
+							return key !== undefined &&
+								fn.instructionKind(key) === "operation" &&
+								fn.instructionOpcodeName(key) === "createString"
+								? fn.instructionAttributes(key).stringIndex
+								: undefined;
+						})()
+					: undefined;
+		if (
+			typeof propertyName !== "number" ||
+			!stringConstantIs(program, propertyName, "from")
+		)
+			return false;
+		const receiver = definition(fn.kernel.operandAt(propertyOperandStart));
+		return (
+			receiver !== undefined &&
+			fn.instructionKind(receiver) === "operation" &&
+			fn.instructionOpcodeName(receiver) === "loadIntrinsic" &&
+			fn.instructionAttributes(receiver).intrinsic === "Array"
+		);
+	};
 	const seeds: Array<CorePrivateArraySeed> = [];
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
 		if (
-			(opcode !== "call" &&
-				(opcode !== "callKnown" ||
-					fn.instructionAttributes(instruction).operation !== "Array.from")) ||
+			!isDirectArrayFromCall(instruction) ||
 			fn.kernel.instructionResultCount(instruction) !== 1
 		)
 			continue;
@@ -427,7 +475,7 @@ export function corePrivateArrayLengthCandidates(
 	if (!privateArrayPolicyIsLocked(context)) return [];
 	return privateArrayUses(program, fn, cfg, [
 		...privateNumericArraySeeds(fn),
-		...privateArrayFromSeeds(fn, analysis),
+		...privateArrayFromSeeds(program, fn, cfg, analysis),
 	]);
 }
 
