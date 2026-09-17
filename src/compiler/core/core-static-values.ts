@@ -1,3 +1,4 @@
+import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
@@ -18,7 +19,10 @@ import type {
 } from "../shared/static-values.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreCanonicalValueRoots,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
@@ -49,6 +53,111 @@ const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
 	"memoryEffects",
 	"facts",
 ] as const satisfies ReadonlyArray<CoreChangeDomain>;
+
+function coreStringConstantIs(
+	program: CoreProgram,
+	index: number,
+	expected: string,
+): boolean {
+	const units = program.stringConstants[index];
+	return (
+		units?.length === expected.length &&
+		units.every((unit, offset) => unit === expected.charCodeAt(offset))
+	);
+}
+
+export function coreExactArrayFromCallResult(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+	instruction: CoreInstructionId,
+): CoreValueId | undefined {
+	if (
+		context.facts.world.primordialPolicy !== "locked" ||
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.kernel.instructionResultCount(instruction) !== 1
+	)
+		return undefined;
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode !== "call" && opcode !== "callKnown") return undefined;
+	const roots = coreCanonicalValueRoots(fn, cfg);
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const definition = (value: CoreValueId): CoreInstructionId | undefined => {
+		const canonical = root(value);
+		return fn.kernel.valueDefinitionKind(canonical) === 1
+			? coreInstructionId(fn.kernel.valueDefinitionOwner(canonical))
+			: undefined;
+	};
+	const callOperandStart = fn.kernel.instructionOperandStart(instruction);
+	const exactIntrinsicArray = (value: CoreValueId): boolean => {
+		const receiver = definition(value);
+		return (
+			receiver !== undefined &&
+			fn.instructionKind(receiver) === "operation" &&
+			fn.instructionOpcodeName(receiver) === "loadIntrinsic" &&
+			fn.instructionAttributes(receiver).intrinsic === "Array"
+		);
+	};
+	const exactArrayFrom =
+		provePrimordialAccess(
+			context.facts.world,
+			{ kind: "intrinsic", id: "Array", realm: "current" },
+			"from",
+		)?.resolution?.value?.[0] === "Array.from";
+	if (!exactArrayFrom) return undefined;
+	if (opcode === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		if (
+			attributes.operation !== "Array.from" ||
+			attributes.construct ||
+			attributes.argumentMode !== undefined ||
+			fn.kernel.instructionOperandCount(instruction) < 1
+		)
+			return undefined;
+		try {
+			verifyBuiltinWorldAssumptions(
+				attributes.worldAssumptions,
+				"Array.from",
+				context.facts.world,
+			);
+		} catch {
+			return undefined;
+		}
+		if (!exactIntrinsicArray(fn.kernel.operandAt(callOperandStart))) return undefined;
+		return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+	}
+	if (fn.kernel.instructionOperandCount(instruction) < 2) return undefined;
+	const callee = definition(fn.kernel.operandAt(callOperandStart));
+	if (callee === undefined || fn.instructionKind(callee) !== "operation")
+		return undefined;
+	const propertyOpcode = fn.instructionOpcodeName(callee);
+	const propertyOperandStart = fn.kernel.instructionOperandStart(callee);
+	const propertyOperandCount = fn.kernel.instructionOperandCount(callee);
+	const propertyName =
+		propertyOpcode === "loadPropertyStatic"
+			? fn.instructionAttributes(callee).stringIndex
+			: propertyOpcode === "loadProperty" && propertyOperandCount === 2
+				? (() => {
+						const key = definition(fn.kernel.operandAt(propertyOperandStart + 1));
+						return key !== undefined &&
+							fn.instructionKind(key) === "operation" &&
+							fn.instructionOpcodeName(key) === "createString"
+							? fn.instructionAttributes(key).stringIndex
+							: undefined;
+					})()
+				: undefined;
+	if (
+		typeof propertyName !== "number" ||
+		!coreStringConstantIs(program, propertyName, "from")
+	)
+		return undefined;
+	const propertyReceiver = root(fn.kernel.operandAt(propertyOperandStart));
+	if (root(fn.kernel.operandAt(callOperandStart + 1)) !== propertyReceiver)
+		return undefined;
+	if (!exactIntrinsicArray(propertyReceiver)) return undefined;
+	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+}
 
 const STATIC_CONSTRUCTORS = new Set([
 	"Array",

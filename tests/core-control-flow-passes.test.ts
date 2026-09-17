@@ -21,6 +21,7 @@ import {
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { coreExactArrayFromCallResult } from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -1096,6 +1097,37 @@ describe("Core control-flow analyses and passes", () => {
 		const { fn, load } = sourceLengthLoad(program, "denseFactoryTraversal");
 		const cfg = buildCoreControlFlow(program, fn.id);
 		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
+	});
+
+	it("rejects a canonical Array.from callee with the wrong call receiver", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[..."from"].map((unit) => unit.codePointAt(0)!)],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [array] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Array" },
+		});
+		const [from] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [callee] = builder.appendInstruction(entry, "loadProperty", [array!, from!]);
+		const [object] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Object" },
+		});
+		const [result] = builder.appendInstruction(entry, "call", [callee!, object!]);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const functionId = builder.finish(entry).function;
+		const fn = program.function(functionId);
+		expect(
+			coreExactArrayFromCallResult(
+				program,
+				fn,
+				buildCoreControlFlow(program, functionId),
+				lockedArrayContext,
+				definingInstruction(fn, result!),
+			),
+		).toBeUndefined();
 	});
 
 	it.each([

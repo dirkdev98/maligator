@@ -46,7 +46,7 @@ import type {
 	CoreProgramFlowValueKindStatistics,
 	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
-import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
+import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const BUILTIN_RESULT_KIND_MASKS = {
@@ -369,79 +369,12 @@ function privateArrayFromSeeds(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	analysis: CoreStaticValueAnalysis,
+	context: CoreCompilationContext,
 ): Array<CorePrivateArraySeed> {
-	const roots = coreCanonicalValueRoots(fn, cfg);
-	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const definition = (value: CoreValueId): CoreInstructionId | undefined => {
-		const canonical = root(value);
-		return fn.kernel.valueDefinitionKind(canonical) === 1
-			? coreInstructionId(fn.kernel.valueDefinitionOwner(canonical))
-			: undefined;
-	};
-	const isDirectArrayFromCall = (instruction: CoreInstructionId): boolean => {
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "callKnown")
-			return fn.instructionAttributes(instruction).operation === "Array.from";
-		if (opcode !== "call") return false;
-		const callOperandStart = fn.kernel.instructionOperandStart(instruction);
-		const callee = definition(fn.kernel.operandAt(callOperandStart));
-		if (callee === undefined || fn.instructionKind(callee) !== "operation") return false;
-		const propertyOpcode = fn.instructionOpcodeName(callee);
-		const propertyOperandStart = fn.kernel.instructionOperandStart(callee);
-		const propertyOperandCount = fn.kernel.instructionOperandCount(callee);
-		const propertyName =
-			propertyOpcode === "loadPropertyStatic"
-				? fn.instructionAttributes(callee).stringIndex
-				: propertyOpcode === "loadProperty" && propertyOperandCount === 2
-					? (() => {
-							const key = definition(fn.kernel.operandAt(propertyOperandStart + 1));
-							return key !== undefined &&
-								fn.instructionKind(key) === "operation" &&
-								fn.instructionOpcodeName(key) === "createString"
-								? fn.instructionAttributes(key).stringIndex
-								: undefined;
-						})()
-					: undefined;
-		if (
-			typeof propertyName !== "number" ||
-			!stringConstantIs(program, propertyName, "from")
-		)
-			return false;
-		const receiver = definition(fn.kernel.operandAt(propertyOperandStart));
-		return (
-			receiver !== undefined &&
-			fn.instructionKind(receiver) === "operation" &&
-			fn.instructionOpcodeName(receiver) === "loadIntrinsic" &&
-			fn.instructionAttributes(receiver).intrinsic === "Array"
-		);
-	};
 	const seeds: Array<CorePrivateArraySeed> = [];
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		if (
-			!isDirectArrayFromCall(instruction) ||
-			fn.kernel.instructionResultCount(instruction) !== 1
-		)
-			continue;
-		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		const value = analysis.query(result);
-		if (
-			value.kind !== "known" ||
-			value.brand !== "array" ||
-			value.exactBrand !== "Array" ||
-			value.state !== "initial-allocation" ||
-			value.identity?.kind !== "fresh-per-evaluation" ||
-			value.identity.function !== fn.id ||
-			value.identity.value !== result ||
-			value.construction?.kind !== "call" ||
-			value.construction.callee !== "Array.from" ||
-			value.construction.instruction !== instruction ||
-			value.prototype.kind !== "intrinsic" ||
-			value.prototype.id !== "Array.prototype"
-		)
-			continue;
-		analysis.verify(value);
+		const result = coreExactArrayFromCallResult(program, fn, cfg, context, instruction);
+		if (result === undefined) continue;
 		seeds.push({ allocation: instruction, root: result });
 	}
 	return seeds;
@@ -470,12 +403,11 @@ export function corePrivateArrayLengthCandidates(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	context: CoreCompilationContext,
-	analysis: CoreStaticValueAnalysis,
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	if (!privateArrayPolicyIsLocked(context)) return [];
 	return privateArrayUses(program, fn, cfg, [
 		...privateNumericArraySeeds(fn),
-		...privateArrayFromSeeds(program, fn, cfg, analysis),
+		...privateArrayFromSeeds(program, fn, cfg, context),
 	]);
 }
 
