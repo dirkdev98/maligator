@@ -3798,27 +3798,23 @@ function emitInstruction(
 			// A move is also the explicit representation-conversion seam.
 			const dst = instruction.dst;
 			const read =
-				nativePlan?.kind === "int32-boxing" &&
-				reps[instruction.src] === "number" &&
-				reps[dst] === "boxed"
-					? profileCall("boxing", `mal_value_from_i32((i32) r${instruction.src})`)
-					: reps[dst] === "int32"
-						? reps[instruction.src] === "int32"
-							? `r${instruction.src}`
-							: reps[instruction.src] === "number"
-								? `mal_ops_number_to_i32(r${instruction.src})`
-								: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
-						: reps[dst] === "number"
-							? reps[instruction.src] === "number"
+				reps[dst] === "int32"
+					? reps[instruction.src] === "int32"
+						? `r${instruction.src}`
+						: reps[instruction.src] === "number"
+							? `mal_ops_number_to_i32(r${instruction.src})`
+							: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
+					: reps[dst] === "number"
+						? reps[instruction.src] === "number"
+							? num(instruction.src)
+							: reps[instruction.src] === "int32"
 								? num(instruction.src)
-								: reps[instruction.src] === "int32"
-									? num(instruction.src)
-									: `mal_ops_number_as_f64(${boxed(instruction.src)})`
-							: reps[dst] === "boolean"
-								? reps[instruction.src] === "boolean"
-									? truthy(instruction.src)
-									: `mal_value_to_boolean(${boxed(instruction.src)})`
-								: boxed(instruction.src);
+								: `mal_ops_number_as_f64(${boxed(instruction.src)})`
+						: reps[dst] === "boolean"
+							? reps[instruction.src] === "boolean"
+								? truthy(instruction.src)
+								: `mal_value_to_boolean(${boxed(instruction.src)})`
+							: boxed(instruction.src);
 			return [`r${dst} = ${read};`];
 		}
 		case "CREATE_UNDEFINED":

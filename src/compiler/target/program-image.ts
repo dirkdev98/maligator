@@ -1280,7 +1280,6 @@ export type NativeInstructionPlan =
 			readonly kind: "exact-builtin-input-kinds";
 			readonly inputKindMasks: ReadonlyArray<number>;
 	  }
-	| { readonly kind: "int32-boxing" }
 	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" };
 
@@ -1596,8 +1595,6 @@ function nativeInstructionPlanFromExecution(
 	instruction: CompilerInstruction,
 ): NativeInstructionPlan | undefined {
 	switch (instruction.type) {
-		case "move":
-			return instruction.int32Boxing ? { kind: "int32-boxing" } : undefined;
 		case "call": {
 			const guardedBuiltinCall = lowerGuardedBuiltinCall(instruction);
 			const exactCollectionReceiver =

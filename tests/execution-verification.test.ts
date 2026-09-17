@@ -458,40 +458,6 @@ describe("Core target verification", () => {
 		expect(error.context).toMatchObject({ functionIndex, register: 0 });
 	});
 
-	it("rejects int32 boxing proofs on incompatible move classes", () => {
-		const program = optimizedTarget(LOOP_SOURCE, "int32-boxing-proof.js");
-		const match = findInstruction(
-			program,
-			(instruction, fn) =>
-				instruction.type === "move" &&
-				(fn.registerRepresentations[instruction.registers[1]] !== "number" ||
-					fn.registerRepresentations[instruction.registers[0]] !== "boxed"),
-		);
-		if (match.instruction.type !== "move") throw new Error("expected move");
-		const error = verificationError(
-			withFunction(
-				program,
-				match.functionIndex,
-				withBlock(
-					match.fn,
-					match.block,
-					match.fn.blocks[match.block]!.instructions.with(match.index, {
-						...match.instruction,
-						int32Boxing: true,
-					}),
-				),
-			),
-		);
-
-		expect(error.detail).toBe("int32 boxing move has incompatible register classes");
-		expect(error.context).toMatchObject({
-			functionIndex: match.functionIndex,
-			block: match.block,
-			instruction: match.index,
-			opcode: "move",
-		});
-	});
-
 	it("rejects a parallel copy whose emitted moves lose its semantics", () => {
 		const program = optimizedTarget(LOOP_SOURCE, "parallel-copies.js");
 		const functionIndex = program.functions.findIndex(

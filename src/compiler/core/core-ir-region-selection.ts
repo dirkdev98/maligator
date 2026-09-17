@@ -68,10 +68,8 @@ import {
 import {
 	coreOperatorInputPlans,
 	coreBuiltinInputPlans,
-	coreInt32BoxingValuePlans,
 	coreUnsignedArithmeticPlans,
 } from "./core-native-numeric-analysis.ts";
-import type { CoreInt32BoxingValuePlan } from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import {
@@ -118,7 +116,6 @@ export interface CoreLocalOptimizationPlanInput {
 	readonly pending: ReadonlyArray<CorePendingOptimizationCandidate>;
 	readonly blocks: ReadonlyArray<CoreBlockId>;
 	readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
-	readonly int32BoxingValues: ReadonlyArray<CoreInt32BoxingValuePlan>;
 	readonly versions: Pick<
 		CoreFunctionVersions,
 		| "body"
@@ -1044,7 +1041,6 @@ export function buildCoreLocalOptimizationPlanInput(
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
 	const included = new Set(blocks);
-	const int32BoxingValues = coreInt32BoxingValuePlans(program, analyses, [functionId]);
 	const versions = fn.versions;
 	return Object.freeze({
 		function: functionId,
@@ -1057,7 +1053,6 @@ export function buildCoreLocalOptimizationPlanInput(
 		omittedBlocks: Object.freeze(
 			[...fn.blockIds()].filter((block) => !included.has(block)),
 		),
-		int32BoxingValues,
 		versions: Object.freeze({
 			body: versions.body,
 			cfg: versions.cfg,
@@ -1095,19 +1090,19 @@ function guardedCallCandidates(
 	const candidates: Array<CorePendingOptimizationCandidate> = [];
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
-		const targetSites = summaries.targets.outgoing(caller);
-		if (targetSites.length === 0) continue;
 		const reachable = analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 				scope: "function",
 				function: caller,
 			})
 			.exceptional().reachable;
-		const outgoing = targetSites.filter(
-			(site) =>
-				fn.isInstructionLive(site.instruction) &&
-				reachable.has(fn.instructionBlock(site.instruction)),
-		);
+		const outgoing = summaries.targets
+			.outgoing(caller)
+			.filter(
+				(site) =>
+					fn.isInstructionLive(site.instruction) &&
+					reachable.has(fn.instructionBlock(site.instruction)),
+			);
 		const globalTargetUses = new Map<CoreFunctionId, number>();
 		for (const site of outgoing) {
 			const target =
@@ -1234,8 +1229,6 @@ function directEntryCandidates(
 	}
 	for (const caller of [...live].sort((left, right) => left - right)) {
 		const fn = program.function(caller);
-		const outgoing = summaries.targets.outgoing(caller);
-		if (outgoing.length === 0) continue;
 		const reachable = analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 				scope: "function",
@@ -1253,7 +1246,7 @@ function directEntryCandidates(
 				? undefined
 				: String.fromCharCode(...units);
 		};
-		for (const site of outgoing) {
+		for (const site of summaries.targets.outgoing(caller)) {
 			if (
 				!fn.isInstructionLive(site.instruction) ||
 				!reachable.has(fn.instructionBlock(site.instruction)) ||
@@ -1820,9 +1813,6 @@ export function buildCoreOptimizationPlan(
 		operatorInputs: coreOperatorInputPlans(program, analyses, liveFunctions),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, liveFunctions),
 		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
-		int32BoxingValues: Object.freeze(
-			resolvedLocalInputs.flatMap((input) => input.int32BoxingValues),
-		),
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,
 	});
