@@ -7387,15 +7387,9 @@ function emitInstruction(
 			const genericStep = virtualResult
 				? `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`
 				: `mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`;
-			const cursorStep =
-				nativeIteratorCursorAction?.cursor.kind === "array-values-iterator-cursor"
-					? `mal_vm_iterator_step_dense_array_cursor(vm, __iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp}, &${rec}, &${val}, &${done})`
-					: nativeIteratorCursorAction?.role === "step"
-						? `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp}, &${val}, &${done})`
-						: undefined;
 			const step =
-				cursorStep !== undefined
-					? `(__iter_cursor_${nativeIteratorCursorAction!.cursor.initializeIp} != nullptr ? ${cursorStep} : ${genericStep})`
+				nativeIteratorCursorAction?.role === "step"
+					? `(__iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp} != nullptr ? mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp}, &${val}, &${done}) : ${genericStep})`
 					: genericStep;
 			if (nativeRegExpIteratorProjectionAction?.role === "step") {
 				const site = nativeRegExpIteratorProjectionAction.site;
