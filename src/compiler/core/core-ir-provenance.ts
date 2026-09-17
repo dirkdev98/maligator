@@ -928,6 +928,7 @@ export interface CoreIndexedLengthLoopCandidate extends CoreLocalSpecializationC
 	readonly elements: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
 		readonly kind: "load" | "store";
+		readonly arrayIndexIsUint32: boolean;
 	}>;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
 }
@@ -2405,11 +2406,13 @@ function indexedLengthLoopCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
+	loops: CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
 		const loadAttributes = fn.instructionAttributes(load);
 		if (
@@ -2512,6 +2515,30 @@ function indexedLengthLoopCandidates(
 		]);
 		// The target region has no exceptional exits; cleanup handlers require ordinary operations.
 		if (exceptionalBlocks.length !== 0) continue;
+		const loopInduction = loops.inductions.find(
+			(candidate) =>
+				candidate.loop.header === loop.header &&
+				candidate.comparison?.instruction === comparison &&
+				root(candidate.value) === root(induction),
+		);
+		const arrayIndexInduction =
+			loopInduction?.comparison?.operator === "<" &&
+			loopInduction.representation === "f64" &&
+			loopInduction.step === 1 &&
+			literalArrayIndex(fn, root(loopInduction.initial)) === 0
+				? loopInduction
+				: undefined;
+		const certifiedElements = Object.freeze(
+			elements.map((element) => ({
+				...element,
+				arrayIndexIsUint32:
+					arrayIndexInduction !== undefined &&
+					control.dominates(
+						arrayIndexInduction.comparison!.body,
+						fn.instructionBlock(element.instruction),
+					),
+			})),
+		);
 
 		candidates.push(
 			Object.freeze({
@@ -2522,7 +2549,7 @@ function indexedLengthLoopCandidates(
 				load,
 				comparison,
 				lengthPosition,
-				elements: Object.freeze(elements),
+				elements: certifiedElements,
 				exceptionalBlocks,
 				instructions,
 				fanOut: 1 + elements.length,
@@ -3870,7 +3897,7 @@ function discoverCandidates(
 	}
 	for (const candidate of [
 		...freshArrayLengthCandidates(program, fn, provenanceAnalysis, control, roots, index),
-		...indexedLengthLoopCandidates(program, fn, control, roots, index),
+		...indexedLengthLoopCandidates(program, fn, control, loops, roots, index),
 		...iteratorCursorCandidates(fn, control, roots, index),
 		...iteratorResultVirtualizationCandidates(fn, control, index),
 		...iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index),

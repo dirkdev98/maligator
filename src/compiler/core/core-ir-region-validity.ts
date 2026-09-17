@@ -911,7 +911,8 @@ function verifySpecialization(
 			indexed.elements.some(
 				(element, index) =>
 					element.instruction !== candidate.elements[index]?.instruction ||
-					element.kind !== candidate.elements[index]?.kind,
+					element.kind !== candidate.elements[index]?.kind ||
+					element.arrayIndexIsUint32 !== candidate.elements[index]?.arrayIndexIsUint32,
 			) ||
 			fn.instructionNext(candidate.load) !== candidate.comparison ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||

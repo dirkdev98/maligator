@@ -604,6 +604,7 @@ function lowerCoreSpecializations(
 						{ type: "loadProperty" | "storeProperty" }
 					>,
 					kind: element.kind,
+					arrayIndexIsUint32: element.arrayIndexIsUint32,
 				};
 			});
 			regions.push({

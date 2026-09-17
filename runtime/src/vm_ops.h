@@ -1692,6 +1692,9 @@ static inline bool mal_vm_try_store_known_own_slots(
 }
 
 static inline bool mal_vm_array_try_get_index(const MalArrayObject *arr, f64 index, MalValue *out);
+static inline bool mal_vm_array_try_get_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
+);
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value);
 
 static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
@@ -1874,17 +1877,11 @@ static inline MalArrayObject *mal_vm_as_array(MalValue v) {
                                                             : nullptr;
 }
 
-static inline bool mal_vm_array_try_get_index(
-    const MalArrayObject *arr, f64 index, MalValue *out
+/** `index` must be an ECMAScript Array index, which excludes UINT32_MAX. */
+static inline bool mal_vm_array_try_get_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
 ) {
-    if (!(index >= 0 && index < (f64) UINT32_MAX)) {
-        return false;
-    }
-    u32 i = (u32) index;
-    if ((f64) i != index) {
-        return false;
-    }
-    if (mal_array_object_dense_get(arr, i, out)) {
+    if (mal_array_object_dense_get(arr, index, out)) {
         return true;
     }
     if (!arr->dense_deopted && mal_array_elements_protector &&
@@ -1894,6 +1891,16 @@ static inline bool mal_vm_array_try_get_index(
         return true;
     }
     return false;
+}
+
+static inline bool mal_vm_array_try_get_index(
+    const MalArrayObject *arr, f64 index, MalValue *out
+) {
+    if (!(index >= 0 && index < (f64) UINT32_MAX)) {
+        return false;
+    }
+    u32 integer = (u32) index;
+    return (f64) integer == index && mal_vm_array_try_get_proven_index(arr, integer, out);
 }
 
 /** A successful dense own-element lookup proves `index in array`; every miss must

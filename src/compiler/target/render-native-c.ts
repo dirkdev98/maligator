@@ -2230,6 +2230,7 @@ function emitBody(
 			length !== load.dst ||
 			(action.role === "element"
 				? element === undefined ||
+					typeof element.arrayIndexIsUint32 !== "boolean" ||
 					(element.kind === "load"
 						? elementInstruction?.opcode !== "LOAD_PROPERTY"
 						: elementInstruction?.opcode !== "STORE_PROPERTY") ||
@@ -2239,6 +2240,11 @@ function emitBody(
 							elementInstruction.key !== other
 						: true)
 				: element !== undefined) ||
+			(element?.arrayIndexIsUint32 === true &&
+				!(
+					(site.lengthPosition === 1 && comparison.operator === ">") ||
+					(site.lengthPosition === 2 && comparison.operator === "<")
+				)) ||
 			action.ip !==
 				(action.role === "load"
 					? site.loadIp
@@ -4425,9 +4431,12 @@ function emitInstruction(
 					indexedLengthLoopAction.element?.kind === "load"
 				) {
 					const id = indexedLengthLoopAction.loadIp;
+					const arrayLoad = indexedLengthLoopAction.element.arrayIndexIsUint32
+						? `mal_vm_array_try_get_proven_index(__indexed_length_${id}_array, (u32) ${num(instruction.key)}, &__indexed_element_${ip})`
+						: `mal_vm_array_try_get_index(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})`;
 					return [
 						`MalValue __indexed_element_${ip};`,
-						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_get_index(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})) {`,
+						`if (__indexed_length_${id}_kind == 1 && ${arrayLoad}) {`,
 						`  r${instruction.dst} = __indexed_element_${ip};`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
 						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${num(instruction.key)}));`,

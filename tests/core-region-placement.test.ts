@@ -455,13 +455,15 @@ describe("late plan migration gates", () => {
 	});
 
 	it.each([
-		["length on the left", "values.length > index", 1],
-		["non-strict inequality", "index != values.length", 2],
-		["strict inequality", "index !== values.length", 2],
-		["inclusive comparison", "index <= values.length", 2],
-	] as const)("certifies %s indexed loop tests", (_name, condition, lengthPosition) => {
-		const compilation = optimize(
-			`globalThis.visit = function visit(values) {
+		["length on the left", "values.length > index", 1, true],
+		["non-strict inequality", "index != values.length", 2, false],
+		["strict inequality", "index !== values.length", 2, false],
+		["inclusive comparison", "index <= values.length", 2, false],
+	] as const)(
+		"certifies %s indexed loop tests",
+		(_name, condition, lengthPosition, arrayIndexIsUint32) => {
+			const compilation = optimize(
+				`globalThis.visit = function visit(values) {
 				let total = 0;
 				for (let index = 0; ${condition}; index++) {
 					total += values[index];
@@ -469,7 +471,36 @@ describe("late plan migration gates", () => {
 				}
 				return total;
 			};`,
-			"core-array-length-orientation.js",
+				"core-array-length-orientation.js",
+			);
+			const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
+				(candidate) => candidate.kind === "indexed-length-loop",
+			);
+			if (selection?.kind !== "indexed-length-loop") {
+				throw new Error("missing indexed-length plan");
+			}
+			expect(selection.indexedLengthLoop).toMatchObject({
+				lengthPosition,
+				elements: [{ kind: "load", arrayIndexIsUint32 }],
+			});
+		},
+	);
+
+	it.each([
+		["negative seed", "-1", "index++"],
+		["fractional seed", "0.5", "index++"],
+		["non-unit update", "0", "index += 2"],
+	] as const)("does not certify %s as an Array index", (_name, initial, update) => {
+		const compilation = optimize(
+			`globalThis.visit = function visit(values) {
+				let total = 0;
+				for (let index = ${initial}; index < values.length; ${update}) {
+					total += values[index];
+					if (index > 8) break;
+				}
+				return total;
+			};`,
+			"core-array-index-domain.js",
 		);
 		const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
 			(candidate) => candidate.kind === "indexed-length-loop",
@@ -477,10 +508,28 @@ describe("late plan migration gates", () => {
 		if (selection?.kind !== "indexed-length-loop") {
 			throw new Error("missing indexed-length plan");
 		}
-		expect(selection.indexedLengthLoop).toMatchObject({
-			lengthPosition,
-			elements: [{ kind: "load" }],
-		});
+		expect(selection.indexedLengthLoop.elements).toMatchObject([
+			{ kind: "load", arrayIndexIsUint32: false },
+		]);
+	});
+
+	it("does not create an indexed length plan for a wrapping update", () => {
+		const compilation = optimize(
+			`globalThis.visit = function visit(values) {
+				let total = 0;
+				for (let index = 0; index < values.length; index = (index + 1) | 0) {
+					total += values[index];
+					if (index > 8) break;
+				}
+				return total;
+			};`,
+			"core-array-index-wrapping.js",
+		);
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				(candidate) => candidate.kind === "indexed-length-loop",
+			),
+		).toBe(false);
 	});
 
 	it("preserves a dense-fill reserve when its exit is the next loop header", () => {

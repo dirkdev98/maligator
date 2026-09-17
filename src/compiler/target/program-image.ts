@@ -607,6 +607,7 @@ export type VmIndexedLengthLoopRegion = VmRegionEnvelope<
 		readonly elements: ReadonlyArray<{
 			readonly ip: number;
 			readonly kind: "load" | "store";
+			readonly arrayIndexIsUint32: boolean;
 		}>;
 	}>;
 };
@@ -1805,9 +1806,10 @@ function lowerExecutionFunctionToNativePlan(
 					loadIp: instructionIndexByTargetInstruction.get(load),
 					comparisonIp: instructionIndexByTargetInstruction.get(comparison),
 					lengthPosition,
-					elements: elements.map(({ instruction, kind }) => ({
+					elements: elements.map(({ instruction, kind, arrayIndexIsUint32 }) => ({
 						ip: instructionIndexByTargetInstruction.get(instruction),
 						kind,
+						arrayIndexIsUint32,
 					})),
 				}),
 			);
@@ -1833,7 +1835,8 @@ function lowerExecutionFunctionToNativePlan(
 						site.elements.some(
 							(element) =>
 								element.ip === undefined ||
-								(element.kind !== "load" && element.kind !== "store"),
+								(element.kind !== "load" && element.kind !== "store") ||
+								typeof element.arrayIndexIsUint32 !== "boolean",
 						),
 				)
 			) {
@@ -1848,6 +1851,7 @@ function lowerExecutionFunctionToNativePlan(
 				readonly elements: Array<{
 					readonly ip: number;
 					readonly kind: "load" | "store";
+					readonly arrayIndexIsUint32: boolean;
 				}>;
 			}>;
 			const payloadIps = resolvedSites.flatMap(({ loadIp, comparisonIp, elements }) => [
@@ -1896,10 +1900,15 @@ function lowerExecutionFunctionToNativePlan(
 					site.comparisonIp !== site.loadIp + 1 ||
 					(fn.registerRepresentations[other] !== "int32" &&
 						fn.registerRepresentations[other] !== "number") ||
-					site.elements.some(({ ip, kind }) => {
+					site.elements.some(({ ip, kind, arrayIndexIsUint32 }) => {
 						const element = instructions[ip];
 						return (
 							ip <= site.comparisonIp ||
+							(arrayIndexIsUint32 &&
+								!(
+									(site.lengthPosition === 1 && comparison.operator === ">") ||
+									(site.lengthPosition === 2 && comparison.operator === "<")
+								)) ||
 							(kind === "load"
 								? element?.opcode !== "LOAD_PROPERTY"
 								: element?.opcode !== "STORE_PROPERTY") ||

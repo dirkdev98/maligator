@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 80;
+export const COMPILER_ARTIFACT_VERSION = 81;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -1043,6 +1043,7 @@ function writeCompilerArtifact(
 						for (const element of site.elements) {
 							w.i32(element.ip);
 							w.u8(element.kind === "load" ? 1 : 2);
+							w.u8(element.arrayIndexIsUint32 ? 1 : 0);
 						}
 					}
 					break;
@@ -1505,7 +1506,8 @@ function validateIndexedLengthLoopRegion(
 		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
 		region.cost.score !== region.sites.length * 4 + elementCount * 3 ||
 		region.cost.metadataOperations !== payloadIps.length ||
-		region.sites.some(({ loadIp, comparisonIp, lengthPosition, elements }) => {
+		region.sites.some((site) => {
+			const { loadIp, comparisonIp, lengthPosition, elements } = site;
 			const load = fn.instructions[loadIp];
 			const comparison = fn.instructions[comparisonIp];
 			const other =
@@ -1531,10 +1533,16 @@ function validateIndexedLengthLoopRegion(
 				(registerRepresentations[other] !== "int32" &&
 					registerRepresentations[other] !== "number") ||
 				elements.length > 8 ||
-				elements.some(({ ip, kind }) => {
+				elements.some(({ ip, kind, arrayIndexIsUint32 }) => {
 					const element = fn.instructions[ip];
 					return (
 						ip <= comparisonIp ||
+						typeof arrayIndexIsUint32 !== "boolean" ||
+						(arrayIndexIsUint32 &&
+							!(
+								(lengthPosition === 1 && comparison.operator === ">") ||
+								(lengthPosition === 2 && comparison.operator === "<")
+							)) ||
 						(kind === "load"
 							? element?.opcode !== "LOAD_PROPERTY"
 							: element?.opcode !== "STORE_PROPERTY") ||
@@ -3959,23 +3967,37 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						const comparisonIp = r.i32();
 						const lengthPosition = r.u8();
 						const elementCount = r.count(2);
-						const elements: Array<{ ip: number; kind: "load" | "store" }> = [];
+						const elements: Array<{
+							ip: number;
+							kind: "load" | "store";
+							arrayIndexIsUint32: boolean;
+						}> = [];
 						for (let element = 0; element < elementCount; element++) {
 							const ip = r.i32();
 							const kindTag = r.u8();
-							if (kindTag !== 1 && kindTag !== 2) {
+							const arrayIndexTag = r.u8();
+							if ((kindTag !== 1 && kindTag !== 2) || arrayIndexTag > 1) {
 								throw new RangeError(
 									"program-image-codec: invalid array-length element kind",
 								);
 							}
-							elements.push({ ip, kind: kindTag === 1 ? "load" : "store" });
+							elements.push({
+								ip,
+								kind: kindTag === 1 ? "load" : "store",
+								arrayIndexIsUint32: arrayIndexTag === 1,
+							});
 						}
 						if (lengthPosition !== 1 && lengthPosition !== 2) {
 							throw new RangeError(
 								"program-image-codec: invalid array-length operand position",
 							);
 						}
-						sites.push({ loadIp, comparisonIp, lengthPosition, elements });
+						sites.push({
+							loadIp,
+							comparisonIp,
+							lengthPosition,
+							elements,
+						});
 					}
 					if (runtimeGuardTag !== 1) {
 						throw new RangeError(

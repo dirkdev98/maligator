@@ -304,6 +304,7 @@ export interface CorePlanIndexedLengthLoopSpecialization extends CorePlanSpecial
 		readonly elements: ReadonlyArray<{
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
+			readonly arrayIndexIsUint32: boolean;
 		}>;
 	};
 }
@@ -866,6 +867,7 @@ export interface CoreAllocatedIndexedLengthLoopRegion extends CoreAllocatedRegio
 				{ type: "loadProperty" | "storeProperty" }
 			>;
 			readonly kind: "load" | "store";
+			readonly arrayIndexIsUint32: boolean;
 		}>;
 	}>;
 }

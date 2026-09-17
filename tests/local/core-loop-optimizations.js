@@ -54,6 +54,32 @@ function mutatingLength(values) {
 }
 check("length mutation stays observable", mutatingLength([1, 2]) === "14:3");
 
+function shrinkBeforeAccess() {
+	const values = [3, 5];
+	let missing = 0;
+	for (let index = 0; index < values.length; index++) {
+		values.length = 0;
+		if (values[index] === undefined) missing++;
+	}
+	return missing;
+}
+check("shrunk length before access", shrinkBeforeAccess() === 1);
+
+function inheritedHoleyLoop() {
+	Object.defineProperty(Array.prototype, "1", {
+		configurable: true,
+		get() {
+			return 7;
+		},
+	});
+	const values = [3, , 5];
+	let total = 0;
+	for (let index = 0; index < values.length; index++) total += values[index];
+	delete Array.prototype[1];
+	return total;
+}
+check("inherited hole in indexed loop", inheritedHoleyLoop() === 15);
+
 function preservesNegativeZero() {
 	for (let i = -0; i < 1; i++) return Object.is(i, -0);
 	return false;

@@ -2312,6 +2312,7 @@ describe("native update-expression representation", () => {
 		expect(Number.isSafeInteger(region.sites[0]!.comparisonIp)).toBe(true);
 		expect(region.sites[0]!.lengthPosition).toBe(2);
 		expect(region.sites[0]!.elements).toHaveLength(1);
+		expect(region.sites[0]!.elements[0]!.arrayIndexIsUint32).toBe(true);
 		expect(
 			specializations(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
 		).toEqual(specializations(definition));
@@ -2320,7 +2321,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain(".mode == MAL_IC_MODE_ARRAY_LENGTH");
 		expect(output).toContain("->length");
 		expect(output).toMatch(
-			/mal_vm_array_try_get_index\(__indexed_length_\d+_array, r\d+, &__indexed_element_\d+\)/,
+			/mal_vm_array_try_get_proven_index\(__indexed_length_\d+_array, \(u32\) r\d+, &__indexed_element_\d+\)/,
 		);
 		expect(output).toContain("mal_vm_admit_numeric_typed_array_length(vm,");
 		expect(output).toContain("mal_typed_array_object_get(vm,");
