@@ -6771,8 +6771,6 @@ void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instr
     );
 }
 
-// Build a rest-parameter array (`function f(...rest)`): the call arguments from
-// `start` onward as a fresh Array. Shared by the interpreter op and compiled code.
 MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start) {
     i32 count = arg_count > start ? arg_count - start : 0;
     MAL_PERF_COUNT(rest_array_allocations);
@@ -6782,14 +6780,11 @@ MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_coun
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
     );
-    mal_array_object_set_length(rest, (u32) count);
-
-    for (i32 i = 0; i < count; i++) {
-        mal_object_set(
-            (MalObject *) rest,
-            mal_key_index(i),
-            args[start + i]
-        );
+    // Rest binding creates own data properties even over inherited accessors or read-only indices.
+    if (count > 0 &&
+        (!mal_array_object_fresh_dense_reserve_exact(rest, (u32) count) ||
+         !mal_array_object_dense_build_values(rest, 0, args + start, (u32) count))) {
+        abort();
     }
 
     return mal_value_from_array_object(rest);
