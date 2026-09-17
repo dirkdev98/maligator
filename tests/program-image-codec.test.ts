@@ -1552,35 +1552,19 @@ describe("program-image-codec", () => {
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(containedTypedArrayStore)),
 		).toEqual(containedTypedArrayStore);
-		const packedRestArrayLoad = (indexIsUint32: boolean) =>
-			withInstruction(
-				{
-					opcode: "LOAD_PROPERTY",
-					dst: 0,
-					object: 1,
-					key: 2,
-					icIndex: 0,
-				},
-				{ kind: "exact-packed-rest-array-element", indexIsUint32 },
-			);
-		for (const indexIsUint32 of [false, true]) {
-			const packed = packedRestArrayLoad(indexIsUint32);
-			expect(deserializeCompilerArtifact(serializeCompilerArtifact(packed))).toEqual(
-				packed,
-			);
-		}
-		expect(() =>
-			serializeCompilerArtifact(packedRestArrayLoad(2 as unknown as boolean)),
-		).toThrow(/invalid packed rest index metadata/);
-		const malformedPackedRest = serializeCompilerArtifact(packedRestArrayLoad(true), {
-			debugInfo: false,
-		});
-		expect(malformedPackedRest.at(-3)).toBe(19);
-		expect(malformedPackedRest.at(-2)).toBe(1);
-		malformedPackedRest[malformedPackedRest.length - 2] = 2;
-		expect(() => deserializeCompilerArtifact(malformedPackedRest)).toThrow(
-			/invalid packed rest index metadata/,
+		const packedRestArrayLoad = withInstruction(
+			{
+				opcode: "LOAD_PROPERTY",
+				dst: 0,
+				object: 1,
+				key: 2,
+				icIndex: 0,
+			},
+			{ kind: "exact-packed-rest-array-element" },
 		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(packedRestArrayLoad)),
+		).toEqual(packedRestArrayLoad);
 		const length = Array.from("length", (unit) => unit.charCodeAt(0));
 		const containedTypedArrayLength = withRuntime(
 			withInstruction(

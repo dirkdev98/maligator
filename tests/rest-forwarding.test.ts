@@ -82,60 +82,16 @@ describe("rest forwarding allocation contract", () => {
 		const packedLoads = runtime.instructions.flatMap((instruction, index) =>
 			instruction.opcode === "LOAD_PROPERTY" &&
 			native.instructions[index]?.kind === "exact-packed-rest-array-element"
-				? [{ instruction, index, plan: native.instructions[index] }]
+				? [{ instruction, index }]
 				: [],
 		);
 		expect(packedLoads).toHaveLength(4);
 		for (const load of packedLoads) {
 			expect(native.registerRepresentations[load.instruction.dst]).toBe("boxed");
-			expect(load.plan).toEqual({
-				kind: "exact-packed-rest-array-element",
-				indexIsUint32: true,
-			});
 		}
 		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false);
-		expect(emitted?.source).toContain("mal_array_object_contained_dense_get_u32");
+		expect(emitted?.source).toContain("mal_array_object_contained_dense_get");
 		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
-	});
-
-	it.each([
-		"function read(index, ...rest) { return rest[+index]; }",
-		"function read(index, ...rest) { return rest[index | 0]; }",
-		"function read(index, ...rest) { return rest[(index >>> 0) * 2]; }",
-	])("retains packed f64 reads without a uint32 certificate for %s", (source) => {
-		const image = compile(source, "locked");
-		const functionIndex = image.native.functions.findIndex((fn) =>
-			fn.instructions.some((plan) => plan?.kind === "exact-packed-rest-array-element"),
-		);
-		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const native = image.native.functions[functionIndex]!;
-		const plans = native.instructions.filter(
-			(plan) => plan?.kind === "exact-packed-rest-array-element",
-		);
-		expect(plans).toEqual([
-			{ kind: "exact-packed-rest-array-element", indexIsUint32: false },
-		]);
-		const emitted = emitCompiledFunction(
-			image.runtime.functions[functionIndex]!,
-			native,
-			functionIndex,
-			"",
-			false,
-		);
-		expect(emitted?.source).toContain("mal_array_object_contained_dense_get(");
-		expect(emitted?.source).not.toContain("mal_array_object_contained_dense_get_u32");
-	});
-
-	it("certifies the full uint32 key range without assuming bounds", () => {
-		const image = compile(
-			"function read(index, ...rest) { return rest[index >>> 0]; }",
-			"locked",
-		);
-		expect(
-			image.native.functions
-				.flatMap((fn) => fn.instructions)
-				.filter((plan) => plan?.kind === "exact-packed-rest-array-element"),
-		).toEqual([{ kind: "exact-packed-rest-array-element", indexIsUint32: true }]);
 	});
 
 	it.each([

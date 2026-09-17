@@ -527,7 +527,7 @@ export type CompilerInstruction =
 			exactContainedArrayElement?: true;
 			/** COMPILE-ONLY: the receiver is an unescaped, read-only rest Array whose
 			 * dense storage contains every index below length. */
-			exactPackedRestArrayElement?: { readonly indexIsUint32: boolean };
+			exactPackedRestArrayElement?: true;
 			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
 			 * code may skip receiver branding, the property cache, prototype lookup,
 			 * and the generic element-kind dispatch. */

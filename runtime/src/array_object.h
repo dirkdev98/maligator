@@ -77,13 +77,6 @@ static inline MalValue mal_array_object_contained_dense_get(
     return MAL_VALUE_UNDEFINED;
 }
 
-/** Packed rest arrays contain every element below length. */
-static inline MalValue mal_array_object_contained_dense_get_u32(
-    const MalArrayObject *array, u32 index
-) {
-    return index < array->length ? array->elements[index] : MAL_VALUE_UNDEFINED;
-}
-
 /** Read the two own data elements of a dense entry pair atomically. */
 bool mal_array_object_dense_pair(
     const MalArrayObject *array, MalValue *first_out, MalValue *second_out);

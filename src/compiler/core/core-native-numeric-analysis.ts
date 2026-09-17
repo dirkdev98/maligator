@@ -39,7 +39,6 @@ export interface CorePrivateNumericArrayElementPlan {
 export interface CorePrivatePackedRestArrayElementPlan {
 	readonly function: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
-	readonly indexIsUint32: boolean;
 }
 
 const privateNumericArrayProofs = new WeakMap<
@@ -155,24 +154,14 @@ export function corePrivatePackedRestArrayElementPlans(
 			scope: "function",
 			function: functionId,
 		});
-		const loads = corePrivatePackedRestArrayLoads(program, fn, cfg, context, (value) =>
-			packedRestKeyIsNumber(fn, kinds, value),
-		);
-		if (loads.length === 0) continue;
-		const ranges = analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
-		for (const instruction of loads) {
-			const key = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1);
-			const block = coreBlockId(fn.kernel.instructionBlock(instruction));
-			const range = ranges.range(key, block);
-			const plan = Object.freeze({
-				function: functionId,
-				instruction,
-				indexIsUint32:
-					range !== undefined && range.minimum >= 0 && range.maximum <= 0xffff_ffff,
-			});
+		for (const instruction of corePrivatePackedRestArrayLoads(
+			program,
+			fn,
+			cfg,
+			context,
+			(value) => packedRestKeyIsNumber(fn, kinds, value),
+		)) {
+			const plan = Object.freeze({ function: functionId, instruction });
 			privatePackedRestArrayProofs.set(plan, { fn, versions: fn.versions, context });
 			plans.push(plan);
 		}
