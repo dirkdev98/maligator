@@ -70,4 +70,17 @@ general({
 	},
 });
 record(coercions);
+
+let nullishFallbacks = 0;
+function privateNumericNullish(index) {
+	const values = [];
+	values[0] = -0;
+	values[2] = NaN;
+	values[4] = Infinity;
+	values[6] = -Infinity;
+	return values[index] ?? (nullishFallbacks++, 7);
+}
+
+for (let index = 0; index <= 6; index++) record(privateNumericNullish(index));
+record(nullishFallbacks);
 console.log(JSON.stringify(results));

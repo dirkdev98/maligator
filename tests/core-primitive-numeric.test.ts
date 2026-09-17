@@ -47,7 +47,7 @@ describe("certified primitive numeric lowering", () => {
 				globalThis.result = holeyArrayTraversal(1);`,
 						"holey-array.js",
 					),
-					{ facts },
+					{ facts, coreVerification: "per-pass" },
 				),
 			),
 		);
@@ -66,16 +66,39 @@ describe("certified primitive numeric lowering", () => {
 				instruction.operator === "+" &&
 				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
 				native.instructions[index].inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER &&
-				native.instructions[index].inputKindMasks[1] ===
-					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
+				native.instructions[index].inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER,
 		);
 		expect(addition).toBeGreaterThanOrEqual(0);
+		const normalized = runtime.instructions.findIndex(
+			(instruction, index) =>
+				instruction.opcode === "UNARY" &&
+				instruction.operator === "+" &&
+				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
+				native.instructions[index].inputKindMasks[0] ===
+					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
+		);
+		expect(normalized).toBeGreaterThanOrEqual(0);
+		if (runtime.instructions[normalized]?.opcode !== "UNARY") {
+			throw new Error("expected numeric nullish normalization");
+		}
+		expect(native.registerRepresentations[runtime.instructions[normalized].src]).toBe(
+			"boxed",
+		);
+		expect(native.registerRepresentations[runtime.instructions[normalized].dst]).toBe(
+			"number",
+		);
 		const privateLoad = runtime.instructions.findIndex(
 			(instruction, index) =>
 				instruction.opcode === "LOAD_PROPERTY" &&
 				native.instructions[index]?.kind === "exact-contained-array-element",
 		);
 		expect(privateLoad).toBeGreaterThanOrEqual(0);
+		if (runtime.instructions[privateLoad]?.opcode !== "LOAD_PROPERTY") {
+			throw new Error("expected private array element load");
+		}
+		expect(native.registerRepresentations[runtime.instructions[privateLoad].dst]).toBe(
+			"boxed",
+		);
 		const indexedLoop = native.specializations.find(
 			(region) => region.kind === "indexed-length-loop",
 		);
@@ -91,6 +114,41 @@ describe("certified primitive numeric lowering", () => {
 		expect(emitted.source).toContain("mal_vm_private_array_try_get_proven_index");
 		expect(emitted.source).toContain("mal_vm_indexed_fast_load_index");
 		expect(emitted.source).not.toContain("mal_array_object_contained_dense_get");
+	});
+
+	it.each([
+		[
+			"unknown values",
+			`function coalesce(value) { return (value ?? 0) + 1; }
+			globalThis.result = coalesce(globalThis.value);`,
+		],
+		[
+			"strings",
+			`function coalesce(flag) { const value = flag ? "x" : undefined; return value ?? ""; }
+			globalThis.result = coalesce(globalThis.flag);`,
+		],
+		[
+			"bigints",
+			`function coalesce(flag) { const value = flag ? 1n : undefined; return value ?? 0n; }
+			globalThis.result = coalesce(globalThis.flag);`,
+		],
+	])("does not normalize nullish joins over %s", (_name, source) => {
+		const image = compile(source);
+		expect(
+			image.runtime.functions.some((fn, functionIndex) =>
+				fn.instructions.some((instruction, instructionIndex) => {
+					const plan =
+						image.native.functions[functionIndex]?.instructions[instructionIndex];
+					return (
+						instruction.opcode === "UNARY" &&
+						instruction.operator === "+" &&
+						plan?.kind === "exact-operator-input-kinds" &&
+						plan.inputKindMasks[0] ===
+							(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED)
+					);
+				}),
+			),
+		).toBe(false);
 	});
 
 	it.each([

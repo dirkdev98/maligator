@@ -433,6 +433,111 @@ describe("Core local proofs and representations", () => {
 		expect(fn.valueRepresentation(sum!)).toBe("f64");
 	});
 
+	it("normalizes exact numeric nullish joins without changing forwarded joins", () => {
+		for (const forwarded of [false, true]) {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const numberBlock = builder.createBlock();
+			const undefinedBlock = builder.createBlock();
+			const compareBlock = builder.createBlock([{ representation: "boxed" }]);
+			const fallbackBlock = builder.createBlock();
+			const join = builder.createBlock([{ representation: "boxed" }]);
+			const exit = forwarded
+				? builder.createBlock([{ representation: "boxed" }])
+				: undefined;
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: numberBlock, arguments: [] },
+				alternate: { block: undefinedBlock, arguments: [] },
+			});
+			const [number] = builder.appendInstruction(numberBlock, "createNumber", [], {
+				attributes: { value: -0 },
+			});
+			const [undefinedValue] = builder.appendInstruction(
+				undefinedBlock,
+				"createUndefined",
+				[],
+			);
+			builder.setTerminator(numberBlock, {
+				kind: "jump",
+				edge: { block: compareBlock, arguments: [number!] },
+			});
+			builder.setTerminator(undefinedBlock, {
+				kind: "jump",
+				edge: { block: compareBlock, arguments: [undefinedValue!] },
+			});
+			const subject = inspectCoreBlockParameters(builder, compareBlock)[0]!.value;
+			const [undefinedConstant] = builder.appendInstruction(
+				compareBlock,
+				"createUndefined",
+				[],
+			);
+			const [isNullish] = builder.appendInstruction(
+				compareBlock,
+				"binary",
+				[subject, undefinedConstant!],
+				{ attributes: { operator: "==" } },
+			);
+			builder.setTerminator(compareBlock, {
+				kind: "branch",
+				condition: isNullish!,
+				consequent: { block: fallbackBlock, arguments: [] },
+				alternate: { block: join, arguments: [subject] },
+			});
+			const [fallback] = builder.appendInstruction(fallbackBlock, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.setTerminator(fallbackBlock, {
+				kind: "jump",
+				edge: { block: join, arguments: [fallback!] },
+			});
+			const joined = inspectCoreBlockParameters(builder, join)[0]!.value;
+			const consumerBlock = exit ?? join;
+			const consumer =
+				exit === undefined ? joined : inspectCoreBlockParameters(builder, exit)[0]!.value;
+			if (exit !== undefined) {
+				builder.setTerminator(join, {
+					kind: "jump",
+					edge: { block: exit, arguments: [joined] },
+				});
+			}
+			const [sum] = builder.appendInstruction(
+				consumerBlock,
+				"binary",
+				[consumer, fallback!],
+				{ attributes: { operator: "+" } },
+			);
+			builder.setTerminator(consumerBlock, { kind: "return", value: sum! });
+			const finished = builder.finish(entry);
+			const fn = program.function(finished.function);
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			new CoreFunctionPassScheduler(
+				program,
+				context,
+				analyses,
+				report,
+				finished.function,
+			).runComponent("proofs", CORE_PROOF_PASSES);
+			expect(fn.valueRepresentation(subject)).toBe("boxed");
+			expect(fn.valueRepresentation(joined)).toBe(forwarded ? "boxed" : "f64");
+			const normalized = [...fn.instructionIds()].some((instruction) => {
+				if (
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.instructionOpcodeName(instruction) !== "unary" ||
+					fn.instructionAttributes(instruction).operator !== "+"
+				)
+					return false;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				return fn.kernel.operandAt(start) === subject;
+			});
+			expect(normalized).toBe(!forwarded);
+		}
+	});
+
 	it("uses a numeric result while its proven numeric input remains boxed", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 		const builder = new CoreFunctionBuilder(program);

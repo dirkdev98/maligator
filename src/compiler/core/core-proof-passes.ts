@@ -1,6 +1,13 @@
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { coreValueControlFlowUseMask } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreValueControlFlowUseMask,
+} from "./core-ir-control-flow.ts";
 import {
 	CORE_FACT_AVAILABILITY_ANALYSIS,
 	coreFactImplies,
@@ -64,6 +71,44 @@ function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdg
 	for (let index = 0; index < count; index++)
 		arguments_.push(fn.kernel.operandAt(start + index));
 	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
+}
+
+function instructionOperand(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	index: number,
+): CoreValueId | undefined {
+	return index < fn.kernel.instructionOperandCount(instruction)
+		? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index)
+		: undefined;
+}
+
+function moveRoot(fn: CoreFunctionStore, value: CoreValueId): CoreValueId {
+	const visited = new Set<CoreValueId>();
+	let current = value;
+	while (!visited.has(current) && fn.kernel.valueDefinitionKind(current) === 1) {
+		visited.add(current);
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
+		if (
+			fn.instructionKind(definition) !== "operation" ||
+			fn.instructionOpcodeName(definition) !== "move"
+		)
+			break;
+		const input = instructionOperand(fn, definition, 0);
+		if (input === undefined) break;
+		current = input;
+	}
+	return current;
+}
+
+function isUndefinedValue(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	const root = moveRoot(fn, value);
+	if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
+	return (
+		fn.instructionKind(definition) === "operation" &&
+		fn.instructionOpcodeName(definition) === "createUndefined"
+	);
 }
 
 function factValidityRank(fact: CoreFact): number {
@@ -327,6 +372,199 @@ const foldSubsumedGuards: CoreFunctionPass = {
 			});
 		}
 		for (const { fact } of folds) editor.removeFact(fact);
+		return editor.commit();
+	},
+};
+
+const normalizeNumericNullishJoins: CoreFunctionPass = {
+	name: "numeric-nullish-join-normalization",
+	stage: "proofs",
+	requiredFunctionOpcodesAny: ["binary"],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "representations"],
+	changes: { cfg: true, calls: true, facts: false, representations: true },
+	budget: PROOF_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		const fn = program.function(item.function);
+		if (fn.isAsync || fn.isGenerator) return undefined;
+		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const edgeUses = coreValueControlFlowUseMask(fn);
+		const numericOrUndefined = COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED;
+		const candidates: Array<{
+			readonly block: CoreBlockId;
+			readonly terminator: CoreInstructionId;
+			readonly condition: CoreValueId;
+			readonly consequent: CoreEdge;
+			readonly alternate: CoreEdge;
+			readonly nonNullishEdge: 0 | 1;
+			readonly argument: number;
+			readonly value: CoreValueId;
+			readonly fallbackBlock: CoreBlockId;
+			readonly fallbackTerminator: CoreInstructionId;
+			readonly fallbackJoin: CoreEdge;
+			readonly fallbackValue: CoreValueId;
+			readonly joinParameter: CoreValueId;
+			readonly sourcePosition: number | undefined;
+		}> = [];
+		if (context.remainingEdits < 5) return undefined;
+		for (const block of fn.blockIds()) {
+			const terminator = fn.blockTerminator(block);
+			if (fn.instructionKind(terminator) !== "branch") continue;
+			const condition = instructionOperand(fn, terminator, 0);
+			if (condition === undefined) continue;
+			const comparisonValue = moveRoot(fn, condition);
+			if (fn.kernel.valueDefinitionKind(comparisonValue) !== 1) continue;
+			const comparison = coreInstructionId(
+				fn.kernel.valueDefinitionOwner(comparisonValue),
+			);
+			if (
+				fn.instructionKind(comparison) !== "operation" ||
+				fn.instructionOpcodeName(comparison) !== "binary" ||
+				fn.kernel.instructionOperandCount(comparison) !== 2
+			)
+				continue;
+			const operator = fn.instructionAttributes(comparison).operator;
+			if (
+				operator !== "==" &&
+				operator !== "===" &&
+				operator !== "!=" &&
+				operator !== "!=="
+			)
+				continue;
+			const left = instructionOperand(fn, comparison, 0)!;
+			const right = instructionOperand(fn, comparison, 1)!;
+			const leftUndefined = isUndefinedValue(fn, left);
+			const rightUndefined = isUndefinedValue(fn, right);
+			if (leftUndefined === rightUndefined) continue;
+			const subject = moveRoot(fn, leftUndefined ? right : left);
+			if (kinds.kindMask(subject) !== numericOrUndefined) continue;
+
+			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+			const consequent = materializeTerminatorEdge(fn, edgeStart);
+			const alternate = materializeTerminatorEdge(fn, edgeStart + 1);
+			const nonNullishEdge: 0 | 1 = operator === "==" || operator === "===" ? 1 : 0;
+			const direct = nonNullishEdge === 0 ? consequent : alternate;
+			const fallback = nonNullishEdge === 0 ? alternate : consequent;
+			if (
+				direct.block === fallback.block ||
+				direct.block === block ||
+				fallback.block === block
+			)
+				continue;
+			const fallbackTerminator = fn.blockTerminator(fallback.block);
+			if (
+				fn.instructionKind(fallbackTerminator) !== "jump" ||
+				fn.kernel.terminatorEdgeCount(fallbackTerminator) !== 1
+			)
+				continue;
+			const fallbackJoin = materializeTerminatorEdge(
+				fn,
+				fn.kernel.terminatorEdgeStart(fallbackTerminator),
+			);
+			if (fallbackJoin.block !== direct.block) continue;
+			const incoming = cfg.predecessors[direct.block] ?? [];
+			if (
+				incoming.length !== 2 ||
+				incoming.some(({ kind }) => kind !== "ordinary") ||
+				!incoming.some(({ from }) => from === block) ||
+				!incoming.some(({ from }) => from === fallback.block)
+			)
+				continue;
+			const matchingArguments = direct.arguments.flatMap((argument, index) =>
+				moveRoot(fn, argument) === subject ? [index] : [],
+			);
+			if (matchingArguments.length !== 1) continue;
+			const argument = matchingArguments[0]!;
+			const value = direct.arguments[argument]!;
+			const fallbackValue = fallbackJoin.arguments[argument];
+			const parameterStart = fn.kernel.blockParameterStart(direct.block);
+			const parameterCount = fn.kernel.blockParameterCount(direct.block);
+			if (argument >= parameterCount) continue;
+			const joinParameter = fn.kernel.blockParameterValue(parameterStart + argument);
+			if (
+				fallbackValue === undefined ||
+				kinds.kindMask(value) !== numericOrUndefined ||
+				kinds.kindMask(fallbackValue) !== COMPILER_VALUE_KIND_NUMBER ||
+				!scalarConsumersOnly(fn, joinParameter, edgeUses)
+			)
+				continue;
+			candidates.push({
+				block,
+				terminator,
+				condition,
+				consequent,
+				alternate,
+				nonNullishEdge,
+				argument,
+				value,
+				fallbackBlock: fallback.block,
+				fallbackTerminator,
+				fallbackJoin,
+				fallbackValue,
+				joinParameter,
+				sourcePosition: fn.instructionSourcePosition(comparison),
+			});
+			break;
+		}
+		if (candidates.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		for (const candidate of candidates) {
+			const numeric = editor.insertInstruction(
+				candidate.block,
+				candidate.terminator,
+				"unary",
+				[candidate.value],
+				{
+					attributes: { operator: "+" },
+					outputRepresentations: ["f64"],
+					sourcePosition: candidate.sourcePosition,
+				},
+			).outputs[0]!;
+			const fallbackNumeric =
+				fn.valueRepresentation(candidate.fallbackValue) === "f64"
+					? candidate.fallbackValue
+					: editor.insertInstruction(
+							candidate.fallbackBlock,
+							candidate.fallbackTerminator,
+							"unary",
+							[candidate.fallbackValue],
+							{
+								attributes: { operator: "+" },
+								outputRepresentations: ["f64"],
+								sourcePosition: candidate.sourcePosition,
+							},
+						).outputs[0]!;
+			const replaceArgument = (edge: CoreEdge): CoreEdge => ({
+				block: edge.block,
+				arguments: edge.arguments.map((value, index) =>
+					index === candidate.argument ? numeric : value,
+				),
+			});
+			editor.replaceTerminator(candidate.block, {
+				kind: "branch",
+				condition: candidate.condition,
+				consequent:
+					candidate.nonNullishEdge === 0
+						? replaceArgument(candidate.consequent)
+						: candidate.consequent,
+				alternate:
+					candidate.nonNullishEdge === 1
+						? replaceArgument(candidate.alternate)
+						: candidate.alternate,
+			});
+			editor.replaceTerminator(candidate.fallbackBlock, {
+				kind: "jump",
+				edge: {
+					block: candidate.fallbackJoin.block,
+					arguments: candidate.fallbackJoin.arguments.map((value, index) =>
+						index === candidate.argument ? fallbackNumeric : value,
+					),
+				},
+			});
+			editor.setValueRepresentation(candidate.joinParameter, "f64");
+		}
 		return editor.commit();
 	},
 };
@@ -856,6 +1094,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 };
 
 export const CORE_LATE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	normalizeNumericNullishJoins,
 	refinePrimitiveEffects,
 	materializeLocalScalars,
 	materializeFlowScalars,
@@ -864,6 +1103,7 @@ export const CORE_LATE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 export const CORE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeFacts,
 	removeEmptyUnreferencedFacts,
+	normalizeNumericNullishJoins,
 	refinePrimitiveEffects,
 	rewireSubsumedEffectProofs,
 	foldSubsumedGuards,
