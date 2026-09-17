@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 82;
+export const COMPILER_ARTIFACT_VERSION = 83;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -867,7 +867,11 @@ function writeCompilerArtifact(
 				plan.kind === "exact-packed-rest-array-element" &&
 				instruction.opcode === "LOAD_PROPERTY"
 			) {
+				if (typeof plan.indexIsUint32 !== "boolean") {
+					throw new RangeError("program-image-codec: invalid packed rest index metadata");
+				}
 				w.u8(19);
+				w.u8(plan.indexIsUint32 ? 1 : 0);
 			} else if (
 				plan.kind === "exact-typed-array-element" &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -3230,8 +3234,13 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "exact-contained-array-element",
 				};
 			} else if (tag === 19 && instruction.opcode === "LOAD_PROPERTY") {
+				const indexIsUint32 = r.u8();
+				if (indexIsUint32 > 1) {
+					throw new RangeError("program-image-codec: invalid packed rest index metadata");
+				}
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-packed-rest-array-element",
+					indexIsUint32: indexIsUint32 === 1,
 				};
 			} else if (
 				tag === 16 &&

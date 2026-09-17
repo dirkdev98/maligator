@@ -25,6 +25,11 @@ function read(index, ...values) {
 	return values[key];
 }
 
+function readUint32(index, ...values) {
+	churn();
+	return values[index >>> 0];
+}
+
 const object = { value: 17 };
 const symbol = Symbol("payload");
 check(read(0, object) === object, "object identity");
@@ -38,6 +43,10 @@ check(read(0.5, object) === undefined, "fractional index");
 check(read(NaN, object) === undefined, "NaN index");
 check(read(Infinity, object) === undefined, "infinite index");
 check(read(8, object) === undefined, "out of bounds");
+check(readUint32(0, object) === object, "uint32 in bounds");
+check(readUint32(0) === undefined, "uint32 empty rest");
+check(readUint32(1, object) === undefined, "uint32 short rest");
+check(readUint32(-1, object) === undefined, "uint32 maximum out of bounds");
 checkThrows(
 	() => read(1n, object),
 	(error) => error instanceof TypeError,

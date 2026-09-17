@@ -1721,7 +1721,7 @@ function lowerFunctionToTarget(
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
-	privatePackedRestArrayElements: ReadonlySet<CoreInstructionId>,
+	privatePackedRestArrayElements: ReadonlyMap<CoreInstructionId, boolean>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
 	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
 	recipeTable: CoreSpecializationRecipeTable,
@@ -2083,10 +2083,14 @@ function lowerFunctionToTarget(
 					throw new Error("Private numeric array proof lost its load");
 				lowered = { ...lowered, exactContainedArrayElement: true };
 			}
-			if (privatePackedRestArrayElements.has(instruction)) {
+			const packedRestIndexIsUint32 = privatePackedRestArrayElements.get(instruction);
+			if (packedRestIndexIsUint32 !== undefined) {
 				if (lowered.type !== "loadProperty")
 					throw new Error("Private packed rest array proof lost its load");
-				lowered = { ...lowered, exactPackedRestArrayElement: true };
+				lowered = {
+					...lowered,
+					exactPackedRestArrayElement: { indexIsUint32: packedRestIndexIsUint32 },
+				};
 			}
 			const builtinMasks = builtinInputs.get(instruction);
 			if (builtinMasks !== undefined) {
@@ -2657,15 +2661,15 @@ export function lowerCoreCompilationToExecutionProgram(
 	}
 	const privatePackedRestArrayElements = new Map<
 		CoreFunctionId,
-		Set<CoreInstructionId>
+		Map<CoreInstructionId, boolean>
 	>();
 	for (const operation of compilation.plan.privatePackedRestArrayElements ?? []) {
 		let instructions = privatePackedRestArrayElements.get(operation.function);
 		if (instructions === undefined) {
-			instructions = new Set();
+			instructions = new Map();
 			privatePackedRestArrayElements.set(operation.function, instructions);
 		}
-		instructions.add(operation.instruction);
+		instructions.set(operation.instruction, operation.indexIsUint32);
 	}
 	const operatorInputs = new Map<
 		CoreFunctionId,
@@ -2706,7 +2710,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
-			privatePackedRestArrayElements.get(core) ?? new Set(),
+			privatePackedRestArrayElements.get(core) ?? new Map(),
 			operatorInputs.get(core) ?? new Map(),
 			builtinInputs.get(core) ?? new Map(),
 			compilation.plan.recipes,
