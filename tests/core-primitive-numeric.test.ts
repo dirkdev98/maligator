@@ -135,6 +135,18 @@ describe("certified primitive numeric lowering", () => {
 		if (runtime.instructions[normalized]?.opcode !== "UNARY") {
 			throw new Error("expected numeric nullish normalization");
 		}
+		const nullishComparison = runtime.instructions.find(
+			(instruction) => instruction.opcode === "BINARY" && instruction.operator === "==",
+		);
+		if (nullishComparison?.opcode !== "BINARY") {
+			throw new Error("expected nullish comparison");
+		}
+		const nullishBranch = runtime.instructions.findIndex(
+			(instruction) =>
+				instruction.opcode === "JUMP_IF" && instruction.cond === nullishComparison.dst,
+		);
+		expect(nullishBranch).toBeGreaterThanOrEqual(0);
+		expect(normalized).toBeGreaterThan(nullishBranch);
 		expect(native.registerRepresentations[runtime.instructions[normalized].src]).toBe(
 			"boxed",
 		);

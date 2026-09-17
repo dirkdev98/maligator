@@ -524,7 +524,7 @@ describe("Core local proofs and representations", () => {
 			).runComponent("proofs", CORE_PROOF_PASSES);
 			expect(fn.valueRepresentation(subject)).toBe("boxed");
 			expect(fn.valueRepresentation(joined)).toBe(forwarded ? "boxed" : "f64");
-			const normalized = [...fn.instructionIds()].some((instruction) => {
+			const normalized = [...fn.instructionIds()].find((instruction) => {
 				if (
 					fn.instructionKind(instruction) !== "operation" ||
 					fn.instructionOpcodeName(instruction) !== "unary" ||
@@ -534,7 +534,10 @@ describe("Core local proofs and representations", () => {
 				const start = fn.kernel.instructionOperandStart(instruction);
 				return fn.kernel.operandAt(start) === subject;
 			});
-			expect(normalized).toBe(!forwarded);
+			expect(normalized !== undefined).toBe(!forwarded);
+			if (normalized !== undefined) {
+				expect(fn.instructionBlock(normalized)).not.toBe(compareBlock);
+			}
 		}
 	});
 
