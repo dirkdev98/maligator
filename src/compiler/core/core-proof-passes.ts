@@ -423,7 +423,7 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 			readonly joinParameter: CoreValueId;
 			readonly sourcePosition: number | undefined;
 		}> = [];
-		if (context.remainingEdits < 8) return undefined;
+		if (context.remainingEdits < 5) return undefined;
 		for (const block of fn.blockIds()) {
 			const terminator = fn.blockTerminator(block);
 			if (fn.instructionKind(terminator) !== "branch") continue;
@@ -526,21 +526,9 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 		if (candidates.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
 		for (const candidate of candidates) {
-			const nonNullishBlock = editor.createBlock();
-			const handlerBlock = fn.kernel.blockHandlerBlock(candidate.block);
-			if (handlerBlock !== undefined) {
-				const argumentStart = fn.kernel.blockHandlerArgumentStart(candidate.block);
-				const argumentCount = fn.kernel.blockHandlerArgumentCount(candidate.block);
-				editor.setHandler(
-					nonNullishBlock,
-					handlerBlock,
-					Array.from({ length: argumentCount }, (_, index) =>
-						fn.kernel.handlerArgumentAt(argumentStart + index),
-					),
-				);
-			}
-			const numeric = editor.appendInstruction(
-				nonNullishBlock,
+			const numeric = editor.insertInstruction(
+				candidate.block,
+				candidate.terminator,
 				"unary",
 				[candidate.value],
 				{
@@ -569,24 +557,16 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 					index === candidate.argument ? numeric : value,
 				),
 			});
-			const direct =
-				candidate.nonNullishEdge === 0 ? candidate.consequent : candidate.alternate;
-			editor.setTerminator(nonNullishBlock, {
-				kind: "jump",
-				edge: replaceArgument(direct),
-				sourcePosition: candidate.sourcePosition,
-			});
-			const routedDirect: CoreEdge = { block: nonNullishBlock, arguments: [] };
 			editor.replaceTerminator(candidate.block, {
 				kind: "branch",
 				condition: candidate.condition,
 				consequent:
 					candidate.nonNullishEdge === 0
-						? routedDirect
+						? replaceArgument(candidate.consequent)
 						: candidate.consequent,
 				alternate:
 					candidate.nonNullishEdge === 1
-						? routedDirect
+						? replaceArgument(candidate.alternate)
 						: candidate.alternate,
 			});
 			editor.replaceTerminator(candidate.fallbackBlock, {
