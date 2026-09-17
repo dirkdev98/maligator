@@ -278,13 +278,6 @@ function functionPropertyId(
 	return identities.intern(2, functionId, stringIndex);
 }
 
-function functionPropertyHintId(
-	identities: CoreGraphIdentityTable,
-	stringIndex: number,
-): CoreFunctionPropertyId {
-	return identities.intern(4, 0, stringIndex);
-}
-
 function instructionOperand(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -401,48 +394,7 @@ function directStringIndex(
 		: undefined;
 }
 
-function stringConstantEquals(
-	program: CoreProgram,
-	index: number,
-	value: string,
-): boolean {
-	const units = program.stringConstants[index];
-	return (
-		units?.length === value.length &&
-		units.every((unit, position) => unit === value.charCodeAt(position))
-	);
-}
-
-function directFunctionPrototypeOwner(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-	seen = new Set<CoreValueId>(),
-): CoreFunctionId | undefined {
-	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-	seen.add(value);
-	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-	const opcode = fn.instructionOpcodeName(definition);
-	if (opcode === "move") {
-		const input = instructionOperand(fn, definition, 0);
-		return input === undefined
-			? undefined
-			: directFunctionPrototypeOwner(program, fn, input, seen);
-	}
-	if (opcode !== "loadPropertyStatic") return undefined;
-	const stringIndex = fn.instructionAttributes(definition).stringIndex;
-	if (
-		typeof stringIndex !== "number" ||
-		!stringConstantEquals(program, stringIndex, "prototype")
-	) {
-		return undefined;
-	}
-	const owner = instructionOperand(fn, definition, 0);
-	return owner === undefined ? undefined : coreDirectCreatedFunction(fn, owner);
-}
-
 function collectKnownFunctionProperties(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
 	functionCapacity: number,
 	localTransfers: CoreProgramFlowLocalTransfers,
@@ -529,21 +481,6 @@ function collectKnownFunctionProperties(
 		const receiverTargets = localTargets(receiver);
 		const valueTargets = localTargets(value);
 		if (coreCalleeTargetsIsBottom(valueTargets)) continue;
-		const directValueTarget = coreDirectCreatedFunction(fn, value);
-		if (
-			directValueTarget !== undefined &&
-			directValueTarget < functionCapacity &&
-			directFunctionPrototypeOwner(program, fn, receiver) !== undefined
-		) {
-			const hint = functionPropertyHintId(identities, stringIndex);
-			properties.set(
-				hint,
-				joinCoreCalleeTargets(
-					properties.get(hint) ?? CORE_CALLEE_TARGETS_BOTTOM,
-					coreCalleeTargetsFunction(directValueTarget),
-				),
-			);
-		}
 		for (const receiverFunction of receiverTargets.functions) {
 			const property = functionPropertyId(identities, receiverFunction, stringIndex);
 			properties.set(
@@ -734,12 +671,7 @@ function analyzeFunctionTargets(
 			} else if (opcode === "loadPropertyStatic") {
 				const receiver = instructionOperand(fn, instruction, 0);
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-				let knownTargets =
-					typeof stringIndex === "number"
-						? (knownFunctionProperties.get(
-								functionPropertyHintId(identities, stringIndex),
-							) ?? CORE_CALLEE_TARGETS_BOTTOM)
-						: CORE_CALLEE_TARGETS_BOTTOM;
+				let knownTargets = CORE_CALLEE_TARGETS_BOTTOM;
 				resultTargets = CORE_CALLEE_TARGETS_OPEN;
 				if (receiver !== undefined && typeof stringIndex === "number") {
 					const receiverTargets = values[receiver] ?? CORE_CALLEE_TARGETS_OPEN;
@@ -882,11 +814,6 @@ function analyzeFunctionTargets(
 			const receiver = instructionOperand(fn, instruction, 0);
 			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 			if (receiver !== undefined && typeof stringIndex === "number") {
-				const hint = functionPropertyHintId(identities, stringIndex);
-				propertyInputs.set(
-					hint,
-					knownFunctionProperties.get(hint) ?? CORE_CALLEE_TARGETS_BOTTOM,
-				);
 				for (const receiverFunction of values[receiver]?.functions ?? []) {
 					const property = functionPropertyId(identities, receiverFunction, stringIndex);
 					propertyInputs.set(

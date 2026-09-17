@@ -589,7 +589,7 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
-	it("guards and inlines a unique class instance method without assuming the lookup is closed", () => {
+	it("guards and inlines a unique class instance method in a loop", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -597,7 +597,11 @@ describe("bounded Core cross-call transforms", () => {
 					constructor(offset) { this.offset = offset; }
 					add(value) { return value + this.offset; }
 				}
-				function caller(counter, value) { return counter.add(value) * 2; }
+				function caller(counter, value) {
+					let total = 0;
+					for (let index = 0; index < 4; index++) total += counter.add(value + index);
+					return total;
+				}
 				caller(new Counter(10), 1);`,
 				"core-guarded-instance-inline.js",
 			),
@@ -621,6 +625,40 @@ describe("bounded Core cross-call transforms", () => {
 				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
 			),
 		).toBe(true);
+	});
+
+	it("does not speculate on ambiguous or cold instance-method names", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class First { add(value) { return value + 1; } }
+				class Second { add(value) { return value + 2; } }
+				function ambiguous(receiver, value) {
+					let total = 0;
+					for (let index = 0; index < 4; index++) total += receiver.add(value);
+					return total;
+				}
+				class Unique { read(value) { return value + 3; } }
+				function cold(receiver, value) { return receiver.read(value); }
+				ambiguous(new First(), 1);
+				ambiguous(new Second(), 1);
+				cold(new Unique(), 1);`,
+				"core-instance-inline-declines.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		expect(optimized).toBeDefined();
+		for (const name of ["ambiguous", "cold"]) {
+			const operations = coreOperations(coreFunctionNamed(optimized!, name)!);
+			expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(
+				false,
+			);
+			expect(operations.some(({ opcode }) => opcode === "call")).toBe(true);
+		}
 	});
 
 	it("plans every finite target installed through a nested closure", () => {

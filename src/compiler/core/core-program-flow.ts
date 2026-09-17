@@ -258,7 +258,6 @@ export interface CoreProgramFlowCallTargetSemantics<
 		identities: Identities,
 	): CoreProgramFlowFunctionCellAccesses;
 	collectPropertyWrites(
-		program: CoreProgram,
 		fn: CoreFunctionStore,
 		functionCapacity: number,
 		transfers: CoreProgramFlowLocalTransfers,
@@ -1355,7 +1354,6 @@ export class CoreProgramFlowEngine {
 
 			const oldWrites = propertyWrites.get(functionId) ?? new Map<number, Targets>();
 			const nextWrites = semantics.collectPropertyWrites(
-				this.#program,
 				fn,
 				this.#program.functionCapacity,
 				transfers,
