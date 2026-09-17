@@ -2690,11 +2690,8 @@ function emitBody(
 			reps[instruction.dst] !== "number"
 		) {
 			const id = fusion.id;
-			const int32Value = fusion.first.operator === "^" || fusion.first.operator === "|";
 			lines.push(`bool __nf_${id}_ok = false;`);
-			lines.push(
-				`${int32Value ? "i32" : "f64"} __nf_${id}_value = ${int32Value ? "0" : "0.0"};`,
-			);
+			lines.push(`f64 __nf_${id}_value = 0.0;`);
 		}
 	}
 	// Publish source positions only before operations that can synchronously capture
@@ -4826,10 +4823,6 @@ function emitInstruction(
 			}
 			const leftIsNum = isNumericRep(reps[left]!);
 			const rightIsNum = isNumericRep(reps[right]!);
-			const guardedInt32Operand = (register: number): string =>
-				reps[register] === "int32"
-					? `r${register}`
-					: `mal_ops_number_to_i32(${isNumericRep(reps[register]!) ? num(register) : `mal_ops_number_as_f64(${boxed(register)})`})`;
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			if (reps[left] === "boolean" || reps[right] === "boolean") {
@@ -4910,18 +4903,11 @@ function emitInstruction(
 				];
 			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {
-				const int32Value = operator === "^" || operator === "|";
-				const nativeExpr = int32Value
-					? nativeInt32Expr(
-							operator,
-							guardedInt32Operand(left),
-							guardedInt32Operand(right),
-						)
-					: nativeNumberExpr(
-							operator,
-							leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-							rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
-						);
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+				);
 				if (nativeExpr !== null) {
 					const guards: Array<string> = [];
 					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
@@ -4945,15 +4931,6 @@ function emitInstruction(
 				const first = fusion.first;
 				const firstOnLeft = left === first.dst;
 				const firstOnRight = right === first.dst;
-				const firstIsInt32 = first.operator === "^" || first.operator === "|";
-				const firstValue = `__nf_${fusion.id}_value`;
-				const firstNumber = firstIsInt32 ? `(f64) ${firstValue}` : firstValue;
-				const materializedFirst = profileCall(
-					"boxing",
-					firstIsInt32
-						? `mal_value_from_i32(${firstValue})`
-						: `mal_ops_number_value(${firstValue})`,
-				);
 				const firstLeftIsNum = isNumericRep(reps[first.left]!);
 				const firstRightIsNum = isNumericRep(reps[first.right]!);
 				const firstExpr = nativeNumberExpr(
@@ -4977,8 +4954,8 @@ function emitInstruction(
 							? `__nf_${fusion.id}_ok`
 							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
 						const fast = firstOnLeft
-							? `${firstNumber} ${compare} ${externalExpr}`
-							: `${externalExpr} ${compare} ${firstNumber}`;
+							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
+							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
 						const slow = profileCall(
 							"binary",
 							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
@@ -4989,7 +4966,7 @@ function emitInstruction(
 								? `  r${dst} = ${fast};`
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fast})`)};`,
 							`} else {`,
-							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${materializedFirst};`,
+							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
 							reps[dst] === "boolean"
 								? `  r${dst} = mal_value_to_boolean(${slow});`
 								: `  r${dst} = ${slow};`,
@@ -4997,34 +4974,14 @@ function emitInstruction(
 							`}`,
 						];
 					}
-					const resultIsInt32 = operator === "^" || operator === "|";
-					const nativeExpr = resultIsInt32
-						? nativeInt32Expr(
-								operator,
-								firstOnLeft
-									? firstIsInt32
-										? firstValue
-										: `mal_ops_number_to_i32(${firstValue})`
-									: guardedInt32Operand(external),
-								firstOnRight
-									? firstIsInt32
-										? firstValue
-										: `mal_ops_number_to_i32(${firstValue})`
-									: guardedInt32Operand(external),
-							)
-						: nativeNumberExpr(
-								operator,
-								firstOnLeft ? firstNumber : externalExpr,
-								firstOnRight ? firstNumber : externalExpr,
-							);
+					const nativeExpr = nativeNumberExpr(
+						operator,
+						firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
+						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
+					);
 					if (nativeExpr !== null) {
-						const result = resultIsInt32
-							? reps[dst] === "number"
-								? `(f64) (${nativeExpr})`
-								: reps[dst] === "int32"
-									? nativeExpr
-									: profileCall("boxing", `mal_value_from_i32(${nativeExpr})`)
-							: reps[dst] === "number"
+						const result =
+							reps[dst] === "number"
 								? nativeExpr
 								: reps[dst] === "int32"
 									? `mal_ops_number_to_i32(${nativeExpr})`
@@ -5040,7 +4997,7 @@ function emitInstruction(
 							`if (${guard}) {`,
 							`  r${dst} = ${result};`,
 							`} else {`,
-							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${materializedFirst};`,
+							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
 							`  r${dst} = ${slow};`,
 							`  ${throwCheck()}`,
 							`}`,
