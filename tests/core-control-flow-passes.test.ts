@@ -1099,6 +1099,69 @@ describe("Core control-flow analyses and passes", () => {
 		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
 	});
 
+	it("hoists the stable length of a private array through a same-root alias", () => {
+		const program = optimizeSource(`
+			function arrayTraversal(flag) {
+				const values = Array.from({ length: 64 }, (_, index) => index);
+				const alias = flag ? values : values;
+				let checksum = 0;
+				for (let index = 0; index < alias.length; index++) checksum += +alias[index];
+				return checksum;
+			}
+			globalThis.result = arrayTraversal(globalThis.flag);
+		`);
+		const { fn, load } = sourceLengthLoad(program, "arrayTraversal");
+		const cfg = buildCoreControlFlow(program, fn.id);
+		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
+	});
+
+	it("retains a private array length load when a mixed-root alias can shrink it", () => {
+		const program = optimizeSource(`
+			function shorten(flag) {
+				const values = [];
+				values[0] = 10;
+				values[1] = 20;
+				values[2] = 30;
+				const alias = flag ? values : [];
+				let checksum = 0;
+				for (let index = 0; index < values.length; index++) {
+					checksum += +values[index];
+					if (index === 0) alias.length = 1;
+				}
+				return checksum;
+			}
+			globalThis.result = shorten(globalThis.flag);
+		`);
+		const { fn, load } = sourceLengthLoad(program, "shorten");
+		const loop = buildCoreControlFlow(program, fn.id).loops[0];
+		expect(loop).toBeDefined();
+		expect(loop!.blocks.has(load.block)).toBe(true);
+	});
+
+	it("retains a private array length load after exceptional mixed-root aliasing", () => {
+		const program = optimizeSource(`
+			function shortenAcrossHandler() {
+				const values = Array.from({ length: 64 }, (_, index) => index);
+				let alias = [];
+				try {
+					globalThis.beforeAlias();
+					alias = values;
+					globalThis.afterAlias();
+				} catch {
+					alias.length = 1;
+				}
+				let checksum = 0;
+				for (let index = 0; index < values.length; index++) checksum += +values[index];
+				return checksum;
+			}
+			globalThis.result = shortenAcrossHandler();
+		`);
+		const { fn, load } = sourceLengthLoad(program, "shortenAcrossHandler");
+		const loop = buildCoreControlFlow(program, fn.id).loops[0];
+		expect(loop).toBeDefined();
+		expect(loop!.blocks.has(load.block)).toBe(true);
+	});
+
 	it("rejects a canonical Array.from callee with the wrong call receiver", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: [[..."from"].map((unit) => unit.codePointAt(0)!)],

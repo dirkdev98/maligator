@@ -274,6 +274,25 @@ function privateArrayUses(
 
 	const reject = new Set<CoreValueId>();
 	for (const block of fn.blockIds()) {
+		const incoming = cfg.predecessors[block] ?? [];
+		if (incoming.length === 0) continue;
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const row = parameterStart + index;
+			if (fn.kernel.blockParameterRole(row) === 1) continue;
+			const parameterRoot = root(fn.kernel.blockParameterValue(row));
+			for (const edge of incoming) {
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (argument === undefined) continue;
+				const argumentRoot = root(argument);
+				if (candidates.has(argumentRoot) && parameterRoot !== argumentRoot) {
+					reject.add(argumentRoot);
+				}
+			}
+		}
+	}
+	for (const block of fn.blockIds()) {
 		const input = coreTerminatorInput(fn, fn.blockTerminator(block));
 		const observed =
 			input.kind === "branch" || input.kind === "guard"
