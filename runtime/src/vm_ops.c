@@ -7237,6 +7237,19 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
     }
 }
 
+void mal_vm_op_define_fresh_array_element(
+    MalVm *vm, MalValue object_value, u32 index, MalValue value
+) {
+    if (mal_array_object_dense_store(
+            mal_value_to_array_object(object_value), index, value
+        ) == MAL_ARRAY_DENSE_APPLIED) {
+        return;
+    }
+    mal_vm_op_define_property(
+        vm, object_value, mal_value_from_i32((i32) index), value,
+        true, true, true);
+}
+
 void mal_op_define_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_define_property(
         callable->vm,

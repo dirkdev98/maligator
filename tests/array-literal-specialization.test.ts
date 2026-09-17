@@ -67,7 +67,9 @@ describe("fresh Array literal element definitions", () => {
 			"",
 			false,
 		);
-		expect(emitted?.source.match(/mal_array_object_dense_store/g)).toHaveLength(4);
+		expect(emitted?.source.match(/mal_vm_op_define_fresh_array_element/g)).toHaveLength(
+			4,
+		);
 	});
 
 	it.each([
