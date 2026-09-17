@@ -2200,7 +2200,8 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
-		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
+		expect(output).toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
 
 		const retainedGeneric = withSpecializations(
