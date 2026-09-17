@@ -5206,7 +5206,12 @@ function emitInstruction(
 			if (producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
 				if (nativeExpr !== null) {
-					const fast = profileCall("boxing", `mal_ops_number_value(${nativeExpr})`);
+					const fast = profileCall(
+						"boxing",
+						operator === "+" && bothBoxed
+							? `mal_ops_add_numbers(${boxed(left)}, ${boxed(right)})`
+							: `mal_ops_number_value(${nativeExpr})`,
+					);
 					// numberGuard is empty only when both operands are proven numbers but
 					// the dst rep was joined to boxed elsewhere — then native is
 					// unconditional and never throws.

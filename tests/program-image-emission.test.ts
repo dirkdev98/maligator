@@ -2376,6 +2376,15 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_ops_number_as_f64(mal_value_from_i32");
 	});
 
+	it("preserves int32 tags for guarded boxed numeric addition", () => {
+		const output = emit(
+			`"use strict"; function read(...values) { return values[0] + values[1] + values[2] + values[3]; } function sum(limit) { let total = 0; for (let index = 0; index < limit; index++) total += read(index & 31, 3, 5, 7); return total; } globalThis.sum = sum;`,
+		);
+		expect(output).toMatch(/mal_ops_is_number\(r\d+\).*mal_ops_is_number\(r\d+\)/);
+		expect(output).toMatch(/mal_ops_add_numbers\(r\d+, r\d+\)/);
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
+	});
+
 	it("stores fused arithmetic in its unboxed destination representation", () => {
 		const output = emit(
 			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,

@@ -440,7 +440,7 @@ void mal_op_catch(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_binary(MalCallable *callable, const MalInstruction *instruction);
 
 /**
- * Portable-interpreter fast path for a binary operation over two boxed Numbers.
+ * Fast path for a binary operation over two boxed Numbers.
  * It performs no coercion and returns false for every other operand/operator, so
  * the caller can preserve the generic operation's observable fallback exactly.
  */
@@ -448,11 +448,8 @@ static inline bool mal_vm_try_binary_number_fast(
     MalBinaryOp op, MalValue left, MalValue right, MalValue *out
 ) {
     if (op == MAL_BIN_ADD && mal_value_is_int32(left) && mal_value_is_int32(right)) {
-        i64 result = (i64) mal_value_to_i32(left) + (i64) mal_value_to_i32(right);
         MAL_PERF_COUNT(binary_number_arithmetic_hits);
-        *out = result >= INT32_MIN && result <= INT32_MAX
-            ? mal_value_from_i32((i32) result)
-            : mal_ops_number_value((f64) result);
+        *out = mal_ops_add_numbers(left, right);
         return true;
     }
 
@@ -519,7 +516,7 @@ static inline bool mal_vm_try_binary_number_fast(
     switch (op) {
         case MAL_BIN_ADD:
             MAL_PERF_COUNT(binary_number_arithmetic_hits);
-            *out = mal_ops_number_value(l + r);
+            *out = mal_ops_add_numbers(left, right);
             return true;
         case MAL_BIN_SUB:
             MAL_PERF_COUNT(binary_number_arithmetic_hits);

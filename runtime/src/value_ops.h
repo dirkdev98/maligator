@@ -158,6 +158,19 @@ static inline MalValue mal_ops_number_value(f64 value) {
     return mal_value_from_f64_convert_nan(value);
 }
 
+/** Add two values already proven to be JS Numbers without coercion. */
+static inline MalValue mal_ops_add_numbers(MalValue left, MalValue right) {
+    if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        i64 result = (i64) mal_value_to_i32(left) + (i64) mal_value_to_i32(right);
+        return result >= INT32_MIN && result <= INT32_MAX
+            ? mal_value_from_i32((i32) result)
+            : mal_ops_number_value((f64) result);
+    }
+
+    return mal_ops_number_value(
+        mal_ops_number_as_f64(left) + mal_ops_number_as_f64(right));
+}
+
 /** Canonical Strict Equality Comparison (7.2.15). String comparison may flatten. */
 static inline bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
     // NaN must precede bit identity because every NaN has one canonical encoding.
