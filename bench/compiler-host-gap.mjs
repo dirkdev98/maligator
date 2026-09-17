@@ -860,6 +860,14 @@ function prefixedRestLength(_prefix, ...values) {
 	return values.length;
 }
 
+function chooseRestBounded(selector, ...values) {
+	return values[(+selector) & 1];
+}
+
+function chooseFixedBounded(selector, first, second) {
+	return (+selector) & 1 ? second : first;
+}
+
 function collectRest(...values) {
 	return values;
 }
@@ -918,6 +926,24 @@ function prefixedRestLengthControl(scale) {
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
 		checksum += prefixedRestLength(0, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function boundedRestSelection(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += chooseRestBounded(index, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function boundedFixedSelectionControl(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += chooseFixedBounded(index, index & 31, 3, 5, 7);
 	}
 	return result(checksum, operations);
 }
@@ -1590,6 +1616,24 @@ const kernels = [
 		"rest-arguments",
 		"src/compiler/core/core-local-passes.ts",
 		prefixedRestLengthControl,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"bounded-rest-selection",
+		"runtime",
+		"two-way bounded dynamic rest selection",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		boundedRestSelection,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"bounded-fixed-selection-control",
+		"runtime",
+		"fixed-arity control for bounded dynamic rest selection",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		boundedFixedSelectionControl,
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(

@@ -145,6 +145,13 @@ describe("compiler host-gap ladder", () => {
 			checksum: length.checksum,
 		});
 
+		const bounded = fixtureOutput("bounded-rest-selection");
+		const boundedControl = fixtureOutput("bounded-fixed-selection-control");
+		expect(bounded).toMatchObject({
+			operations: boundedControl.operations,
+			checksum: boundedControl.checksum,
+		});
+
 		const materialized = fixtureOutput("materialized-rest-parameters");
 		const arrayControl = fixtureOutput("materialized-array-control");
 		expect(materialized).toMatchObject({
