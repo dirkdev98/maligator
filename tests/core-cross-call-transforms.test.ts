@@ -589,6 +589,40 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
+	it("guards and inlines a unique class instance method without assuming the lookup is closed", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Counter {
+					constructor(offset) { this.offset = offset; }
+					add(value) { return value + this.offset; }
+				}
+				function caller(counter, value) { return counter.add(value) * 2; }
+				caller(new Counter(10), 1);`,
+				"core-guarded-instance-inline.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		expect(optimized).toBeDefined();
+		const caller = coreFunctionNamed(optimized!, "caller")!;
+		const target = coreFunctionNamed(optimized!, "add")!;
+		const operations = coreOperations(caller);
+		const guard = operations.find(({ opcode }) => opcode === "guardFunctionIndex");
+		const fallback = operations.find(({ opcode }) => opcode === "call");
+		expect(guard?.attributes.functionIndex).toBe(target.id);
+		expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
+		expect(fallback?.attributes.calleeTargets).toBeUndefined();
+		expect(
+			operations.some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+			),
+		).toBe(true);
+	});
+
 	it("plans every finite target installed through a nested closure", () => {
 		let optimized: CoreProgram | undefined;
 		let plan: CoreOptimizationPlan | undefined;
