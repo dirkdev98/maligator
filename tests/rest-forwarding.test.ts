@@ -108,6 +108,18 @@ describe("rest forwarding allocation contract", () => {
 		).toBe(false);
 	});
 
+	it.each([
+		"function read(index, ...rest) { return rest[index + '']; }",
+		"function read(index, ...rest) { return rest[index & 3n]; }",
+	])("declines non-number rest element keys for %s", (source) => {
+		const image = compile(source, "locked");
+		expect(
+			image.native.functions.some((fn) =>
+				fn.instructions.some((plan) => plan?.kind === "exact-packed-rest-array-element"),
+			),
+		).toBe(false);
+	});
+
 	it("declines packed rest storage with mutable array primordials", () => {
 		const image = compile("function read(index, ...rest) { return rest[+index]; }");
 		expect(

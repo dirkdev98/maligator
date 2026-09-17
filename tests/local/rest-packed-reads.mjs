@@ -2,6 +2,16 @@ function check(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
+function checkThrows(callback, matches, message) {
+	try {
+		callback();
+	} catch (error) {
+		check(matches(error), message);
+		return;
+	}
+	throw new Error(message);
+}
+
 function churn() {
 	for (let index = 0; index < 100; index++) {
 		const value = { index, values: [index, index + 1] };
@@ -28,5 +38,30 @@ check(read(0.5, object) === undefined, "fractional index");
 check(read(NaN, object) === undefined, "NaN index");
 check(read(Infinity, object) === undefined, "infinite index");
 check(read(8, object) === undefined, "out of bounds");
+checkThrows(
+	() => read(1n, object),
+	(error) => error instanceof TypeError,
+	"bigint key",
+);
+checkThrows(
+	() => read(Symbol("key"), object),
+	(error) => error instanceof TypeError,
+	"symbol key",
+);
+
+const marker = {};
+let coercions = 0;
+const throwingKey = {
+	[Symbol.toPrimitive]() {
+		coercions++;
+		throw marker;
+	},
+};
+checkThrows(
+	() => read(throwingKey, object),
+	(error) => error === marker,
+	"throwing key",
+);
+check(coercions === 1, "single key coercion");
 
 console.log("rest-packed-reads PASS");
