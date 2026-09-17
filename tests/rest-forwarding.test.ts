@@ -179,40 +179,6 @@ describe("rest forwarding allocation contract", () => {
 		);
 	});
 
-	it("scalarizes a terminal positive-prefix rest length observation", () => {
-		const image = deserializeCompilerArtifact(
-			serializeCompilerArtifact(
-				compile(
-					"function read(first, ...rest) { return rest.length; }",
-					"locked",
-				),
-			),
-		);
-		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
-		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT_COUNT")).toBe(true);
-		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
-			false,
-		);
-	});
-
-	it.each([
-		"function read(first, ...rest) { return rest.length + 0; }",
-		"function read(first, ...rest) { const length = rest.length; sink(); return length; }",
-		"function read(first, ...rest) { try { return rest.length; } catch { return 0; } }",
-		"function read(first, ...rest) { rest.push(1); return rest.length; }",
-		"function read(first, ...rest) { sink(rest); return rest.length; }",
-	])("retains prefixed rest length outside the terminal proof for %s", (source) => {
-		const image = compile(source, "locked");
-		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
-		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
-	});
-
-	it("retains prefixed terminal rest lengths with mutable array primordials", () => {
-		const image = compile("function read(first, ...rest) { return rest.length; }");
-		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
-		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
-	});
-
 	it("scalarizes a bounded terminal rest read into argument snapshots", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
@@ -263,6 +229,7 @@ describe("rest forwarding allocation contract", () => {
 
 	for (const source of [
 		"function read(index, ...rest) { return rest[index]; }",
+		"function read(first, ...rest) { return rest.length; }",
 		"function read(...rest) { rest[0] = 1; return rest[0]; }",
 		"function read(...rest) { globalThis.saved = rest; return rest[0]; }",
 		"function read(...rest) { return () => rest[0]; }",

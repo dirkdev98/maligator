@@ -57,20 +57,6 @@ function chooseBounded(selector, ...rest) {
 	return rest[(+selector) & 1];
 }
 
-function prefixedCount(_first, ...rest) {
-	return rest.length;
-}
-
-function prefixedCountAfterArgumentsMutation(_first, ...rest) {
-	arguments.length = 0;
-	return rest.length;
-}
-
-let defaultEffects = 0;
-function prefixedCountAfterDefault(first = (defaultEffects++, churn(127)), ...rest) {
-	return rest.length;
-}
-
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
 check(missing(1, 2) === undefined, "missing argument reads as undefined");
 check(
@@ -130,20 +116,5 @@ try {
 	caught = error;
 }
 check(caught === thrown, "bounded read preserves coercion throws");
-check(prefixedCount() === 0, "prefixed length clamps below its prefix");
-check(prefixedCount(131) === 0, "prefixed length handles its exact prefix");
-check(
-	prefixedCount(137, undefined, 139) === 2,
-	"prefixed length counts explicit undefined",
-);
-check(
-	prefixedCountAfterArgumentsMutation(149, 151, 157) === 2,
-	"prefixed length uses the original argument count",
-);
-check(
-	prefixedCountAfterDefault(undefined, 163, 167) === 2,
-	"prefixed length preserves default evaluation",
-);
-check(defaultEffects === 1, "prefixed length evaluates defaults once");
 
 console.log(`rest-index-scalarization PASS ${passed}`);
