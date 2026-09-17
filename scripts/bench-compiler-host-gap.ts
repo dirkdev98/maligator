@@ -26,7 +26,7 @@ const DEFAULT_JSON = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report
 const DEFAULT_MARKDOWN = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report.md");
 const CONFIG = resolveBuildConfig({
 	engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-	surface: { node: true, webPlatform: false, maligator: true },
+	surface: { node: true, webPlatform: true, maligator: true },
 });
 
 interface KernelDescriptor {
