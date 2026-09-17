@@ -70,6 +70,7 @@ check(
 );
 check(exactMissingInline(31) === undefined, "exact inlining preserves missing snapshots");
 check(count() === 0, "empty rest length uses the argument count");
+check(count(undefined) === 1, "explicit undefined contributes to the rest length");
 check(count(41, 43) === 43, "rest length and element share argument snapshots");
 
 console.log(`rest-index-scalarization PASS ${passed}`);

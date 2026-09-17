@@ -261,7 +261,7 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
-	it("does not relocate callee activation reads into the caller", () => {
+	it("does not relocate captured reads and binds argument counts at the call site", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -290,18 +290,57 @@ describe("bounded Core cross-call transforms", () => {
 		expect(coreOperations(captured).some(({ opcode }) => opcode === "loadCaptured")).toBe(
 			false,
 		);
-		expect(coreOperations(counted).some(({ opcode }) => opcode === "call")).toBe(true);
+		expect(coreOperations(counted).some(({ opcode }) => opcode === "call")).toBe(false);
 		expect(
 			coreOperations(counted).some(({ opcode }) => opcode === "loadArgumentCount"),
 		).toBe(false);
+		expect(
+			coreOperations(counted).some(
+				({ opcode, attributes }) =>
+					opcode === "createNumber" && attributes.value === 2,
+			),
+		).toBe(true);
 	});
 
-	it("guards and inlines hot global rest argument snapshots", () => {
+	it("binds scalarized rest counts and elements during exact inlining", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer(value) {
+					function observe(...values) {
+						return values.length + (values[0] ?? 0);
+					}
+					return observe(value, undefined, 3);
+				}
+				outer(1);`,
+				"core-inline-rest-count.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const operations = coreOperations(coreFunctionNamed(optimized!, "outer")!);
+		expect(operations.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "loadArgumentCount")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "loadArgument")).toBe(false);
+		expect(
+			operations.some(
+				({ opcode, attributes }) =>
+					opcode === "createNumber" && attributes.value === 3,
+			),
+		).toBe(true);
+	});
+
+	it("guards and inlines hot global rest argument snapshots and counts", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function sumRest(...values) {
-					return values[0] + values[1] + values[2] + values[3];
+					return values.length + values[0] + values[1] + values[2] + values[3];
 				}
 				function hot(value) {
 					let checksum = 0;
@@ -327,6 +366,13 @@ describe("bounded Core cross-call transforms", () => {
 		expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
 		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
 		expect(operations.some(({ opcode }) => opcode === "loadArgument")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "loadArgumentCount")).toBe(false);
+		expect(
+			operations.some(
+				({ opcode, attributes }) =>
+					opcode === "createNumber" && attributes.value === 4,
+			),
+		).toBe(true);
 	});
 
 	it("materializes missing scalarized rest snapshots after exact inlining", () => {
