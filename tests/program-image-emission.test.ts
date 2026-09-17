@@ -2414,12 +2414,9 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function has(array, index) { return index in array; } globalThis.has = has;`,
 		);
-		expect(output).toMatch(
-			/mal_vm_array_try_has\(mal_vm_as_array\(r\d+\), [^,]+, &__array_has_\d+\)/,
-		);
-		expect(output).toMatch(
-			/r\d+ = __array_has_\d+ \? MAL_VALUE_TRUE : MAL_VALUE_FALSE;/,
-		);
+		expect(output).toContain("mal_vm_array_try_has(mal_vm_as_array(");
+		expect(output).toContain("mal_vm_array_index_is_proven_absent(mal_vm_as_array(");
+		expect(output).toMatch(/r\d+ = MAL_VALUE_FALSE;/);
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 
