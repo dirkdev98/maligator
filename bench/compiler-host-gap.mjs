@@ -1176,12 +1176,10 @@ function holeyArrayTraversal(scale) {
 	return result(checksum, values.length * rounds);
 }
 
-function matchedArrayTraversal(scale, fillHoles) {
+function matchedHoleyArrayTraversal(scale) {
 	const values = [];
 	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
-	if (fillHoles) {
-		for (let index = 1; index < 16_384; index += 2) values[index] = 0;
-	} else values[16_383] = 0;
+	values[16_383] = 0;
 	let checksum = 0;
 	const rounds = 120 * scale;
 	for (let round = 0; round < rounds; round++) {
@@ -1190,36 +1188,44 @@ function matchedArrayTraversal(scale, fillHoles) {
 	return result(checksum, values.length * rounds);
 }
 
-function matchedHoleyArrayTraversal(scale) {
-	return matchedArrayTraversal(scale, false);
-}
-
 function matchedStoredZeroArrayTraversal(scale) {
-	return matchedArrayTraversal(scale, true);
-}
-
-function matchedArrayPresence(scale, fillHoles) {
 	const values = [];
 	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
-	if (fillHoles) {
-		for (let index = 1; index < 16_384; index += 2) values[index] = 0;
-	} else values[16_383] = 0;
+	for (let index = 1; index < 16_384; index += 2) values[index] = 0;
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index] ?? 0;
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function holeyArrayUndefinedCheck(scale) {
+	const values = [];
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+	values[16_383] = 0;
 	let checksum = 0;
 	const rounds = 120 * scale;
 	for (let round = 0; round < rounds; round++) {
 		for (let index = 0; index < values.length; index++) {
-			if (index in values) checksum++;
+			if (values[index] === undefined) checksum++;
 		}
 	}
 	return result(checksum, values.length * rounds);
 }
 
-function holeyArrayPresence(scale) {
-	return matchedArrayPresence(scale, false);
-}
-
-function storedZeroArrayPresenceControl(scale) {
-	return matchedArrayPresence(scale, true);
+function storedZeroArrayUndefinedCheckControl(scale) {
+	const values = [];
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+	for (let index = 1; index < 16_384; index += 2) values[index] = 0;
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) {
+			if (values[index] === undefined) checksum++;
+		}
+	}
+	return result(checksum, values.length * rounds);
 }
 
 function recordArrayTraversal(scale) {
@@ -1740,30 +1746,30 @@ const kernels = [
 		},
 	),
 	kernel(
-		"holey-array-presence",
+		"holey-array-undefined-check",
 		"runtime",
-		"holey Array indexed presence probes",
+		"holey Array indexed undefined checks",
 		"array-layout",
 		"runtime/src/vm_ops.h",
-		holeyArrayPresence,
+		holeyArrayUndefinedCheck,
 		{
 			category: "object-array-representation",
 			inputShape: "16,384 slots, alternating holes, present final index",
-			unit: "indexed presence probe",
+			unit: "indexed undefined check",
 			sentinel: false,
 		},
 	),
 	kernel(
-		"stored-zero-array-presence-control",
+		"stored-zero-array-undefined-check-control",
 		"runtime",
-		"stored-zero Array indexed presence probes",
+		"stored-zero Array indexed undefined checks",
 		"array-layout",
 		"runtime/src/vm_ops.h",
-		storedZeroArrayPresenceControl,
+		storedZeroArrayUndefinedCheckControl,
 		{
 			category: "object-array-representation",
 			inputShape: "16,384 slots, alternating stored zeroes",
-			unit: "indexed presence probe",
+			unit: "indexed undefined check",
 			sentinel: false,
 		},
 	),

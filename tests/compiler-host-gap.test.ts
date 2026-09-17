@@ -161,11 +161,13 @@ describe("compiler host-gap ladder", () => {
 			checksum: storedZero.checksum,
 		});
 
-		const holeyPresence = fixtureOutput("holey-array-presence");
-		const storedZeroPresence = fixtureOutput("stored-zero-array-presence-control");
-		expect(holeyPresence.operations).toBe(storedZeroPresence.operations);
-		expect(holeyPresence.checksum).toBeGreaterThan(0);
-		expect(holeyPresence.checksum).toBeLessThan(storedZeroPresence.checksum);
+		const holeyUndefined = fixtureOutput("holey-array-undefined-check");
+		const storedZeroUndefined = fixtureOutput(
+			"stored-zero-array-undefined-check-control",
+		);
+		expect(holeyUndefined.operations).toBe(storedZeroUndefined.operations);
+		expect(holeyUndefined.checksum).toBeGreaterThan(0);
+		expect(storedZeroUndefined.checksum).toBe(0);
 	});
 
 	it("summarizes category ratios without implying workload attribution", () => {
