@@ -151,6 +151,14 @@ describe("compiler host-gap ladder", () => {
 			operations: boundedControl.operations,
 			checksum: boundedControl.checksum,
 		});
+		const fourWayBounded = fixtureOutput("four-way-bounded-rest-selection");
+		const fourWayBoundedControl = fixtureOutput(
+			"four-way-bounded-fixed-selection-control",
+		);
+		expect(fourWayBounded).toMatchObject({
+			operations: fourWayBoundedControl.operations,
+			checksum: fourWayBoundedControl.checksum,
+		});
 
 		const materialized = fixtureOutput("materialized-rest-parameters");
 		const arrayControl = fixtureOutput("materialized-array-control");

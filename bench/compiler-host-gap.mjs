@@ -868,6 +868,21 @@ function chooseFixedBounded(selector, first, second) {
 	return (+selector) & 1 ? second : first;
 }
 
+function chooseRestBoundedFour(selector, ...values) {
+	return values[(+selector) & 3];
+}
+
+function chooseFixedBoundedFour(selector, first, second, third, fourth) {
+	const selected = (+selector) & 3;
+	return selected < 2
+		? selected === 0
+			? first
+			: second
+		: selected === 2
+			? third
+			: fourth;
+}
+
 function collectRest(...values) {
 	return values;
 }
@@ -944,6 +959,24 @@ function boundedFixedSelectionControl(scale) {
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
 		checksum += chooseFixedBounded(index, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function fourWayBoundedRestSelection(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += chooseRestBoundedFour(index, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function fourWayBoundedFixedSelectionControl(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += chooseFixedBoundedFour(index, index & 31, 3, 5, 7);
 	}
 	return result(checksum, operations);
 }
@@ -1634,6 +1667,24 @@ const kernels = [
 		"rest-arguments",
 		"src/compiler/core/core-local-passes.ts",
 		boundedFixedSelectionControl,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"four-way-bounded-rest-selection",
+		"runtime",
+		"four-way bounded dynamic rest selection",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		fourWayBoundedRestSelection,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"four-way-bounded-fixed-selection-control",
+		"runtime",
+		"fixed-arity control for four-way bounded rest selection",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		fourWayBoundedFixedSelectionControl,
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(
