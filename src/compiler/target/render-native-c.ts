@@ -4912,13 +4912,13 @@ function emitInstruction(
 			}
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
-				const receiver = `mal_vm_as_array(${boxed(right)})`;
-				const index = leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`;
+				const result = `__array_has_${ip}`;
 				return [
-					`if (${numberGuard}mal_vm_array_try_has(${receiver}, ${index})) {`,
-					dstIsBool ? `  r${dst} = true;` : `  r${dst} = MAL_VALUE_TRUE;`,
-					`} else if (${numberGuard}mal_vm_array_index_is_proven_absent(${receiver}, ${index})) {`,
-					dstIsBool ? `  r${dst} = false;` : `  r${dst} = MAL_VALUE_FALSE;`,
+					`bool ${result};`,
+					`if (${numberGuard}mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`}, &${result})) {`,
+					dstIsBool
+						? `  r${dst} = ${result};`
+						: `  r${dst} = ${result} ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;`,
 					`} else {`,
 					dstIsBool
 						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)});`
