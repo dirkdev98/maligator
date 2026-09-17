@@ -2376,6 +2376,28 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_ops_number_as_f64(mal_value_from_i32");
 	});
 
+	it("keeps fused XOR and OR intermediates as int32", () => {
+		const xorChain = emit(
+			`"use strict"; function mix(object, mask) { return (object.left ^ object.right) | mask; } globalThis.mix = mix;`,
+		);
+		expect(xorChain).toMatch(/i32 __nf_\d+_value = 0;/);
+		expect(xorChain).toMatch(/mal_value_from_i32\(__nf_\d+_value\)/);
+		expect(xorChain).toContain("mal_vm_binary_op(vm, MAL_BIN_BIT_XOR");
+		expect(xorChain).toContain("mal_vm_binary_op(vm, MAL_BIN_BIT_OR");
+
+		const xorThenAdd = emit(
+			`"use strict"; function mix(object, value) { return (object.left ^ object.right) + value; } globalThis.mix = mix;`,
+		);
+		expect(xorThenAdd).toMatch(/i32 __nf_\d+_value = 0;/);
+		expect(xorThenAdd).toMatch(/\(f64\) __nf_\d+_value \+/);
+
+		const addThenXor = emit(
+			`"use strict"; function mix(object, mask) { return (object.left + object.right) ^ mask; } globalThis.mix = mix;`,
+		);
+		expect(addThenXor).toMatch(/f64 __nf_\d+_value = 0\.0;/);
+		expect(addThenXor).toContain("mal_value_from_i32(");
+	});
+
 	it("preserves int32 tags for guarded boxed numeric addition", () => {
 		const output = emit(
 			`"use strict"; function read(...values) { return values[0] + values[1] + values[2] + values[3]; } function sum(limit) { let total = 0; for (let index = 0; index < limit; index++) total += read(index & 31, 3, 5, 7); return total; } globalThis.sum = sum;`,
