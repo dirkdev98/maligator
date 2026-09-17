@@ -46,6 +46,7 @@ import type {
 	CoreProgramFlowValueKindStatistics,
 	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
+import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const BUILTIN_RESULT_KIND_MASKS = {
@@ -224,7 +225,7 @@ function isLengthProperty(
 	);
 }
 
-export interface CorePrivateNumericArray {
+export interface CorePrivateArrayUseSummary {
 	readonly allocation: CoreInstructionId;
 	readonly root: CoreValueId;
 	readonly lengthLoads: ReadonlyArray<CoreInstructionId>;
@@ -232,11 +233,19 @@ export interface CorePrivateNumericArray {
 	readonly elementStores: ReadonlyArray<CoreInstructionId>;
 }
 
-function privateNumericArrays(
+export type CorePrivateNumericArray = CorePrivateArrayUseSummary;
+
+interface CorePrivateArraySeed {
+	readonly allocation: CoreInstructionId;
+	readonly root: CoreValueId;
+}
+
+function privateArrayUses(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-): ReadonlyArray<CorePrivateNumericArray> {
+	seeds: ReadonlyArray<CorePrivateArraySeed>,
+): ReadonlyArray<CorePrivateArrayUseSummary> {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const candidates = new Map<
@@ -248,17 +257,9 @@ function privateNumericArrays(
 			elementStores: Array<CoreInstructionId>;
 		}
 	>();
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "createArray" ||
-			fn.instructionAttributes(instruction).length !== 0 ||
-			fn.kernel.instructionResultCount(instruction) !== 1
-		)
-			continue;
-		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		candidates.set(root(result), {
-			allocation: instruction,
+	for (const seed of seeds) {
+		candidates.set(root(seed.root), {
+			allocation: seed.allocation,
 			lengthLoads: [],
 			elementLoads: [],
 			elementStores: [],
@@ -342,16 +343,92 @@ function privateNumericArrays(
 	);
 }
 
+function privateNumericArraySeeds(fn: CoreFunctionStore): Array<CorePrivateArraySeed> {
+	const seeds: Array<CorePrivateArraySeed> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "createArray" ||
+			fn.instructionAttributes(instruction).length !== 0 ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		seeds.push({
+			allocation: instruction,
+			root: fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+		});
+	}
+	return seeds;
+}
+
+function privateArrayFromSeeds(
+	fn: CoreFunctionStore,
+	analysis: CoreStaticValueAnalysis,
+): Array<CorePrivateArraySeed> {
+	const seeds: Array<CorePrivateArraySeed> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			(opcode !== "call" &&
+				(opcode !== "callKnown" ||
+					fn.instructionAttributes(instruction).operation !== "Array.from")) ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		const value = analysis.query(result);
+		if (
+			value.kind !== "known" ||
+			value.brand !== "array" ||
+			value.exactBrand !== "Array" ||
+			value.state !== "initial-allocation" ||
+			value.identity?.kind !== "fresh-per-evaluation" ||
+			value.identity.function !== fn.id ||
+			value.identity.value !== result ||
+			value.construction?.kind !== "call" ||
+			value.construction.callee !== "Array.from" ||
+			value.construction.instruction !== instruction ||
+			value.prototype.kind !== "intrinsic" ||
+			value.prototype.id !== "Array.prototype"
+		)
+			continue;
+		analysis.verify(value);
+		seeds.push({ allocation: instruction, root: result });
+	}
+	return seeds;
+}
+
+function privateArrayPolicyIsLocked(context: CoreCompilationContext): boolean {
+	return (
+		context.facts.world.primordialPolicy === "locked" &&
+		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
+	);
+}
+
 export function corePrivateNumericArrays(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	context: CoreCompilationContext,
 ): ReadonlyArray<CorePrivateNumericArray> {
-	return context.facts.world.primordialPolicy === "locked" &&
-		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
-		? privateNumericArrays(program, fn, cfg)
+	return privateArrayPolicyIsLocked(context)
+		? privateArrayUses(program, fn, cfg, privateNumericArraySeeds(fn))
 		: [];
+}
+
+export function corePrivateArrayLengthCandidates(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+	analysis: CoreStaticValueAnalysis,
+): ReadonlyArray<CorePrivateArrayUseSummary> {
+	if (!privateArrayPolicyIsLocked(context)) return [];
+	return privateArrayUses(program, fn, cfg, [
+		...privateNumericArraySeeds(fn),
+		...privateArrayFromSeeds(fn, analysis),
+	]);
 }
 
 export function corePrivateNumericArrayLoads(

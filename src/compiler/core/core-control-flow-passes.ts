@@ -24,7 +24,7 @@ import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
-	corePrivateNumericArrays,
+	corePrivateArrayLengthCandidates,
 } from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
@@ -43,6 +43,7 @@ import {
 } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const CONTROL_FLOW_BUDGET = CORE_O2_PASS_BUDGETS["cfg-loop-licm-pre"];
@@ -608,7 +609,11 @@ const hoistLoopInvariants: CoreFunctionPass = {
 			return hasLoopInvariantConsumer(program.function(functionId));
 		},
 	},
-	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
+	requiredAnalyses: [
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
+		CORE_STATIC_VALUE_ANALYSIS,
+	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
@@ -617,11 +622,12 @@ const hoistLoopInvariants: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
-		const privateArrays = corePrivateNumericArrays(
+		const privateArrays = corePrivateArrayLengthCandidates(
 			program,
 			fn,
 			cfg,
 			context.compilationContext,
+			context.analysis(CORE_STATIC_VALUE_ANALYSIS),
 		);
 		const privateArrayByLengthLoad = new Map(
 			privateArrays.flatMap((array) =>

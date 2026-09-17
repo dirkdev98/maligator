@@ -4,6 +4,7 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
@@ -23,6 +24,7 @@ import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimiz
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import {
 	compilerProgramFactsFromConfig,
@@ -33,6 +35,8 @@ import {
 	inspectCoreInstructionResults,
 	inspectCoreTerminatorPayload,
 	inspectCoreValueDefinition,
+	coreFunctionNamed,
+	coreOperations,
 } from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
@@ -68,6 +72,31 @@ function definingInstruction(fn: CoreFunctionStore, value: CoreValueId) {
 	const definition = inspectCoreValueDefinition(fn, value);
 	if (definition.kind !== "instruction") throw new Error("expected instruction value");
 	return definition.instruction;
+}
+
+function optimizeSource(source: string, compilationContext = lockedArrayContext) {
+	return optimizeCore(
+		lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(source, "control-flow-source.js"),
+			{ facts: compilationContext.facts },
+		),
+		{ verification: "per-pass" },
+	).compilation.program;
+}
+
+function sourceLengthLoad(program: CoreProgram, functionName: string) {
+	const fn = coreFunctionNamed(program, functionName);
+	if (fn === undefined) throw new Error(`missing ${functionName}`);
+	const load = coreOperations(fn).find(({ opcode, attributes }) => {
+		if (opcode !== "loadPropertyStatic" || typeof attributes.stringIndex !== "number")
+			return false;
+		return (
+			String.fromCodePoint(...(program.stringConstants[attributes.stringIndex] ?? [])) ===
+			"length"
+		);
+	});
+	if (load === undefined) throw new Error(`missing ${functionName} length load`);
+	return { fn, load };
 }
 
 describe("Core control-flow analyses and passes", () => {
@@ -1050,6 +1079,71 @@ describe("Core control-flow analyses and passes", () => {
 		const loop = buildCoreControlFlow(optimized, function_).loops[0];
 		expect(loop).toBeDefined();
 		expect(loop!.blocks.has(entry)).toBe(false);
+	});
+
+	it("hoists the stable length of a private exact Array.from result", () => {
+		const program = optimizeSource(`
+			function denseFactoryTraversal(scale) {
+				const values = Array.from({ length: 64 }, (_, index) => ({ value: index }));
+				let checksum = 0;
+				for (let round = 0; round < scale; round++) {
+					for (let index = 0; index < values.length; index++) checksum += values[index].value;
+				}
+				return checksum;
+			}
+			globalThis.result = denseFactoryTraversal(2);
+		`);
+		const { fn, load } = sourceLengthLoad(program, "denseFactoryTraversal");
+		const cfg = buildCoreControlFlow(program, fn.id);
+		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
+	});
+
+	it.each([
+		{
+			name: "escapes",
+			before: "globalThis.values = values;",
+			body: "checksum += values[index];",
+		},
+		{
+			name: "grows during traversal",
+			before: "",
+			body: "values[index + 64] = index; checksum += values[index];",
+		},
+	])("retains an Array.from length load when the result $name", ({ before, body }) => {
+		const program = optimizeSource(`
+			function factoryTraversal(scale) {
+				const values = Array.from({ length: 64 }, (_, index) => index);
+				${before}
+				let checksum = 0;
+				for (let round = 0; round < scale; round++) {
+					for (let index = 0; index < values.length; index++) { ${body} }
+				}
+				return checksum;
+			}
+			globalThis.result = factoryTraversal(2);
+		`);
+		const { fn, load } = sourceLengthLoad(program, "factoryTraversal");
+		const inner = buildCoreControlFlow(program, fn.id).loops.reduce((deepest, loop) =>
+			loop.depth > deepest.depth ? loop : deepest,
+		);
+		expect(inner.blocks.has(load.block)).toBe(true);
+	});
+
+	it("retains an Array.from length load without locked primordial facts", () => {
+		const program = optimizeSource(
+			`function factoryTraversal(scale) {
+				const values = Array.from({ length: 64 }, (_, index) => index);
+				let checksum = 0;
+				for (let index = 0; index < values.length * scale; index++) checksum += values[index & 63];
+				return checksum;
+			}
+			globalThis.result = factoryTraversal(2);`,
+			context,
+		);
+		const { fn, load } = sourceLengthLoad(program, "factoryTraversal");
+		const loop = buildCoreControlFlow(program, fn.id).loops[0];
+		expect(loop).toBeDefined();
+		expect(loop!.blocks.has(load.block)).toBe(true);
 	});
 
 	it("retains a private array length load when the loop can grow it", () => {

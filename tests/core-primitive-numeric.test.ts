@@ -22,6 +22,60 @@ function compile(source: string) {
 }
 
 describe("certified primitive numeric lowering", () => {
+	it("hoists exact Array.from lengths without certifying unknown element kinds", () => {
+		const facts = compilerProgramFactsFromConfig(
+			resolveBuildConfig({
+				engine: { primordials: "locked", realms: false },
+			}),
+		);
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						`function denseArrayTraversal(scale) {
+							const values = Array.from({ length: 64 }, (_, index) => ({ value: index }));
+							let checksum = 0;
+							for (let round = 0; round < scale; round++) {
+								for (let index = 0; index < values.length; index++) checksum += values[index].value;
+							}
+							return checksum;
+						}
+						globalThis.result = denseArrayTraversal(2);`,
+						"dense-array.js",
+					),
+					{ facts, coreVerification: "per-pass" },
+				),
+			),
+		);
+		const functionIndex = image.runtime.functions.findIndex((fn) => {
+			const units = image.runtime.stringConstants[fn.nameStringIndex];
+			return (
+				units !== undefined && String.fromCodePoint(...units) === "denseArrayTraversal"
+			);
+		});
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const runtime = image.runtime.functions[functionIndex]!;
+		const native = image.native.functions[functionIndex]!;
+		const indexedLoop = native.specializations.find(
+			(region) => region.kind === "indexed-length-loop",
+		);
+		expect(indexedLoop?.kind).toBe("indexed-length-loop");
+		if (indexedLoop?.kind !== "indexed-length-loop") {
+			throw new Error("expected indexed length loop");
+		}
+		expect(indexedLoop.sites[0]!.comparisonIp).toBeGreaterThan(
+			indexedLoop.sites[0]!.loadIp + 1,
+		);
+		const elementLoads = runtime.instructions.flatMap((instruction, index) =>
+			instruction.opcode === "LOAD_PROPERTY" ? [{ instruction, index }] : [],
+		);
+		expect(elementLoads.length).toBeGreaterThan(0);
+		for (const { instruction, index } of elementLoads) {
+			expect(native.instructions[index]?.kind).not.toBe("exact-contained-array-element");
+			expect(native.registerRepresentations[instruction.dst]).toBe("boxed");
+		}
+	});
+
 	it("certifies the holey-array checksum addition from private numeric stores", () => {
 		const facts = compilerProgramFactsFromConfig(
 			resolveBuildConfig({
