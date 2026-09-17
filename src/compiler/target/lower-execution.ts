@@ -1720,6 +1720,7 @@ function lowerFunctionToTarget(
 	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
+	freshArrayLiteralElements: ReadonlyMap<CoreInstructionId, number>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	privatePackedRestArrayElements: ReadonlySet<CoreInstructionId>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
@@ -2077,6 +2078,12 @@ function lowerFunctionToTarget(
 				if (lowered.type !== "binary")
 					throw new Error("Unsigned arithmetic lost its operation");
 				lowered = { ...lowered, unsignedArithmetic: true };
+			}
+			const freshArrayLiteralIndex = freshArrayLiteralElements.get(instruction);
+			if (freshArrayLiteralIndex !== undefined) {
+				if (lowered.type !== "defineProperty")
+					throw new Error("Fresh array literal proof lost its definition");
+				lowered = { ...lowered, freshArrayLiteralIndex };
 			}
 			if (privateNumericArrayElements.has(instruction)) {
 				if (lowered.type !== "loadProperty")
@@ -2646,6 +2653,18 @@ export function lowerCoreCompilationToExecutionProgram(
 		}
 		instructions.add(operation.instruction);
 	}
+	const freshArrayLiteralElements = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, number>
+	>();
+	for (const operation of compilation.plan.freshArrayLiteralElements ?? []) {
+		let instructions = freshArrayLiteralElements.get(operation.function);
+		if (instructions === undefined) {
+			instructions = new Map();
+			freshArrayLiteralElements.set(operation.function, instructions);
+		}
+		instructions.set(operation.instruction, operation.index);
+	}
 	const privateNumericArrayElements = new Map<CoreFunctionId, Set<CoreInstructionId>>();
 	for (const operation of compilation.plan.privateNumericArrayElements ?? []) {
 		let instructions = privateNumericArrayElements.get(operation.function);
@@ -2705,6 +2724,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
+			freshArrayLiteralElements.get(core) ?? new Map(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? new Set(),
 			operatorInputs.get(core) ?? new Map(),

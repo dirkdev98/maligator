@@ -777,6 +777,9 @@ export type CompilerInstruction =
 			enumerable: boolean;
 			writable?: boolean;
 			configurable?: boolean;
+			/** COMPILE-ONLY: Core proved an exact fresh Array literal and this canonical
+			 * index definition occurs before its identity can escape. */
+			freshArrayLiteralIndex?: number;
 	  }
 	| {
 			// SetFunctionName([func], [key]): set an anonymous function/class value's

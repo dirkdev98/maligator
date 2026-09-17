@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 82;
+export const COMPILER_ARTIFACT_VERSION = 83;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -846,6 +846,24 @@ function writeCompilerArtifact(
 				}
 				w.u8(12);
 				w.i32(plan.length);
+			} else if (
+				plan.kind === "fresh-array-literal-element" &&
+				instruction.opcode === "DEFINE_PROPERTY"
+			) {
+				if (
+					!instruction.enumerable ||
+					!instruction.writable ||
+					!instruction.configurable ||
+					!Number.isInteger(plan.index) ||
+					plan.index < 0 ||
+					plan.index >= 0xffff_ffff
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid fresh Array literal element metadata",
+					);
+				}
+				w.u8(20);
+				w.u32(plan.index);
 			} else if (
 				plan.kind === "exact-array-length" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -3210,6 +3228,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "fresh-dense-reserve",
 					length: reserveLength,
+				};
+			} else if (tag === 20 && instruction.opcode === "DEFINE_PROPERTY") {
+				const index = r.u32();
+				if (index >= 0xffff_ffff) {
+					throw new RangeError(
+						"program-image-codec: invalid fresh Array literal element metadata",
+					);
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "fresh-array-literal-element",
+					index,
 				};
 			} else if (
 				tag === 14 &&
