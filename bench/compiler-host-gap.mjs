@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { URL } from "node:url";
+import { parse as parseUrl } from "node:url";
 
 const MODULUS = 1_000_000_007;
 
@@ -1182,7 +1182,7 @@ function urlParsing(scale) {
 	let checksum = 0;
 	const operations = 25_000 * scale;
 	for (let index = 0; index < operations; index++) {
-		const url = new URL(`https://example.test/path/${index & 255}?q=${index & 63}#part`);
+		const url = parseUrl(`https://example.test/path/${index & 255}?q=${index & 63}#part`);
 		checksum += url.pathname.length + url.search.length + url.hash.length;
 	}
 	return result(checksum, operations);
@@ -1618,9 +1618,9 @@ const kernels = [
 	kernel(
 		"url-parsing",
 		"runtime",
-		"WHATWG URL construction and parsing",
+		"node:url legacy parsing",
 		"host-api",
-		"runtime/src/runtime/web_url.c",
+		"runtime/src/runtime/node_url.c",
 		urlParsing,
 		{ category: "host-apis", unit: "URL", sentinel: false },
 	),
