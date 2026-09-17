@@ -86,9 +86,11 @@ and `--preset confirm --case ID` for deeper selected evidence. `bench:compiler-h
 remains the queue-facing entrypoint and can include a self-compile capture with
 `--self-compile PATH`. Neither diagnostic command updates `bench/baseline.json`.
 
-Run native runtime-gap sweeps through `mjq perf.host-gap` with the explicit case IDs
-from the local plan. Quick reports are screening evidence: confirm an optimization with
-more interleaved pairs plus a representative product workload and adjacent controls.
+Run native runtime-gap sweeps through `mjq perf.host-gap`. Queue options can select
+explicit `cases` or use `preset`, `category`, and `suite`; `budget_seconds` bounds the
+whole driver and `case_timeout_ms` bounds each child invocation. Quick reports are
+screening evidence: confirm an optimization with more interleaved pairs plus a
+representative product workload and adjacent controls.
 Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
 collection deltas cover the measured window, while its GC pause and peak-live values
 cover the separate resource process. Node allocation is sampled and is not directly
