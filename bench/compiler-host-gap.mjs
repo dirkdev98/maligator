@@ -1178,11 +1178,10 @@ function holeyArrayTraversal(scale) {
 
 function matchedArrayTraversal(scale, fillHoles) {
 	const values = [];
-	values[16_383] = 0;
-	for (let index = 0; index < 16_383; index += 2) values[index] = index & 255;
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
 	if (fillHoles) {
-		for (let index = 1; index < 16_383; index += 2) values[index] = 0;
-	}
+		for (let index = 1; index < 16_384; index += 2) values[index] = 0;
+	} else values[16_383] = 0;
 	let checksum = 0;
 	const rounds = 120 * scale;
 	for (let round = 0; round < rounds; round++) {
@@ -1201,11 +1200,10 @@ function matchedStoredZeroArrayTraversal(scale) {
 
 function matchedArrayPresence(scale, fillHoles) {
 	const values = [];
-	values[16_383] = 0;
-	for (let index = 0; index < 16_383; index += 2) values[index] = index & 255;
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
 	if (fillHoles) {
-		for (let index = 1; index < 16_383; index += 2) values[index] = 0;
-	}
+		for (let index = 1; index < 16_384; index += 2) values[index] = 0;
+	} else values[16_383] = 0;
 	let checksum = 0;
 	const rounds = 120 * scale;
 	for (let round = 0; round < rounds; round++) {
