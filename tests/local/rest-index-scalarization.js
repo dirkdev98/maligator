@@ -54,7 +54,11 @@ function count(...rest) {
 }
 
 function chooseBounded(selector, ...rest) {
-	return rest[(+selector) & 1];
+	return rest[+selector & 1];
+}
+
+function chooseBoundedFour(selector, ...rest) {
+	return rest[+selector & 3];
 }
 
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
@@ -84,9 +88,35 @@ check(
 );
 const objectPayload = { value: 73 };
 const symbolPayload = Symbol("rest-index-scalarization");
-check(chooseBounded(0, objectPayload, 79) === objectPayload, "bounded read preserves objects");
+check(
+	chooseBounded(0, objectPayload, 79) === objectPayload,
+	"bounded read preserves objects",
+);
 check(chooseBounded(1, 83, 89n) === 89n, "bounded read preserves bigints");
-check(chooseBounded(1, 97, symbolPayload) === symbolPayload, "bounded read preserves symbols");
+check(
+	chooseBounded(1, 97, symbolPayload) === symbolPayload,
+	"bounded read preserves symbols",
+);
+check(
+	chooseBoundedFour(0, objectPayload, 101, 103, 107) === objectPayload,
+	"four-way bounded read selects zero",
+);
+check(
+	chooseBoundedFour(1, 109, 113, 127, 131) === 113,
+	"four-way bounded read selects one",
+);
+check(
+	chooseBoundedFour(2, 137, 139, 149n, 151) === 149n,
+	"four-way bounded read selects two",
+);
+check(
+	chooseBoundedFour(3, 157, 163, 167, symbolPayload) === symbolPayload,
+	"four-way bounded read selects three",
+);
+check(
+	chooseBoundedFour(3, 173, 179) === undefined,
+	"four-way bounded read preserves missing arguments",
+);
 let coercions = 0;
 const coerciveSelector = {
 	valueOf() {
@@ -100,6 +130,19 @@ check(
 	"bounded read roots payloads across coercion",
 );
 check(coercions === 1, "bounded read coerces its key once");
+let fourWayCoercions = 0;
+const fourWaySelector = {
+	valueOf() {
+		fourWayCoercions++;
+		churn(181);
+		return 3;
+	},
+};
+check(
+	chooseBoundedFour(fourWaySelector, 191, 193, 197, objectPayload) === objectPayload,
+	"four-way bounded read roots payloads across coercion",
+);
+check(fourWayCoercions === 1, "four-way bounded read coerces its key once");
 const thrown = { value: 107 };
 let caught;
 try {
@@ -116,5 +159,23 @@ try {
 	caught = error;
 }
 check(caught === thrown, "bounded read preserves coercion throws");
+const fourWayThrown = { value: 199 };
+let fourWayCaught;
+try {
+	chooseBoundedFour(
+		{
+			valueOf() {
+				throw fourWayThrown;
+			},
+		},
+		211,
+		223,
+		227,
+		229,
+	);
+} catch (error) {
+	fourWayCaught = error;
+}
+check(fourWayCaught === fourWayThrown, "four-way bounded read preserves coercion throws");
 
 console.log(`rest-index-scalarization PASS ${passed}`);

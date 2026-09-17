@@ -2710,10 +2710,14 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			}
 			const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 			if (kinds.kindMask(key) !== COMPILER_VALUE_KIND_NUMBER) continue;
-			const range = context
-				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
-				.range(key, block);
-			if (range?.minimum !== 0 || range.maximum !== 1) continue;
+			const range = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).range(key, block);
+			if (
+				range?.minimum !== 0 ||
+				(range.maximum !== 1 && range.maximum !== 3) ||
+				startIndex + range.maximum > 0x7fff_ffff
+			) {
+				continue;
+			}
 
 			let before = fn.blockTerminator(fn.entry);
 			const snapshots = new Map<number, CoreValueId>();
@@ -2732,19 +2736,68 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 				}
 			}
 			const editor = CoreEditor.open(program, item.function);
-			for (const argumentIndex of [startIndex, startIndex + 1]) {
+			const argumentIndices =
+				range.maximum === 1
+					? [startIndex, startIndex + 1]
+					: [startIndex, startIndex + 1, startIndex + 2, startIndex + 3];
+			for (const argumentIndex of argumentIndices) {
 				if (snapshots.has(argumentIndex)) continue;
-				const snapshot = editor.insertInstruction(
-					fn.entry,
-					before,
-					"loadArgument",
-					[],
-					{
-						attributes: { index: argumentIndex },
-						sourcePosition: fn.instructionSourcePosition(producer),
-					},
-				).outputs[0]!;
+				const snapshot = editor.insertInstruction(fn.entry, before, "loadArgument", [], {
+					attributes: { index: argumentIndex },
+					sourcePosition: fn.instructionSourcePosition(producer),
+				}).outputs[0]!;
 				snapshots.set(argumentIndex, snapshot);
+			}
+			if (range.maximum === 3) {
+				const returns = argumentIndices.map((argumentIndex) => {
+					const returnBlock = editor.createBlock();
+					editor.setTerminator(returnBlock, {
+						kind: "return",
+						value: snapshots.get(argumentIndex)!,
+						sourcePosition: fn.instructionSourcePosition(terminator),
+					});
+					return returnBlock;
+				});
+				const lower = editor.createBlock();
+				const upper = editor.createBlock();
+				const two = editor.insertInstruction(block, load, "createNumber", [], {
+					attributes: { value: 2 },
+					sourcePosition: fn.instructionSourcePosition(load),
+				}).outputs[0]!;
+				const lowerHalf = editor.insertInstruction(block, load, "binary", [key, two], {
+					attributes: { operator: "<" },
+					sourcePosition: fn.instructionSourcePosition(load),
+				}).outputs[0]!;
+				const zero = editor.appendInstruction(lower, "createNumber", [], {
+					attributes: { value: 0 },
+				}).outputs[0]!;
+				const lowerFirst = editor.appendInstruction(lower, "binary", [key, zero], {
+					attributes: { operator: "===" },
+				}).outputs[0]!;
+				const upperFirst = editor.appendInstruction(upper, "binary", [key, two], {
+					attributes: { operator: "===" },
+				}).outputs[0]!;
+				editor.setTerminator(lower, {
+					kind: "branch",
+					condition: lowerFirst,
+					consequent: { block: returns[0]!, arguments: [] },
+					alternate: { block: returns[1]!, arguments: [] },
+				});
+				editor.setTerminator(upper, {
+					kind: "branch",
+					condition: upperFirst,
+					consequent: { block: returns[2]!, arguments: [] },
+					alternate: { block: returns[3]!, arguments: [] },
+				});
+				editor.replaceTerminator(block, {
+					kind: "branch",
+					condition: lowerHalf,
+					consequent: { block: lower, arguments: [] },
+					alternate: { block: upper, arguments: [] },
+				});
+				editor.removeInstruction(load);
+				editor.removeInstruction(producer);
+				return editor.commit();
 			}
 			const alternate = editor.createBlock();
 			const consequent = editor.createBlock();

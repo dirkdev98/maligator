@@ -174,9 +174,7 @@ describe("rest forwarding allocation contract", () => {
 		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
 		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT_COUNT")).toBe(true);
 		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT")).toBe(true);
-		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
-			false,
-		);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
 	});
 
 	it("scalarizes a bounded terminal rest read into argument snapshots", () => {
@@ -204,9 +202,34 @@ describe("rest forwarding allocation contract", () => {
 		expect(owner!.instructions.some((i) => i.opcode === "LOAD_PROPERTY")).toBe(false);
 	});
 
+	it("scalarizes a four-way bounded terminal rest read", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(
+					"function choose(which, ...rest) { return rest[(+which) & 3]; }",
+					"locked",
+				),
+			),
+		);
+		const owner = image.runtime.functions.find((fn) => fn.argumentSnapshotCount === 4);
+		expect(owner).toBeDefined();
+		const prefix = owner!.instructions.slice(0, owner!.argumentSnapshotCount);
+		expect(
+			new Set(
+				prefix.flatMap((instruction) =>
+					instruction.opcode === "LOAD_ARGUMENT" ? [instruction.index] : [],
+				),
+			),
+		).toEqual(new Set([1, 2, 3, 4]));
+		expect(owner!.instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
+			false,
+		);
+		expect(owner!.instructions.some((i) => i.opcode === "LOAD_PROPERTY")).toBe(false);
+	});
+
 	it.each([
 		"function choose(which, ...rest) { return rest[+which]; }",
-		"function choose(which, ...rest) { return rest[(+which) & 3]; }",
+		"function choose(which, ...rest) { return rest[(+which) & 7]; }",
 		"function choose(which, ...rest) { return rest[String(which)]; }",
 		"function choose(which, ...rest) { return rest[which & 1n]; }",
 		"function choose(which, ...rest) { return rest[(+which) & 1] + rest[0]; }",
