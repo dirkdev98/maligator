@@ -1909,9 +1909,7 @@ static inline bool mal_vm_array_try_get_index(
 static inline bool mal_vm_private_array_try_get_proven_index(
     const MalArrayObject *arr, u32 index, MalValue *out
 ) {
-    if (arr->elements != nullptr && index < arr->dense_count) {
-        MalValue value = arr->elements[index];
-        *out = mal_value_is_array_hole(value) ? mal_value_new_undefined() : value;
+    if (mal_array_object_dense_get(arr, index, out)) {
         return true;
     }
     if (arr->dense_deopted) {
