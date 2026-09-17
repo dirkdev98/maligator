@@ -4912,13 +4912,9 @@ function emitInstruction(
 			}
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
-				const result = `__array_has_${ip}`;
 				return [
-					`bool ${result};`,
-					`if (${numberGuard}mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`}, &${result})) {`,
-					dstIsBool
-						? `  r${dst} = ${result};`
-						: `  r${dst} = ${result} ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;`,
+					`if (${numberGuard}mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})) {`,
+					dstIsBool ? `  r${dst} = true;` : `  r${dst} = MAL_VALUE_TRUE;`,
 					`} else {`,
 					dstIsBool
 						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)});`

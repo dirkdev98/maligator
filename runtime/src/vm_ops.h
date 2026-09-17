@@ -1930,26 +1930,12 @@ static inline bool mal_vm_private_array_try_get_index(
            mal_vm_private_array_try_get_proven_index(arr, integer, out);
 }
 
-/** Return true when a numeric Array membership result is known without observable lookup. */
-static inline bool mal_vm_array_try_has(
-    const MalArrayObject *arr, f64 index, bool *result
-) {
-    if (arr == nullptr || !(index >= 0 && index < (f64) UINT32_MAX)) {
-        return false;
-    }
-    u32 i = (u32) index;
-    if ((f64) i != index) {
-        return false;
-    }
-    if (mal_array_object_dense_has(arr, i)) {
-        *result = true;
-        return true;
-    }
-    if (!arr->dense_deopted && mal_array_elements_protector &&
-        mal_array_prototype_object != nullptr &&
-        arr->object.prototype == mal_array_prototype_object) {
-        *result = false;
-        return true;
+/** A successful dense own-element lookup proves `index in array`; every miss must
+ * use the general path because a hole can still be supplied by the prototype. */
+static inline bool mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
+    if (arr && index >= 0 && index < (f64) UINT32_MAX) {
+        u32 i = (u32) index;
+        return (f64) i == index && mal_array_object_dense_has(arr, i);
     }
     return false;
 }

@@ -2410,16 +2410,11 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/r\d+ \+= 1\.0;/);
 	});
 
-	it("emits handled Array membership results and preserves the generic fallback", () => {
+	it("takes a dense own-element fast path for the in operator", () => {
 		const output = emit(
 			`"use strict"; function has(array, index) { return index in array; } globalThis.has = has;`,
 		);
-		expect(output).toMatch(
-			/mal_vm_array_try_has\(mal_vm_as_array\(r\d+\), [^,]+, &__array_has_\d+\)/,
-		);
-		expect(output).toMatch(
-			/r\d+ = __array_has_\d+ \? MAL_VALUE_TRUE : MAL_VALUE_FALSE;/,
-		);
+		expect(output).toContain("mal_vm_array_try_has");
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 
