@@ -380,6 +380,21 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 	name: "numeric-nullish-join-normalization",
 	stage: "proofs",
 	requiredFunctionOpcodesAny: ["binary"],
+	admission: {
+		predicate: "synchronous equality comparison that may feed a nullish diamond",
+		hasOpportunity({ program, function: functionId }) {
+			const fn = program.function(functionId);
+			if (fn.isAsync || fn.isGenerator) return false;
+			return [...fn.instructionIds()].some(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "binary" &&
+					["==", "===", "!=", "!=="].includes(
+						fn.instructionAttributes(instruction).operator as string,
+					),
+			);
+		},
+	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { cfg: true, calls: true, facts: false, representations: true },
