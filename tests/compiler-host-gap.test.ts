@@ -195,6 +195,12 @@ describe("compiler host-gap ladder", () => {
 		expect(holeyUndefined.operations).toBe(storedZeroUndefined.operations);
 		expect(holeyUndefined.checksum).toBeGreaterThan(0);
 		expect(storedZeroUndefined.checksum).toBe(0);
+
+		const holeyMembership = fixtureOutput("holey-array-membership");
+		const storedZeroMembership = fixtureOutput("stored-zero-array-membership-control");
+		expect(holeyMembership.operations).toBe(storedZeroMembership.operations);
+		expect(holeyMembership.checksum).toBeGreaterThan(0);
+		expect(storedZeroMembership.checksum).toBe(0);
 	});
 
 	it("summarizes category ratios without implying workload attribution", () => {

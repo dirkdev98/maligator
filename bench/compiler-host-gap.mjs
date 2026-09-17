@@ -861,19 +861,19 @@ function prefixedRestLength(_prefix, ...values) {
 }
 
 function chooseRestBounded(selector, ...values) {
-	return values[(+selector) & 1];
+	return values[+selector & 1];
 }
 
 function chooseFixedBounded(selector, first, second) {
-	return (+selector) & 1 ? second : first;
+	return +selector & 1 ? second : first;
 }
 
 function chooseRestBoundedFour(selector, ...values) {
-	return values[(+selector) & 3];
+	return values[+selector & 3];
 }
 
 function chooseFixedBoundedFour(selector, first, second, third, fourth) {
-	const selected = (+selector) & 3;
+	const selected = +selector & 3;
 	return selected < 2
 		? selected === 0
 			? first
@@ -1324,6 +1324,36 @@ function storedZeroArrayUndefinedCheckControl(scale) {
 		}
 	}
 	return result(checksum, values.length * rounds);
+}
+
+function holeyArrayMembership(scale) {
+	const values = [];
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+	values[16_383] = 0;
+	const length = values.length;
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < length; index++) {
+			if (!(index in values)) checksum++;
+		}
+	}
+	return result(checksum, length * rounds);
+}
+
+function storedZeroArrayMembershipControl(scale) {
+	const values = [];
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+	for (let index = 1; index < 16_384; index += 2) values[index] = 0;
+	const length = values.length;
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < length; index++) {
+			if (!(index in values)) checksum++;
+		}
+	}
+	return result(checksum, length * rounds);
 }
 
 function recordArrayTraversal(scale) {
@@ -1931,6 +1961,34 @@ const kernels = [
 			category: "object-array-representation",
 			inputShape: "16,384 slots, alternating stored zeroes",
 			unit: "indexed undefined check",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"holey-array-membership",
+		"runtime",
+		"holey Array indexed membership checks",
+		"array-layout",
+		"runtime/src/vm_ops.h",
+		holeyArrayMembership,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating holes, present final index",
+			unit: "indexed membership check",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"stored-zero-array-membership-control",
+		"runtime",
+		"stored-zero Array indexed membership checks",
+		"array-layout",
+		"runtime/src/vm_ops.h",
+		storedZeroArrayMembershipControl,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating stored zeroes",
+			unit: "indexed membership check",
 			sentinel: false,
 		},
 	),
