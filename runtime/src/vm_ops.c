@@ -7017,6 +7017,45 @@ void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *in
     }
 }
 
+static bool mal_vm_try_merge_shaped_data_properties(
+    MalVm *vm, MalValue target_value, MalValue source
+) {
+    if (!mal_value_is_heap_type(target_value, MAL_HEAP_OBJECT)
+        || !mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    MalObject *target = mal_value_to_object(target_value);
+    MalObject *source_object = mal_value_to_object(source);
+    if (target->shape != mal_shape_root(&vm->heap)
+        || target->slots != nullptr
+        || mal_object_has_public_overflow(target)
+        || !target->extensible
+        || source_object->shape == nullptr
+        || source_object->slots == nullptr
+        || mal_object_has_public_overflow(source_object)) {
+        return false;
+    }
+    u32 count = source_object->shape->inline_count;
+    if (count == 0 || count > MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
+        return false;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        if (!mal_value_is_string(source_object->shape->props[i].key)) {
+            return false;
+        }
+    }
+    MalShapeAppendPlan plan;
+    if (!mal_object_append_plan_init(
+            &plan, target->shape, source_object->shape, count)
+        || !mal_object_try_append_shaped_values(
+            target, &plan, source_object->slots, count)) {
+        return false;
+    }
+    MAL_PERF_COUNT(merge_data_shaped_hits);
+    MAL_PERF_ADD(merge_data_shaped_slots, count);
+    return true;
+}
+
 // Shared by the interpreter op and the native backend: object spread
 // (`{...source}`) — copy source's own enumerable properties onto target with
 // CreateDataProperty semantics. A throwing getter sets vm->completion.
@@ -7045,6 +7084,11 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
     if (!mal_value_is_object(source)) {
         return;
     }
+
+    if (mal_vm_try_merge_shaped_data_properties(vm, target_value, source)) {
+        return;
+    }
+    MAL_PERF_COUNT(merge_data_fallbacks);
 
     MalPropertyIter iter;
     mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
