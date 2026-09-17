@@ -16,6 +16,7 @@
 #include "property_iter.h"
 #include "proxy_object.h"
 #include "rooted_collection.h"
+#include "shape.h"
 #include "u16_buffer.h"
 #include "utf16.h"
 #include "value_ops.h"
@@ -399,13 +400,28 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
         // Deferring the enumerability check into the loop would instead drop the
         // deleted key and would reorder Proxy getOwnPropertyDescriptor traps after
         // get traps.
-        MalRootedKeySnapshot own_keys;
-        mal_rooted_key_snapshot_init(&own_keys);
-        MalRootedKeySnapshot keys;
-        mal_rooted_key_snapshot_init(&keys);
-
         MalObject *object = mal_value_to_object(value);
-        if (object->header.type == MAL_HEAP_OBJECT) {
+        const MalShape *shape_snapshot = nullptr;
+        if (object->header.type == MAL_HEAP_OBJECT &&
+            !mal_object_has_public_overflow(object) && object->shape != nullptr) {
+            shape_snapshot = object->shape;
+            for (u32 i = 0; i < shape_snapshot->inline_count; i++) {
+                if (!mal_value_is_string(shape_snapshot->props[i].key)) {
+                    shape_snapshot = nullptr;
+                    break;
+                }
+            }
+        }
+
+        MalRootedKeySnapshot own_keys = {0};
+        MalRootedKeySnapshot keys = {0};
+        bool has_rooted_snapshots = shape_snapshot == nullptr;
+        if (has_rooted_snapshots) {
+            mal_rooted_key_snapshot_init(&own_keys);
+            mal_rooted_key_snapshot_init(&keys);
+        }
+
+        if (shape_snapshot == nullptr && object->header.type == MAL_HEAP_OBJECT) {
             // A plain ordinary object exposes exactly its shape/table properties.
             // Snapshot their already-available descriptors directly; exotics and
             // proxies retain the full [[OwnPropertyKeys]]/[[GetOwnProperty]] path.
@@ -439,10 +455,27 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 }
             }
         }
-        for (usize i = 0; ok && i < keys.count; i++) {
-            MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
+        usize key_count = shape_snapshot != nullptr
+            ? shape_snapshot->inline_count
+            : keys.count;
+        for (usize i = 0; ok && i < key_count; i++) {
+            MalKey key;
+            MalValue key_string;
+            if (shape_snapshot != nullptr) {
+                const MalShapeProp *prop = &shape_snapshot->props[i];
+                if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) {
+                    continue;
+                }
+                key = mal_key_from_value(prop->key);
+                key_string = prop->key;
+            } else {
+                key = keys.keys[i];
+                key_string = mal_value_from_string(
+                    mal_ops_to_string(&vm->heap, key.value));
+            }
             member->buffer.length = 0;
-            MalJsonResult result = mal_json_serialize_property(state, member, keys.keys[i], key_string, value, depth + 1);
+            MalJsonResult result = mal_json_serialize_property(
+                state, member, key, key_string, value, depth + 1);
             if (result == MAL_JSON_THROW) {
                 ok = false;
                 break;
@@ -463,9 +496,11 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             }
             any = true;
         }
-        // Root spans are stack-linked: unwind the snapshots in reverse order.
-        mal_rooted_key_snapshot_dispose(&keys);
-        mal_rooted_key_snapshot_dispose(&own_keys);
+        if (has_rooted_snapshots) {
+            // Root spans are stack-linked: unwind the snapshots in reverse order.
+            mal_rooted_key_snapshot_dispose(&keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
+        }
     }
 
     if (!ok) {

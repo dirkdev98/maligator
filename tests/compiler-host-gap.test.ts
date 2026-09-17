@@ -103,17 +103,20 @@ describe("compiler host-gap ladder", () => {
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 	});
 
-	it.each(["map-operations", "memory-versions", "array-map", "holey-array-traversal"])(
-		"keeps %s work and checksums deterministic",
-		(id) => {
-			const first = fixtureOutput(id);
-			const second = fixtureOutput(id);
-			expect(second.id).toBe(first.id);
-			expect(second.operations).toBe(first.operations);
-			expect(second.checksum).toBe(first.checksum);
-			expect(first.operations).toBeGreaterThan(0);
-		},
-	);
+	it.each([
+		"map-operations",
+		"memory-versions",
+		"array-map",
+		"holey-array-traversal",
+		"json-stringify-shape-mutation",
+	])("keeps %s work and checksums deterministic", (id) => {
+		const first = fixtureOutput(id);
+		const second = fixtureOutput(id);
+		expect(second.id).toBe(first.id);
+		expect(second.operations).toBe(first.operations);
+		expect(second.checksum).toBe(first.checksum);
+		expect(first.operations).toBeGreaterThan(0);
+	});
 
 	it("summarizes category ratios without implying workload attribution", () => {
 		const makeResult = (
