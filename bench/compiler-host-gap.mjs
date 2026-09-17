@@ -883,6 +883,47 @@ function dynamicRestParameters(scale) {
 	return result(checksum, operations);
 }
 
+function reduceRestBatch(rounds, ...values) {
+	let checksum = 0;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index];
+	}
+	return checksum;
+}
+
+function reduceArrayBatch(rounds, first, second, third, fourth) {
+	const values = [];
+	values[0] = first;
+	values[1] = second;
+	values[2] = third;
+	values[3] = fourth;
+	let checksum = 0;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index];
+	}
+	return checksum;
+}
+
+function batchedRestReduction(scale) {
+	let checksum = 0;
+	const batches = 250 * scale;
+	const rounds = 256;
+	for (let batch = 0; batch < batches; batch++) {
+		checksum += reduceRestBatch(rounds, batch & 31, 3, 5, 7);
+	}
+	return result(checksum, batches * rounds * 4);
+}
+
+function batchedArrayReductionControl(scale) {
+	let checksum = 0;
+	const batches = 250 * scale;
+	const rounds = 256;
+	for (let batch = 0; batch < batches; batch++) {
+		checksum += reduceArrayBatch(rounds, batch & 31, 3, 5, 7);
+	}
+	return result(checksum, batches * rounds * 4);
+}
+
 function materializedRestParameters(scale) {
 	const retained = new Array(32);
 	const operations = 200_000 * scale;
@@ -1413,6 +1454,34 @@ const kernels = [
 		"runtime/src/function_object.c",
 		dynamicRestParameters,
 		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"batched-rest-reduction",
+		"runtime",
+		"repeated numeric reduction over a private rest array",
+		"rest-arguments",
+		"src/compiler/core/core-ir-value-kinds.ts",
+		batchedRestReduction,
+		{
+			category: "language-features",
+			inputShape: "4-number rest array, 256 traversals per call",
+			unit: "element load",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"batched-array-reduction-control",
+		"runtime",
+		"repeated numeric reduction over a private array",
+		"array-layout",
+		"src/compiler/core/core-ir-value-kinds.ts",
+		batchedArrayReductionControl,
+		{
+			category: "language-features",
+			inputShape: "4-number private array, 256 traversals per call",
+			unit: "element load",
+			sentinel: false,
+		},
 	),
 	kernel(
 		"materialized-rest-parameters",

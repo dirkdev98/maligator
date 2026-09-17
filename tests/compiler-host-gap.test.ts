@@ -139,6 +139,13 @@ describe("compiler host-gap ladder", () => {
 			operations: arrayControl.operations,
 			checksum: arrayControl.checksum,
 		});
+
+		const batched = fixtureOutput("batched-rest-reduction");
+		const batchedControl = fixtureOutput("batched-array-reduction-control");
+		expect(batched).toMatchObject({
+			operations: batchedControl.operations,
+			checksum: batchedControl.checksum,
+		});
 	});
 
 	it("summarizes category ratios without implying workload attribution", () => {
