@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -49,12 +50,14 @@ interface KernelOutput extends KernelDescriptor {
 	readonly operations: number;
 	readonly checksum: number;
 	readonly elapsedMs: number;
+	readonly warmupMs: ReadonlyArray<number>;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
 }
 
 interface TimedKernelSample {
 	readonly elapsedMs: number;
+	readonly warmupMs: ReadonlyArray<number>;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
 }
@@ -135,11 +138,14 @@ interface FullCompilerAnalysis {
 interface Options {
 	readonly samples: number;
 	readonly targetNodeMs: number;
+	readonly budgetSeconds: number;
+	readonly caseTimeoutMs: number;
 	readonly output: string;
 	readonly markdown: string;
 	readonly groups: ReadonlySet<KernelDescriptor["group"]>;
 	readonly cases: ReadonlySet<string>;
 	readonly skipNodeAllocation: boolean;
+	readonly plan: boolean;
 	readonly selfCompile?: string;
 }
 
@@ -148,12 +154,15 @@ const HELP = `Usage: npm run bench:compiler-host-gap -- [options]
 Options:
   --samples N                paired timing samples per host (default: 5)
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
+  --budget-seconds N         whole-run budget including the shared build (default: 300)
+  --case-timeout-ms N        timeout for one child invocation (default: 10000)
   --group primitive|algorithm
   --case ID                  select a kernel; repeatable
   --output PATH              JSON report (default: .cache/compiler-host-gap/report.json)
   --markdown PATH            Markdown report (default: .cache/compiler-host-gap/report.md)
   --skip-node-allocation     omit V8 sampled-allocation resource probes
   --self-compile PATH        merge a full self-compile owner artifact
+  --plan=json                describe selected work without writing or building
 `;
 
 function requiredValue(args: ReadonlyArray<string>, index: number): string {
@@ -177,11 +186,14 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	}
 	let samples = 5;
 	let targetNodeMs = 40;
+	let budgetSeconds = 300;
+	let caseTimeoutMs = 10_000;
 	let output = DEFAULT_JSON;
 	let markdown = DEFAULT_MARKDOWN;
 	const groups = new Set<KernelDescriptor["group"]>();
 	const cases = new Set<string>();
 	let skipNodeAllocation = false;
+	let plan = false;
 	let selfCompile: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
@@ -190,6 +202,12 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 			index++;
 		} else if (option === "--target-node-ms") {
 			targetNodeMs = positiveInteger(requiredValue(args, index), option);
+			index++;
+		} else if (option === "--budget-seconds") {
+			budgetSeconds = positiveInteger(requiredValue(args, index), option);
+			index++;
+		} else if (option === "--case-timeout-ms") {
+			caseTimeoutMs = positiveInteger(requiredValue(args, index), option);
 			index++;
 		} else if (option === "--output") {
 			output = path.resolve(requiredValue(args, index));
@@ -209,6 +227,8 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 			index++;
 		} else if (option === "--skip-node-allocation") {
 			skipNodeAllocation = true;
+		} else if (option === "--plan=json") {
+			plan = true;
 		} else if (option === "--self-compile") {
 			selfCompile = path.resolve(requiredValue(args, index));
 			index++;
@@ -219,11 +239,14 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	return {
 		samples,
 		targetNodeMs,
+		budgetSeconds,
+		caseTimeoutMs,
 		output,
 		markdown,
 		groups,
 		cases,
 		skipNodeAllocation,
+		plan,
 		...(selfCompile === undefined ? {} : { selfCompile }),
 	};
 }
@@ -232,12 +255,13 @@ function runProcess(
 	command: string,
 	args: ReadonlyArray<string>,
 	environment: NodeJS.ProcessEnv = process.env,
+	timeoutMs = 900_000,
 ): { readonly stdout: string; readonly stderr: string } {
 	const completed = spawnSync(command, [...args], {
 		env: environment,
 		encoding: "utf8",
 		maxBuffer: 16 * 1024 * 1024,
-		timeout: 900_000,
+		timeout: timeoutMs,
 	});
 	if (completed.error !== undefined) throw completed.error;
 	if (completed.status !== 0) {
@@ -260,7 +284,9 @@ function parseKernelOutput(stdout: string): KernelOutput {
 		parsed.operations <= 0 ||
 		typeof parsed.checksum !== "number" ||
 		typeof parsed.elapsedMs !== "number" ||
-		parsed.elapsedMs < 0
+		parsed.elapsedMs < 0 ||
+		!Array.isArray(parsed.warmupMs) ||
+		parsed.warmupMs.some((value) => typeof value !== "number" || value < 0)
 	) {
 		throw new Error(`invalid compiler host-gap kernel output: ${line}`);
 	}
@@ -274,14 +300,12 @@ function listKernels(): ReadonlyArray<KernelDescriptor> {
 	return parsed;
 }
 
-function runKernel(command: string, args: ReadonlyArray<string>): KernelOutput {
-	return parseKernelOutput(
-		runProcess(command, args, {
-			...process.env,
-			MAL_GC_STATS: "1",
-			MAL_GC_CONTROL: "1",
-		}).stdout,
-	);
+function runKernel(
+	command: string,
+	args: ReadonlyArray<string>,
+	timeoutMs: number,
+): KernelOutput {
+	return parseKernelOutput(runProcess(command, args, process.env, timeoutMs).stdout);
 }
 
 function median(values: ReadonlyArray<number>): number {
@@ -297,6 +321,7 @@ function timeInvocation(
 	command: string,
 	args: ReadonlyArray<string>,
 	environment: NodeJS.ProcessEnv,
+	timeoutMs: number,
 ): {
 	readonly output: KernelOutput;
 	readonly cpuMs: number;
@@ -308,6 +333,7 @@ function timeInvocation(
 		"/usr/bin/time",
 		[timeFlag, command, ...args],
 		environment,
+		timeoutMs,
 	);
 	const stderr = completed.stderr;
 	const macCpu = stderr.match(/([0-9.]+)\s+user\s+([0-9.]+)\s+sys/);
@@ -347,12 +373,14 @@ function nodeResourceSample(
 	id: string,
 	scale: number,
 	sampleAllocation: boolean,
+	timeoutMs: number,
 ): ResourceSample {
 	if (!sampleAllocation) {
 		const measured = timeInvocation(
 			process.execPath,
 			[FIXTURE, id, String(scale)],
 			process.env,
+			timeoutMs,
 		);
 		return { cpuMs: measured.cpuMs, peakRssBytes: measured.peakRssBytes };
 	}
@@ -370,6 +398,7 @@ function nodeResourceSample(
 				String(scale),
 			],
 			process.env,
+			timeoutMs,
 		);
 		const profileName = readdirSync(profileRoot).find((name) =>
 			name.endsWith(".heapprofile"),
@@ -396,12 +425,18 @@ function maligatorResourceSample(
 	binary: string,
 	id: string,
 	scale: number,
+	timeoutMs: number,
 ): ResourceSample {
-	const measured = timeInvocation(binary, [id, String(scale)], {
-		...process.env,
-		MAL_GC_STATS: "1",
-		MAL_GC_CONTROL: "1",
-	});
+	const measured = timeInvocation(
+		binary,
+		[id, String(scale)],
+		{
+			...process.env,
+			MAL_GC_STATS: "1",
+			MAL_GC_CONTROL: "1",
+		},
+		timeoutMs,
+	);
 	return {
 		cpuMs: measured.cpuMs,
 		peakRssBytes: measured.peakRssBytes,
@@ -425,23 +460,44 @@ function assertParity(reference: KernelOutput, actual: KernelOutput): void {
 	}
 }
 
-function calibrateScale(descriptor: KernelDescriptor, targetNodeMs: number): number {
-	let scale = 1;
-	for (let attempt = 0; attempt < 3; attempt++) {
-		const output = runKernel(process.execPath, [FIXTURE, descriptor.id, String(scale)]);
-		if (output.elapsedMs >= targetNodeMs) return scale;
-		const multiplier = Math.max(
-			2,
-			Math.ceil(targetNodeMs / Math.max(1, output.elapsedMs)),
-		);
-		scale = Math.min(256, scale * multiplier);
-	}
-	return scale;
+function invocationTimeout(deadline: number, caseTimeoutMs: number): number {
+	const remaining = Math.floor(deadline - performance.now() - 250);
+	if (remaining < 1) throw new Error("runtime-gap budget exhausted");
+	return Math.min(caseTimeoutMs, remaining);
+}
+
+function calibrateScale(
+	binary: string,
+	descriptor: KernelDescriptor,
+	targetNodeMs: number,
+	deadline: number,
+	caseTimeoutMs: number,
+): number {
+	const node = runKernel(
+		process.execPath,
+		[FIXTURE, descriptor.id, "1"],
+		invocationTimeout(deadline, caseTimeoutMs),
+	);
+	const maligator = runKernel(
+		binary,
+		[descriptor.id, "1"],
+		invocationTimeout(deadline, caseTimeoutMs),
+	);
+	assertParity(node, maligator);
+	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
+	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
+	const targetScale = Math.max(1, Math.ceil(targetNodeMs / fasterMs));
+	const slowerScale = Math.max(
+		1,
+		Math.floor((caseTimeoutMs * 0.5) / Math.max(1, slowerMs)),
+	);
+	return Math.min(256, targetScale, slowerScale);
 }
 
 function timedSample(output: KernelOutput): TimedKernelSample {
 	return {
 		elapsedMs: output.elapsedMs,
+		warmupMs: output.warmupMs,
 		...(output.allocatedBytes === undefined
 			? {}
 			: { allocatedBytes: output.allocatedBytes }),
@@ -452,17 +508,35 @@ function timedSample(output: KernelOutput): TimedKernelSample {
 function measureKernel(
 	binary: string,
 	descriptor: KernelDescriptor,
-	options: Pick<Options, "samples" | "targetNodeMs" | "skipNodeAllocation">,
+	options: Pick<
+		Options,
+		"samples" | "targetNodeMs" | "skipNodeAllocation" | "caseTimeoutMs"
+	>,
+	deadline: number,
 ): CompilerHostGapKernelResult {
-	const scale = calibrateScale(descriptor, options.targetNodeMs);
+	const scale = calibrateScale(
+		binary,
+		descriptor,
+		options.targetNodeMs,
+		deadline,
+		options.caseTimeoutMs,
+	);
 	const nodeSamples: Array<TimedKernelSample> = [];
 	const maligatorSamples: Array<TimedKernelSample> = [];
 	let reference: KernelOutput | undefined;
 	for (let sample = 0; sample < options.samples; sample++) {
 		const runNode = (): KernelOutput =>
-			runKernel(process.execPath, [FIXTURE, descriptor.id, String(scale)]);
+			runKernel(
+				process.execPath,
+				[FIXTURE, descriptor.id, String(scale)],
+				invocationTimeout(deadline, options.caseTimeoutMs),
+			);
 		const runMaligator = (): KernelOutput =>
-			runKernel(binary, [descriptor.id, String(scale)]);
+			runKernel(
+				binary,
+				[descriptor.id, String(scale)],
+				invocationTimeout(deadline, options.caseTimeoutMs),
+			);
 		const ordered = sample % 2 === 0 ? [runNode, runMaligator] : [runMaligator, runNode];
 		const first = ordered[0]!();
 		const second = ordered[1]!();
@@ -486,13 +560,23 @@ function measureKernel(
 			samples: nodeSamples,
 			medianMs: nodeMedianMs,
 			nsPerOperation: (nodeMedianMs * 1e6) / operations,
-			resource: nodeResourceSample(descriptor.id, scale, !options.skipNodeAllocation),
+			resource: nodeResourceSample(
+				descriptor.id,
+				scale,
+				!options.skipNodeAllocation,
+				invocationTimeout(deadline, options.caseTimeoutMs),
+			),
 		},
 		maligator: {
 			samples: maligatorSamples,
 			medianMs: maligatorMedianMs,
 			nsPerOperation: (maligatorMedianMs * 1e6) / operations,
-			resource: maligatorResourceSample(binary, descriptor.id, scale),
+			resource: maligatorResourceSample(
+				binary,
+				descriptor.id,
+				scale,
+				invocationTimeout(deadline, options.caseTimeoutMs),
+			),
 		},
 		ratio: maligatorMedianMs / nodeMedianMs,
 		hostGapMs: maligatorMedianMs - nodeMedianMs,
@@ -790,7 +874,7 @@ function digest(file: string): string {
 	return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-function main(args: ReadonlyArray<string>): void {
+export function main(args: ReadonlyArray<string>): void {
 	const options = parseOptions(args);
 	if (options === undefined) return;
 	const descriptors = listKernels().filter(
@@ -804,7 +888,30 @@ function main(args: ReadonlyArray<string>): void {
 	if (unknownCases.length > 0)
 		throw new Error(`unknown selected kernels: ${unknownCases.join(", ")}`);
 	if (descriptors.length === 0) throw new Error("no compiler host-gap kernels selected");
+	if (options.plan) {
+		console.log(
+			JSON.stringify(
+				{
+					schema: 1,
+					workload: "runtime-gap",
+					cases: descriptors,
+					samples: options.samples,
+					targetNodeMs: options.targetNodeMs,
+					budgetSeconds: options.budgetSeconds,
+					caseTimeoutMs: options.caseTimeoutMs,
+					nodeAllocation: !options.skipNodeAllocation,
+					writes: false,
+					builds: false,
+				},
+				undefined,
+				"\t",
+			),
+		);
+		return;
+	}
 
+	const startedAt = performance.now();
+	const deadline = startedAt + options.budgetSeconds * 1_000;
 	const progress = new CommandProgress("compiler-host-gap");
 	progress.start(`${descriptors.length} kernels · ${options.samples} paired samples`);
 	progress.detail("build shared native kernel runner");
@@ -816,9 +923,12 @@ function main(args: ReadonlyArray<string>): void {
 	});
 	const results: Array<CompilerHostGapKernelResult> = [];
 	for (const [index, descriptor] of descriptors.entries()) {
+		if (performance.now() >= deadline) {
+			throw new Error(`runtime-gap budget exhausted before ${descriptor.id}`);
+		}
 		progress.stage(index + 1, descriptors.length, descriptor.id);
 		try {
-			results.push(measureKernel(binary, descriptor, options));
+			results.push(measureKernel(binary, descriptor, options, deadline));
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {
 			progress.stageFailed(index + 1, descriptors.length, descriptor.id);
@@ -862,7 +972,10 @@ function main(args: ReadonlyArray<string>): void {
 	const dirtyPatch = gitOutput(["diff", "--binary", "HEAD"]);
 	const report = {
 		schema: 2,
+		status: "complete",
+		complete: true,
 		generatedAt: new Date().toISOString(),
+		elapsedMs: performance.now() - startedAt,
 		source: {
 			commit: gitOutput(["rev-parse", "HEAD"]),
 			dirty: dirtyPatch.length > 0,
@@ -879,6 +992,8 @@ function main(args: ReadonlyArray<string>): void {
 		configuration: {
 			samples: options.samples,
 			targetNodeMs: options.targetNodeMs,
+			budgetSeconds: options.budgetSeconds,
+			caseTimeoutMs: options.caseTimeoutMs,
 			fixture: path.relative(REPOSITORY_ROOT, FIXTURE),
 			fixtureDigest: digest(FIXTURE),
 			driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
@@ -902,7 +1017,8 @@ function main(args: ReadonlyArray<string>): void {
 	};
 	mkdirSync(path.dirname(options.output), { recursive: true });
 	mkdirSync(path.dirname(options.markdown), { recursive: true });
-	writeFileSync(options.output, `${JSON.stringify(report, undefined, "\t")}\n`);
+	writeFileSync(`${options.output}.tmp`, `${JSON.stringify(report, undefined, "\t")}\n`);
+	renameSync(`${options.output}.tmp`, options.output);
 	writeFileSync(options.markdown, markdownReport(report));
 	const formatter = path.join(REPOSITORY_ROOT, "node_modules/.bin/oxfmt");
 	if (existsSync(formatter))

@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 const MODULUS = 1_000_000_007;
 
 function normalized(value) {
@@ -897,16 +899,21 @@ if (argument === "--list") {
 	const scale = Number(process.argv[3] ?? "1");
 	if (!Number.isSafeInteger(scale) || scale < 1)
 		throw new Error("scale must be a positive integer");
-	selected.run(1);
+	const warmupMs = [];
+	for (let warmup = 0; warmup < 2; warmup++) {
+		const warmupStartedAt = performance.now();
+		selected.run(Math.min(scale, 4));
+		warmupMs.push(performance.now() - warmupStartedAt);
+	}
 	const allocatedReader = Reflect.get(globalThis, "__mal_gc_allocated_bytes");
 	const collectionsReader = Reflect.get(globalThis, "__mal_gc_collections");
 	const beforeAllocated =
 		typeof allocatedReader === "function" ? allocatedReader() : undefined;
 	const beforeCollections =
 		typeof collectionsReader === "function" ? collectionsReader() : undefined;
-	const startedAt = Date.now();
+	const startedAt = performance.now();
 	const measured = selected.run(scale);
-	const elapsedMs = Date.now() - startedAt;
+	const elapsedMs = performance.now() - startedAt;
 	const afterAllocated =
 		typeof allocatedReader === "function" ? allocatedReader() : undefined;
 	const afterCollections =
@@ -924,6 +931,7 @@ if (argument === "--list") {
 			operations: measured.operations,
 			checksum: measured.checksum,
 			elapsedMs,
+			warmupMs,
 			...(beforeAllocated === undefined || afterAllocated === undefined
 				? {}
 				: { allocatedBytes: Math.max(0, afterAllocated - beforeAllocated) }),
