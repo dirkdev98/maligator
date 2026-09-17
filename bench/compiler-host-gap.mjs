@@ -833,11 +833,77 @@ function sumRest(...values) {
 	return values[0] + values[1] + values[2] + values[3];
 }
 
+function sumFour(first, second, third, fourth) {
+	return first + second + third + fourth;
+}
+
+function sumRestDynamic(selector, ...values) {
+	const start = selector & 3;
+	return (
+		values[start] +
+		values[(start + 1) & 3] +
+		values[(start + 2) & 3] +
+		values[(start + 3) & 3]
+	);
+}
+
+function collectRest(...values) {
+	return values;
+}
+
+function collectFour(first, second, third, fourth) {
+	return [first, second, third, fourth];
+}
+
+function fixedArityParameters(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += sumFour(index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
 function restParameters(scale) {
 	let checksum = 0;
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
 		checksum += sumRest(index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function dynamicRestParameters(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += sumRestDynamic(index, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function materializedRestParameters(scale) {
+	const retained = new Array(32);
+	const operations = 200_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		retained[index & 31] = collectRest(index & 31, 3, 5, 7);
+	}
+	let checksum = 0;
+	for (const values of retained) {
+		checksum += values[0] + values[1] + values[2] + values[3];
+	}
+	return result(checksum, operations);
+}
+
+function materializedArrayControl(scale) {
+	const retained = new Array(32);
+	const operations = 200_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		retained[index & 31] = collectFour(index & 31, 3, 5, 7);
+	}
+	let checksum = 0;
+	for (const values of retained) {
+		checksum += values[0] + values[1] + values[2] + values[3];
 	}
 	return result(checksum, operations);
 }
@@ -1321,13 +1387,54 @@ const kernels = [
 		{ category: "language-features", unit: "caught exception" },
 	),
 	kernel(
+		"fixed-arity-parameters",
+		"runtime",
+		"fixed-arity call control for rest probes",
+		"rest-arguments",
+		"runtime/src/function_object.c",
+		fixedArityParameters,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
 		"rest-parameters",
 		"runtime",
-		"rest parameter materialization",
+		"scalarizable fixed-index rest reads",
 		"rest-arguments",
 		"runtime/src/function_object.c",
 		restParameters,
 		{ category: "language-features", unit: "call" },
+	),
+	kernel(
+		"dynamic-rest-parameters",
+		"runtime",
+		"dynamic indexed rest reads",
+		"rest-arguments",
+		"runtime/src/function_object.c",
+		dynamicRestParameters,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"materialized-rest-parameters",
+		"runtime",
+		"escaping rest arrays retained by the caller",
+		"rest-arguments",
+		"runtime/src/function_object.c",
+		materializedRestParameters,
+		{ category: "language-features", inputShape: "32-entry retained ring", unit: "call" },
+	),
+	kernel(
+		"materialized-array-control",
+		"runtime",
+		"array-literal control retained by the caller",
+		"rest-arguments",
+		"runtime/src/array_object.c",
+		materializedArrayControl,
+		{
+			category: "language-features",
+			inputShape: "32-entry retained ring",
+			unit: "call",
+			sentinel: false,
+		},
 	),
 	kernel(
 		"object-destructuring",

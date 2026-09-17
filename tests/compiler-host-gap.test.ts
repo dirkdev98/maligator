@@ -75,7 +75,7 @@ describe("compiler host-gap ladder", () => {
 				}>;
 			};
 			expect(plan).toMatchObject({ preset: "quick", samples: 3, targetNodeMs: 20 });
-			expect(plan.cases).toHaveLength(36);
+			expect(plan.cases).toHaveLength(37);
 			expect(
 				plan.cases.every(({ suite, sentinel }) => suite === "runtime" && sentinel),
 			).toBe(true);
@@ -98,7 +98,7 @@ describe("compiler host-gap ladder", () => {
 		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
 		expect(
 			kernels.filter(({ suite, sentinel }) => suite === "runtime" && sentinel),
-		).toHaveLength(36);
+		).toHaveLength(37);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 	});
@@ -117,6 +117,27 @@ describe("compiler host-gap ladder", () => {
 		expect(second.operations).toBe(first.operations);
 		expect(second.checksum).toBe(first.checksum);
 		expect(first.operations).toBeGreaterThan(0);
+	});
+
+	it("keeps rest probes matched to their controls", () => {
+		const fixed = fixtureOutput("fixed-arity-parameters");
+		const scalarized = fixtureOutput("rest-parameters");
+		const dynamic = fixtureOutput("dynamic-rest-parameters");
+		expect(scalarized).toMatchObject({
+			operations: fixed.operations,
+			checksum: fixed.checksum,
+		});
+		expect(dynamic).toMatchObject({
+			operations: fixed.operations,
+			checksum: fixed.checksum,
+		});
+
+		const materialized = fixtureOutput("materialized-rest-parameters");
+		const arrayControl = fixtureOutput("materialized-array-control");
+		expect(materialized).toMatchObject({
+			operations: arrayControl.operations,
+			checksum: arrayControl.checksum,
+		});
 	});
 
 	it("summarizes category ratios without implying workload attribution", () => {
