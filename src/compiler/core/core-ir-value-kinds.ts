@@ -249,6 +249,7 @@ function privateArrayUses(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	seeds: ReadonlyArray<CorePrivateArraySeed>,
+	numberValue: (value: CoreValueId) => boolean = (value) => isNumberValue(fn, value),
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -312,7 +313,7 @@ function privateArrayUses(
 				position === 0 &&
 				opcode === "loadProperty" &&
 				operandCount === 2 &&
-				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1))
+				numberValue(fn.kernel.operandAt(operandStart + 1))
 			) {
 				candidate.elementLoads.push(instruction);
 				continue;
@@ -321,8 +322,8 @@ function privateArrayUses(
 				position === 0 &&
 				opcode === "storeProperty" &&
 				operandCount === 3 &&
-				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1)) &&
-				isNumberValue(fn, fn.kernel.operandAt(operandStart + 2))
+				numberValue(fn.kernel.operandAt(operandStart + 1)) &&
+				numberValue(fn.kernel.operandAt(operandStart + 2))
 			) {
 				candidate.elementStores.push(instruction);
 				continue;
@@ -354,6 +355,23 @@ function privateNumericArraySeeds(fn: CoreFunctionStore): Array<CorePrivateArray
 			fn.instructionKind(instruction) !== "operation" ||
 			fn.instructionOpcodeName(instruction) !== "createArray" ||
 			fn.instructionAttributes(instruction).length !== 0 ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		seeds.push({
+			allocation: instruction,
+			root: fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+		});
+	}
+	return seeds;
+}
+
+function privatePackedRestArraySeeds(fn: CoreFunctionStore): Array<CorePrivateArraySeed> {
+	const seeds: Array<CorePrivateArraySeed> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "createRestArguments" ||
 			fn.kernel.instructionResultCount(instruction) !== 1
 		)
 			continue;
@@ -421,6 +439,21 @@ export function corePrivateNumericArrayLoads(
 		corePrivateNumericArrays(program, fn, cfg, context).flatMap(
 			(array) => array.elementLoads,
 		),
+	);
+}
+
+export function corePrivatePackedRestArrayLoads(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+	numberValue: (value: CoreValueId) => boolean,
+): ReadonlySet<CoreInstructionId> {
+	if (!privateArrayPolicyIsLocked(context)) return new Set();
+	return new Set(
+		privateArrayUses(program, fn, cfg, privatePackedRestArraySeeds(fn), numberValue)
+			.filter((array) => array.elementStores.length === 0)
+			.flatMap((array) => array.elementLoads),
 	);
 }
 

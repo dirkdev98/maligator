@@ -4,12 +4,17 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import {
 	deserializeRuntimeImage,
 	serializeRuntimeImage,
 } from "../src/compiler/target/program-image-codec.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 	const source = `globalThis.forward = ${body};`;
@@ -52,6 +57,56 @@ describe("rest forwarding allocation contract", () => {
 		expect(owner!.instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
 			false,
 		);
+	});
+
+	it("certifies packed storage for read-only dynamic rest element loads", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile("function read(index, ...rest) { return rest[+index]; }", "locked"),
+			),
+		);
+		const functionIndex = image.runtime.functions.findIndex((fn) =>
+			fn.instructions.some(
+				(instruction) => instruction.opcode === "CREATE_REST_ARGUMENTS",
+			),
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const runtime = image.runtime.functions[functionIndex]!;
+		const native = image.native.functions[functionIndex]!;
+		const packedLoads = runtime.instructions.flatMap((instruction, index) =>
+			instruction.opcode === "LOAD_PROPERTY" &&
+			native.instructions[index]?.kind === "exact-packed-rest-array-element"
+				? [{ instruction, index }]
+				: [],
+		);
+		expect(packedLoads).toHaveLength(1);
+		expect(native.registerRepresentations[packedLoads[0]!.instruction.dst]).toBe("boxed");
+		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false);
+		expect(emitted?.source).toContain("mal_array_object_contained_dense_get");
+		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
+	});
+
+	it.each([
+		"function read(index, ...rest) { rest[0] = 1; return rest[+index]; }",
+		"function read(index, ...rest) { const alias = rest; alias[0] = 1; return rest[+index]; }",
+		"function read(index, ...rest) { sink(rest); return rest[+index]; }",
+		"function read(index, ...rest) { Object.setPrototypeOf(rest, null); return rest[+index]; }",
+	])("declines packed rest storage after mutation or escape for %s", (source) => {
+		const image = compile(source, "locked");
+		expect(
+			image.native.functions.some((fn) =>
+				fn.instructions.some((plan) => plan?.kind === "exact-packed-rest-array-element"),
+			),
+		).toBe(false);
+	});
+
+	it("declines packed rest storage with mutable array primordials", () => {
+		const image = compile("function read(index, ...rest) { return rest[+index]; }");
+		expect(
+			image.native.functions.some((fn) =>
+				fn.instructions.some((plan) => plan?.kind === "exact-packed-rest-array-element"),
+			),
+		).toBe(false);
 	});
 
 	for (const source of [

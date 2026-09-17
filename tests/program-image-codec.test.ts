@@ -1552,6 +1552,19 @@ describe("program-image-codec", () => {
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(containedTypedArrayStore)),
 		).toEqual(containedTypedArrayStore);
+		const packedRestArrayLoad = withInstruction(
+			{
+				opcode: "LOAD_PROPERTY",
+				dst: 0,
+				object: 1,
+				key: 2,
+				icIndex: 0,
+			},
+			{ kind: "exact-packed-rest-array-element" },
+		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(packedRestArrayLoad)),
+		).toEqual(packedRestArrayLoad);
 		const length = Array.from("length", (unit) => unit.charCodeAt(0));
 		const containedTypedArrayLength = withRuntime(
 			withInstruction(

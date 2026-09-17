@@ -1263,6 +1263,7 @@ export type NativeInstructionPlan =
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
 	| { readonly kind: "exact-contained-array-element" }
+	| { readonly kind: "exact-packed-rest-array-element" }
 	| {
 			readonly kind: "contained-fixed-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
@@ -1657,18 +1658,22 @@ function nativeInstructionPlanFromExecution(
 		case "loadProperty":
 			return instruction.exactContainedArrayElement === true
 				? { kind: "exact-contained-array-element" }
-				: instruction.containedFixedTypedArrayKind !== undefined
-					? {
-							kind: "contained-fixed-typed-array-element",
-							elementKind: instruction.containedFixedTypedArrayKind,
-							...(instruction.containedFixedTypedArrayInBounds ? { inBounds: true } : {}),
-						}
-					: instruction.exactTypedArrayKind === undefined
-						? undefined
-						: {
-								kind: "exact-typed-array-element",
-								elementKind: instruction.exactTypedArrayKind,
-							};
+				: instruction.exactPackedRestArrayElement === true
+					? { kind: "exact-packed-rest-array-element" }
+					: instruction.containedFixedTypedArrayKind !== undefined
+						? {
+								kind: "contained-fixed-typed-array-element",
+								elementKind: instruction.containedFixedTypedArrayKind,
+								...(instruction.containedFixedTypedArrayInBounds
+									? { inBounds: true }
+									: {}),
+							}
+						: instruction.exactTypedArrayKind === undefined
+							? undefined
+							: {
+									kind: "exact-typed-array-element",
+									elementKind: instruction.exactTypedArrayKind,
+								};
 		case "storeProperty":
 			return instruction.containedFixedTypedArrayKind !== undefined
 				? {

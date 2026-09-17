@@ -69,6 +69,7 @@ import {
 	coreOperatorInputPlans,
 	coreBuiltinInputPlans,
 	corePrivateNumericArrayElementPlans,
+	corePrivatePackedRestArrayElementPlans,
 	coreUnsignedArithmeticPlans,
 } from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
@@ -1814,6 +1815,12 @@ export function buildCoreOptimizationPlan(
 		operatorInputs: coreOperatorInputPlans(program, analyses, liveFunctions),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, liveFunctions),
 		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
+			program,
+			analyses,
+			liveFunctions,
+			options.context,
+		),
+		privatePackedRestArrayElements: corePrivatePackedRestArrayElementPlans(
 			program,
 			analyses,
 			liveFunctions,

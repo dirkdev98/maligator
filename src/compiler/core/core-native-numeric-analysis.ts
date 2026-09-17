@@ -12,6 +12,7 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	corePrivatePackedRestArrayLoads,
 	corePrivateNumericArrayLoads,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
@@ -34,8 +35,22 @@ export interface CorePrivateNumericArrayElementPlan {
 	readonly instruction: CoreInstructionId;
 }
 
+export interface CorePrivatePackedRestArrayElementPlan {
+	readonly function: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+}
+
 const privateNumericArrayProofs = new WeakMap<
 	CorePrivateNumericArrayElementPlan,
+	{
+		fn: CoreFunctionStore;
+		versions: CoreFunctionVersions;
+		context: CoreCompilationContext;
+	}
+>();
+
+const privatePackedRestArrayProofs = new WeakMap<
+	CorePrivatePackedRestArrayElementPlan,
 	{
 		fn: CoreFunctionStore;
 		versions: CoreFunctionVersions;
@@ -49,6 +64,20 @@ export function corePrivateNumericArrayElementProofIsCurrent(
 	context: CoreCompilationContext | undefined,
 ): boolean {
 	const proof = privateNumericArrayProofs.get(plan);
+	return (
+		context !== undefined &&
+		proof?.context === context &&
+		proof.fn === program.function(plan.function) &&
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
+	);
+}
+
+export function corePrivatePackedRestArrayElementProofIsCurrent(
+	program: CoreProgram,
+	plan: CorePrivatePackedRestArrayElementPlan,
+	context: CoreCompilationContext | undefined,
+): boolean {
+	const proof = privatePackedRestArrayProofs.get(plan);
 	return (
 		context !== undefined &&
 		proof?.context === context &&
@@ -75,6 +104,40 @@ export function corePrivateNumericArrayElementPlans(
 		for (const instruction of corePrivateNumericArrayLoads(program, fn, cfg, context)) {
 			const plan = Object.freeze({ function: functionId, instruction });
 			privateNumericArrayProofs.set(plan, { fn, versions: fn.versions, context });
+			plans.push(plan);
+		}
+	}
+	return Object.freeze(plans);
+}
+
+export function corePrivatePackedRestArrayElementPlans(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	functions: ReadonlyArray<CoreFunctionId>,
+	context: CoreCompilationContext,
+): ReadonlyArray<CorePrivatePackedRestArrayElementPlan> {
+	const plans: Array<CorePrivatePackedRestArrayElementPlan> = [];
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		const cfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			})
+			.exceptional();
+		const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		for (const instruction of corePrivatePackedRestArrayLoads(
+			program,
+			fn,
+			cfg,
+			context,
+			(value) => kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER,
+		)) {
+			const plan = Object.freeze({ function: functionId, instruction });
+			privatePackedRestArrayProofs.set(plan, { fn, versions: fn.versions, context });
 			plans.push(plan);
 		}
 	}

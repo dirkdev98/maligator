@@ -40,6 +40,29 @@ describe("rest argument forwarding", () => {
 	}
 });
 
+describe("packed rest element reads", () => {
+	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
+	let reference: string;
+	beforeAll(() => {
+		const packedFixture = "tests/local/rest-packed-reads.mjs";
+		reference = execFileSync(process.execPath, [packedFixture], { encoding: "utf8" });
+		pair = buildBackendPairFromOneProgramImage({
+			fixture: packedFixture,
+			name: "rest-packed-reads",
+			outDir,
+			mainFile: HOST_MAIN,
+			config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+		});
+	});
+	for (const backend of ["compiled", "interpreted"] as const) {
+		it(`${backend} preserves numeric index and payload semantics`, () => {
+			expect(runToStdout(pair[backend], { env: STRESS_ENV, timeoutMs: 60000 })).toBe(
+				reference,
+			);
+		});
+	}
+});
+
 describe("rest forwarding allocation counters", () => {
 	for (const primordials of ["mutable", "locked"] as const) {
 		it(`${primordials} forwards without allocating a rest Array`, () => {

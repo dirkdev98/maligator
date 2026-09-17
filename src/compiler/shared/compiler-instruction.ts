@@ -525,6 +525,9 @@ export type CompilerInstruction =
 			 * primitive Number. Native code may resolve clean holes without prototype
 			 * lookup, but must retain generic fallback for deopted storage and non-indices. */
 			exactContainedArrayElement?: true;
+			/** COMPILE-ONLY: the receiver is an unescaped, read-only rest Array whose
+			 * dense storage contains every index below length. */
+			exactPackedRestArrayElement?: true;
 			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
 			 * code may skip receiver branding, the property cache, prototype lookup,
 			 * and the generic element-kind dispatch. */
