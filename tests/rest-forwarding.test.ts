@@ -166,9 +166,22 @@ describe("rest forwarding allocation contract", () => {
 		});
 	}
 
+	it("scalarizes a start-at-zero rest length observation", () => {
+		const image = compile(
+			"function read(...rest) { return rest.length + (rest[0] ?? 0); }",
+			"locked",
+		);
+		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT_COUNT")).toBe(true);
+		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT")).toBe(true);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
+			false,
+		);
+	});
+
 	for (const source of [
 		"function read(index, ...rest) { return rest[index]; }",
-		"function read(...rest) { return rest.length; }",
+		"function read(first, ...rest) { return rest.length; }",
 		"function read(...rest) { rest[0] = 1; return rest[0]; }",
 		"function read(...rest) { globalThis.saved = rest; return rest[0]; }",
 		"function read(...rest) { return () => rest[0]; }",

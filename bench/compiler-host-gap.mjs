@@ -848,6 +848,14 @@ function sumRestDynamic(selector, ...values) {
 	);
 }
 
+function restLength(...values) {
+	return values.length;
+}
+
+function fixedArityLength(_first, _second, _third, _fourth) {
+	return 4;
+}
+
 function collectRest(...values) {
 	return values;
 }
@@ -879,6 +887,24 @@ function dynamicRestParameters(scale) {
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
 		checksum += sumRestDynamic(index, index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function restLengthParameters(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += restLength(index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function fixedArityLengthControl(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += fixedArityLength(index & 31, 3, 5, 7);
 	}
 	return result(checksum, operations);
 }
@@ -1524,6 +1550,24 @@ const kernels = [
 		"rest-arguments",
 		"runtime/src/function_object.c",
 		dynamicRestParameters,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"rest-length-parameters",
+		"runtime",
+		"start-at-zero rest length observation",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		restLengthParameters,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"fixed-arity-length-control",
+		"runtime",
+		"fixed-arity control for rest length observation",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		fixedArityLengthControl,
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(

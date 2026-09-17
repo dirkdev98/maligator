@@ -2506,6 +2506,10 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				readonly result: CoreValueId;
 				readonly argumentIndex: number;
 			}> = [];
+			const lengthReads: Array<{
+				readonly instruction: CoreInstructionId;
+				readonly result: CoreValueId;
+			}> = [];
 			let valid = true;
 			for (
 				let use = fn.kernel.valueFirstUse(rest);
@@ -2533,6 +2537,10 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 					const stringIndex = attributes.stringIndex;
 					if (typeof stringIndex === "number") {
 						const key = decodeString(program, stringIndex);
+						if (key === "length" && startIndex === 0 && result !== undefined) {
+							lengthReads.push({ instruction, result });
+							continue;
+						}
 						if (key !== undefined) elementIndex = canonicalRestElementIndex(key);
 					}
 				} else {
@@ -2557,9 +2565,10 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				}
 				reads.push({ instruction, result, argumentIndex });
 			}
-			if (!valid || reads.length === 0) continue;
+			if (!valid || (reads.length === 0 && lengthReads.length === 0)) continue;
 
 			let before = fn.blockTerminator(fn.entry);
+			let argumentCount: CoreValueId | undefined;
 			const snapshots = new Map<number, CoreValueId>();
 			for (const instruction of fn.bodyInstructionIds(fn.entry)) {
 				const opcode = fn.instructionOpcodeName(instruction);
@@ -2567,7 +2576,9 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 					before = instruction;
 					break;
 				}
-				if (opcode === "loadArgument") {
+				if (opcode === "loadArgumentCount") {
+					argumentCount = instructionResult(fn, instruction, 0);
+				} else {
 					const index = fn.instructionAttributes(instruction).index;
 					const result = instructionResult(fn, instruction, 0);
 					if (typeof index === "number" && result !== undefined) {
@@ -2576,6 +2587,15 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				}
 			}
 			const editor = CoreEditor.open(program, item.function);
+			if (lengthReads.length > 0 && argumentCount === undefined) {
+				argumentCount = editor.insertInstruction(
+					fn.entry,
+					before,
+					"loadArgumentCount",
+					[],
+					{ sourcePosition: fn.instructionSourcePosition(producer) },
+				).outputs[0]!;
+			}
 			for (const argumentIndex of [
 				...new Set(reads.map((read) => read.argumentIndex)),
 			].sort((left, right) => left - right)) {
@@ -2588,6 +2608,10 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 			}
 			for (const read of reads) {
 				editor.replaceValueUses(read.result, snapshots.get(read.argumentIndex)!);
+				editor.removeInstruction(read.instruction);
+			}
+			for (const read of lengthReads) {
+				editor.replaceValueUses(read.result, argumentCount!);
 				editor.removeInstruction(read.instruction);
 			}
 			editor.removeInstruction(producer);

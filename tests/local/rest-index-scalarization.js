@@ -49,6 +49,10 @@ function exactMissingInline(value) {
 	return read(value);
 }
 
+function count(...rest) {
+	return rest.length + (rest[0] ?? 0);
+}
+
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
 check(missing(1, 2) === undefined, "missing argument reads as undefined");
 check(
@@ -65,5 +69,7 @@ check(
 	"exact inlining preserves defaults, mutation, and rooted snapshots",
 );
 check(exactMissingInline(31) === undefined, "exact inlining preserves missing snapshots");
+check(count() === 0, "empty rest length uses the argument count");
+check(count(41, 43) === 43, "rest length and element share argument snapshots");
 
 console.log(`rest-index-scalarization PASS ${passed}`);

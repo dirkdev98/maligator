@@ -32,6 +32,9 @@ it("scalarizes locked rest element reads without losing argument roots", () => {
 			instructions.some((instruction) => instruction.opcode === "LOAD_ARGUMENT"),
 		).toBe(true);
 		expect(
+			instructions.some((instruction) => instruction.opcode === "LOAD_ARGUMENT_COUNT"),
+		).toBe(true);
+		expect(
 			instructions.some((instruction) => instruction.opcode === "CREATE_REST_ARGUMENTS"),
 		).toBe(false);
 		for (const binary of [pair.compiled, pair.interpreted]) {
