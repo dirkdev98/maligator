@@ -16,8 +16,9 @@ import {
 	corePrivateNumericArrayLoads,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
 	CoreFunctionVersions,
@@ -86,6 +87,30 @@ export function corePrivatePackedRestArrayElementProofIsCurrent(
 	);
 }
 
+function packedRestKeyIsNumber(
+	fn: CoreFunctionStore,
+	kinds: CoreValueKindAnalysis,
+	value: CoreValueId,
+): boolean {
+	if (kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER) return true;
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionKind(definition) !== "operation") return false;
+	const opcode = fn.instructionOpcodeName(definition);
+	const operator = fn.instructionAttributes(definition).operator;
+	if (opcode === "unary") return operator === "+";
+	if (
+		opcode !== "binary" ||
+		typeof operator !== "string" ||
+		!["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"].includes(operator)
+	)
+		return false;
+	const start = fn.kernel.instructionOperandStart(definition);
+	return [fn.kernel.operandAt(start), fn.kernel.operandAt(start + 1)].some(
+		(operand) => kinds.kindMask(operand) === COMPILER_VALUE_KIND_NUMBER,
+	);
+}
+
 export function corePrivateNumericArrayElementPlans(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -134,7 +159,7 @@ export function corePrivatePackedRestArrayElementPlans(
 			fn,
 			cfg,
 			context,
-			(value) => kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER,
+			(value) => packedRestKeyIsNumber(fn, kinds, value),
 		)) {
 			const plan = Object.freeze({ function: functionId, instruction });
 			privatePackedRestArrayProofs.set(plan, { fn, versions: fn.versions, context });

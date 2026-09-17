@@ -62,7 +62,13 @@ describe("rest forwarding allocation contract", () => {
 	it("certifies packed storage for read-only dynamic rest element loads", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
-				compile("function read(index, ...rest) { return rest[+index]; }", "locked"),
+				compile(
+					`function read(index, ...rest) {
+						const start = index & 3;
+						return rest[start] + rest[(start + 1) & 3] + rest[(start + 2) & 3] + rest[(start + 3) & 3];
+					}`,
+					"locked",
+				),
 			),
 		);
 		const functionIndex = image.runtime.functions.findIndex((fn) =>
@@ -79,8 +85,10 @@ describe("rest forwarding allocation contract", () => {
 				? [{ instruction, index }]
 				: [],
 		);
-		expect(packedLoads).toHaveLength(1);
-		expect(native.registerRepresentations[packedLoads[0]!.instruction.dst]).toBe("boxed");
+		expect(packedLoads).toHaveLength(4);
+		for (const load of packedLoads) {
+			expect(native.registerRepresentations[load.instruction.dst]).toBe("boxed");
+		}
 		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false);
 		expect(emitted?.source).toContain("mal_array_object_contained_dense_get");
 		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
