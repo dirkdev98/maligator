@@ -23,12 +23,14 @@ describe("interpreter-local dense array accesses", () => {
 			fixture,
 			name: "compiled-dense-array",
 			compiled: true,
+			evalEnabled: false,
 			outDir,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "interpreter-dense-array",
 			compiled: false,
+			evalEnabled: false,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});

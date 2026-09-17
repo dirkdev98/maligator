@@ -1769,7 +1769,7 @@ describe("native update-expression representation", () => {
 		);
 		const output = emitProgramImage(image, { compiled: true });
 		if (kind === "ordinary") {
-			expect(output).toContain("mal_vm_array_try_load(");
+			expect(output).toContain("mal_vm_array_try_get_index(");
 			expect(output).toContain("mal_vm_array_try_store(");
 			expect(output).toContain("mal_vm_indexed_fast_load_index(");
 			expect(output).toContain("mal_vm_indexed_fast_store_index(");
@@ -2047,7 +2047,7 @@ describe("native update-expression representation", () => {
 			),
 		);
 		expect(increments).toEqual(["number"]);
-		expect(output).toContain("mal_vm_array_try_load(");
+		expect(output).toContain("mal_vm_array_try_get_index(");
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toMatch(
@@ -2320,7 +2320,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain(".mode == MAL_IC_MODE_ARRAY_LENGTH");
 		expect(output).toContain("->length");
 		expect(output).toMatch(
-			/mal_vm_array_try_load\(__indexed_length_\d+_array, r\d+, &__indexed_element_\d+\)/,
+			/mal_vm_array_try_get_index\(__indexed_length_\d+_array, r\d+, &__indexed_element_\d+\)/,
 		);
 		expect(output).toContain("mal_vm_admit_numeric_typed_array_length(vm,");
 		expect(output).toContain("mal_typed_array_object_get(vm,");
@@ -3449,7 +3449,7 @@ describe("native update-expression representation", () => {
 		const emitted = emitProgramImage(cached, { compiled: true });
 		expect(emitted).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(emitted).toContain(
-			`mal_vm_array_try_load(__property_receiver_${cursor.elementIp}, r${element.key}`,
+			`mal_vm_array_try_get_index(__property_receiver_${cursor.elementIp}, r${element.key}`,
 		);
 		const duplicate = withSpecializations(lowered, functionIndex, [
 			...owner.specializations,

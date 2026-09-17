@@ -1691,7 +1691,7 @@ static inline bool mal_vm_try_store_known_own_slots(
     return false;
 }
 
-static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out);
+static inline bool mal_vm_array_try_get_index(const MalArrayObject *arr, f64 index, MalValue *out);
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value);
 
 static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
@@ -1786,7 +1786,7 @@ static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value
         f64 index = mal_ops_number_as_f64(key_value);
         if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
             MalValue out;
-            if (mal_vm_array_try_load(
+            if (mal_vm_array_try_get_index(
                     (const MalArrayObject *) mal_value_to_heap(object_value), index, &out)) {
                 return out;
             }
@@ -1874,17 +1874,24 @@ static inline MalArrayObject *mal_vm_as_array(MalValue v) {
                                                             : nullptr;
 }
 
-/**
- * Attempt a dense-vector read of `arr[index]`. Returns true and writes *out on a hit
- * (in-range, non-hole); false when the index is not a valid array index or misses the
- * dense region (the caller then takes the general path). Never runs user code.
- */
-static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out) {
-    if (index >= 0 && index < (f64) UINT32_MAX) {
-        u32 i = (u32) index;
-        if ((f64) i == index) {
-            return mal_array_object_dense_get(arr, i, out);
-        }
+static inline bool mal_vm_array_try_get_index(
+    const MalArrayObject *arr, f64 index, MalValue *out
+) {
+    if (!(index >= 0 && index < (f64) UINT32_MAX)) {
+        return false;
+    }
+    u32 i = (u32) index;
+    if ((f64) i != index) {
+        return false;
+    }
+    if (mal_array_object_dense_get(arr, i, out)) {
+        return true;
+    }
+    if (!arr->dense_deopted && mal_array_elements_protector &&
+        mal_array_prototype_object != nullptr &&
+        arr->object.prototype == mal_array_prototype_object) {
+        *out = mal_value_new_undefined();
+        return true;
     }
     return false;
 }
@@ -1948,7 +1955,7 @@ static inline MalValue mal_vm_indexed_fast_load_index(MalVm *vm, MalValue object
                                                       MalInlineCache *ic) {
     MalArrayObject *array = mal_vm_as_array(object_value);
     MalValue out;
-    if (array != nullptr && mal_vm_array_try_load(array, index, &out)) {
+    if (array != nullptr && mal_vm_array_try_get_index(array, index, &out)) {
         return out;
     }
     return mal_vm_indexed_fast_load(vm, object_value, mal_ops_number_value(index), ic);

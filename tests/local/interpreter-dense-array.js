@@ -59,7 +59,14 @@ for (let i = 0; i < 200; i++) {
 
 const hole = [10, 20, 30];
 delete hole[1];
-check(load(hole, 1) === undefined && !Object.hasOwn(hole, 1), "hole load falls back");
+for (let index = 0; index < 1000; index++) {
+	check(load(hole, 1) === undefined, "clean hole load");
+}
+check(!Object.hasOwn(hole, 1), "clean hole remains absent");
+check(load([undefined], 0) === undefined, "own undefined is readable");
+const trailingHole = [1];
+trailingHole.length = 4;
+check(load(trailingHole, 3) === undefined, "trailing hole load");
 
 const fixedLength = [1];
 Object.defineProperty(fixedLength, "length", { writable: false });
@@ -357,15 +364,28 @@ const ranged = [];
 store(ranged, -1, "negative");
 store(ranged, 2147483648, "large");
 store(ranged, 4294967295, "max");
+store(ranged, NaN, "nan");
+store(ranged, Infinity, "infinity");
+store(ranged, -Infinity, "negative infinity");
+store(ranged, 0.5, "fractional");
 check(load(ranged, -1) === "negative", "negative key falls back");
 check(load(ranged, 2147483648) === "large", "non-int32 array index falls back");
 check(load(ranged, 4294967295) === "max", "non-array-index key falls back");
+check(load(ranged, NaN) === "nan", "NaN key falls back");
+check(load(ranged, Infinity) === "infinity", "infinity key falls back");
+check(
+	load(ranged, -Infinity) === "negative infinity",
+	"negative infinity key falls back",
+);
+check(load(ranged, 0.5) === "fractional", "fractional key falls back");
 
 let customGetCalls = 0;
+let customReceiver;
 let customSetValue;
 const customPrototype = {
 	get 1() {
 		customGetCalls++;
+		customReceiver = this;
 		return 71;
 	},
 	set 2(value) {
@@ -374,7 +394,10 @@ const customPrototype = {
 };
 const custom = [10];
 Object.setPrototypeOf(custom, customPrototype);
-check(load(custom, 1) === 71 && customGetCalls === 1, "custom prototype hole getter");
+check(
+	load(custom, 1) === 71 && customGetCalls === 1 && customReceiver === custom,
+	"custom prototype hole getter",
+);
 store(custom, 2, 72);
 check(customSetValue === 72 && !Object.hasOwn(custom, 2), "custom prototype hole setter");
 store(custom, 0, 73);

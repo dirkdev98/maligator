@@ -2472,7 +2472,7 @@ static void mal_vm_run_until_frame_count(
                 MalValue result;
                 if ((mal_value_is_int32(key) || mal_value_is_f64(key)) &&
                     mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT) &&
-                    mal_vm_array_try_load(
+                    mal_vm_array_try_get_index(
                         (const MalArrayObject *) mal_value_to_heap(object),
                         mal_value_is_int32(key) ? (f64) mal_value_to_i32(key) : mal_value_to_f64(key),
                         &result)) {

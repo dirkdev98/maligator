@@ -4409,7 +4409,7 @@ function emitInstruction(
 						? [
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 								`MalValue __v_${ip};`,
-								`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = __v_${ip};`,
 								`} else {`,
 								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
@@ -4427,7 +4427,7 @@ function emitInstruction(
 					const id = indexedLengthLoopAction.loadIp;
 					return [
 						`MalValue __indexed_element_${ip};`,
-						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_load(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})) {`,
+						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_get_index(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})) {`,
 						`  r${instruction.dst} = __indexed_element_${ip};`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
 						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${num(instruction.key)}));`,
