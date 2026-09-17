@@ -203,6 +203,15 @@ describe("compiler host-gap ladder", () => {
 		expect(storedZeroMembership.checksum).toBe(0);
 	});
 
+	it("keeps trailing-hole indexOf matched to its stored-zero control", () => {
+		const trailingHoles = fixtureOutput("trailing-hole-index-of");
+		const storedZero = fixtureOutput("stored-zero-index-of-control");
+		expect(trailingHoles).toMatchObject({
+			operations: storedZero.operations,
+			checksum: storedZero.checksum,
+		});
+	});
+
 	it("summarizes category ratios without implying workload attribution", () => {
 		const makeResult = (
 			category: CompilerHostGapKernelResult["category"],

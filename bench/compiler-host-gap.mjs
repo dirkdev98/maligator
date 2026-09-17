@@ -1132,6 +1132,30 @@ function arrayIncludes(scale) {
 	return result(checksum, operations);
 }
 
+function trailingHoleIndexOf(scale) {
+	const values = Array.from({ length: 1_024 }, (_, index) => index * 3 + 1);
+	values.length = 16_384;
+	let checksum = 0;
+	const searches = 2_000 * scale;
+	for (let index = 0; index < searches; index++) {
+		const needle = index & 1 ? (896 + (index & 127)) * 3 + 1 : -((index & 1_023) + 1);
+		checksum += values.indexOf(needle) + 1;
+	}
+	return result(checksum, searches);
+}
+
+function storedZeroIndexOfControl(scale) {
+	const values = Array.from({ length: 1_024 }, (_, index) => index * 3 + 1);
+	for (let index = 1_024; index < 16_384; index++) values[index] = 0;
+	let checksum = 0;
+	const searches = 2_000 * scale;
+	for (let index = 0; index < searches; index++) {
+		const needle = index & 1 ? (896 + (index & 127)) * 3 + 1 : -((index & 1_023) + 1);
+		checksum += values.indexOf(needle) + 1;
+	}
+	return result(checksum, searches);
+}
+
 function stringConcatenation(scale) {
 	let checksum = 0;
 	const operations = 250_000 * scale;
@@ -1826,6 +1850,34 @@ const kernels = [
 		"runtime/src/builtin_array.c",
 		arrayIncludes,
 		{ category: "api-builtins", unit: "search" },
+	),
+	kernel(
+		"trailing-hole-index-of",
+		"runtime",
+		"Array.prototype.indexOf over a dense prefix and trailing holes",
+		"array-search",
+		"runtime/src/builtin_array.c",
+		trailingHoleIndexOf,
+		{
+			category: "api-builtins",
+			inputShape: "1,024 numeric elements, then 15,360 trailing holes",
+			unit: "search",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"stored-zero-index-of-control",
+		"runtime",
+		"Array.prototype.indexOf over a numeric prefix and stored zeroes",
+		"array-search",
+		"runtime/src/builtin_array.c",
+		storedZeroIndexOfControl,
+		{
+			category: "api-builtins",
+			inputShape: "1,024 numeric elements, then 15,360 stored zeroes",
+			unit: "search",
+			sentinel: false,
+		},
 	),
 	kernel(
 		"string-concatenation",
