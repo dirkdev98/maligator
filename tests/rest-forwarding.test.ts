@@ -11,7 +11,7 @@ import {
 	serializeRuntimeImage,
 } from "../src/compiler/target/program-image-codec.ts";
 
-function compile(body: string) {
+function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 	const source = `globalThis.forward = ${body};`;
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
@@ -22,7 +22,7 @@ function compile(body: string) {
 		semantic,
 		{
 			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { primordials: "mutable" } }),
+				resolveBuildConfig({ engine: { primordials } }),
 			),
 		},
 		(_phase, run) => run(),
@@ -31,6 +31,64 @@ function compile(body: string) {
 }
 
 describe("rest forwarding allocation contract", () => {
+	it("scalarizes locked static element reads into argument snapshots", () => {
+		const image = compile(
+			"function read(first, ...rest) { return arguments[3] + rest[2] + rest[0] + rest[2]; }",
+			"locked",
+		);
+		const owner = image.runtime.functions.find((fn) => fn.argumentSnapshotCount === 2);
+		expect(owner).toBeDefined();
+		const prefix = owner!.instructions.slice(0, owner!.argumentSnapshotCount);
+		expect(prefix.every((instruction) => instruction.opcode === "LOAD_ARGUMENT")).toBe(
+			true,
+		);
+		expect(
+			new Set(
+				prefix.flatMap((instruction) =>
+					instruction.opcode === "LOAD_ARGUMENT" ? [instruction.index] : [],
+				),
+			),
+		).toEqual(new Set([1, 3]));
+		expect(owner!.instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
+			false,
+		);
+	});
+
+	for (const source of [
+		"function read(first = fallback(), ...rest) { return rest[0]; }",
+		"function read(first, ...rest) { first = 99; return rest[0]; }",
+	]) {
+		it(`scalarizes reads independently of parameter initialization for ${source}`, () => {
+			const image = compile(source, "locked");
+			const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+			expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT")).toBe(true);
+			expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
+		});
+	}
+
+	for (const source of [
+		"function read(index, ...rest) { return rest[index]; }",
+		"function read(...rest) { return rest.length; }",
+		"function read(...rest) { rest[0] = 1; return rest[0]; }",
+		"function read(...rest) { globalThis.saved = rest; return rest[0]; }",
+		"function read(...rest) { return () => rest[0]; }",
+		"function read(first, ...rest) { return rest[2147483647]; }",
+		"function* read(...rest) { yield rest[0]; }",
+		"async function read(...rest) { return rest[0]; }",
+	]) {
+		it(`retains locked rest construction for ${source}`, () => {
+			const image = compile(source, "locked");
+			const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+			expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
+		});
+	}
+
+	it("retains mutable static element reads", () => {
+		const image = compile("function read(...rest) { return rest[0]; }");
+		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
+	});
+
 	for (const source of [
 		"function forward(...args) { return target(...args); }",
 		"function forward(fn, ...args) { return fn(...args); }",
