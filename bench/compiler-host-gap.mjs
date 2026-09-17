@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { URL } from "node:url";
 
 const MODULUS = 1_000_000_007;
 

@@ -110,6 +110,7 @@ describe("compiler host-gap ladder", () => {
 		"holey-array-traversal",
 		"json-stringify-shape-mutation",
 		"generator-iterator-semantics",
+		"url-parsing",
 	])("keeps %s work and checksums deterministic", (id) => {
 		const first = fixtureOutput(id);
 		const second = fixtureOutput(id);
