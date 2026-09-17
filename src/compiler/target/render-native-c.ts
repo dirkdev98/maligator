@@ -1993,6 +1993,7 @@ interface NativeNumericFusionAction {
 interface IndexedLengthLoopAction {
 	readonly loadIp: number;
 	readonly role: "load" | "compare" | "element";
+	readonly privateArray: boolean;
 	readonly site: Extract<VmRegion, { kind: "indexed-length-loop" }>["sites"][number];
 	readonly element?: Extract<
 		VmRegion,
@@ -2255,9 +2256,15 @@ function emitBody(
 		) {
 			throw new Error("Invalid indexed-length-loop region");
 		}
+		const privateArray = site.elements.some(
+			(candidate) =>
+				candidate.kind === "load" &&
+				nativeInstructions[candidate.ip]?.kind === "exact-contained-array-element",
+		);
 		indexedLengthLoopActionByIp.set(action.ip, {
 			loadIp: site.loadIp,
 			role: action.role,
+			privateArray,
 			site,
 			...(element === undefined ? {} : { element }),
 		});
@@ -3638,7 +3645,10 @@ function emitInstruction(
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
 		const value = `__private_array_element_${ip}`;
-		const array = `mal_value_to_array_object(${boxed(instruction.object)})`;
+		const array =
+			indexedLengthLoopAction?.role === "element" && indexedLengthLoopAction.privateArray
+				? `__indexed_length_${indexedLengthLoopAction.loadIp}_array`
+				: `mal_value_to_array_object(${boxed(instruction.object)})`;
 		const load =
 			indexedLengthLoopAction?.role === "element" &&
 			indexedLengthLoopAction.element?.kind === "load" &&
@@ -4517,6 +4527,13 @@ function emitInstruction(
 			];
 			if (indexedLengthLoopAction?.role === "load") {
 				const id = indexedLengthLoopAction.loadIp;
+				if (indexedLengthLoopAction.privateArray) {
+					return [
+						`__indexed_length_${id}_array = mal_value_to_array_object(${boxed(instruction.object)});`,
+						`__indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
+						"mal_perf_ic_load_array_length_hit();",
+					];
+				}
 				return [
 					`__indexed_length_${id}_kind = 0;`,
 					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
@@ -4884,6 +4901,13 @@ function emitInstruction(
 					indexedLengthLoopAction.site.lengthPosition === 1
 						? `${length} ${compareOperator} ${num(right)}`
 						: `${num(left)} ${compareOperator} ${length}`;
+				if (indexedLengthLoopAction.privateArray) {
+					return [
+						dstIsBool
+							? `r${dst} = ${fast};`
+							: `r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fast})`)};`,
+					];
+				}
 				return [
 					`if (__indexed_length_${indexedLengthLoopAction.loadIp}_kind != 0) {`,
 					dstIsBool

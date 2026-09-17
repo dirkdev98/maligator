@@ -77,6 +77,11 @@ describe("certified primitive numeric lowering", () => {
 		expect(emitted.source).toContain("mal_vm_private_array_try_get_proven_index");
 		expect(emitted.source).toContain("mal_vm_indexed_fast_load_index");
 		expect(emitted.source).not.toContain("mal_array_object_contained_dense_get");
+		expect(emitted.source).toMatch(
+			/__indexed_length_\d+_array = mal_value_to_array_object\(/,
+		);
+		expect(emitted.source).not.toMatch(/__indexed_length_\d+_array = mal_vm_as_array\(/);
+		expect(emitted.source).not.toMatch(/if \(__indexed_length_\d+_kind != 0\)/);
 	});
 
 	it.each([
