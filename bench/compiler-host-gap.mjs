@@ -921,7 +921,7 @@ function fixedArityLengthControl(scale) {
 	return result(checksum, operations);
 }
 
-function prefixedRestLengthControl(scale) {
+function prefixedRestLengthParameters(scale) {
 	let checksum = 0;
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
@@ -1610,12 +1610,12 @@ const kernels = [
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(
-		"prefixed-rest-length-control",
+		"prefixed-rest-length-parameters",
 		"runtime",
-		"materialized prefixed-rest control for rest length observation",
+		"positive-prefix rest length observation",
 		"rest-arguments",
 		"src/compiler/core/core-local-passes.ts",
-		prefixedRestLengthControl,
+		prefixedRestLengthParameters,
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(
