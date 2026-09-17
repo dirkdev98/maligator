@@ -35,12 +35,20 @@ import type {
 import { coreStaticArrayCopyResult } from "./core-static-array-copies.ts";
 import { coreStaticStringResult } from "./core-static-string-results.ts";
 import { CORE_STATIC_CELL_INDEX } from "./core-static-value-cells.ts";
-import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
+	CoreChangeDomain,
 	CoreFunctionStore,
 	CoreFunctionVersions,
 	CoreProgram,
 } from "./core-store.ts";
+
+const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
+	"body",
+	"cfg",
+	"exceptionFlow",
+	"memoryEffects",
+	"facts",
+] as const satisfies ReadonlyArray<CoreChangeDomain>;
 
 const STATIC_CONSTRUCTORS = new Set([
 	"Array",
@@ -305,7 +313,9 @@ export class CoreStaticValueAnalysis {
 	assertCurrent(): void {
 		if (
 			this.#program.function(this.#fn.id) !== this.#fn ||
-			!coreFunctionVersionsAreCurrent(this.#fn, this.#versions) ||
+			!CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES.every(
+				(domain) => this.#versions[domain] === this.#fn.version(domain),
+			) ||
 			this.#program.programVersion("data") !== this.#dataVersion
 		)
 			throw new Error("Stale static-value facts");
@@ -2070,14 +2080,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 	{
 		key: "static-value-descriptions",
 		scope: "function",
-		functionDependencies: [
-			"body",
-			"cfg",
-			"exceptionFlow",
-			"memoryEffects",
-			"facts",
-			"representations",
-		],
+		functionDependencies: CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES,
 		programDependencies: ["data"],
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function")

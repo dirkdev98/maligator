@@ -263,7 +263,7 @@ describe("Core optimizer infrastructure", () => {
 		]);
 	});
 
-	it("invalidates static values when representations change", () => {
+	it("keeps static values current across representation changes", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
@@ -282,7 +282,7 @@ describe("Core optimizer infrastructure", () => {
 		editor.commit();
 
 		const second = analyses.get(CORE_STATIC_VALUE_ANALYSIS, request);
-		expect(second).not.toBe(first);
+		expect(second).toBe(first);
 		expect(second.query(value!).kind).toBe("known");
 	});
 
