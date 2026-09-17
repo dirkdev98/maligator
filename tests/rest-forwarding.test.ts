@@ -179,6 +179,54 @@ describe("rest forwarding allocation contract", () => {
 		);
 	});
 
+	it("scalarizes a bounded terminal rest read into argument snapshots", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(
+					"function choose(which, ...rest) { return rest[(+which) & 1]; }",
+					"locked",
+				),
+			),
+		);
+		const owner = image.runtime.functions.find((fn) => fn.argumentSnapshotCount === 2);
+		expect(owner).toBeDefined();
+		const prefix = owner!.instructions.slice(0, owner!.argumentSnapshotCount);
+		expect(
+			new Set(
+				prefix.flatMap((instruction) =>
+					instruction.opcode === "LOAD_ARGUMENT" ? [instruction.index] : [],
+				),
+			),
+		).toEqual(new Set([1, 2]));
+		expect(owner!.instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
+			false,
+		);
+		expect(owner!.instructions.some((i) => i.opcode === "LOAD_PROPERTY")).toBe(false);
+	});
+
+	it.each([
+		"function choose(which, ...rest) { return rest[+which]; }",
+		"function choose(which, ...rest) { return rest[(+which) & 3]; }",
+		"function choose(which, ...rest) { return rest[String(which)]; }",
+		"function choose(which, ...rest) { return rest[which & 1n]; }",
+		"function choose(which, ...rest) { return rest[(+which) & 1] + rest[0]; }",
+		"function choose(which, ...rest) { const value = rest[(+which) & 1]; sink(); return value; }",
+		"function choose(which, ...rest) { try { return rest[(+which) & 1]; } catch { return undefined; } }",
+		"function choose(which, ...rest) { rest[0] = 1; return rest[(+which) & 1]; }",
+	])("retains bounded rest construction outside the terminal proof for %s", (source) => {
+		const image = compile(source, "locked");
+		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
+	});
+
+	it("retains bounded terminal rest reads with mutable array primordials", () => {
+		const image = compile(
+			"function choose(which, ...rest) { return rest[(+which) & 1]; }",
+		);
+		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(true);
+	});
+
 	for (const source of [
 		"function read(index, ...rest) { return rest[index]; }",
 		"function read(first, ...rest) { return rest.length; }",

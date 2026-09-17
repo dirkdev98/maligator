@@ -2621,10 +2621,163 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 	},
 };
 
+const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
+	name: "scalarize-bounded-terminal-rest-read",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["createRestArguments"],
+	requiredAnalyses: [
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+		CORE_LOOP_INDUCTION_ANALYSIS,
+	],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, compilationContext, item } = context;
+		const fn = program.function(item.function);
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.metadata.isClassConstructor ||
+			fn.metadata.isDerivedConstructor ||
+			fn.metadata.mappedArguments ||
+			fn.handlerBlockCount !== 0 ||
+			!compilerFactIsWorldInvariant(
+				compilationContext.facts.protectors.get("array-elements"),
+			)
+		) {
+			return undefined;
+		}
+		for (const producer of fn.instructionIds()) {
+			if (
+				fn.instructionKind(producer) !== "operation" ||
+				fn.instructionOpcodeName(producer) !== "createRestArguments"
+			) {
+				continue;
+			}
+			const startIndex = fn.instructionAttributes(producer).startIndex;
+			if (
+				typeof startIndex !== "number" ||
+				!Number.isInteger(startIndex) ||
+				startIndex < 0 ||
+				startIndex + 1 > 0x7fff_ffff
+			) {
+				continue;
+			}
+			const rest = instructionResult(fn, producer, 0);
+			if (
+				rest === undefined ||
+				fn.valueUseCount(rest) !== 1 ||
+				fn.kernel.valueHandlerUseCount(rest) !== 0
+			) {
+				continue;
+			}
+			let restUse = fn.kernel.valueFirstUse(rest);
+			while (restUse >= 0 && fn.kernel.useLive(restUse) === 0) {
+				restUse = fn.kernel.useNext(restUse);
+			}
+			if (restUse < 0) continue;
+			const load = fn.kernel.useInstruction(restUse);
+			if (
+				fn.instructionKind(load) !== "operation" ||
+				fn.instructionOpcodeName(load) !== "loadProperty" ||
+				instructionOperand(fn, load, 0) !== rest
+			) {
+				continue;
+			}
+			const key = instructionOperand(fn, load, 1);
+			const loadResult = instructionResult(fn, load, 0);
+			const block = fn.instructionBlock(load);
+			const terminator = fn.blockTerminator(block);
+			if (
+				key === undefined ||
+				loadResult === undefined ||
+				fn.valueUseCount(loadResult) !== 1 ||
+				fn.kernel.valueHandlerUseCount(loadResult) !== 0 ||
+				fn.instructionNext(load) !== terminator ||
+				fn.instructionKind(terminator) !== "return" ||
+				instructionOperand(fn, terminator, 0) !== loadResult
+			) {
+				continue;
+			}
+			const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+			if (
+				!control.reachable.has(block) ||
+				!control.dominates(fn.instructionBlock(producer), block)
+			) {
+				continue;
+			}
+			const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+			if (kinds.kindMask(key) !== COMPILER_VALUE_KIND_NUMBER) continue;
+			const range = context
+				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
+				.range(key, block);
+			if (range?.minimum !== 0 || range.maximum !== 1) continue;
+
+			let before = fn.blockTerminator(fn.entry);
+			const snapshots = new Map<number, CoreValueId>();
+			for (const instruction of fn.bodyInstructionIds(fn.entry)) {
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") {
+					before = instruction;
+					break;
+				}
+				if (opcode === "loadArgument") {
+					const index = fn.instructionAttributes(instruction).index;
+					const result = instructionResult(fn, instruction, 0);
+					if (typeof index === "number" && result !== undefined) {
+						snapshots.set(index, result);
+					}
+				}
+			}
+			const editor = CoreEditor.open(program, item.function);
+			for (const argumentIndex of [startIndex, startIndex + 1]) {
+				if (snapshots.has(argumentIndex)) continue;
+				const snapshot = editor.insertInstruction(
+					fn.entry,
+					before,
+					"loadArgument",
+					[],
+					{
+						attributes: { index: argumentIndex },
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+				snapshots.set(argumentIndex, snapshot);
+			}
+			const alternate = editor.createBlock();
+			const consequent = editor.createBlock();
+			const sourcePosition = fn.instructionSourcePosition(terminator);
+			editor.setTerminator(alternate, {
+				kind: "return",
+				value: snapshots.get(startIndex)!,
+				sourcePosition,
+			});
+			editor.setTerminator(consequent, {
+				kind: "return",
+				value: snapshots.get(startIndex + 1)!,
+				sourcePosition,
+			});
+			editor.replaceTerminator(block, {
+				kind: "branch",
+				condition: key,
+				consequent: { block: consequent, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			editor.removeInstruction(load);
+			editor.removeInstruction(producer);
+			return editor.commit();
+		}
+		return undefined;
+	},
+};
+
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	forwardRestArguments,
 	scalarizeRestArgumentReads,
+	scalarizeBoundedTerminalRestRead,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,

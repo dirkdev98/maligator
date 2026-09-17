@@ -53,6 +53,10 @@ function count(...rest) {
 	return rest.length + (rest[0] ?? 0);
 }
 
+function chooseBounded(selector, ...rest) {
+	return rest[(+selector) & 1];
+}
+
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
 check(missing(1, 2) === undefined, "missing argument reads as undefined");
 check(
@@ -71,5 +75,46 @@ check(
 check(exactMissingInline(31) === undefined, "exact inlining preserves missing snapshots");
 check(count() === 0, "empty rest length uses the argument count");
 check(count(41, 43) === 43, "rest length and element share argument snapshots");
+check(chooseBounded(0, 47, 53, 59, 61) === 47, "bounded read selects zero");
+check(chooseBounded(1, 47, 53, 59, 61) === 53, "bounded read selects one");
+check(chooseBounded(1, 67) === undefined, "bounded read preserves missing arguments");
+check(
+	chooseBounded(1, 71, undefined) === undefined,
+	"bounded read preserves explicit undefined",
+);
+const objectPayload = { value: 73 };
+const symbolPayload = Symbol("rest-index-scalarization");
+check(chooseBounded(0, objectPayload, 79) === objectPayload, "bounded read preserves objects");
+check(chooseBounded(1, 83, 89n) === 89n, "bounded read preserves bigints");
+check(chooseBounded(1, 97, symbolPayload) === symbolPayload, "bounded read preserves symbols");
+let coercions = 0;
+const coerciveSelector = {
+	valueOf() {
+		coercions++;
+		churn(101);
+		return 1;
+	},
+};
+check(
+	chooseBounded(coerciveSelector, 103, objectPayload) === objectPayload,
+	"bounded read roots payloads across coercion",
+);
+check(coercions === 1, "bounded read coerces its key once");
+const thrown = { value: 107 };
+let caught;
+try {
+	chooseBounded(
+		{
+			valueOf() {
+				throw thrown;
+			},
+		},
+		109,
+		113,
+	);
+} catch (error) {
+	caught = error;
+}
+check(caught === thrown, "bounded read preserves coercion throws");
 
 console.log(`rest-index-scalarization PASS ${passed}`);
