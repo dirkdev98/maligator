@@ -3,6 +3,13 @@ import { fileURLToPath } from "node:url";
 import { main } from "./bench-compiler-host-gap.ts";
 
 const args = process.argv.slice(2);
+if (
+	!["--preset", "--case", "--category", "--suite", "--group"].some((option) =>
+		args.includes(option),
+	)
+) {
+	args.push("--preset", "quick");
+}
 if (!args.includes("--output")) {
 	args.push("--output", ".cache/runtime-gap/report.json");
 }

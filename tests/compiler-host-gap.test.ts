@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hostGapFractions } from "../scripts/bench-compiler-host-gap.ts";
+import { summarizeRuntimeGapCategories } from "../scripts/bench-compiler-host-gap.ts";
 import type { CompilerHostGapKernelResult } from "../scripts/bench-compiler-host-gap.ts";
 
 const fixture = "bench/compiler-host-gap.mjs";
@@ -24,16 +27,63 @@ function fixtureOutput(id: string): {
 }
 
 describe("compiler host-gap ladder", () => {
-	it("covers every required primitive and algorithm kernel", () => {
+	it("plans the bounded runtime sentinel sweep without writing reports", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-runtime-gap-plan-"));
+		const output = path.join(directory, "report.json");
+		const markdown = path.join(directory, "report.md");
+		try {
+			const plan = JSON.parse(
+				execFileSync(
+					process.execPath,
+					[
+						"scripts/bench-runtime-gap.ts",
+						"--output",
+						output,
+						"--markdown",
+						markdown,
+						"--plan=json",
+					],
+					{ encoding: "utf8" },
+				),
+			) as {
+				readonly preset: string;
+				readonly samples: number;
+				readonly targetNodeMs: number;
+				readonly cases: ReadonlyArray<{
+					readonly suite: string;
+					readonly sentinel: boolean;
+				}>;
+			};
+			expect(plan).toMatchObject({ preset: "quick", samples: 3, targetNodeMs: 20 });
+			expect(plan.cases).toHaveLength(36);
+			expect(
+				plan.cases.every(({ suite, sentinel }) => suite === "runtime" && sentinel),
+			).toBe(true);
+			expect(existsSync(output)).toBe(false);
+			expect(existsSync(markdown)).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("covers the runtime sentinel matrix and compiler algorithm kernels", () => {
 		const kernels = JSON.parse(
 			execFileSync(process.execPath, [fixture, "--list"], { encoding: "utf8" }),
-		) as ReadonlyArray<{ readonly id: string; readonly group: string }>;
+		) as ReadonlyArray<{
+			readonly id: string;
+			readonly group: string;
+			readonly suite: string;
+			readonly sentinel: boolean;
+		}>;
 		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
+		expect(
+			kernels.filter(({ suite, sentinel }) => suite === "runtime" && sentinel),
+		).toHaveLength(36);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 	});
 
-	it.each(["map-operations", "memory-versions"])(
+	it.each(["map-operations", "memory-versions", "array-map", "holey-array-traversal"])(
 		"keeps %s work and checksums deterministic",
 		(id) => {
 			const first = fixtureOutput(id);
@@ -45,19 +95,28 @@ describe("compiler host-gap ladder", () => {
 		},
 	);
 
-	it("classifies only positive kernel host gaps", () => {
+	it("summarizes category ratios without implying workload attribution", () => {
 		const makeResult = (
 			category: CompilerHostGapKernelResult["category"],
-			hostGapMs: number,
+			ratio: number,
 		): CompilerHostGapKernelResult =>
-			({ category, hostGapMs }) as CompilerHostGapKernelResult;
-		const fractions = hostGapFractions([
+			({ category, ratio }) as CompilerHostGapKernelResult;
+		const summaries = summarizeRuntimeGapCategories([
 			makeResult("allocation-gc", 30),
-			makeResult("function-closure-dispatch", 10),
-			makeResult("compiler-algorithms", -20),
+			makeResult("allocation-gc", 10),
+			makeResult("compiler-algorithms", 20),
 		]);
-		expect(fractions["allocation-gc"]).toBe(0.75);
-		expect(fractions["function-closure-dispatch"]).toBe(0.25);
-		expect(fractions["compiler-algorithms"]).toBe(0);
+		expect(summaries["allocation-gc"]).toEqual({
+			cases: 2,
+			medianRatio: 20,
+			minimumRatio: 10,
+			maximumRatio: 30,
+		});
+		expect(summaries["compiler-algorithms"]).toEqual({
+			cases: 1,
+			medianRatio: 20,
+			minimumRatio: 20,
+			maximumRatio: 20,
+		});
 	});
 });

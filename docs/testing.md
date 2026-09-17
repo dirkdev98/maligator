@@ -77,11 +77,22 @@ invocation and remove it on success, failure, or handled interruption. Use `--ke
 retain generated sources and binaries for diagnosis; the runner prints the path.
 Reports and the shared build cache remain outside that disposable directory.
 
-`bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default;
-`bench:compiler-host-gap` writes `.cache/compiler-host-gap/report.json` and
-`report.md`. Use `--output` (and host-gap's `--markdown`) to retain separate runs.
-Host-gap only incorporates a self-compile capture when passed `--self-compile PATH`.
-Neither command updates the canonical `bench/baseline.json`.
+`bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default.
+`bench:runtime-gap` writes `.cache/runtime-gap/report.json` and `report.md`; its quick
+preset is a bounded same-source Node/native diagnostic sweep across runtime constructs,
+builtins, language features, allocation/GC, and memory representation. Use
+`--plan=json` before execution, `--category` or repeatable `--case` for focused work,
+and `--preset confirm --case ID` for deeper selected evidence. `bench:compiler-host-gap`
+remains the queue-facing entrypoint and can include a self-compile capture with
+`--self-compile PATH`. Neither diagnostic command updates `bench/baseline.json`.
+
+Run native runtime-gap sweeps through `mjq perf.host-gap` with the explicit case IDs
+from the local plan. Quick reports are screening evidence: confirm an optimization with
+more interleaved pairs plus a representative product workload and adjacent controls.
+Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
+collection deltas cover the measured window, while its GC pause and peak-live values
+cover the separate resource process. Node allocation is sampled and is not directly
+equivalent to Maligator's charged managed-heap bytes.
 
 `node ./src/index.ts cache prune --dry-run` previews pruning the managed user cache
 to its default 15 GiB target; omit `--dry-run` to apply it. Live commands block

@@ -11,8 +11,36 @@ function result(checksum, operations) {
 	return { checksum: normalized(checksum), operations };
 }
 
-function kernel(id, group, owner, category, sourceSeam, run) {
-	return { id, group, owner, category, sourceSeam, run };
+const legacySentinelExclusions = new Set([
+	"for-of-collections",
+	"array-callbacks",
+	"sorting",
+]);
+
+function reportCategory(group, mechanism) {
+	if (group === "algorithm") return "compiler-algorithms";
+	if (mechanism === "allocation-gc") return "allocation-gc";
+	if (mechanism === "function-closure-dispatch") return "language-features";
+	if (mechanism === "iterators-callbacks") return "language-features";
+	if (mechanism === "runtime-collections-properties") return "api-builtins";
+	return "statements-operators";
+}
+
+function kernel(id, group, owner, mechanism, sourceSeam, run, details = {}) {
+	return {
+		id,
+		group,
+		suite: group === "algorithm" ? "compiler" : "runtime",
+		owner,
+		category: details.category ?? reportCategory(group, mechanism),
+		mechanisms: details.mechanisms ?? [mechanism],
+		inputShape: details.inputShape ?? "compiler-shaped runtime data",
+		unit: details.unit ?? "logical operation",
+		sentinel:
+			details.sentinel ?? (group !== "algorithm" && !legacySentinelExclusions.has(id)),
+		sourceSeam,
+		run,
+	};
 }
 
 function numericScalarLoops(scale) {
@@ -604,6 +632,313 @@ function loweringReplay(scale) {
 	return result(checksum, operations);
 }
 
+function predictableBranches(scale) {
+	let checksum = 0;
+	const operations = 1_000_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		if ((index & 7) !== 0) checksum += index & 255;
+		else checksum -= index & 63;
+	}
+	return result(checksum, operations);
+}
+
+function mixedBranches(scale) {
+	let checksum = 0;
+	let state = 0x12345678;
+	const operations = 800_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		state ^= state << 13;
+		state ^= state >>> 17;
+		state ^= state << 5;
+		if ((state & 1) === 0) checksum += index & 255;
+		else checksum -= index & 127;
+	}
+	return result(checksum, operations);
+}
+
+function switchDispatch(scale) {
+	let checksum = 0;
+	const operations = 900_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		switch ((index * 17) & 7) {
+			case 0:
+			case 3:
+				checksum += index & 31;
+				break;
+			case 1:
+			case 6:
+				checksum ^= index & 255;
+				break;
+			case 2:
+			case 5:
+				checksum -= index & 15;
+				break;
+			default:
+				checksum += 7;
+		}
+	}
+	return result(checksum, operations);
+}
+
+function tryWithoutThrow(scale) {
+	let checksum = 0;
+	const operations = 700_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		try {
+			checksum += (index * 3) & 255;
+		} finally {
+			checksum ^= index & 7;
+		}
+	}
+	return result(checksum, operations);
+}
+
+function caughtThrows(scale) {
+	let checksum = 0;
+	const operations = 20_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		try {
+			throw index & 255;
+		} catch (value) {
+			checksum += value;
+		}
+	}
+	return result(checksum, operations);
+}
+
+function sumRest(...values) {
+	return values[0] + values[1] + values[2] + values[3];
+}
+
+function restParameters(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += sumRest(index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function objectDestructuring(scale) {
+	const values = Array.from({ length: 2_048 }, (_, index) => ({
+		left: index,
+		right: index * 3,
+		ignored: index * 7,
+	}));
+	let checksum = 0;
+	const rounds = 180 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (const { left, right } of values) checksum += left ^ right ^ round;
+	}
+	return result(checksum, values.length * rounds);
+}
+
+class Counter {
+	constructor(offset) {
+		this.offset = offset;
+	}
+	add(value) {
+		return value + this.offset;
+	}
+}
+
+function classMethods(scale) {
+	const counters = Array.from({ length: 32 }, (_, index) => new Counter(index));
+	let checksum = 0;
+	const operations = 700_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += counters[index & 31].add(index & 255);
+	}
+	return result(checksum, operations);
+}
+
+function arrayMap(scale) {
+	const values = Array.from({ length: 1_024 }, (_, index) => index);
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		const mapped = values.map((value) => value + round);
+		checksum += mapped[round & 1_023];
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function arrayFilter(scale) {
+	const values = Array.from({ length: 1_024 }, (_, index) => index);
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		const filtered = values.filter((value) => (value & 7) === (round & 7));
+		checksum += filtered.length + filtered[round & 127];
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function arrayIncludes(scale) {
+	const values = Array.from({ length: 2_048 }, (_, index) => index * 3);
+	let checksum = 0;
+	const operations = 200_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += values.includes((index & 2_047) * 3) ? 1 : 0;
+	}
+	return result(checksum, operations);
+}
+
+function stringConcatenation(scale) {
+	let checksum = 0;
+	const operations = 250_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const value = "fn:" + (index & 1_023) + ":block:" + ((index * 17) & 255);
+		checksum += value.length + value.charCodeAt(value.length - 1);
+	}
+	return result(checksum, operations);
+}
+
+function stringSearch(scale) {
+	const value = `${"abcdef0123456789".repeat(64)}target:${"uvwxyz".repeat(32)}`;
+	let checksum = 0;
+	const operations = 180_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += value.indexOf(index & 1 ? "target:" : "not-present");
+	}
+	return result(checksum, operations);
+}
+
+function stringSplit(scale) {
+	const value = Array.from({ length: 128 }, (_, index) => `field-${index}`).join(",");
+	let checksum = 0;
+	const operations = 30_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const fields = value.split(",");
+		checksum += fields[index & 127].length + fields.length;
+	}
+	return result(checksum, operations);
+}
+
+function jsonParse(scale) {
+	const source = JSON.stringify(
+		Array.from({ length: 64 }, (_, id) => ({
+			id,
+			value: id * 17,
+			active: (id & 3) !== 0,
+		})),
+	);
+	let checksum = 0;
+	const operations = 8_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const rows = JSON.parse(source);
+		checksum += rows[index & 63].value + rows.length;
+	}
+	return result(checksum, operations);
+}
+
+function jsonStringify(scale) {
+	const rows = Array.from({ length: 64 }, (_, id) => ({
+		id,
+		value: id * 17,
+		active: (id & 3) !== 0,
+	}));
+	let checksum = 0;
+	const operations = 8_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += JSON.stringify(rows).length + (index & 1);
+	}
+	return result(checksum, operations);
+}
+
+function denseArrayTraversal(scale) {
+	const values = Array.from({ length: 16_384 }, (_, index) => index & 255);
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index];
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function holeyArrayTraversal(scale) {
+	const values = [];
+	for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index] ?? 0;
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function recordArrayTraversal(scale) {
+	const rows = Array.from({ length: 8_192 }, (_, index) => ({
+		left: index & 1_023,
+		right: (index * 17) & 1_023,
+		kind: index & 31,
+	}));
+	let checksum = 0;
+	const rounds = 100 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (const row of rows) checksum += row.left + row.right + row.kind;
+	}
+	return result(checksum, rows.length * rounds);
+}
+
+function parallelTypedArrays(scale) {
+	const left = new Uint32Array(8_192);
+	const right = new Uint32Array(8_192);
+	const kinds = new Uint8Array(8_192);
+	for (let index = 0; index < left.length; index++) {
+		left[index] = index & 1_023;
+		right[index] = (index * 17) & 1_023;
+		kinds[index] = index & 31;
+	}
+	let checksum = 0;
+	const rounds = 100 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < left.length; index++) {
+			checksum += left[index] + right[index] + kinds[index];
+		}
+	}
+	return result(checksum, left.length * rounds);
+}
+
+function polymorphicProperties(scale) {
+	const rows = Array.from({ length: 4_096 }, (_, index) =>
+		index & 1 ? { value: index, left: 1 } : { value: index, right: 2 },
+	);
+	let checksum = 0;
+	const rounds = 150 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (const row of rows) checksum += row.value;
+	}
+	return result(checksum, rows.length * rounds);
+}
+
+function computedProperties(scale) {
+	const rows = Array.from({ length: 2_048 }, (_, index) => ({
+		field0: index,
+		field1: index + 1,
+		field2: index + 2,
+		field3: index + 3,
+	}));
+	const keys = ["field0", "field1", "field2", "field3"];
+	let checksum = 0;
+	const rounds = 180 * scale;
+	for (let round = 0; round < rounds; round++) {
+		const key = keys[round & 3];
+		for (const row of rows) checksum += row[key];
+	}
+	return result(checksum, rows.length * rounds);
+}
+
+function urlParsing(scale) {
+	let checksum = 0;
+	const operations = 25_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const url = new URL(`https://example.test/path/${index & 255}?q=${index & 63}#part`);
+		checksum += url.pathname.length + url.search.length + url.hash.length;
+	}
+	return result(checksum, operations);
+}
+
 const kernels = [
 	kernel(
 		"numeric-scalar-loops",
@@ -652,6 +987,7 @@ const kernels = [
 		"runtime-collections-properties",
 		"src/compiler/core/core-ir.ts",
 		stableShapeProperties,
+		{ category: "object-array-representation", unit: "property access" },
 	),
 	kernel(
 		"short-lived-records",
@@ -756,6 +1092,229 @@ const kernels = [
 		"allocation-gc",
 		"src/compiler/core/core-ir.ts",
 		moderateRetentionChurn,
+	),
+	kernel(
+		"predictable-branches",
+		"runtime",
+		"predictable conditional branches",
+		"control-flow",
+		"runtime/src/vm_ops.c",
+		predictableBranches,
+		{ category: "statements-operators", unit: "branch" },
+	),
+	kernel(
+		"mixed-branches",
+		"runtime",
+		"data-dependent conditional branches",
+		"control-flow",
+		"runtime/src/vm_ops.c",
+		mixedBranches,
+		{ category: "statements-operators", unit: "branch" },
+	),
+	kernel(
+		"switch-dispatch",
+		"runtime",
+		"dense switch dispatch",
+		"control-flow",
+		"runtime/src/vm_ops.c",
+		switchDispatch,
+		{ category: "statements-operators", unit: "dispatch" },
+	),
+	kernel(
+		"try-without-throw",
+		"runtime",
+		"try/finally without exceptional flow",
+		"exception-flow",
+		"runtime/src/vm_ops.c",
+		tryWithoutThrow,
+		{ category: "language-features", unit: "try execution" },
+	),
+	kernel(
+		"caught-throws",
+		"runtime",
+		"throw and catch",
+		"exception-flow",
+		"runtime/src/vm_ops.c",
+		caughtThrows,
+		{ category: "language-features", unit: "caught exception" },
+	),
+	kernel(
+		"rest-parameters",
+		"runtime",
+		"rest parameter materialization",
+		"rest-arguments",
+		"runtime/src/function_object.c",
+		restParameters,
+		{ category: "language-features", unit: "call" },
+	),
+	kernel(
+		"object-destructuring",
+		"runtime",
+		"object destructuring loads",
+		"property-load",
+		"runtime/src/vm_ops.c",
+		objectDestructuring,
+		{ category: "language-features", unit: "record" },
+	),
+	kernel(
+		"class-methods",
+		"runtime",
+		"class instance method calls",
+		"function-closure-dispatch",
+		"runtime/src/function_object.c",
+		classMethods,
+		{ category: "language-features", unit: "call" },
+	),
+	kernel(
+		"array-map",
+		"runtime",
+		"Array.prototype.map",
+		"array-callback",
+		"runtime/src/builtin_array.c",
+		arrayMap,
+		{ category: "api-builtins", unit: "visited element" },
+	),
+	kernel(
+		"array-filter",
+		"runtime",
+		"Array.prototype.filter",
+		"array-callback",
+		"runtime/src/builtin_array.c",
+		arrayFilter,
+		{ category: "api-builtins", unit: "visited element" },
+	),
+	kernel(
+		"array-includes",
+		"runtime",
+		"Array.prototype.includes",
+		"array-search",
+		"runtime/src/builtin_array.c",
+		arrayIncludes,
+		{ category: "api-builtins", unit: "search" },
+	),
+	kernel(
+		"string-concatenation",
+		"runtime",
+		"dynamic string concatenation",
+		"string-allocation",
+		"runtime/src/heap_string.c",
+		stringConcatenation,
+		{ category: "api-builtins", unit: "result string" },
+	),
+	kernel(
+		"string-search",
+		"runtime",
+		"String.prototype.indexOf",
+		"string-search",
+		"runtime/src/builtin_string.c",
+		stringSearch,
+		{ category: "api-builtins", unit: "search" },
+	),
+	kernel(
+		"string-split",
+		"runtime",
+		"String.prototype.split",
+		"string-allocation",
+		"runtime/src/builtin_string.c",
+		stringSplit,
+		{ category: "api-builtins", unit: "split" },
+	),
+	kernel(
+		"json-parse",
+		"runtime",
+		"JSON.parse",
+		"json",
+		"runtime/src/builtin_json.c",
+		jsonParse,
+		{ category: "api-builtins", unit: "document" },
+	),
+	kernel(
+		"json-stringify",
+		"runtime",
+		"JSON.stringify",
+		"json",
+		"runtime/src/builtin_json.c",
+		jsonStringify,
+		{ category: "api-builtins", unit: "document" },
+	),
+	kernel(
+		"dense-array-traversal",
+		"runtime",
+		"dense dynamic array traversal",
+		"array-layout",
+		"runtime/src/array_object.c",
+		denseArrayTraversal,
+		{ category: "object-array-representation", unit: "element load" },
+	),
+	kernel(
+		"holey-array-traversal",
+		"runtime",
+		"holey dynamic array traversal",
+		"array-layout",
+		"runtime/src/array_object.c",
+		holeyArrayTraversal,
+		{ category: "object-array-representation", unit: "indexed probe" },
+	),
+	kernel(
+		"record-array-traversal",
+		"runtime",
+		"array of stable-shape records",
+		"object-layout",
+		"runtime/src/object.h",
+		recordArrayTraversal,
+		{
+			category: "memory-layout-usage",
+			inputShape: "8192 three-field records",
+			unit: "record",
+		},
+	),
+	kernel(
+		"parallel-typed-arrays",
+		"runtime",
+		"parallel typed-array columns",
+		"typed-array-layout",
+		"runtime/src/typed_array_object.c",
+		parallelTypedArrays,
+		{
+			category: "memory-layout-usage",
+			inputShape: "three parallel typed arrays of 8192 values",
+			unit: "row",
+		},
+	),
+	kernel(
+		"polymorphic-properties",
+		"runtime",
+		"property loads across two shapes",
+		"property-load",
+		"runtime/src/vm_ops.c",
+		polymorphicProperties,
+		{
+			category: "object-array-representation",
+			unit: "property load",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"computed-properties",
+		"runtime",
+		"computed property loads",
+		"property-load",
+		"runtime/src/vm_ops.c",
+		computedProperties,
+		{
+			category: "object-array-representation",
+			unit: "property load",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"url-parsing",
+		"runtime",
+		"WHATWG URL construction and parsing",
+		"host-api",
+		"runtime/src/runtime/web_url.c",
+		urlParsing,
+		{ category: "host-apis", unit: "URL", sentinel: false },
 	),
 	kernel(
 		"pruned-ssa",
@@ -883,13 +1442,31 @@ const argument = process.argv[2];
 if (argument === "--list") {
 	console.log(
 		JSON.stringify(
-			kernels.map(({ id, group, owner, category, sourceSeam }) => ({
-				id,
-				group,
-				owner,
-				category,
-				sourceSeam,
-			})),
+			kernels.map(
+				({
+					id,
+					group,
+					suite,
+					owner,
+					category,
+					mechanisms,
+					inputShape,
+					unit,
+					sentinel,
+					sourceSeam,
+				}) => ({
+					id,
+					group,
+					suite,
+					owner,
+					category,
+					mechanisms,
+					inputShape,
+					unit,
+					sentinel,
+					sourceSeam,
+				}),
+			),
 		),
 	);
 } else {
@@ -913,7 +1490,8 @@ if (argument === "--list") {
 		typeof collectionsReader === "function" ? collectionsReader() : undefined;
 	const startedAt = performance.now();
 	const measured = selected.run(scale);
-	const elapsedMs = performance.now() - startedAt;
+	const finishedAt = performance.now();
+	const elapsedMs = finishedAt - startedAt;
 	const afterAllocated =
 		typeof allocatedReader === "function" ? allocatedReader() : undefined;
 	const afterCollections =
@@ -921,16 +1499,23 @@ if (argument === "--list") {
 	console.log(
 		JSON.stringify({
 			schema: 1,
-			workload: "compiler-host-gap-v1",
+			workload: "runtime-gap-v1",
 			id: selected.id,
 			group: selected.group,
+			suite: selected.suite,
 			owner: selected.owner,
 			category: selected.category,
+			mechanisms: selected.mechanisms,
+			inputShape: selected.inputShape,
+			unit: selected.unit,
+			sentinel: selected.sentinel,
 			sourceSeam: selected.sourceSeam,
 			scale,
 			operations: measured.operations,
 			checksum: measured.checksum,
 			elapsedMs,
+			measurementStartMs: startedAt,
+			measurementEndMs: finishedAt,
 			warmupMs,
 			...(beforeAllocated === undefined || afterAllocated === undefined
 				? {}

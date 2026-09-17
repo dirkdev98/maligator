@@ -2,10 +2,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	readlinkSync,
 	renameSync,
 	rmSync,
 	writeFileSync,
@@ -16,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
+import { summarizeV8GcTrace } from "./v8-gc-trace.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FIXTURE = path.join(REPOSITORY_ROOT, "bench/compiler-host-gap.mjs");
@@ -28,28 +31,39 @@ const CONFIG = resolveBuildConfig({
 
 interface KernelDescriptor {
 	readonly id: string;
-	readonly group: "primitive" | "algorithm";
+	readonly group: "primitive" | "runtime" | "algorithm";
+	readonly suite: "runtime" | "compiler";
 	readonly owner: string;
 	readonly category: HostGapCategory;
+	readonly mechanisms: ReadonlyArray<string>;
+	readonly inputShape: string;
+	readonly unit: string;
+	readonly sentinel: boolean;
 	readonly sourceSeam: string;
 }
 
 type HostGapCategory =
-	| "runtime-collections-properties"
-	| "function-closure-dispatch"
-	| "iterators-callbacks"
+	| "statements-operators"
+	| "api-builtins"
+	| "language-features"
+	| "object-array-representation"
 	| "allocation-gc"
-	| "typed-arrays-numeric-loops"
+	| "memory-layout-usage"
+	| "host-apis"
 	| "compiler-algorithms"
 	| "unattributed-execution";
 
+type Preset = "quick" | "survey" | "confirm";
+
 interface KernelOutput extends KernelDescriptor {
 	readonly schema: 1;
-	readonly workload: "compiler-host-gap-v1";
+	readonly workload: "runtime-gap-v1";
 	readonly scale: number;
 	readonly operations: number;
 	readonly checksum: number;
 	readonly elapsedMs: number;
+	readonly measurementStartMs: number;
+	readonly measurementEndMs: number;
 	readonly warmupMs: ReadonlyArray<number>;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
@@ -65,12 +79,20 @@ interface TimedKernelSample {
 interface ResourceSample {
 	readonly cpuMs: number;
 	readonly peakRssBytes: number;
+	readonly gcWallMs?: number;
+	readonly gcEvents?: number;
 	readonly sampledAllocatedBytes?: number;
 	readonly allocationSamplingIntervalBytes?: number;
 	readonly allocatedBytes?: number;
 	readonly collections?: number;
 	readonly peakLiveBytes?: number;
 	readonly maxPauseMs?: number;
+}
+
+interface RuntimeGapFailure {
+	readonly id: string;
+	readonly status: "budget" | "timeout" | "incorrect" | "error";
+	readonly message: string;
 }
 
 export interface CompilerHostGapKernelResult extends KernelDescriptor {
@@ -80,17 +102,20 @@ export interface CompilerHostGapKernelResult extends KernelDescriptor {
 	readonly node: {
 		readonly samples: ReadonlyArray<TimedKernelSample>;
 		readonly medianMs: number;
+		readonly medianAbsoluteDeviationMs: number;
 		readonly nsPerOperation: number;
 		readonly resource: ResourceSample;
 	};
 	readonly maligator: {
 		readonly samples: ReadonlyArray<TimedKernelSample>;
 		readonly medianMs: number;
+		readonly medianAbsoluteDeviationMs: number;
 		readonly nsPerOperation: number;
 		readonly resource: ResourceSample;
 	};
 	readonly ratio: number;
 	readonly hostGapMs: number;
+	readonly deltaNsPerOperation: number;
 }
 
 interface FullCompilerOwner {
@@ -143,9 +168,12 @@ interface Options {
 	readonly output: string;
 	readonly markdown: string;
 	readonly groups: ReadonlySet<KernelDescriptor["group"]>;
+	readonly suites: ReadonlySet<KernelDescriptor["suite"]>;
+	readonly categories: ReadonlySet<HostGapCategory>;
 	readonly cases: ReadonlySet<string>;
 	readonly skipNodeAllocation: boolean;
 	readonly plan: boolean;
+	readonly preset?: Preset;
 	readonly selfCompile?: string;
 }
 
@@ -156,7 +184,10 @@ Options:
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
   --budget-seconds N         whole-run budget including the shared build (default: 300)
   --case-timeout-ms N        timeout for one child invocation (default: 10000)
-  --group primitive|algorithm
+  --preset quick|survey|confirm
+  --suite runtime|compiler
+  --category NAME            select a report category; repeatable
+  --group primitive|runtime|algorithm
   --case ID                  select a kernel; repeatable
   --output PATH              JSON report (default: .cache/compiler-host-gap/report.json)
   --markdown PATH            Markdown report (default: .cache/compiler-host-gap/report.md)
@@ -184,15 +215,29 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		console.log(HELP);
 		return undefined;
 	}
-	let samples = 5;
-	let targetNodeMs = 40;
+	const presetIndex = args.indexOf("--preset");
+	const presetValue = presetIndex < 0 ? undefined : args[presetIndex + 1];
+	if (presetIndex >= 0 && presetValue === undefined) throw new Error(HELP.trim());
+	if (
+		presetValue !== undefined &&
+		presetValue !== "quick" &&
+		presetValue !== "survey" &&
+		presetValue !== "confirm"
+	) {
+		throw new Error(`unknown preset: ${presetValue}`);
+	}
+	const preset = presetValue;
+	let samples = preset === "quick" ? 3 : preset === "confirm" ? 9 : 5;
+	let targetNodeMs = preset === "quick" ? 20 : preset === "confirm" ? 100 : 40;
 	let budgetSeconds = 300;
 	let caseTimeoutMs = 10_000;
 	let output = DEFAULT_JSON;
 	let markdown = DEFAULT_MARKDOWN;
 	const groups = new Set<KernelDescriptor["group"]>();
+	const suites = new Set<KernelDescriptor["suite"]>();
+	const categories = new Set<HostGapCategory>();
 	const cases = new Set<string>();
-	let skipNodeAllocation = false;
+	let skipNodeAllocation = preset === "quick";
 	let plan = false;
 	let selfCompile: string | undefined;
 	for (let index = 0; index < args.length; index++) {
@@ -209,6 +254,8 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		} else if (option === "--case-timeout-ms") {
 			caseTimeoutMs = positiveInteger(requiredValue(args, index), option);
 			index++;
+		} else if (option === "--preset") {
+			index++;
 		} else if (option === "--output") {
 			output = path.resolve(requiredValue(args, index));
 			index++;
@@ -217,10 +264,20 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 			index++;
 		} else if (option === "--group") {
 			const group = requiredValue(args, index);
-			if (group !== "primitive" && group !== "algorithm") {
+			if (group !== "primitive" && group !== "runtime" && group !== "algorithm") {
 				throw new Error(`unknown kernel group: ${group}`);
 			}
 			groups.add(group);
+			index++;
+		} else if (option === "--suite") {
+			const suite = requiredValue(args, index);
+			if (suite !== "runtime" && suite !== "compiler") {
+				throw new Error(`unknown suite: ${suite}`);
+			}
+			suites.add(suite);
+			index++;
+		} else if (option === "--category") {
+			categories.add(requiredValue(args, index) as HostGapCategory);
 			index++;
 		} else if (option === "--case") {
 			cases.add(requiredValue(args, index));
@@ -244,9 +301,12 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		output,
 		markdown,
 		groups,
+		suites,
+		categories,
 		cases,
 		skipNodeAllocation,
 		plan,
+		...(preset === undefined ? {} : { preset }),
 		...(selfCompile === undefined ? {} : { selfCompile }),
 	};
 }
@@ -278,13 +338,16 @@ function parseKernelOutput(stdout: string): KernelOutput {
 	const parsed = JSON.parse(line) as Partial<KernelOutput>;
 	if (
 		parsed.schema !== 1 ||
-		parsed.workload !== "compiler-host-gap-v1" ||
+		parsed.workload !== "runtime-gap-v1" ||
 		typeof parsed.id !== "string" ||
 		typeof parsed.operations !== "number" ||
 		parsed.operations <= 0 ||
 		typeof parsed.checksum !== "number" ||
 		typeof parsed.elapsedMs !== "number" ||
 		parsed.elapsedMs < 0 ||
+		typeof parsed.measurementStartMs !== "number" ||
+		typeof parsed.measurementEndMs !== "number" ||
+		parsed.measurementEndMs < parsed.measurementStartMs ||
 		!Array.isArray(parsed.warmupMs) ||
 		parsed.warmupMs.some((value) => typeof value !== "number" || value < 0)
 	) {
@@ -315,6 +378,11 @@ function median(values: ReadonlyArray<number>): number {
 	return sorted.length % 2 === 0
 		? (sorted[middle - 1]! + sorted[middle]!) / 2
 		: sorted[middle]!;
+}
+
+function medianAbsoluteDeviation(values: ReadonlyArray<number>): number {
+	const center = median(values);
+	return median(values.map((value) => Math.abs(value - center)));
 }
 
 function timeInvocation(
@@ -378,11 +446,22 @@ function nodeResourceSample(
 	if (!sampleAllocation) {
 		const measured = timeInvocation(
 			process.execPath,
-			[FIXTURE, id, String(scale)],
+			["--trace-gc-nvp", FIXTURE, id, String(scale)],
 			process.env,
 			timeoutMs,
 		);
-		return { cpuMs: measured.cpuMs, peakRssBytes: measured.peakRssBytes };
+		const gc = summarizeV8GcTrace(
+			measured.stderr,
+			measured.output.measurementStartMs,
+			measured.output.measurementEndMs,
+		);
+		return {
+			cpuMs: measured.cpuMs,
+			peakRssBytes: measured.peakRssBytes,
+			gcWallMs: gc.wallMs,
+			gcEvents: gc.events,
+			maxPauseMs: gc.maximumPauseMs,
+		};
 	}
 	const profileRoot = mkdtempSync(path.join(os.tmpdir(), "mal-host-gap-heap-"));
 	try {
@@ -390,6 +469,7 @@ function nodeResourceSample(
 		const measured = timeInvocation(
 			process.execPath,
 			[
+				"--trace-gc-nvp",
 				"--heap-prof",
 				`--heap-prof-interval=${interval}`,
 				`--heap-prof-dir=${profileRoot}`,
@@ -410,9 +490,17 @@ function nodeResourceSample(
 		) as {
 			head?: unknown;
 		};
+		const gc = summarizeV8GcTrace(
+			measured.stderr,
+			measured.output.measurementStartMs,
+			measured.output.measurementEndMs,
+		);
 		return {
 			cpuMs: measured.cpuMs,
 			peakRssBytes: measured.peakRssBytes,
+			gcWallMs: gc.wallMs,
+			gcEvents: gc.events,
+			maxPauseMs: gc.maximumPauseMs,
 			sampledAllocatedBytes: profileSelfSize(profile.head),
 			allocationSamplingIntervalBytes: interval,
 		};
@@ -440,6 +528,8 @@ function maligatorResourceSample(
 	return {
 		cpuMs: measured.cpuMs,
 		peakRssBytes: measured.peakRssBytes,
+		gcWallMs: gcStat(measured.stderr, "total_ms"),
+		gcEvents: measured.output.collections,
 		allocatedBytes: measured.output.allocatedBytes,
 		collections: measured.output.collections,
 		peakLiveBytes: gcStat(measured.stderr, "peak_live_bytes"),
@@ -550,6 +640,12 @@ function measureKernel(
 	}
 	const nodeMedianMs = median(nodeSamples.map(({ elapsedMs }) => elapsedMs));
 	const maligatorMedianMs = median(maligatorSamples.map(({ elapsedMs }) => elapsedMs));
+	const nodeDeviationMs = medianAbsoluteDeviation(
+		nodeSamples.map(({ elapsedMs }) => elapsedMs),
+	);
+	const maligatorDeviationMs = medianAbsoluteDeviation(
+		maligatorSamples.map(({ elapsedMs }) => elapsedMs),
+	);
 	const operations = reference!.operations;
 	return {
 		...descriptor,
@@ -559,6 +655,7 @@ function measureKernel(
 		node: {
 			samples: nodeSamples,
 			medianMs: nodeMedianMs,
+			medianAbsoluteDeviationMs: nodeDeviationMs,
 			nsPerOperation: (nodeMedianMs * 1e6) / operations,
 			resource: nodeResourceSample(
 				descriptor.id,
@@ -570,6 +667,7 @@ function measureKernel(
 		maligator: {
 			samples: maligatorSamples,
 			medianMs: maligatorMedianMs,
+			medianAbsoluteDeviationMs: maligatorDeviationMs,
 			nsPerOperation: (maligatorMedianMs * 1e6) / operations,
 			resource: maligatorResourceSample(
 				binary,
@@ -580,33 +678,38 @@ function measureKernel(
 		},
 		ratio: maligatorMedianMs / nodeMedianMs,
 		hostGapMs: maligatorMedianMs - nodeMedianMs,
+		deltaNsPerOperation: ((maligatorMedianMs - nodeMedianMs) * 1e6) / operations,
 	};
 }
 
-export function hostGapFractions(
+export interface RuntimeGapCategorySummary {
+	readonly cases: number;
+	readonly medianRatio: number;
+	readonly minimumRatio: number;
+	readonly maximumRatio: number;
+}
+
+export function summarizeRuntimeGapCategories(
 	results: ReadonlyArray<CompilerHostGapKernelResult>,
-): Readonly<Record<HostGapCategory, number>> {
-	const categories: ReadonlyArray<HostGapCategory> = [
-		"runtime-collections-properties",
-		"function-closure-dispatch",
-		"iterators-callbacks",
-		"allocation-gc",
-		"typed-arrays-numeric-loops",
-		"compiler-algorithms",
-		"unattributed-execution",
-	];
-	const total = results.reduce((sum, item) => sum + Math.max(0, item.hostGapMs), 0);
+): Readonly<Record<string, RuntimeGapCategorySummary>> {
+	const categories = [...new Set(results.map(({ category }) => category))].sort();
 	return Object.freeze(
 		Object.fromEntries(
-			categories.map((category) => [
-				category,
-				total === 0
-					? 0
-					: results
-							.filter((item) => item.category === category)
-							.reduce((sum, item) => sum + Math.max(0, item.hostGapMs), 0) / total,
-			]),
-		) as Record<HostGapCategory, number>,
+			categories.map((category) => {
+				const ratios = results
+					.filter((result) => result.category === category)
+					.map(({ ratio }) => ratio);
+				return [
+					category,
+					Object.freeze({
+						cases: ratios.length,
+						medianRatio: median(ratios),
+						minimumRatio: Math.min(...ratios),
+						maximumRatio: Math.max(...ratios),
+					}),
+				];
+			}),
+		),
 	);
 }
 
@@ -655,10 +758,10 @@ function ownerCategory(owner: string): HostGapCategory {
 		name.includes("verification") ||
 		name.includes("block-parameter")
 	) {
-		return "runtime-collections-properties";
+		return "api-builtins";
 	}
 	if (name.includes("specialization") || name.includes("cross-call")) {
-		return "function-closure-dispatch";
+		return "language-features";
 	}
 	if (
 		name.includes("value kind") ||
@@ -670,7 +773,7 @@ function ownerCategory(owner: string): HostGapCategory {
 		name.includes("canonical") ||
 		name.includes("dense generation")
 	) {
-		return "typed-arrays-numeric-loops";
+		return "statements-operators";
 	}
 	return "compiler-algorithms";
 }
@@ -679,11 +782,13 @@ function ownerCategoryFractions(
 	owners: ReadonlyArray<FullCompilerOwner & { readonly category: HostGapCategory }>,
 ): Readonly<Record<HostGapCategory, number>> {
 	const categories: ReadonlyArray<HostGapCategory> = [
-		"runtime-collections-properties",
-		"function-closure-dispatch",
-		"iterators-callbacks",
+		"statements-operators",
+		"api-builtins",
+		"language-features",
+		"object-array-representation",
 		"allocation-gc",
-		"typed-arrays-numeric-loops",
+		"memory-layout-usage",
+		"host-apis",
 		"compiler-algorithms",
 		"unattributed-execution",
 	];
@@ -777,29 +882,57 @@ function loadFullCompilerAnalysis(
 }
 
 function row(result: CompilerHostGapKernelResult): string {
-	return `| ${result.id} | ${result.node.medianMs.toFixed(1)} | ${result.maligator.medianMs.toFixed(1)} | ${result.ratio.toFixed(2)}x | ${result.hostGapMs.toFixed(1)} | ${result.maligator.resource.allocatedBytes?.toLocaleString() ?? "n/a"} |`;
+	const nodeDispersion =
+		(100 * result.node.medianAbsoluteDeviationMs) / Math.max(0.001, result.node.medianMs);
+	const maligatorDispersion =
+		(100 * result.maligator.medianAbsoluteDeviationMs) /
+		Math.max(0.001, result.maligator.medianMs);
+	const allocatedPerOperation =
+		result.maligator.resource.allocatedBytes === undefined
+			? "n/a"
+			: (result.maligator.resource.allocatedBytes / result.operations).toFixed(2);
+	const rss = `${(result.node.resource.peakRssBytes / 1024 / 1024).toFixed(1)}/${(
+		result.maligator.resource.peakRssBytes /
+		1024 /
+		1024
+	).toFixed(1)}`;
+	return `| ${result.id} | ${result.inputShape} | ${result.node.nsPerOperation.toFixed(1)} | ${result.maligator.nsPerOperation.toFixed(1)} | ${result.ratio.toFixed(2)}x | ${result.deltaNsPerOperation.toFixed(1)} | ${nodeDispersion.toFixed(1)}%/${maligatorDispersion.toFixed(1)}% | ${allocatedPerOperation} | ${rss} | ok |`;
 }
 
 function markdownReport(report: {
+	readonly status: string;
+	readonly complete: boolean;
 	readonly source: { readonly commit: string; readonly dirty: boolean };
 	readonly results: ReadonlyArray<CompilerHostGapKernelResult>;
+	readonly failures: ReadonlyArray<RuntimeGapFailure>;
 	readonly fullCompiler?: FullCompilerAnalysis;
 	readonly diagnosis: {
-		readonly firstPrimitiveAboveSeven: string | null;
-		readonly firstAlgorithmAboveSeven: string | null;
 		readonly topHostGap: ReadonlyArray<string>;
 		readonly topAllocation: ReadonlyArray<string>;
-		readonly categoryFractions: Readonly<Record<HostGapCategory, number>>;
+		readonly categorySummaries: Readonly<Record<string, RuntimeGapCategorySummary>>;
 	};
 }): string {
-	const primitive = report.results.filter(({ group }) => group === "primitive");
-	const algorithm = report.results.filter(({ group }) => group === "algorithm");
 	const table = (rows: ReadonlyArray<CompilerHostGapKernelResult>): string =>
 		[
-			"| Kernel | Node ms | Maligator ms | Ratio | Gap ms | Maligator allocated bytes |",
-			"| --- | ---: | ---: | ---: | ---: | ---: |",
+			"| Case | Input shape | Node ns/op | Maligator ns/op | Ratio | Delta ns/op | Node/Maligator MAD | Maligator bytes/op | Node/Maligator peak RSS MiB | Status |",
+			"| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
 			...rows.map(row),
 		].join("\n");
+	const categorySections = Object.keys(report.diagnosis.categorySummaries)
+		.sort()
+		.map(
+			(category) => `## ${category}
+
+${table(report.results.filter((result) => result.category === category))}`,
+		)
+		.join("\n\n");
+	const failureSection =
+		report.failures.length === 0
+			? ""
+			: `## Incomplete cases
+
+${report.failures.map((failure) => `- ${failure.id}: ${failure.status} - ${failure.message}`).join("\n")}
+`;
 	const fullCompilerSection =
 		report.fullCompiler === undefined
 			? "## Full compiler owners\n\nNo full self-compile owner artifact was supplied.\n"
@@ -833,41 +966,69 @@ ${Object.entries(report.fullCompiler.categoryFractions)
 
 The category association maps measured owner gaps to their representative kernels; it is a ranking model, not a claim that one primitive alone explains an owner's complete cost.
 `;
-	return `# Compiler host-gap analysis
+	return `# Runtime gap analysis
 
 Source: \`${report.source.commit}\`${report.source.dirty ? " with benchmark changes" : ""}
 
-The kernels replay current compiler operation shapes. They are diagnostic evidence, not product baseline lanes. Node allocation is a V8 sampled-allocation estimate; Maligator allocation and collection deltas are exact runtime counters around the measured kernel. CPU and RSS come from an isolated resource probe, separate from the paired timing samples.
+Status: ${report.status}${report.complete ? "" : " (incomplete)"}
+
+These same-source Node/Maligator cases are diagnostic evidence, not product baseline lanes. Headline timings use ordinary production execution; CPU, RSS, allocation, and GC data come from separate resource probes. Node sampled allocation and Maligator charged managed-heap allocation have different provenance and are not directly equivalent.
 
 ## Diagnosis
 
-- First primitive ratio above 7x: ${report.diagnosis.firstPrimitiveAboveSeven ?? "none"}
-- First algorithm ratio above 7x: ${report.diagnosis.firstAlgorithmAboveSeven ?? "none"}
 - Top host-gap kernels: ${report.diagnosis.topHostGap.join(", ")}
 - Top Maligator allocation kernels: ${report.diagnosis.topAllocation.join(", ")}
 
-Modeled positive kernel-gap fractions:
+Category ratio summaries:
 
-${Object.entries(report.diagnosis.categoryFractions)
-	.map(([category, fraction]) => `- ${category}: ${(fraction * 100).toFixed(1)}%`)
+${Object.entries(report.diagnosis.categorySummaries)
+	.map(
+		([category, summary]) =>
+			`- ${category}: ${summary.cases} cases, median ${summary.medianRatio.toFixed(2)}x, range ${summary.minimumRatio.toFixed(2)}x-${summary.maximumRatio.toFixed(2)}x`,
+	)
 	.join("\n")}
 
-These fractions classify the kernel ladder only. Full compiler owner coverage remains authoritative for the total self-host gap.
+Category summaries describe the selected synthetic cases. They are not percentages of a real workload; representative workload profiles remain authoritative for total-gap attribution.
+
+${failureSection}
 
 ${fullCompilerSection}
 
-## Primitive kernels
-
-${table(primitive)}
-
-## Algorithm kernels
-
-${table(algorithm)}
+${categorySections}
 `;
 }
 
 function gitOutput(args: ReadonlyArray<string>): string {
 	return runProcess("git", args).stdout.trim();
+}
+
+function sourceIdentity(): {
+	readonly commit: string;
+	readonly dirty: boolean;
+	readonly dirtyDigest: string;
+} {
+	const commit = gitOutput(["rev-parse", "HEAD"]);
+	const patch = gitOutput(["diff", "--binary", "HEAD"]);
+	const untracked = gitOutput(["ls-files", "--others", "--exclude-standard", "-z"])
+		.split("\0")
+		.filter(Boolean)
+		.sort();
+	const hash = createHash("sha256").update(patch);
+	for (const file of untracked) {
+		const absolute = path.join(REPOSITORY_ROOT, file);
+		hash
+			.update(`${file}\0`)
+			.update(
+				lstatSync(absolute).isSymbolicLink()
+					? readlinkSync(absolute)
+					: readFileSync(absolute),
+			);
+	}
+	return {
+		commit,
+		dirty: patch.length > 0 || untracked.length > 0,
+		dirtyDigest: hash.digest("hex"),
+	};
 }
 
 function digest(file: string): string {
@@ -877,23 +1038,45 @@ function digest(file: string): string {
 export function main(args: ReadonlyArray<string>): void {
 	const options = parseOptions(args);
 	if (options === undefined) return;
-	const descriptors = listKernels().filter(
+	const allDescriptors = listKernels();
+	const knownCategories = new Set(allDescriptors.map(({ category }) => category));
+	const unknownCategories = [...options.categories].filter(
+		(category) => !knownCategories.has(category),
+	);
+	if (unknownCategories.length > 0) {
+		throw new Error(`unknown categories: ${unknownCategories.join(", ")}`);
+	}
+	if (options.preset === "confirm" && options.cases.size === 0) {
+		throw new Error("the confirm preset requires at least one explicit --case");
+	}
+	const implicitRuntimeSuite =
+		options.preset !== undefined &&
+		options.suites.size === 0 &&
+		options.groups.size === 0 &&
+		options.cases.size === 0 &&
+		options.categories.size === 0;
+	const descriptors = allDescriptors.filter(
 		(descriptor) =>
 			(options.groups.size === 0 || options.groups.has(descriptor.group)) &&
-			(options.cases.size === 0 || options.cases.has(descriptor.id)),
+			(options.suites.size === 0 || options.suites.has(descriptor.suite)) &&
+			(options.categories.size === 0 || options.categories.has(descriptor.category)) &&
+			(options.cases.size === 0 || options.cases.has(descriptor.id)) &&
+			(!implicitRuntimeSuite || descriptor.suite === "runtime") &&
+			(options.preset !== "quick" || !implicitRuntimeSuite || descriptor.sentinel),
 	);
 	const unknownCases = [...options.cases].filter(
 		(id) => !descriptors.some((descriptor) => descriptor.id === id),
 	);
 	if (unknownCases.length > 0)
 		throw new Error(`unknown selected kernels: ${unknownCases.join(", ")}`);
-	if (descriptors.length === 0) throw new Error("no compiler host-gap kernels selected");
+	if (descriptors.length === 0) throw new Error("no runtime-gap cases selected");
 	if (options.plan) {
 		console.log(
 			JSON.stringify(
 				{
 					schema: 1,
 					workload: "runtime-gap",
+					preset: options.preset ?? null,
 					cases: descriptors,
 					samples: options.samples,
 					targetNodeMs: options.targetNodeMs,
@@ -912,19 +1095,129 @@ export function main(args: ReadonlyArray<string>): void {
 
 	const startedAt = performance.now();
 	const deadline = startedAt + options.budgetSeconds * 1_000;
+	const results: Array<CompilerHostGapKernelResult> = [];
+	const failures: Array<RuntimeGapFailure> = [];
+	const source = sourceIdentity();
+	let preparationMs = 0;
+	let fullCompiler: FullCompilerAnalysis | undefined;
+	const classifyFailure = (id: string, error: unknown): RuntimeGapFailure => {
+		const message = (error instanceof Error ? error.message : String(error)).slice(
+			0,
+			2_000,
+		);
+		const status = message.includes("budget exhausted")
+			? "budget"
+			: message.includes("ETIMEDOUT") || message.includes("timed out")
+				? "timeout"
+				: message.includes("work differs")
+					? "incorrect"
+					: "error";
+		return { id, status, message };
+	};
+	const makeReport = (status: string, complete: boolean) => {
+		const byGap = [...results].sort((left, right) => right.hostGapMs - left.hostGapMs);
+		const byAllocation = [...results].sort(
+			(left, right) =>
+				(right.maligator.resource.allocatedBytes ?? 0) -
+				(left.maligator.resource.allocatedBytes ?? 0),
+		);
+		return {
+			schema: 2,
+			status,
+			complete,
+			generatedAt: new Date().toISOString(),
+			elapsedMs: performance.now() - startedAt,
+			preparationMs,
+			source,
+			runtime: {
+				node: process.version,
+				v8: process.versions.v8,
+				platform: process.platform,
+				arch: process.arch,
+				release: os.release(),
+				cpu: os.cpus()[0]?.model ?? "unknown",
+			},
+			configuration: {
+				preset: options.preset ?? null,
+				samples: options.samples,
+				targetNodeMs: options.targetNodeMs,
+				budgetSeconds: options.budgetSeconds,
+				caseTimeoutMs: options.caseTimeoutMs,
+				selectedCases: descriptors.map(({ id }) => id),
+				fixture: path.relative(REPOSITORY_ROOT, FIXTURE),
+				fixtureDigest: digest(FIXTURE),
+				driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
+				driverDigest: digest(fileURLToPath(import.meta.url)),
+				build: CONFIG,
+				...(options.selfCompile === undefined
+					? {}
+					: {
+							selfCompileArtifact: path.relative(REPOSITORY_ROOT, options.selfCompile),
+							selfCompileArtifactDigest: digest(options.selfCompile),
+						}),
+			},
+			workParity: {
+				operations: true,
+				checksums: true,
+				reducedHostWork: false,
+				completeSelection: complete,
+			},
+			results,
+			failures,
+			...(fullCompiler === undefined ? {} : { fullCompiler }),
+			diagnosis: {
+				topHostGap: byGap.slice(0, 5).map(({ id }) => id),
+				topAllocation: byAllocation.slice(0, 5).map(({ id }) => id),
+				categorySummaries: summarizeRuntimeGapCategories(results),
+			},
+		};
+	};
+	mkdirSync(path.dirname(options.output), { recursive: true });
+	mkdirSync(path.dirname(options.markdown), { recursive: true });
+	const persist = (status: string, complete: boolean) => {
+		const report = makeReport(status, complete);
+		writeFileSync(
+			`${options.output}.tmp`,
+			`${JSON.stringify(report, undefined, "\t")}\n`,
+		);
+		renameSync(`${options.output}.tmp`, options.output);
+		writeFileSync(`${options.markdown}.tmp`, markdownReport(report));
+		renameSync(`${options.markdown}.tmp`, options.markdown);
+	};
+	persist("preparing", false);
+
 	const progress = new CommandProgress("compiler-host-gap");
 	progress.start(`${descriptors.length} kernels · ${options.samples} paired samples`);
 	progress.detail("build shared native kernel runner");
-	const binary = buildNativeBinary({
-		fixture: FIXTURE,
-		name: "bench-compiler-host-gap",
-		config: CONFIG,
-		production: true,
-	});
-	const results: Array<CompilerHostGapKernelResult> = [];
+	let binary: string;
+	const preparationStartedAt = performance.now();
+	try {
+		binary = buildNativeBinary({
+			fixture: FIXTURE,
+			name: "bench-compiler-host-gap",
+			config: CONFIG,
+			production: true,
+		});
+		preparationMs = performance.now() - preparationStartedAt;
+		persist("running", false);
+	} catch (error) {
+		preparationMs = performance.now() - preparationStartedAt;
+		failures.push(classifyFailure("shared-native-build", error));
+		persist("failed", false);
+		progress.failed();
+		process.exitCode = 2;
+		return;
+	}
 	for (const [index, descriptor] of descriptors.entries()) {
 		if (performance.now() >= deadline) {
-			throw new Error(`runtime-gap budget exhausted before ${descriptor.id}`);
+			for (const pending of descriptors.slice(index)) {
+				failures.push({
+					id: pending.id,
+					status: "budget",
+					message: "not started before the whole-run deadline",
+				});
+			}
+			break;
 		}
 		progress.stage(index + 1, descriptors.length, descriptor.id);
 		try {
@@ -932,100 +1225,60 @@ export function main(args: ReadonlyArray<string>): void {
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {
 			progress.stageFailed(index + 1, descriptors.length, descriptor.id);
-			progress.failed();
-			throw error;
+			const failure = classifyFailure(descriptor.id, error);
+			failures.push(failure);
+			if (failure.status === "budget") {
+				for (const pending of descriptors.slice(index + 1)) {
+					failures.push({
+						id: pending.id,
+						status: "budget",
+						message: "not started before the whole-run deadline",
+					});
+				}
+				persist("incomplete", false);
+				break;
+			}
+		}
+		persist("running", false);
+	}
+	if (failures.length === 0 && options.selfCompile !== undefined) {
+		try {
+			fullCompiler = loadFullCompilerAnalysis(
+				options.selfCompile,
+				new Set(results.map(({ id }) => id)),
+			);
+			const unmappedTopOwners = fullCompiler.owners.filter(
+				(owner) =>
+					fullCompiler!.topHostGap.includes(owner.name) &&
+					owner.representativeKernels.length === 0,
+			);
+			if (unmappedTopOwners.length > 0) {
+				throw new Error(
+					`top compiler owners lack representative kernels: ${unmappedTopOwners.map(({ name }) => name).join(", ")}`,
+				);
+			}
+		} catch (error) {
+			fullCompiler = undefined;
+			failures.push(classifyFailure("self-compile-attribution", error));
 		}
 	}
-	const byGap = [...results].sort((left, right) => right.hostGapMs - left.hostGapMs);
-	const byAllocation = [...results].sort(
-		(left, right) =>
-			(right.maligator.resource.allocatedBytes ?? 0) -
-			(left.maligator.resource.allocatedBytes ?? 0),
-	);
-	const fullCompiler =
-		options.selfCompile === undefined
-			? undefined
-			: loadFullCompilerAnalysis(
-					options.selfCompile,
-					new Set(results.map(({ id }) => id)),
-				);
-	const unmappedTopOwners =
-		fullCompiler?.owners.filter(
-			(owner) =>
-				fullCompiler.topHostGap.includes(owner.name) &&
-				owner.representativeKernels.length === 0,
-		) ?? [];
-	if (unmappedTopOwners.length > 0) {
-		throw new Error(
-			`top compiler owners lack representative kernels: ${unmappedTopOwners.map(({ name }) => name).join(", ")}`,
-		);
-	}
-	const diagnosis = {
-		firstPrimitiveAboveSeven:
-			results.find(({ group, ratio }) => group === "primitive" && ratio > 7)?.id ?? null,
-		firstAlgorithmAboveSeven:
-			results.find(({ group, ratio }) => group === "algorithm" && ratio > 7)?.id ?? null,
-		topHostGap: byGap.slice(0, 5).map(({ id }) => id),
-		topAllocation: byAllocation.slice(0, 5).map(({ id }) => id),
-		categoryFractions: hostGapFractions(results),
-	};
-	const dirtyPatch = gitOutput(["diff", "--binary", "HEAD"]);
-	const report = {
-		schema: 2,
-		status: "complete",
-		complete: true,
-		generatedAt: new Date().toISOString(),
-		elapsedMs: performance.now() - startedAt,
-		source: {
-			commit: gitOutput(["rev-parse", "HEAD"]),
-			dirty: dirtyPatch.length > 0,
-			dirtyDigest: createHash("sha256").update(dirtyPatch).digest("hex"),
-		},
-		runtime: {
-			node: process.version,
-			v8: process.versions.v8,
-			platform: process.platform,
-			arch: process.arch,
-			release: os.release(),
-			cpu: os.cpus()[0]?.model ?? "unknown",
-		},
-		configuration: {
-			samples: options.samples,
-			targetNodeMs: options.targetNodeMs,
-			budgetSeconds: options.budgetSeconds,
-			caseTimeoutMs: options.caseTimeoutMs,
-			fixture: path.relative(REPOSITORY_ROOT, FIXTURE),
-			fixtureDigest: digest(FIXTURE),
-			driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
-			driverDigest: digest(fileURLToPath(import.meta.url)),
-			build: CONFIG,
-			...(options.selfCompile === undefined
-				? {}
-				: {
-						selfCompileArtifact: path.relative(REPOSITORY_ROOT, options.selfCompile),
-						selfCompileArtifactDigest: digest(options.selfCompile),
-					}),
-		},
-		workParity: {
-			operations: true,
-			checksums: true,
-			reducedHostWork: false,
-		},
-		results,
-		...(fullCompiler === undefined ? {} : { fullCompiler }),
-		diagnosis,
-	};
-	mkdirSync(path.dirname(options.output), { recursive: true });
-	mkdirSync(path.dirname(options.markdown), { recursive: true });
-	writeFileSync(`${options.output}.tmp`, `${JSON.stringify(report, undefined, "\t")}\n`);
-	renameSync(`${options.output}.tmp`, options.output);
-	writeFileSync(options.markdown, markdownReport(report));
+	const complete = failures.length === 0 && results.length === descriptors.length;
+	const status = complete
+		? "complete"
+		: failures.some((failure) => failure.status !== "budget")
+			? "failed"
+			: "incomplete";
+	persist(status, complete);
 	const formatter = path.join(REPOSITORY_ROOT, "node_modules/.bin/oxfmt");
 	if (existsSync(formatter))
 		runProcess(formatter, ["--write", options.output, options.markdown]);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.output)}`);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.markdown)}`);
-	progress.complete();
+	if (complete) progress.complete();
+	else {
+		progress.failed();
+		process.exitCode = 2;
+	}
 }
 
 if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
