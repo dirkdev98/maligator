@@ -2461,6 +2461,33 @@ function canonicalRestElementIndex(key: string | number): number | undefined {
 	return index;
 }
 
+function argumentSnapshotPrefix(fn: CoreFunctionStore): {
+	readonly before: CoreInstructionId;
+	readonly argumentCount: CoreValueId | undefined;
+	readonly snapshots: Map<number, CoreValueId>;
+} {
+	let before = fn.blockTerminator(fn.entry);
+	let argumentCount: CoreValueId | undefined;
+	const snapshots = new Map<number, CoreValueId>();
+	for (const instruction of fn.bodyInstructionIds(fn.entry)) {
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") {
+			before = instruction;
+			break;
+		}
+		if (opcode === "loadArgumentCount") {
+			argumentCount = instructionResult(fn, instruction, 0);
+		} else {
+			const index = fn.instructionAttributes(instruction).index;
+			const result = instructionResult(fn, instruction, 0);
+			if (typeof index === "number" && result !== undefined) {
+				snapshots.set(index, result);
+			}
+		}
+	}
+	return { before, argumentCount, snapshots };
+}
+
 const scalarizeRestArgumentReads: CoreFunctionPass = {
 	name: "scalarize-rest-argument-reads",
 	stage: "canonicalize",
@@ -2567,25 +2594,9 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 			}
 			if (!valid || (reads.length === 0 && lengthReads.length === 0)) continue;
 
-			let before = fn.blockTerminator(fn.entry);
-			let argumentCount: CoreValueId | undefined;
-			const snapshots = new Map<number, CoreValueId>();
-			for (const instruction of fn.bodyInstructionIds(fn.entry)) {
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") {
-					before = instruction;
-					break;
-				}
-				if (opcode === "loadArgumentCount") {
-					argumentCount = instructionResult(fn, instruction, 0);
-				} else {
-					const index = fn.instructionAttributes(instruction).index;
-					const result = instructionResult(fn, instruction, 0);
-					if (typeof index === "number" && result !== undefined) {
-						snapshots.set(index, result);
-					}
-				}
-			}
+			const prefix = argumentSnapshotPrefix(fn);
+			let { argumentCount } = prefix;
+			const { before, snapshots } = prefix;
 			const editor = CoreEditor.open(program, item.function);
 			if (lengthReads.length > 0 && argumentCount === undefined) {
 				argumentCount = editor.insertInstruction(
@@ -2614,6 +2625,148 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				editor.replaceValueUses(read.result, argumentCount!);
 				editor.removeInstruction(read.instruction);
 			}
+			editor.removeInstruction(producer);
+			return editor.commit();
+		}
+		return undefined;
+	},
+};
+
+const scalarizeTerminalRestLengthRead: CoreFunctionPass = {
+	name: "scalarize-terminal-rest-length-read",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["createRestArguments"],
+	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts"],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, compilationContext, item } = context;
+		const fn = program.function(item.function);
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.metadata.isClassConstructor ||
+			fn.metadata.isDerivedConstructor ||
+			fn.metadata.mappedArguments ||
+			fn.handlerBlockCount !== 0 ||
+			!compilerFactIsWorldInvariant(
+				compilationContext.facts.protectors.get("array-elements"),
+			)
+		) {
+			return undefined;
+		}
+		for (const producer of fn.instructionIds()) {
+			if (
+				fn.instructionKind(producer) !== "operation" ||
+				fn.instructionOpcodeName(producer) !== "createRestArguments"
+			) {
+				continue;
+			}
+			const startIndex = fn.instructionAttributes(producer).startIndex;
+			if (
+				typeof startIndex !== "number" ||
+				!Number.isInteger(startIndex) ||
+				startIndex <= 0 ||
+				startIndex > 0x7fff_ffff
+			) {
+				continue;
+			}
+			const rest = instructionResult(fn, producer, 0);
+			if (
+				rest === undefined ||
+				fn.valueUseCount(rest) !== 1 ||
+				fn.kernel.valueHandlerUseCount(rest) !== 0
+			) {
+				continue;
+			}
+			let restUse = fn.kernel.valueFirstUse(rest);
+			while (restUse >= 0 && fn.kernel.useLive(restUse) === 0) {
+				restUse = fn.kernel.useNext(restUse);
+			}
+			if (restUse < 0) continue;
+			const load = fn.kernel.useInstruction(restUse);
+			if (
+				fn.instructionKind(load) !== "operation" ||
+				fn.instructionOpcodeName(load) !== "loadPropertyStatic" ||
+				instructionOperand(fn, load, 0) !== rest
+			) {
+				continue;
+			}
+			const stringIndex = fn.instructionAttributes(load).stringIndex;
+			if (
+				typeof stringIndex !== "number" ||
+				decodeString(program, stringIndex) !== "length"
+			) {
+				continue;
+			}
+			const loadResult = instructionResult(fn, load, 0);
+			const block = fn.instructionBlock(load);
+			const terminator = fn.blockTerminator(block);
+			if (
+				loadResult === undefined ||
+				fn.valueUseCount(loadResult) !== 1 ||
+				fn.kernel.valueHandlerUseCount(loadResult) !== 0 ||
+				fn.instructionNext(load) !== terminator ||
+				fn.instructionKind(terminator) !== "return" ||
+				instructionOperand(fn, terminator, 0) !== loadResult
+			) {
+				continue;
+			}
+			const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+			if (
+				!control.reachable.has(block) ||
+				!control.dominates(fn.instructionBlock(producer), block)
+			) {
+				continue;
+			}
+
+			const prefix = argumentSnapshotPrefix(fn);
+			const editor = CoreEditor.open(program, item.function);
+			const argumentCount =
+				prefix.argumentCount ??
+				editor.insertInstruction(fn.entry, prefix.before, "loadArgumentCount", [], {
+					sourcePosition: fn.instructionSourcePosition(producer),
+				}).outputs[0]!;
+			const threshold = editor.insertInstruction(block, load, "createNumber", [], {
+				attributes: { value: startIndex },
+				sourcePosition: fn.instructionSourcePosition(load),
+			}).outputs[0]!;
+			const condition = editor.insertInstruction(
+				block,
+				load,
+				"binary",
+				[argumentCount, threshold],
+				{
+					attributes: { operator: ">" },
+					sourcePosition: fn.instructionSourcePosition(load),
+				},
+			).outputs[0]!;
+			const alternate = editor.createBlock();
+			const consequent = editor.createBlock();
+			const zero = editor.appendInstruction(alternate, "createNumber", [], {
+				attributes: { value: 0 },
+			}).outputs[0]!;
+			const length = editor.appendInstruction(
+				consequent,
+				"binary",
+				[argumentCount, threshold],
+				{ attributes: { operator: "-" } },
+			).outputs[0]!;
+			const sourcePosition = fn.instructionSourcePosition(terminator);
+			editor.setTerminator(alternate, { kind: "return", value: zero, sourcePosition });
+			editor.setTerminator(consequent, {
+				kind: "return",
+				value: length,
+				sourcePosition,
+			});
+			editor.replaceTerminator(block, {
+				kind: "branch",
+				condition,
+				consequent: { block: consequent, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			editor.removeInstruction(load);
 			editor.removeInstruction(producer);
 			return editor.commit();
 		}
@@ -2715,22 +2868,7 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 				.range(key, block);
 			if (range?.minimum !== 0 || range.maximum !== 1) continue;
 
-			let before = fn.blockTerminator(fn.entry);
-			const snapshots = new Map<number, CoreValueId>();
-			for (const instruction of fn.bodyInstructionIds(fn.entry)) {
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") {
-					before = instruction;
-					break;
-				}
-				if (opcode === "loadArgument") {
-					const index = fn.instructionAttributes(instruction).index;
-					const result = instructionResult(fn, instruction, 0);
-					if (typeof index === "number" && result !== undefined) {
-						snapshots.set(index, result);
-					}
-				}
-			}
+			const { before, snapshots } = argumentSnapshotPrefix(fn);
 			const editor = CoreEditor.open(program, item.function);
 			for (const argumentIndex of [startIndex, startIndex + 1]) {
 				if (snapshots.has(argumentIndex)) continue;
@@ -2777,6 +2915,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	annotateTerminalYieldSites,
 	forwardRestArguments,
 	scalarizeRestArgumentReads,
+	scalarizeTerminalRestLengthRead,
 	scalarizeBoundedTerminalRestRead,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
