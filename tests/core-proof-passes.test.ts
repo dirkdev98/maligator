@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { coreClosedGlobalSlotMembership } from "../src/compiler/core/core-compilation.ts";
@@ -25,7 +26,10 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	conservativeCompilerProgramFacts,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -53,6 +57,60 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it.each([
+		{
+			mode: "locked",
+			lateInvalidation: false,
+			expected: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+		},
+		{ mode: "mutable", lateInvalidation: false, expected: COMPILER_VALUE_KIND_TOP },
+		{ mode: "locked", lateInvalidation: true, expected: COMPILER_VALUE_KIND_TOP },
+	] as const)(
+		"infers private numeric array reads in $mode mode with late invalidation=$lateInvalidation",
+		({ mode, lateInvalidation, expected }) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [array] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			const [key] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 2 },
+			});
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: -0 },
+			});
+			builder.setValueRepresentation(key!, "f64");
+			builder.setValueRepresentation(stored!, "f64");
+			builder.appendInstruction(entry, "storeProperty", [array!, key!, stored!]);
+			const [loaded] = builder.appendInstruction(entry, "loadProperty", [array!, key!]);
+			if (lateInvalidation) {
+				const [null_] = builder.appendInstruction(entry, "createNull", []);
+				builder.appendInstruction(entry, "storeProperty", [array!, key!, null_!]);
+			}
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const finished = builder.finish(entry);
+			const compilationContext = {
+				...context,
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({
+						engine: { primordials: mode, realms: false },
+					}),
+				),
+			};
+			const analyses = new CoreAnalysisManager(
+				program,
+				compilationContext,
+				new CoreOptimizationReportBuilder(program),
+			);
+			const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+				scope: "function",
+				function: finished.function,
+			});
+			expect(kinds.kindMask(loaded!)).toBe(expected);
+		},
+	);
+
 	it("shares closed-global membership only for the same captured slot list", () => {
 		const slots = Object.freeze([1, 3]);
 		const first = {

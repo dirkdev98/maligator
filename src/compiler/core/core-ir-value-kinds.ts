@@ -1,4 +1,5 @@
 import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
+import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -21,7 +22,11 @@ import type {
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
-import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreCanonicalValueRoots,
+	coreTerminatorInput,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type {
 	CoreFunctionId,
@@ -187,6 +192,121 @@ const KIND_TRANSFER_COPY = 2;
 const KIND_TRANSFER_NUMERIC_UNARY = 3;
 const KIND_TRANSFER_BINARY = 4;
 const KIND_TRANSFER_ADD = 5;
+
+function isNumberValue(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	const representation = fn.valueRepresentation(value);
+	if (representation === "f64" || representation === "i32") return true;
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionKind(definition) !== "operation") return false;
+	return ["createF64", "createI32", "createNumber"].includes(
+		fn.instructionOpcodeName(definition),
+	);
+}
+
+function isLengthProperty(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const stringIndex = fn.instructionAttributes(instruction).stringIndex;
+	const units =
+		typeof stringIndex === "number" ? program.stringConstants[stringIndex] : undefined;
+	return (
+		units?.length === 6 &&
+		units[0] === 0x6c &&
+		units[1] === 0x65 &&
+		units[2] === 0x6e &&
+		units[3] === 0x67 &&
+		units[4] === 0x74 &&
+		units[5] === 0x68
+	);
+}
+
+function privateNumericArrayLoads(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+): ReadonlySet<CoreInstructionId> {
+	const roots = coreCanonicalValueRoots(fn, cfg);
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const candidates = new Set<CoreValueId>();
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "createArray" ||
+			fn.instructionAttributes(instruction).length !== 0 ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		candidates.add(root(result));
+	}
+	if (candidates.size === 0) return new Set();
+
+	const loads = new Map<CoreValueId, Array<CoreInstructionId>>();
+	const reject = new Set<CoreValueId>();
+	for (const block of fn.blockIds()) {
+		const input = coreTerminatorInput(fn, fn.blockTerminator(block));
+		const observed =
+			input.kind === "branch" || input.kind === "guard"
+				? input.condition
+				: input.kind === "switch"
+					? input.discriminant
+					: input.kind === "return" || input.kind === "throw"
+						? input.value
+						: undefined;
+		if (observed === undefined) continue;
+		const valueRoot = root(observed);
+		if (candidates.has(valueRoot)) reject.add(valueRoot);
+	}
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		for (let position = 0; position < operandCount; position++) {
+			const valueRoot = root(fn.kernel.operandAt(operandStart + position));
+			if (!candidates.has(valueRoot) || reject.has(valueRoot)) continue;
+			if (
+				position === 0 &&
+				(opcode === "move" || opcode === "rootUse" || opcode === "throwIfTdz")
+			)
+				continue;
+			if (
+				position === 0 &&
+				opcode === "loadPropertyStatic" &&
+				isLengthProperty(program, fn, instruction)
+			)
+				continue;
+			if (
+				position === 0 &&
+				opcode === "loadProperty" &&
+				operandCount === 2 &&
+				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1))
+			) {
+				const current = loads.get(valueRoot) ?? [];
+				current.push(instruction);
+				loads.set(valueRoot, current);
+				continue;
+			}
+			if (
+				position === 0 &&
+				opcode === "storeProperty" &&
+				operandCount === 3 &&
+				isNumberValue(fn, fn.kernel.operandAt(operandStart + 1)) &&
+				isNumberValue(fn, fn.kernel.operandAt(operandStart + 2))
+			)
+				continue;
+			reject.add(valueRoot);
+		}
+	}
+	return new Set(
+		[...loads].flatMap(([valueRoot, instructions]) =>
+			reject.has(valueRoot) ? [] : instructions,
+		),
+	);
+}
 
 interface KindTransferBuffer {
 	readonly kinds: Array<number>;
@@ -581,13 +701,23 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		scope: "function",
 		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
 		functionDependencies: ["body", "cfg", "representations"],
-		contextIdentity: (context) => context.data.singleAssignmentGlobalSlots,
+		contextIdentity: (context) => context,
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-			if (context.data.singleAssignmentGlobalSlots.length === 0)
-				return analyzeCoreValueKinds(fn, cfg);
+			const numericArrayLoads =
+				context.facts.world.primordialPolicy === "locked" &&
+				compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
+					? privateNumericArrayLoads(program, fn, cfg)
+					: new Set<CoreInstructionId>();
+			const operationResultMask = (instruction: CoreInstructionId) =>
+				numericArrayLoads.has(instruction)
+					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
+					: undefined;
+			if (context.data.singleAssignmentGlobalSlots.length === 0) {
+				return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
+			}
 			const closedGlobals = coreClosedGlobalSlotMembership(context);
 			const stores = new Map<
 				number,
@@ -633,7 +763,8 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					continue;
 				stores.set(index, stores.has(index) ? null : { instruction, value });
 			}
-			if (stores.size === 0) return analyzeCoreValueKinds(fn, cfg);
+			if (stores.size === 0)
+				return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
 			const instructionOrder = new Int32Array(fn.instructionCapacity);
 			instructionOrder.fill(-1);
 			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
@@ -666,7 +797,10 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? store.value : undefined;
 			};
-			return analyzeCoreValueKinds(fn, cfg, { operationResultValue });
+			return analyzeCoreValueKinds(fn, cfg, {
+				operationResultMask,
+				operationResultValue,
+			});
 		},
 	};
 

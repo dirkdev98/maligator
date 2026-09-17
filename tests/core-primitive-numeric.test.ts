@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -20,6 +22,52 @@ function compile(source: string) {
 }
 
 describe("certified primitive numeric lowering", () => {
+	it("certifies the holey-array checksum addition from private numeric stores", () => {
+		const facts = compilerProgramFactsFromConfig(
+			resolveBuildConfig({
+				engine: { primordials: "locked", realms: false },
+			}),
+		);
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function holeyArrayTraversal(scale) {
+					const values = [];
+					for (let index = 0; index < 16_384; index += 2) values[index] = index & 255;
+					let checksum = 0;
+					const rounds = 120 * scale;
+					for (let round = 0; round < rounds; round++) {
+						for (let index = 0; index < values.length; index++) {
+							checksum += values[index] ?? 0;
+						}
+					}
+					return checksum;
+				}
+				globalThis.result = holeyArrayTraversal(1);`,
+				"holey-array.js",
+			),
+			{ facts },
+		);
+		const functionIndex = image.runtime.functions.findIndex((fn) => {
+			const units = image.runtime.stringConstants[fn.nameStringIndex];
+			return (
+				units !== undefined && String.fromCodePoint(...units) === "holeyArrayTraversal"
+			);
+		});
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const runtime = image.runtime.functions[functionIndex]!;
+		const native = image.native.functions[functionIndex]!;
+		const addition = runtime.instructions.findIndex(
+			(instruction, index) =>
+				instruction.opcode === "BINARY" &&
+				instruction.operator === "+" &&
+				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
+				native.instructions[index].inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER &&
+				native.instructions[index].inputKindMasks[1] ===
+					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
+		);
+		expect(addition).toBeGreaterThanOrEqual(0);
+	});
+
 	it.each([
 		"+",
 		"-",
