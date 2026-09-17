@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { summarizeRuntimeGapCategories } from "../scripts/bench-compiler-host-gap.ts";
+import {
+	parseKernelOutput,
+	summarizeRuntimeGapCategories,
+} from "../scripts/bench-compiler-host-gap.ts";
 import type { CompilerHostGapKernelResult } from "../scripts/bench-compiler-host-gap.ts";
 
 const fixture = "bench/compiler-host-gap.mjs";
@@ -27,6 +30,23 @@ function fixtureOutput(id: string): {
 }
 
 describe("compiler host-gap ladder", () => {
+	it("finds the result record when V8 emits a trailing GC trace", () => {
+		const record = JSON.stringify({
+			schema: 1,
+			workload: "runtime-gap-v1",
+			id: "allocation-case",
+			operations: 10,
+			checksum: 42,
+			elapsedMs: 3,
+			measurementStartMs: 100,
+			measurementEndMs: 103,
+			warmupMs: [1, 1],
+		});
+		const trace = '[1:0:0] 104 ms: GC: {"pause":0.2,"gc":"s"}';
+
+		expect(parseKernelOutput(`${record}\n${trace}`).checksum).toBe(42);
+	});
+
 	it("plans the bounded runtime sentinel sweep without writing reports", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-runtime-gap-plan-"));
 		const output = path.join(directory, "report.json");

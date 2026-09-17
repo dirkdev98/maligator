@@ -55,7 +55,7 @@ type HostGapCategory =
 
 type Preset = "quick" | "survey" | "confirm";
 
-interface KernelOutput extends KernelDescriptor {
+export interface KernelOutput extends KernelDescriptor {
 	readonly schema: 1;
 	readonly workload: "runtime-gap-v1";
 	readonly scale: number;
@@ -332,28 +332,33 @@ function runProcess(
 	return { stdout: String(completed.stdout), stderr: String(completed.stderr) };
 }
 
-function parseKernelOutput(stdout: string): KernelOutput {
-	const line = stdout.trim().split("\n").filter(Boolean).at(-1);
-	if (line === undefined) throw new Error("compiler host-gap kernel produced no output");
-	const parsed = JSON.parse(line) as Partial<KernelOutput>;
-	if (
-		parsed.schema !== 1 ||
-		parsed.workload !== "runtime-gap-v1" ||
-		typeof parsed.id !== "string" ||
-		typeof parsed.operations !== "number" ||
-		parsed.operations <= 0 ||
-		typeof parsed.checksum !== "number" ||
-		typeof parsed.elapsedMs !== "number" ||
-		parsed.elapsedMs < 0 ||
-		typeof parsed.measurementStartMs !== "number" ||
-		typeof parsed.measurementEndMs !== "number" ||
-		parsed.measurementEndMs < parsed.measurementStartMs ||
-		!Array.isArray(parsed.warmupMs) ||
-		parsed.warmupMs.some((value) => typeof value !== "number" || value < 0)
-	) {
-		throw new Error(`invalid compiler host-gap kernel output: ${line}`);
+export function parseKernelOutput(stdout: string): KernelOutput {
+	for (const line of stdout.trim().split("\n").filter(Boolean).reverse()) {
+		let parsed: Partial<KernelOutput>;
+		try {
+			parsed = JSON.parse(line) as Partial<KernelOutput>;
+		} catch {
+			continue;
+		}
+		if (
+			parsed.schema === 1 &&
+			parsed.workload === "runtime-gap-v1" &&
+			typeof parsed.id === "string" &&
+			typeof parsed.operations === "number" &&
+			parsed.operations > 0 &&
+			typeof parsed.checksum === "number" &&
+			typeof parsed.elapsedMs === "number" &&
+			parsed.elapsedMs >= 0 &&
+			typeof parsed.measurementStartMs === "number" &&
+			typeof parsed.measurementEndMs === "number" &&
+			parsed.measurementEndMs >= parsed.measurementStartMs &&
+			Array.isArray(parsed.warmupMs) &&
+			parsed.warmupMs.every((value) => typeof value === "number" && value >= 0)
+		) {
+			return parsed as KernelOutput;
+		}
 	}
-	return parsed as KernelOutput;
+	throw new Error("compiler host-gap kernel produced no valid result record");
 }
 
 function listKernels(): ReadonlyArray<KernelDescriptor> {
@@ -395,6 +400,7 @@ function timeInvocation(
 	readonly cpuMs: number;
 	readonly peakRssBytes: number;
 	readonly stderr: string;
+	readonly traceOutput: string;
 } {
 	const timeFlag = process.platform === "darwin" ? "-l" : "-v";
 	const completed = runProcess(
@@ -418,7 +424,13 @@ function timeInvocation(
 	if (cpuMs <= 0 || peakRssBytes <= 0) {
 		throw new Error(`resource report omitted CPU or RSS:\n${stderr}`);
 	}
-	return { output: parseKernelOutput(completed.stdout), cpuMs, peakRssBytes, stderr };
+	return {
+		output: parseKernelOutput(completed.stdout),
+		cpuMs,
+		peakRssBytes,
+		stderr,
+		traceOutput: `${completed.stdout}\n${stderr}`,
+	};
 }
 
 function gcStat(stderr: string, name: string): number | undefined {
@@ -451,7 +463,7 @@ function nodeResourceSample(
 			timeoutMs,
 		);
 		const gc = summarizeV8GcTrace(
-			measured.stderr,
+			measured.traceOutput,
 			measured.output.measurementStartMs,
 			measured.output.measurementEndMs,
 		);
@@ -491,7 +503,7 @@ function nodeResourceSample(
 			head?: unknown;
 		};
 		const gc = summarizeV8GcTrace(
-			measured.stderr,
+			measured.traceOutput,
 			measured.output.measurementStartMs,
 			measured.output.measurementEndMs,
 		);
