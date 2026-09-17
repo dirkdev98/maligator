@@ -152,6 +152,7 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
 	"callRestArguments",
+	"loadArgumentCount",
 	"loadCallee",
 	"loadCaptured",
 	"loadNewTarget",
@@ -174,8 +175,7 @@ function inlineTarget(
 	const hasArgumentSnapshots = [...fn.instructionIds()].some(
 		(instruction) =>
 			fn.instructionKind(instruction) === "operation" &&
-			(fn.instructionOpcodeName(instruction) === "loadArgument" ||
-				fn.instructionOpcodeName(instruction) === "loadArgumentCount"),
+			fn.instructionOpcodeName(instruction) === "loadArgument",
 	);
 	if (hasArgumentSnapshots && coreArgumentObservation(fn).kind === "general")
 		return undefined;
@@ -633,24 +633,6 @@ function applyLinearInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
-			if (opcode === "loadArgumentCount") {
-				const output = materializeInstructionResults(inline.function, instruction)[0];
-				if (output === undefined) return undefined;
-				const created = editor.insertInstruction(
-					block,
-					candidate.site,
-					"createNumber",
-					[],
-					{
-						outputRepresentations: [inline.function.valueRepresentation(output)],
-						attributes: { value: arguments_.length },
-						sourcePosition: sourcePositions.get(instruction),
-					},
-				);
-				values.set(output, created.outputs[0]!);
-				introduced++;
-				continue;
-			}
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
@@ -921,19 +903,6 @@ function applyGuardedInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
-			if (opcode === "loadArgumentCount") {
-				const output = materializeInstructionResults(inline.function, instruction)[0];
-				if (output === undefined)
-					throw new Error("Validated guarded inline argument count is invalid");
-				const created = editor.appendInstruction(destination, "createNumber", [], {
-					outputRepresentations: [inline.function.valueRepresentation(output)],
-					attributes: { value: arguments_.length },
-					sourcePosition: sourcePositions.get(instruction),
-				});
-				values.set(output, created.outputs[0]!);
-				introduced++;
-				continue;
-			}
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
