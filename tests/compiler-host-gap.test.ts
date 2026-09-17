@@ -153,6 +153,21 @@ describe("compiler host-gap ladder", () => {
 		});
 	});
 
+	it("keeps holey traversal probes matched to stored-zero controls", () => {
+		const holey = fixtureOutput("matched-holey-array-traversal");
+		const storedZero = fixtureOutput("matched-stored-zero-array-traversal");
+		expect(holey).toMatchObject({
+			operations: storedZero.operations,
+			checksum: storedZero.checksum,
+		});
+
+		const holeyPresence = fixtureOutput("holey-array-presence");
+		const storedZeroPresence = fixtureOutput("stored-zero-array-presence-control");
+		expect(holeyPresence.operations).toBe(storedZeroPresence.operations);
+		expect(holeyPresence.checksum).toBeGreaterThan(0);
+		expect(holeyPresence.checksum).toBeLessThan(storedZeroPresence.checksum);
+	});
+
 	it("summarizes category ratios without implying workload attribution", () => {
 		const makeResult = (
 			category: CompilerHostGapKernelResult["category"],

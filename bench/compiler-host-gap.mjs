@@ -1176,6 +1176,54 @@ function holeyArrayTraversal(scale) {
 	return result(checksum, values.length * rounds);
 }
 
+function matchedArrayTraversal(scale, fillHoles) {
+	const values = [];
+	values[16_383] = 0;
+	for (let index = 0; index < 16_383; index += 2) values[index] = index & 255;
+	if (fillHoles) {
+		for (let index = 1; index < 16_383; index += 2) values[index] = 0;
+	}
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += values[index] ?? 0;
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function matchedHoleyArrayTraversal(scale) {
+	return matchedArrayTraversal(scale, false);
+}
+
+function matchedStoredZeroArrayTraversal(scale) {
+	return matchedArrayTraversal(scale, true);
+}
+
+function matchedArrayPresence(scale, fillHoles) {
+	const values = [];
+	values[16_383] = 0;
+	for (let index = 0; index < 16_383; index += 2) values[index] = index & 255;
+	if (fillHoles) {
+		for (let index = 1; index < 16_383; index += 2) values[index] = 0;
+	}
+	let checksum = 0;
+	const rounds = 120 * scale;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) {
+			if (index in values) checksum++;
+		}
+	}
+	return result(checksum, values.length * rounds);
+}
+
+function holeyArrayPresence(scale) {
+	return matchedArrayPresence(scale, false);
+}
+
+function storedZeroArrayPresenceControl(scale) {
+	return matchedArrayPresence(scale, true);
+}
+
 function recordArrayTraversal(scale) {
 	const rows = Array.from({ length: 8_192 }, (_, index) => ({
 		left: index & 1_023,
@@ -1664,6 +1712,62 @@ const kernels = [
 		"runtime/src/array_object.c",
 		holeyArrayTraversal,
 		{ category: "object-array-representation", unit: "indexed probe" },
+	),
+	kernel(
+		"matched-holey-array-traversal",
+		"runtime",
+		"matched holey Array indexed traversal",
+		"array-layout",
+		"runtime/src/array_object.c",
+		matchedHoleyArrayTraversal,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating holes, present final index",
+			unit: "indexed probe",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"matched-stored-zero-array-traversal",
+		"runtime",
+		"matched stored-zero Array indexed traversal",
+		"array-layout",
+		"runtime/src/array_object.c",
+		matchedStoredZeroArrayTraversal,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating stored zeroes",
+			unit: "indexed probe",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"holey-array-presence",
+		"runtime",
+		"holey Array indexed presence probes",
+		"array-layout",
+		"runtime/src/vm_ops.h",
+		holeyArrayPresence,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating holes, present final index",
+			unit: "indexed presence probe",
+			sentinel: false,
+		},
+	),
+	kernel(
+		"stored-zero-array-presence-control",
+		"runtime",
+		"stored-zero Array indexed presence probes",
+		"array-layout",
+		"runtime/src/vm_ops.h",
+		storedZeroArrayPresenceControl,
+		{
+			category: "object-array-representation",
+			inputShape: "16,384 slots, alternating stored zeroes",
+			unit: "indexed presence probe",
+			sentinel: false,
+		},
 	),
 	kernel(
 		"record-array-traversal",
