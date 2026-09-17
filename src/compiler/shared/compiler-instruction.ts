@@ -521,9 +521,9 @@ export type CompilerInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
-			/** COMPILE-ONLY: the receiver is an exact private dense Array and the key
-			 * is already a primitive Number. Native code may return its element or
-			 * undefined directly, with no brand, prototype, IC, or fallback edge. */
+			/** COMPILE-ONLY: the receiver is an exact private Array and the key is a
+			 * primitive Number. Native code may resolve clean holes without prototype
+			 * lookup, but must retain generic fallback for deopted storage and non-indices. */
 			exactContainedArrayElement?: true;
 			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
 			 * code may skip receiver branding, the property cache, prototype lookup,

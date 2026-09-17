@@ -1720,6 +1720,7 @@ function lowerFunctionToTarget(
 	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
+	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
 	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
 	recipeTable: CoreSpecializationRecipeTable,
@@ -2075,6 +2076,11 @@ function lowerFunctionToTarget(
 				if (lowered.type !== "binary")
 					throw new Error("Unsigned arithmetic lost its operation");
 				lowered = { ...lowered, unsignedArithmetic: true };
+			}
+			if (privateNumericArrayElements.has(instruction)) {
+				if (lowered.type !== "loadProperty")
+					throw new Error("Private numeric array proof lost its load");
+				lowered = { ...lowered, exactContainedArrayElement: true };
 			}
 			const builtinMasks = builtinInputs.get(instruction);
 			if (builtinMasks !== undefined) {
@@ -2634,6 +2640,15 @@ export function lowerCoreCompilationToExecutionProgram(
 		}
 		instructions.add(operation.instruction);
 	}
+	const privateNumericArrayElements = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	for (const operation of compilation.plan.privateNumericArrayElements ?? []) {
+		let instructions = privateNumericArrayElements.get(operation.function);
+		if (instructions === undefined) {
+			instructions = new Set();
+			privateNumericArrayElements.set(operation.function, instructions);
+		}
+		instructions.add(operation.instruction);
+	}
 	const operatorInputs = new Map<
 		CoreFunctionId,
 		Map<CoreInstructionId, CompilerOperatorInputKindMasks>
@@ -2672,6 +2687,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
+			privateNumericArrayElements.get(core) ?? new Set(),
 			operatorInputs.get(core) ?? new Map(),
 			builtinInputs.get(core) ?? new Map(),
 			compilation.plan.recipes,

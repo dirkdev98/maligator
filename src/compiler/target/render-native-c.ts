@@ -3637,11 +3637,22 @@ function emitInstruction(
 		nativePlan?.kind === "exact-contained-array-element" &&
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
+		const value = `__private_array_element_${ip}`;
+		const array = `mal_value_to_array_object(${boxed(instruction.object)})`;
+		const load =
+			indexedLengthLoopAction?.role === "element" &&
+			indexedLengthLoopAction.element?.kind === "load" &&
+			indexedLengthLoopAction.element.arrayIndexIsUint32
+				? `mal_vm_private_array_try_get_proven_index(${array}, (u32) ${num(instruction.key)}, &${value})`
+				: `mal_vm_private_array_try_get_index(${array}, ${num(instruction.key)}, &${value})`;
 		return [
 			"MAL_PERF_COUNT(array_contained_element_reads);",
-			reps[instruction.dst] === "number"
-				? `r${instruction.dst} = mal_ops_number_as_f64(mal_array_object_contained_dense_get(mal_value_to_array_object(${boxed(instruction.object)}), ${num(instruction.key)}));`
-				: `r${instruction.dst} = mal_array_object_contained_dense_get(mal_value_to_array_object(${boxed(instruction.object)}), ${num(instruction.key)});`,
+			`MalValue ${value};`,
+			`if (!${load}) {`,
+			`  ${value} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+			`  ${throwCheck()}`,
+			`}`,
+			`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 		];
 	}
 	if (

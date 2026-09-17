@@ -6,10 +6,13 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	corePrivateNumericArrayLoads,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -24,6 +27,58 @@ import type {
 export interface CoreUnsignedArithmeticPlan {
 	readonly function: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
+}
+
+export interface CorePrivateNumericArrayElementPlan {
+	readonly function: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+}
+
+const privateNumericArrayProofs = new WeakMap<
+	CorePrivateNumericArrayElementPlan,
+	{
+		fn: CoreFunctionStore;
+		versions: CoreFunctionVersions;
+		context: CoreCompilationContext;
+	}
+>();
+
+export function corePrivateNumericArrayElementProofIsCurrent(
+	program: CoreProgram,
+	plan: CorePrivateNumericArrayElementPlan,
+	context: CoreCompilationContext | undefined,
+): boolean {
+	const proof = privateNumericArrayProofs.get(plan);
+	return (
+		context !== undefined &&
+		proof?.context === context &&
+		proof.fn === program.function(plan.function) &&
+		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
+	);
+}
+
+export function corePrivateNumericArrayElementPlans(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	functions: ReadonlyArray<CoreFunctionId>,
+	context: CoreCompilationContext,
+): ReadonlyArray<CorePrivateNumericArrayElementPlan> {
+	const plans: Array<CorePrivateNumericArrayElementPlan> = [];
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		const cfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			})
+			.exceptional();
+		for (const instruction of corePrivateNumericArrayLoads(program, fn, cfg, context)) {
+			const plan = Object.freeze({ function: functionId, instruction });
+			privateNumericArrayProofs.set(plan, { fn, versions: fn.versions, context });
+			plans.push(plan);
+		}
+	}
+	return Object.freeze(plans);
 }
 
 const proofs = new WeakMap<

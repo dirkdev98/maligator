@@ -21,6 +21,7 @@ import type {
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -306,6 +307,18 @@ function privateNumericArrayLoads(
 			reject.has(valueRoot) ? [] : instructions,
 		),
 	);
+}
+
+export function corePrivateNumericArrayLoads(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+): ReadonlySet<CoreInstructionId> {
+	return context.facts.world.primordialPolicy === "locked" &&
+		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
+		? privateNumericArrayLoads(program, fn, cfg)
+		: new Set();
 }
 
 interface KindTransferBuffer {
@@ -706,11 +719,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-			const numericArrayLoads =
-				context.facts.world.primordialPolicy === "locked" &&
-				compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
-					? privateNumericArrayLoads(program, fn, cfg)
-					: new Set<CoreInstructionId>();
+			const numericArrayLoads = corePrivateNumericArrayLoads(program, fn, cfg, context);
 			const operationResultMask = (instruction: CoreInstructionId) =>
 				numericArrayLoads.has(instruction)
 					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED

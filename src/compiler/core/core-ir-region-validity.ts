@@ -41,6 +41,7 @@ import {
 import {
 	coreOperatorInputProofIsCurrent,
 	coreBuiltinInputProofIsCurrent,
+	corePrivateNumericArrayElementProofIsCurrent,
 	coreUnsignedArithmeticProofIsCurrent,
 } from "./core-native-numeric-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
@@ -1757,6 +1758,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	const proofPayloads = new Set<object>([
 		...(plan.operatorInputs ?? []),
 		...(plan.builtinInputs ?? []),
+		...(plan.privateNumericArrayElements ?? []),
 		...(plan.unsignedArithmetic ?? []),
 	]);
 	for (const entry of plan.directEntries) {
@@ -1874,6 +1876,10 @@ export function verifyCoreOptimizationPlan(
 	for (const operation of plan.operatorInputs ?? []) {
 		if (!coreOperatorInputProofIsCurrent(program, operation))
 			fail("operator inputs have no current kind proof");
+	}
+	for (const operation of plan.privateNumericArrayElements ?? []) {
+		if (!corePrivateNumericArrayElementProofIsCurrent(program, operation, context))
+			fail("private numeric array element has no current proof");
 	}
 	for (const operation of plan.unsignedArithmetic ?? []) {
 		if (!coreUnsignedArithmeticProofIsCurrent(program, operation))

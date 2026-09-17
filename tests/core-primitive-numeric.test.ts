@@ -66,6 +66,17 @@ describe("certified primitive numeric lowering", () => {
 					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 		);
 		expect(addition).toBeGreaterThanOrEqual(0);
+		const privateLoad = runtime.instructions.findIndex(
+			(instruction, index) =>
+				instruction.opcode === "LOAD_PROPERTY" &&
+				native.instructions[index]?.kind === "exact-contained-array-element",
+		);
+		expect(privateLoad).toBeGreaterThanOrEqual(0);
+		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false)!;
+		expect(emitted).not.toBeNull();
+		expect(emitted.source).toContain("mal_vm_private_array_try_get_proven_index");
+		expect(emitted.source).toContain("mal_vm_indexed_fast_load_index");
+		expect(emitted.source).not.toContain("mal_array_object_contained_dense_get");
 	});
 
 	it.each([

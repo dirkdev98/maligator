@@ -12,6 +12,7 @@ import type {
 import type {
 	CoreBuiltinInputPlan,
 	CoreOperatorInputPlan,
+	CorePrivateNumericArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
 import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
@@ -434,6 +435,7 @@ export interface CoreOptimizationPlan {
 	readonly directBuiltinCallbacks?: ReadonlyArray<CoreDirectBuiltinCallbackPlan>;
 	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
 	readonly builtinInputs?: ReadonlyArray<CoreBuiltinInputPlan>;
+	readonly privateNumericArrayElements?: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly recipes: CoreSpecializationRecipeTable;
 	readonly statistics: CoreOptimizationPlanStatistics;

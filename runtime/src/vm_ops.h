@@ -1692,6 +1692,12 @@ static inline bool mal_vm_array_try_get_index(const MalArrayObject *arr, f64 ind
 static inline bool mal_vm_array_try_get_proven_index(
     const MalArrayObject *arr, u32 index, MalValue *out
 );
+static inline bool mal_vm_private_array_try_get_index(
+    const MalArrayObject *arr, f64 index, MalValue *out
+);
+static inline bool mal_vm_private_array_try_get_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
+);
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value);
 
 static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
@@ -1898,6 +1904,30 @@ static inline bool mal_vm_array_try_get_index(
     }
     u32 integer = (u32) index;
     return (f64) integer == index && mal_vm_array_try_get_proven_index(arr, integer, out);
+}
+
+static inline bool mal_vm_private_array_try_get_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
+) {
+    if (mal_array_object_dense_get(arr, index, out)) {
+        return true;
+    }
+    if (arr->dense_deopted) {
+        return false;
+    }
+    *out = mal_value_new_undefined();
+    return true;
+}
+
+static inline bool mal_vm_private_array_try_get_index(
+    const MalArrayObject *arr, f64 index, MalValue *out
+) {
+    if (!(index >= 0 && index < (f64) UINT32_MAX)) {
+        return false;
+    }
+    u32 integer = (u32) index;
+    return (f64) integer == index &&
+           mal_vm_private_array_try_get_proven_index(arr, integer, out);
 }
 
 /** A successful dense own-element lookup proves `index in array`; every miss must
