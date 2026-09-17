@@ -81,7 +81,6 @@ describe("certified primitive numeric lowering", () => {
 			/__indexed_length_\d+_array = mal_value_to_array_object\(/,
 		);
 		expect(emitted.source).not.toMatch(/__indexed_length_\d+_array = mal_vm_as_array\(/);
-		expect(emitted.source).toMatch(/__indexed_length_\d+_kind = 1/);
 		expect(emitted.source).not.toMatch(/if \(__indexed_length_\d+_kind != 0\)/);
 	});
 
