@@ -2070,7 +2070,14 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 	{
 		key: "static-value-descriptions",
 		scope: "function",
-		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects", "facts"],
+		functionDependencies: [
+			"body",
+			"cfg",
+			"exceptionFlow",
+			"memoryEffects",
+			"facts",
+			"representations",
+		],
 		programDependencies: ["data"],
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function")

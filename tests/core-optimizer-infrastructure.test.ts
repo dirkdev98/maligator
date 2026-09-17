@@ -12,6 +12,7 @@ import {
 	CoreFunctionOptimizationSession,
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-control-flow.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -39,6 +40,7 @@ import type {
 	CoreFunctionPassContext,
 } from "../src/compiler/core/core-pass.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
+import { CORE_STATIC_VALUE_ANALYSIS } from "../src/compiler/core/core-static-values.ts";
 import {
 	CORE_PROGRAM_FLOW_REPRESENTATIONS,
 	CoreProgram,
@@ -259,6 +261,29 @@ describe("Core optimizer infrastructure", () => {
 		expect(finished.analyses).toMatchObject([
 			{ queries: 5, hits: 2, recomputations: 3, invalidations: 1 },
 		]);
+	});
+
+	it("invalidates static values when representations change", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const functionId = builder.finish(entry).function;
+		const { analyses } = analysisHarness(program);
+		const request = { scope: "function" as const, function: functionId };
+		const first = analyses.get(CORE_STATIC_VALUE_ANALYSIS, request);
+		expect(first.query(value!).kind).toBe("known");
+
+		const editor = CoreEditor.open(program, functionId);
+		editor.setValueRepresentation(value!, "f64");
+		editor.commit();
+
+		const second = analyses.get(CORE_STATIC_VALUE_ANALYSIS, request);
+		expect(second).not.toBe(first);
+		expect(second.query(value!).kind).toBe("known");
 	});
 
 	it("rejects every analysis manager from the construction generation", () => {
