@@ -7778,14 +7778,16 @@ MalCompletion mal_builtin_sort_numeric(
 }
 
 void mal_vm_op_define_fresh_array_element(
-    MalVm *vm, MalValue object_value, u32 index, MalValue value
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value,
+    bool enumerable, bool writable, bool configurable
 ) {
+    u32 index = (u32) mal_ops_number_as_f64(key_value);
     if (mal_array_object_dense_store(
             mal_value_to_array_object(object_value), index, value
         ) == MAL_ARRAY_DENSE_APPLIED) {
         return;
     }
     mal_vm_op_define_property(
-        vm, object_value, mal_value_from_i32((i32) index), value,
-        true, true, true);
+        vm, object_value, key_value, value,
+        enumerable, writable, configurable);
 }

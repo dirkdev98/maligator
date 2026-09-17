@@ -2160,7 +2160,8 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
 /** Define a default own element below the pre-established length of a proven fresh,
  * still-dense Array; fallback only handles dense-storage admission failure. */
 void mal_vm_op_define_fresh_array_element(
-    MalVm *vm, MalValue object_value, u32 index, MalValue value
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value,
+    bool enumerable, bool writable, bool configurable
 );
 
 /**

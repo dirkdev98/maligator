@@ -4012,7 +4012,7 @@ function emitInstruction(
 		case "DEFINE_PROPERTY":
 			if (nativePlan?.kind === "fresh-array-literal-element") {
 				return [
-					`mal_vm_op_define_fresh_array_element(vm, ${boxed(instruction.object)}, ${nativePlan.index}, ${boxed(instruction.value)});`,
+					`mal_vm_op_define_fresh_array_element(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 				];
 			}
 			// Object-literal define semantics; cannot run user code, so no
