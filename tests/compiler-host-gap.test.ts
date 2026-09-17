@@ -135,9 +135,14 @@ describe("compiler host-gap ladder", () => {
 
 		const length = fixtureOutput("rest-length-parameters");
 		const lengthControl = fixtureOutput("fixed-arity-length-control");
+		const prefixedLengthControl = fixtureOutput("prefixed-rest-length-control");
 		expect(length).toMatchObject({
 			operations: lengthControl.operations,
 			checksum: lengthControl.checksum,
+		});
+		expect(prefixedLengthControl).toMatchObject({
+			operations: length.operations,
+			checksum: length.checksum,
 		});
 
 		const materialized = fixtureOutput("materialized-rest-parameters");

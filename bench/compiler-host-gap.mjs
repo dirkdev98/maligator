@@ -856,6 +856,10 @@ function fixedArityLength(_first, _second, _third, _fourth) {
 	return 4;
 }
 
+function prefixedRestLength(_prefix, ...values) {
+	return values.length;
+}
+
 function collectRest(...values) {
 	return values;
 }
@@ -905,6 +909,15 @@ function fixedArityLengthControl(scale) {
 	const operations = 500_000 * scale;
 	for (let index = 0; index < operations; index++) {
 		checksum += fixedArityLength(index & 31, 3, 5, 7);
+	}
+	return result(checksum, operations);
+}
+
+function prefixedRestLengthControl(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += prefixedRestLength(0, index & 31, 3, 5, 7);
 	}
 	return result(checksum, operations);
 }
@@ -1568,6 +1581,15 @@ const kernels = [
 		"rest-arguments",
 		"src/compiler/core/core-local-passes.ts",
 		fixedArityLengthControl,
+		{ category: "language-features", unit: "call", sentinel: false },
+	),
+	kernel(
+		"prefixed-rest-length-control",
+		"runtime",
+		"materialized prefixed-rest control for rest length observation",
+		"rest-arguments",
+		"src/compiler/core/core-local-passes.ts",
+		prefixedRestLengthControl,
 		{ category: "language-features", unit: "call", sentinel: false },
 	),
 	kernel(
