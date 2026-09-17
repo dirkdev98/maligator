@@ -94,6 +94,31 @@ describe("rest forwarding allocation contract", () => {
 		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
 	});
 
+	it("uses the indexed loop bounds for packed rest element loads", () => {
+		const image = compile(
+			`function sum(...rest) {
+				let total = 0;
+				for (let index = 0; index < rest.length; index++) total += rest[index];
+				return total;
+			}`,
+			"locked",
+		);
+		const functionIndex = image.runtime.functions.findIndex((fn) =>
+			fn.instructions.some(
+				(instruction) => instruction.opcode === "CREATE_REST_ARGUMENTS",
+			),
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const emitted = emitCompiledFunction(
+			image.runtime.functions[functionIndex]!,
+			image.native.functions[functionIndex]!,
+			functionIndex,
+			"",
+			false,
+		);
+		expect(emitted?.source).toMatch(/->elements\[\(u32\) r\d+\]/);
+	});
+
 	it.each([
 		"function read(index, ...rest) { rest[0] = 1; return rest[+index]; }",
 		"function read(index, ...rest) { const alias = rest; alias[0] = 1; return rest[+index]; }",

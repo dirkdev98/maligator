@@ -3638,7 +3638,12 @@ function emitInstruction(
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
 		const array = `mal_value_to_array_object(${boxed(instruction.object)})`;
-		const value = `mal_array_object_contained_dense_get(${array}, ${typedNumber(instruction.key)})`;
+		const value =
+			indexedLengthLoopAction?.role === "element" &&
+			indexedLengthLoopAction.element?.kind === "load" &&
+			indexedLengthLoopAction.element.arrayIndexIsUint32
+				? `${array}->elements[(u32) ${num(instruction.key)}]`
+				: `mal_array_object_contained_dense_get(${array}, ${typedNumber(instruction.key)})`;
 		return [
 			"MAL_PERF_COUNT(array_contained_element_reads);",
 			`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
