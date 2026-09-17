@@ -118,13 +118,6 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
     return mal_ops_u32_to_i32(mal_ops_number_to_uint32(number));
 }
 
-/** ToInt32 for a boxed value already guarded as a JS Number. */
-static inline i32 mal_ops_number_value_to_i32(MalValue value) {
-    return mal_value_is_int32(value)
-        ? mal_value_to_i32(value)
-        : mal_ops_number_to_i32(mal_ops_number_as_f64(value));
-}
-
 /**
  * The result of a function body for the native backend's RETURN: for a
  * [[Construct]] call a non-object completion becomes `this`

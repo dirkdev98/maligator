@@ -4823,35 +4823,6 @@ function emitInstruction(
 			}
 			const leftIsNum = isNumericRep(reps[left]!);
 			const rightIsNum = isNumericRep(reps[right]!);
-			const guardedNumberOperand = (register: number): string =>
-				isNumericRep(reps[register]!)
-					? num(register)
-					: `mal_ops_number_as_f64(${boxed(register)})`;
-			const guardedInt32Operand = (register: number): string =>
-				reps[register] === "int32"
-					? `r${register}`
-					: reps[register] === "number"
-						? `mal_ops_number_to_i32(r${register})`
-						: `mal_ops_number_value_to_i32(${boxed(register)})`;
-			const guardedNumberBinaryExpr = (
-				binaryOperator: string,
-				leftRegister: number,
-				rightRegister: number,
-			): string | null => {
-				if (binaryOperator === "^" || binaryOperator === "|") {
-					const expression = nativeInt32Expr(
-						binaryOperator,
-						guardedInt32Operand(leftRegister),
-						guardedInt32Operand(rightRegister),
-					);
-					return expression === null ? null : `(f64) (${expression})`;
-				}
-				return nativeNumberExpr(
-					binaryOperator,
-					guardedNumberOperand(leftRegister),
-					guardedNumberOperand(rightRegister),
-				);
-			};
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			if (reps[left] === "boolean" || reps[right] === "boolean") {
@@ -4932,7 +4903,11 @@ function emitInstruction(
 				];
 			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {
-				const nativeExpr = guardedNumberBinaryExpr(operator, left, right);
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+				);
 				if (nativeExpr !== null) {
 					const guards: Array<string> = [];
 					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
@@ -4956,10 +4931,16 @@ function emitInstruction(
 				const first = fusion.first;
 				const firstOnLeft = left === first.dst;
 				const firstOnRight = right === first.dst;
-				const firstExpr = guardedNumberBinaryExpr(
+				const firstLeftIsNum = isNumericRep(reps[first.left]!);
+				const firstRightIsNum = isNumericRep(reps[first.right]!);
+				const firstExpr = nativeNumberExpr(
 					first.operator,
-					first.left,
-					first.right,
+					firstLeftIsNum
+						? num(first.left)
+						: `mal_ops_number_as_f64(${boxed(first.left)})`,
+					firstRightIsNum
+						? num(first.right)
+						: `mal_ops_number_as_f64(${boxed(first.right)})`,
 				);
 				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
 					const external = firstOnLeft ? right : left;
@@ -4993,25 +4974,11 @@ function emitInstruction(
 							`}`,
 						];
 					}
-					const nativeExpr =
-						operator === "^" || operator === "|"
-							? (() => {
-									const expression = nativeInt32Expr(
-										operator,
-										firstOnLeft
-											? `mal_ops_number_to_i32(__nf_${fusion.id}_value)`
-											: guardedInt32Operand(external),
-										firstOnRight
-											? `mal_ops_number_to_i32(__nf_${fusion.id}_value)`
-											: guardedInt32Operand(external),
-									);
-									return expression === null ? null : `(f64) (${expression})`;
-								})()
-							: nativeNumberExpr(
-									operator,
-									firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
-									firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
-								);
+					const nativeExpr = nativeNumberExpr(
+						operator,
+						firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
+						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
+					);
 					if (nativeExpr !== null) {
 						const result =
 							reps[dst] === "number"
@@ -5237,7 +5204,7 @@ function emitInstruction(
 			// for both-boxed there is no static proof, but the guard is a cheap,
 			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
 			if (producesNumberFromNumbers(operator)) {
-				const nativeExpr = guardedNumberBinaryExpr(operator, left, right);
+				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
 				if (nativeExpr !== null) {
 					const fast = profileCall(
 						"boxing",
