@@ -4529,6 +4529,7 @@ function emitInstruction(
 				const id = indexedLengthLoopAction.loadIp;
 				if (indexedLengthLoopAction.privateArray) {
 					return [
+						`__indexed_length_${id}_kind = 1;`,
 						`__indexed_length_${id}_array = mal_value_to_array_object(${boxed(instruction.object)});`,
 						`__indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
 						"mal_perf_ic_load_array_length_hit();",
