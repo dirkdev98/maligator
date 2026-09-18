@@ -43,6 +43,74 @@ for (let i = 0; i < 8; i++) {
 	}
 }
 
+function dynamicRemainder(left, right) {
+	try {
+		record(left % right);
+	} catch (error) {
+		record(error.name);
+	}
+}
+
+for (const [left, right] of [
+	[5, 7],
+	[-5, 7],
+	[5, -7],
+	[-5, -7],
+	[1.5, 2.25],
+	[-1.5, 2.25],
+	[-0, 7],
+	[0, -7],
+	[7, 7],
+	[-7, 7],
+	[14, 7],
+	[-14, 7],
+	[1, 0],
+	[NaN, 3],
+	[3, NaN],
+	[Infinity, 3],
+	[-Infinity, 3],
+	[3, Infinity],
+	[-3, -Infinity],
+	[Number.MIN_VALUE, 1],
+	[-Number.MIN_VALUE, 1],
+	[Number.MAX_VALUE, Infinity],
+	[Number.MAX_VALUE, 1e308],
+]) {
+	dynamicRemainder(left, right);
+}
+
+const remainderCoercions = [];
+const remainderLeft = {
+	valueOf() {
+		remainderCoercions.push("left");
+		return 5;
+	},
+};
+const remainderRight = {
+	valueOf() {
+		remainderCoercions.push("right");
+		return 7;
+	},
+};
+dynamicRemainder(remainderLeft, remainderRight);
+dynamicRemainder(5n, 2n);
+dynamicRemainder(5n, 2);
+dynamicRemainder(
+	{
+		valueOf() {
+			remainderCoercions.push("throw-left");
+			throw new Error("remainder coercion");
+		},
+	},
+	{
+		valueOf() {
+			remainderCoercions.push("skipped-right");
+			return 7;
+		},
+	},
+);
+record(remainderCoercions.join(","));
+
 function general(x) {
 	try {
 		record(x + 2);
