@@ -1259,7 +1259,8 @@ static inline bool mal_vm_local_inherited_value_try_load_static(
     const MalObject *object, const MalInlineCache *ic, MalValue *out
 ) {
     if (object == nullptr || ic->mode != MAL_IC_MODE_INHERITED_VALUE ||
-        ic->poly_count == 0 || object->shape != ic->shape ||
+        ic->poly_count == 0 || ic->receiver_type != MAL_HEAP_OBJECT ||
+        object->shape != ic->shape ||
         object->prototype != ic->proto_object[0] || mal_object_has_public_overflow(object)) {
         return false;
     }
@@ -1549,6 +1550,11 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         *out = mal_ops_number_value((f64) array->length);
         mal_perf_ic_load_array_length_hit();
         return true;
+    }
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
+        ic->receiver_type == MAL_HEAP_OBJECT) {
+        return mal_vm_local_inherited_value_try_load_static(
+            mal_vm_as_object(receiver), ic, out);
     }
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||

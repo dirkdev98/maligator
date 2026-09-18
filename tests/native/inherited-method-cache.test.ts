@@ -32,6 +32,8 @@ describe("inherited built-in method and native call caches", () => {
 	let userlandInterpreted: string;
 	let polymorphicCompiled: string;
 	let polymorphicInterpreted: string;
+	let mixedStaticCompiled: string;
+	let mixedStaticInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -145,6 +147,18 @@ describe("inherited built-in method and native call caches", () => {
 		polymorphicInterpreted = buildNativeBinary({
 			fixture: "tests/local/inherited-polymorphic-cache.js",
 			name: "inherited-polymorphic-cache-ni",
+			compiled: false,
+			outDir,
+		});
+		mixedStaticCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-static-load-mixed.js",
+			name: "inherited-static-load-mixed",
+			compiled: true,
+			outDir,
+		});
+		mixedStaticInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-static-load-mixed.js",
+			name: "inherited-static-load-mixed-ni",
 			compiled: false,
 			outDir,
 		});
@@ -295,6 +309,26 @@ describe("inherited built-in method and native call caches", () => {
 				timeoutMs: 60_000,
 			}),
 			["inherited-polymorphic-cache PASS"],
+		);
+	});
+
+	it.each([
+		["compiled", () => mixedStaticCompiled],
+		["interpreted", () => mixedStaticInterpreted],
+	])(
+		"keeps ordinary inherited hits isolated from dictionary, primitive, and proxy receivers in %s mode",
+		(_name, binary) => {
+			assertExactLines(runToStdout(binary()), ["inherited-static-load-mixed PASS"]);
+		},
+	);
+
+	it("keeps mixed static inherited loads sound under GC stress", () => {
+		assertExactLines(
+			runToStdout(mixedStaticCompiled, {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+			["inherited-static-load-mixed PASS"],
 		);
 	});
 
