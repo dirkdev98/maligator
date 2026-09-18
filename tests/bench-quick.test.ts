@@ -30,7 +30,7 @@ function fixture(failure: "none" | "output" | "timeout" = "none") {
 import { readFileSync } from 'node:fs';
 export function compileEntrypoint(input) {
   if (${JSON.stringify(failure === "timeout" && label === "baseline")} && process.argv[4].includes('pair-1-baseline')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
-  return ${failure === "output" && label === "candidate" ? "'wrong generated output'" : "readFileSync(input, 'utf8')"};
+  return ${failure === "output" && label === "candidate" ? "process.argv[4].includes('warm-candidate') ? 'first generated output' : 'changed generated output'" : "readFileSync(input, 'utf8')"};
 }
 `,
 			"tests/fixtures/express-5/app.js": `frozen ${label} application input`,
@@ -126,17 +126,21 @@ it("compares both compiler revisions on frozen baseline input, preserving altern
 	).toBe("frozen baseline application input");
 });
 
-it("rejects changed generated output without counting the failed sample as a pair", () => {
+it("permits output changes between compilers but rejects changes within one revision", () => {
 	const test = fixture("output");
 	expect(test.run().status).toBe(2);
-	expect(test.report()).toMatchObject({ status: "failed", complete: false, pairs: [] });
+	expect(test.report()).toMatchObject({
+		status: "failed",
+		complete: false,
+		pairs: [],
+	});
 	expect(test.report().error).toContain("output differs");
 	expect(
 		readFileSync(
-			path.join(test.output, "warm-candidate/output/unit-runtime-image.c"),
+			path.join(test.output, "pair-0-candidate/output/unit-runtime-image.c"),
 			"utf8",
 		),
-	).toBe("wrong generated output");
+	).toBe("changed generated output");
 });
 
 it("stops at the total budget and retains complete pairs plus partial evidence", () => {

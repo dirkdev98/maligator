@@ -74,8 +74,10 @@ const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
 compiler-app compiles one frozen Express application graph to C using each Node-hosted
 compiler directly. app-batch builds production binaries once, then runs a fixed dataset
 through parsing, validation, grouping, sorting, and serialization. Both use one warmup
-per revision and require every sample to match the reference output. Fresh processes
-are timed end to end; warmups warm caches, not a persistent JavaScript process.
+per revision. app-batch requires both revisions to match the Node reference;
+compiler-app permits compiler output to change between revisions but requires each
+revision to remain deterministic across its samples. Fresh processes are timed end to
+end; warmups warm caches, not a persistent JavaScript process.
 No native self-hosted compiler, calibration, profiling, or adaptive extra pairs run.
 Exit 2 means failed or incomplete. Completed quick runs are screening evidence only.
 `;
@@ -252,6 +254,7 @@ async function run(value: Options): Promise<void> {
 	let prepared: Prepared | undefined;
 	let inputDigest: string | undefined;
 	let oracle: string | undefined;
+	const revisionOracles: Partial<Record<Revision, string>> = {};
 	let active: (() => void) | undefined;
 	let interruption: string | undefined;
 	const median = (values: Array<number>) => {
@@ -276,6 +279,7 @@ async function run(value: Options): Promise<void> {
 			identity: runIdentity,
 			inputDigest,
 			oracle,
+			revisionOracles,
 			elapsedMs: performance.now() - started,
 			phases,
 			samples,
@@ -558,6 +562,8 @@ async function run(value: Options): Promise<void> {
 				oracle = digest(readFileSync(reference.stdout));
 			}
 		});
+		revisionOracles.baseline = oracle!;
+		if (value.workload === "app-batch") revisionOracles.candidate = oracle!;
 		if (value.workload === "app-batch" && value.prepared === undefined) {
 			prepared = {
 				schema: 1,
@@ -569,20 +575,26 @@ async function run(value: Options): Promise<void> {
 			};
 			save(path.join(preparation, "manifest.json"), prepared);
 		}
-		const checked = async (label: string, revision: Revision) => {
+		const checked = async (
+			label: string,
+			revision: Revision,
+			establishRevisionOracle = false,
+		) => {
 			const result = await sample(label, revision);
 			samples.push(result);
+			if (revisionOracles[revision] === undefined && establishRevisionOracle)
+				revisionOracles[revision] = result.digest;
 			persist();
-			if (result.digest !== oracle)
+			if (result.digest !== revisionOracles[revision])
 				throw new Error(
-					`${label} output differs from the frozen reference; timing is not accepted`,
+					`${label} output differs from the ${revision} frozen reference; timing is not accepted`,
 				);
 			return result;
 		};
 		if (!value.prepareOnly) {
 			await inPhase("warmup", async () => {
 				await checked("warm-baseline", "baseline");
-				await checked("warm-candidate", "candidate");
+				await checked("warm-candidate", "candidate", value.workload === "compiler-app");
 			});
 			await inPhase("measurement", async () => {
 				for (let index = 0; index < value.pairs; index++) {
@@ -591,7 +603,10 @@ async function run(value: Options): Promise<void> {
 					const results: Partial<Record<Revision, Sample>> = {};
 					for (const revision of order)
 						results[revision] = await checked(`pair-${index}-${revision}`, revision);
-					pairs.push({ baseline: results.baseline!, candidate: results.candidate! });
+					pairs.push({
+						baseline: results.baseline!,
+						candidate: results.candidate!,
+					});
 					persist();
 				}
 			});
