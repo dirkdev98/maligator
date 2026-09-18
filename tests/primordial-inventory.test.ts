@@ -26,14 +26,15 @@ describe("native primordial installation matrix", () => {
 					"Regenerate the target-specific host descriptor audit on a new platform",
 				).toEqual({ platform: expected.platform, arch: expected.arch });
 				const digest = primordialInventoryDigest(phases);
+				let mismatchMessage = "Descriptor audit digest changed";
 				if (digest !== expected.modes.find((entry) => entry.mode === mode)?.sha256) {
 					const evidence = path.resolve(".cache/primordial-inventory-failures");
 					mkdirSync(evidence, { recursive: true });
 					const file = path.join(evidence, `${mode}-${Date.now()}.json`);
 					writeFileSync(file, JSON.stringify(phases));
-					console.error(`Descriptor audit mismatch: ${file}`);
+					mismatchMessage = `Descriptor audit mismatch: ${file}`;
 				}
-				expect(primordialInventoryDigest(phases)).toBe(
+				expect(digest, mismatchMessage).toBe(
 					expected.modes.find((entry) => entry.mode === mode)?.sha256,
 				);
 			} finally {
