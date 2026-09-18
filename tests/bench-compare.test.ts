@@ -174,6 +174,7 @@ test("ordinary self-compile samples may differ by revision but stay stable withi
 		lanes: ["self-compile"],
 		pairs: 1,
 		maxPairs: 1,
+		extraArgs: ["--self-compile-sample", "frozen-input"],
 	};
 	const complete = await runBenchmarkComparison(options);
 	expect(complete.exitCode).toBe(0);

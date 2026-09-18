@@ -31,6 +31,9 @@ if (control.hang === label) {
 	await new Promise(() => {});
 }
 if (args.includes("--checkpoint")) {
+	if (args.includes("--self-compile-sample")) {
+		throw new Error("ordinary self-compile samples cannot use diagnostic checkpoints");
+	}
 	const checkpoint = args[args.indexOf("--checkpoint") + 1]!;
 	if (!existsSync(checkpoint)) {
 		writeFileSync(checkpoint, '{"stage":"prepared"}');

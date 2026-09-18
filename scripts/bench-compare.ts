@@ -478,7 +478,10 @@ async function runSnapshot(
 	mkdirSync(pendingDirectory, { recursive: true });
 	const pendingOutput = path.join(pendingDirectory, `${label}.json`);
 	rmSync(pendingOutput, { force: true });
-	const selfCompile = lanes.length === 1 && lanes[0] === "self-compile";
+	const checkpointedSelfCompile =
+		lanes.length === 1 &&
+		lanes[0] === "self-compile" &&
+		!extraArgs.includes("--self-compile-sample");
 	const checkpoint = path.join(runDirectory, `${label}.checkpoint.json`);
 	const scratchDirectory = path.join(runDirectory, "scratch", label);
 	do {
@@ -486,7 +489,7 @@ async function runSnapshot(
 			? readFileSync(checkpoint, "utf8")
 			: undefined;
 		console.log(
-			`[bench-compare] ${label}${selfCompile ? " advance checkpoint" : ""}; log: ${label}.log`,
+			`[bench-compare] ${label}${checkpointedSelfCompile ? " advance checkpoint" : ""}; log: ${label}.log`,
 		);
 		await runLoggedCommand(
 			repository,
@@ -498,7 +501,7 @@ async function runSnapshot(
 				"--json-out",
 				pendingOutput,
 				...extraArgs,
-				...(selfCompile ? ["--checkpoint", checkpoint] : []),
+				...(checkpointedSelfCompile ? ["--checkpoint", checkpoint] : []),
 			],
 			path.join(runDirectory, `${label}.log`),
 			deadline,
@@ -508,7 +511,7 @@ async function runSnapshot(
 		if (existsSync(pendingOutput)) {
 			JSON.parse(readFileSync(pendingOutput, "utf8"));
 			renameSync(pendingOutput, output);
-		} else if (!selfCompile) {
+		} else if (!checkpointedSelfCompile) {
 			throw new Error(`benchmark did not write ${output}`);
 		} else if (
 			!existsSync(checkpoint) ||
