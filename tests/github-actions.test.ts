@@ -23,6 +23,17 @@ function usedActions(value: unknown): Array<string> {
 }
 
 describe("GitHub Actions", () => {
+	it("selects the pinned Rust toolchain and prepares cacheable Test262 inputs", () => {
+		for (const platform of ["linux", "macos"]) {
+			const action = readFileSync(
+				path.join(githubRoot, "actions", `setup-${platform}`, "action.yml"),
+				"utf8",
+			);
+			expect(action).toContain('echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"');
+			expect(action).toContain("run: npm run test262:prepare");
+		}
+	});
+
 	it("keeps every external action dependency immutable", () => {
 		const violations: Array<string> = [];
 		for (const file of yamlFiles(githubRoot)) {

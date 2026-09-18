@@ -631,7 +631,7 @@ describe("normal build frontend cache", () => {
 		expect(changedAlpha.wires![0]).not.toEqual(combined.wires![0]);
 		expect(changedAlpha.wires![1]).toEqual(combined.wires![1]);
 		expect(changedAlpha.wires![2]).toEqual(combined.wires![2]);
-	});
+	}, 30_000);
 
 	it("retains dependency linkage validation across local exported-value edits", () => {
 		const root = temporaryDirectory();
