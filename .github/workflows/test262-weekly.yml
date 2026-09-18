@@ -1,0 +1,118 @@
+name: Weekly Test262 baseline
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: test262-baseline
+  cancel-in-progress: false
+
+jobs:
+  test262:
+    name: Full Test262
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Dispatch this workflow from main." >&2
+          exit 1
+
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+          persist-credentials: true
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run the complete Test262 report
+        id: test262
+        continue-on-error: true
+        run: npm run test262:report
+
+      - name: Summarize the complete report
+        id: summary
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          report=.cache/mal-build/test262/report-compiled-normal-combined.json
+          node scripts/test262-ci.ts "$report" "$RUNNER_TEMP/test262-issue.md" "$RUN_URL" > "$RUNNER_TEMP/test262-summary.json"
+          echo "regressions=$(jq -r .regressions "$RUNNER_TEMP/test262-summary.json")" >> "$GITHUB_OUTPUT"
+          echo "improvements=$(jq -r .improvements "$RUNNER_TEMP/test262-summary.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Import an improvement-only baseline
+        if: steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
+        run: >-
+          npm run test262:update-baseline --
+          --from-report .cache/mal-build/test262/report-compiled-normal-combined.json
+
+      - name: Commit a changed baseline
+        if: steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
+        shell: bash
+        run: |
+          if git diff --quiet -- scripts/test262.json; then
+            exit 0
+          fi
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test262.json
+          git commit -m "test262: refresh weekly baseline"
+          git push origin HEAD:main
+
+      - name: Update the regression issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGRESSIONS: ${{ steps.summary.outputs.regressions }}
+        shell: bash
+        run: |
+          title="Automated Test262 regressions"
+          issues="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search '"Automated Test262 regressions" in:title' --limit 10 --json number,state,title --jq '[.[] | select(.title == "Automated Test262 regressions")]')"
+          count="$(jq length <<< "$issues")"
+          if [ "$count" -gt 1 ]; then
+            echo "Expected at most one exact Test262 regression issue, found $count." >&2
+            exit 1
+          fi
+          if [ "$count" -eq 0 ]; then
+            if [ "$REGRESSIONS" -gt 0 ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/test262-issue.md"
+            fi
+            exit 0
+          fi
+          number="$(jq -r '.[0].number' <<< "$issues")"
+          state="$(jq -r '.[0].state' <<< "$issues")"
+          gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/test262-issue.md"
+          if [ "$REGRESSIONS" -gt 0 ] && [ "$state" = CLOSED ]; then
+            gh issue reopen "$number" --repo "$GITHUB_REPOSITORY"
+          elif [ "$REGRESSIONS" -eq 0 ] && [ "$state" = OPEN ]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Retain Test262 reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test262-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/mal-build/test262/report-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fail on regressions or an incomplete run
+        if: steps.test262.outcome != 'success'
+        run: exit 1

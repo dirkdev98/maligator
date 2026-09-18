@@ -318,6 +318,26 @@ instrumentation and maximal GC stress (`MAL_GC_STRESS=1`) each multiply it by th
 combined runs receive 180 seconds because both costs apply. An explicit child
 deadline uses the same factors. Outer test and queue job budgets remain separate.
 
+## GitHub Actions
+
+Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
+smoke tier on macOS ARM. The workflows use four Linux workers and three macOS workers
+to match the hosted CPU allocations. External actions are pinned to immutable commit
+SHAs; local setup actions install Node 24, the repository-pinned Rust toolchain, and
+the platform compiler before running `env:check`.
+
+CI caches npm downloads and the pinned Test262 corpus only. The generated Maligator
+blob store, native objects, Zig outputs, and whole managed cache are deliberately not
+stored because a normal developer cache can exceed the repository's 10 GB Actions
+cache allowance. Test reports are retained only on failure.
+
+The weekly and manually dispatched Test262 workflow runs the complete canonical
+compiled/normal report on `main`. It commits `scripts/test262.json` only when the
+complete report has no regressions and the baseline changed. Regressions are never
+accepted into the baseline; one issue named `Automated Test262 regressions` is
+created or reopened and updated from the complete report, then closed by the next
+regression-free run.
+
 ## Policies
 
 The suite and standards runners accept two policies:
