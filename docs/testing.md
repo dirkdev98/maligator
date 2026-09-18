@@ -78,19 +78,31 @@ retain generated sources and binaries for diagnosis; the runner prints the path.
 Reports and the shared build cache remain outside that disposable directory.
 
 `bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default.
-`bench:runtime-gap` writes `.cache/runtime-gap/report.json` and `report.md`; its quick
-preset is a bounded same-source Node/native diagnostic sweep across runtime constructs,
-builtins, language features, allocation/GC, and memory representation. Use
-`--plan=json` before execution, `--category` or repeatable `--case` for focused work,
-and `--preset confirm --case ID` for deeper selected evidence. `bench:compiler-host-gap`
-remains the queue-facing entrypoint and can include a self-compile capture with
-`--self-compile PATH`. Neither diagnostic command updates `bench/baseline.json`.
+`bench:performance` is the public performance entrypoint. `gap` compiles each selected
+diagnostic case independently, so adding an unselected case does not grow or invalidate
+an existing case. Its reports under `.cache/performance/` include per-case compiler
+artifact identity, image counts, generated-object measurements, executable size, and
+cache outcomes. Use `--plan=json` before execution, `--category` or repeatable `--case`
+for focused work, and `--preset confirm --case ID` for deeper selected evidence.
 
-Run native runtime-gap sweeps through `mjq perf.host-gap`. Queue options can select
-explicit `cases` or use `preset`, `category`, and `suite`; `budget_seconds` bounds the
-whole driver and `case_timeout_ms` bounds each child invocation. Quick reports are
-screening evidence: confirm an optimization with more interleaved pairs plus a
-representative product workload and adjacent controls.
+Use `bench:performance -- experiment new ID [--from CASE] [--control CASE]` for ignored
+scratch work. `experiment run ID` supports `smoke`, `verify`, and `confirm` presets;
+promotion refuses collisions and does not add the new case to a default suite unless
+`--preset survey` or `--preset quick` is explicit. `experiment remove ID` deletes only
+that experiment. The queue transports only the selected scratch closure.
+
+`bench:performance -- portfolio --baseline REF` is the broad acceptance path. Its
+versioned, fixed-weight portfolio delegates to app-batch, compiler-app, JavaScript,
+HTTP, and self-compile owners. Missing families remain incomplete and are never
+reweighted. A smaller related regression may be outweighed by a larger portfolio win,
+but every regression remains visible and explicit per-family guardrails still apply.
+The specialized benchmark commands remain available for their owning diagnostics;
+the performance entrypoint supersedes them as the normal experiment and acceptance
+workflow. None of these commands updates `bench/baseline.json`.
+
+Run native cases and portfolios through `mjq perf.performance`. Queue options select
+`mode=gap`, `mode=experiment`, or `mode=portfolio`; the selected mode's budget bounds
+the complete driver. Smoke and quick reports are screening evidence, not acceptance.
 Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
 collection deltas cover the measured window, while its GC pause and peak-live values
 cover the separate resource process. Node allocation is sampled and is not directly

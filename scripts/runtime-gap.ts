@@ -17,12 +17,17 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { buildNativeBinary } from "../src/test-harness.ts";
-import { loadRuntimeGapCatalog, RUNTIME_GAP_CATALOG } from "./runtime-gap-catalog.ts";
+import { runBoundedProcess } from "./performance-process.ts";
+import {
+	loadRuntimeGapCatalog,
+	loadRuntimeGapExperiment,
+	RUNTIME_GAP_CATALOG,
+} from "./runtime-gap-catalog.ts";
 import type {
 	RuntimeGapCaseDescriptor,
 	RuntimeGapCategory,
 } from "./runtime-gap-catalog.ts";
+import { cleanTestEnvironment } from "./test-environment.ts";
 import { summarizeV8GcTrace } from "./v8-gc-trace.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -73,6 +78,26 @@ interface ResourceSample {
 	readonly maxPauseMs?: number;
 }
 
+interface RuntimeGapBuildEvidence {
+	readonly schema: 1;
+	readonly binaryPath: string;
+	readonly buildMs: number;
+	readonly executableBytes: number;
+	readonly compilerArtifactBytes: number;
+	readonly compilerArtifactDigest: string;
+	readonly programImage: {
+		readonly functionCount: number;
+		readonly instructionCount: number;
+	};
+	readonly frontend: ReadonlyArray<{
+		readonly cache: "hit" | "miss";
+		readonly entrypoint: string;
+	}>;
+	readonly nativeCaches: ReadonlyArray<unknown>;
+	readonly phases: ReadonlyArray<unknown>;
+	readonly measurements: unknown;
+}
+
 interface RuntimeGapFailure {
 	readonly id: string;
 	readonly status: "budget" | "timeout" | "incorrect" | "error";
@@ -83,6 +108,7 @@ export interface CompilerHostGapKernelResult extends Omit<
 	KernelDescriptor,
 	"fixturePath"
 > {
+	readonly build: RuntimeGapBuildEvidence;
 	readonly scale: number;
 	readonly operations: number;
 	readonly checksum: number;
@@ -91,14 +117,16 @@ export interface CompilerHostGapKernelResult extends Omit<
 		readonly medianMs: number;
 		readonly medianAbsoluteDeviationMs: number;
 		readonly nsPerOperation: number;
-		readonly resource: ResourceSample;
+		readonly resource?: ResourceSample;
+		readonly resourceFailure?: string;
 	};
 	readonly maligator: {
 		readonly samples: ReadonlyArray<TimedKernelSample>;
 		readonly medianMs: number;
 		readonly medianAbsoluteDeviationMs: number;
 		readonly nsPerOperation: number;
-		readonly resource: ResourceSample;
+		readonly resource?: ResourceSample;
+		readonly resourceFailure?: string;
 	};
 	readonly ratio: number;
 	readonly hostGapMs: number;
@@ -162,6 +190,7 @@ interface Options {
 	readonly plan: boolean;
 	readonly preset?: Preset;
 	readonly selfCompile?: string;
+	readonly experimentManifest?: string;
 }
 
 const HELP = `Usage: npm run bench:performance -- gap [options]
@@ -180,6 +209,8 @@ Options:
   --markdown PATH            Markdown report (default: .cache/performance/runtime-gap.md)
   --skip-node-allocation     omit V8 sampled-allocation resource probes
   --self-compile PATH        merge a full self-compile owner artifact
+  --experiment-manifest PATH
+                             include one scratch experiment case
   --plan=json                describe selected work without writing or building
 `;
 
@@ -227,6 +258,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	let skipNodeAllocation = preset === "quick";
 	let plan = false;
 	let selfCompile: string | undefined;
+	let experimentManifest: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index]!;
 		if (option === "--samples") {
@@ -276,6 +308,9 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		} else if (option === "--self-compile") {
 			selfCompile = path.resolve(requiredValue(args, index));
 			index++;
+		} else if (option === "--experiment-manifest") {
+			experimentManifest = path.resolve(requiredValue(args, index));
+			index++;
 		} else {
 			throw new Error(`unknown option: ${option}`);
 		}
@@ -295,6 +330,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		plan,
 		...(preset === undefined ? {} : { preset }),
 		...(selfCompile === undefined ? {} : { selfCompile }),
+		...(experimentManifest === undefined ? {} : { experimentManifest }),
 	};
 }
 
@@ -353,7 +389,9 @@ function runKernel(
 	args: ReadonlyArray<string>,
 	timeoutMs: number,
 ): KernelOutput {
-	return parseKernelOutput(runProcess(command, args, process.env, timeoutMs).stdout);
+	return parseKernelOutput(
+		runProcess(command, args, cleanTestEnvironment(), timeoutMs).stdout,
+	);
 }
 
 function median(values: ReadonlyArray<number>): number {
@@ -434,14 +472,16 @@ function nodeResourceSample(
 	scale: number,
 	sampleAllocation: boolean,
 	timeoutMs: number,
+	reference: KernelOutput,
 ): ResourceSample {
 	if (!sampleAllocation) {
 		const measured = timeInvocation(
 			process.execPath,
 			["--trace-gc-nvp", fixture, String(scale)],
-			process.env,
+			cleanTestEnvironment(),
 			timeoutMs,
 		);
+		assertRuntimeGapParity(reference, measured.output);
 		const gc = summarizeV8GcTrace(
 			measured.traceOutput,
 			measured.output.measurementStartMs,
@@ -468,9 +508,10 @@ function nodeResourceSample(
 				fixture,
 				String(scale),
 			],
-			process.env,
+			cleanTestEnvironment(),
 			timeoutMs,
 		);
+		assertRuntimeGapParity(reference, measured.output);
 		const profileName = readdirSync(profileRoot).find((name) =>
 			name.endsWith(".heapprofile"),
 		);
@@ -504,17 +545,18 @@ function maligatorResourceSample(
 	binary: string,
 	scale: number,
 	timeoutMs: number,
+	reference: KernelOutput,
 ): ResourceSample {
 	const measured = timeInvocation(
 		binary,
 		[String(scale)],
-		{
-			...process.env,
+		cleanTestEnvironment({
 			MAL_GC_STATS: "1",
 			MAL_GC_CONTROL: "1",
-		},
+		}),
 		timeoutMs,
 	);
+	assertRuntimeGapParity(reference, measured.output);
 	return {
 		cpuMs: measured.cpuMs,
 		peakRssBytes: measured.peakRssBytes,
@@ -527,16 +569,33 @@ function maligatorResourceSample(
 	};
 }
 
-function assertParity(reference: KernelOutput, actual: KernelOutput): void {
+export class RuntimeGapParityError extends Error {}
+
+export function assertRuntimeGapParity(
+	reference: KernelOutput,
+	actual: KernelOutput,
+): void {
 	if (
 		reference.id !== actual.id ||
 		reference.scale !== actual.scale ||
 		reference.operations !== actual.operations ||
 		reference.checksum !== actual.checksum
 	) {
-		throw new Error(
+		throw new RuntimeGapParityError(
 			`kernel work differs between hosts: ${JSON.stringify(reference)} != ${JSON.stringify(actual)}`,
 		);
+	}
+}
+
+export function captureOptionalResource<T>(probe: () => T): {
+	readonly resource?: T;
+	readonly resourceFailure?: string;
+} {
+	try {
+		return { resource: probe() };
+	} catch (error) {
+		if (error instanceof RuntimeGapParityError) throw error;
+		return { resourceFailure: error instanceof Error ? error.message : String(error) };
 	}
 }
 
@@ -559,7 +618,7 @@ function calibrateScale(
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
 	const maligator = runKernel(binary, ["1"], invocationTimeout(deadline, caseTimeoutMs));
-	assertParity(node, maligator);
+	assertRuntimeGapParity(node, maligator);
 	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
 	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
 	const targetScale = Math.max(1, Math.ceil(targetNodeMs / fasterMs));
@@ -583,6 +642,7 @@ function timedSample(output: KernelOutput): TimedKernelSample {
 
 function measureKernel(
 	binary: string,
+	build: RuntimeGapBuildEvidence,
 	descriptor: KernelDescriptor,
 	options: Pick<
 		Options,
@@ -619,8 +679,8 @@ function measureKernel(
 		const node = sample % 2 === 0 ? first : second;
 		const maligator = sample % 2 === 0 ? second : first;
 		reference ??= node;
-		assertParity(reference, node);
-		assertParity(reference, maligator);
+		assertRuntimeGapParity(reference, node);
+		assertRuntimeGapParity(reference, maligator);
 		nodeSamples.push(timedSample(node));
 		maligatorSamples.push(timedSample(maligator));
 	}
@@ -634,8 +694,26 @@ function measureKernel(
 	);
 	const operations = reference!.operations;
 	const { fixturePath: _fixturePath, ...reportDescriptor } = descriptor;
+	const nodeResource = captureOptionalResource(() =>
+		nodeResourceSample(
+			descriptor.fixturePath,
+			scale,
+			!options.skipNodeAllocation,
+			invocationTimeout(deadline, options.caseTimeoutMs),
+			reference!,
+		),
+	);
+	const maligatorResource = captureOptionalResource(() =>
+		maligatorResourceSample(
+			binary,
+			scale,
+			invocationTimeout(deadline, options.caseTimeoutMs),
+			reference!,
+		),
+	);
 	return {
 		...reportDescriptor,
+		build,
 		scale,
 		operations,
 		checksum: reference!.checksum,
@@ -644,23 +722,14 @@ function measureKernel(
 			medianMs: nodeMedianMs,
 			medianAbsoluteDeviationMs: nodeDeviationMs,
 			nsPerOperation: (nodeMedianMs * 1e6) / operations,
-			resource: nodeResourceSample(
-				descriptor.fixturePath,
-				scale,
-				!options.skipNodeAllocation,
-				invocationTimeout(deadline, options.caseTimeoutMs),
-			),
+			...nodeResource,
 		},
 		maligator: {
 			samples: maligatorSamples,
 			medianMs: maligatorMedianMs,
 			medianAbsoluteDeviationMs: maligatorDeviationMs,
 			nsPerOperation: (maligatorMedianMs * 1e6) / operations,
-			resource: maligatorResourceSample(
-				binary,
-				scale,
-				invocationTimeout(deadline, options.caseTimeoutMs),
-			),
+			...maligatorResource,
 		},
 		ratio: maligatorMedianMs / nodeMedianMs,
 		hostGapMs: maligatorMedianMs - nodeMedianMs,
@@ -874,14 +943,18 @@ function row(result: CompilerHostGapKernelResult): string {
 		(100 * result.maligator.medianAbsoluteDeviationMs) /
 		Math.max(0.001, result.maligator.medianMs);
 	const allocatedPerOperation =
-		result.maligator.resource.allocatedBytes === undefined
+		result.maligator.resource?.allocatedBytes === undefined
 			? "n/a"
 			: (result.maligator.resource.allocatedBytes / result.operations).toFixed(2);
-	const rss = `${(result.node.resource.peakRssBytes / 1024 / 1024).toFixed(1)}/${(
-		result.maligator.resource.peakRssBytes /
-		1024 /
-		1024
-	).toFixed(1)}`;
+	const rss = `${
+		result.node.resource === undefined
+			? "n/a"
+			: (result.node.resource.peakRssBytes / 1024 / 1024).toFixed(1)
+	}/${
+		result.maligator.resource === undefined
+			? "n/a"
+			: (result.maligator.resource.peakRssBytes / 1024 / 1024).toFixed(1)
+	}`;
 	return `| ${result.id} | ${result.inputShape} | ${result.node.nsPerOperation.toFixed(1)} | ${result.maligator.nsPerOperation.toFixed(1)} | ${result.ratio.toFixed(2)}x | ${result.deltaNsPerOperation.toFixed(1)} | ${nodeDispersion.toFixed(1)}%/${maligatorDispersion.toFixed(1)}% | ${allocatedPerOperation} | ${rss} | ok |`;
 }
 
@@ -1021,11 +1094,77 @@ function digest(file: string): string {
 	return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-export function main(args: ReadonlyArray<string>): void {
+async function buildRuntimeGapCase(
+	descriptor: KernelDescriptor,
+	outputDirectory: string,
+	deadline: number,
+	caseTimeoutMs: number,
+): Promise<RuntimeGapBuildEvidence> {
+	const token = createHash("sha256").update(descriptor.id).digest("hex").slice(0, 8);
+	const output = path.join(
+		outputDirectory,
+		`.runtime-gap-build-${process.pid}-${token}.json`,
+	);
+	try {
+		const completed = await runBoundedProcess(
+			process.execPath,
+			[
+				path.join(REPOSITORY_ROOT, "scripts/runtime-gap-build-worker.ts"),
+				"--fixture",
+				descriptor.fixturePath,
+				"--name",
+				`malgap-${token}`,
+				"--output",
+				output,
+			],
+			{
+				cwd: REPOSITORY_ROOT,
+				environment: cleanTestEnvironment(),
+				timeoutMs: invocationTimeout(deadline, caseTimeoutMs),
+			},
+		);
+		if (completed.exitCode !== 0) {
+			throw new Error(
+				`runtime-gap build failed (${completed.exitCode}):\n${completed.stdout}\n${completed.stderr}`,
+			);
+		}
+		const report = JSON.parse(
+			readFileSync(output, "utf8"),
+		) as Partial<RuntimeGapBuildEvidence>;
+		if (
+			report.schema !== 1 ||
+			typeof report.binaryPath !== "string" ||
+			!existsSync(report.binaryPath) ||
+			typeof report.buildMs !== "number" ||
+			typeof report.compilerArtifactDigest !== "string" ||
+			report.programImage === undefined
+		) {
+			throw new Error("runtime-gap build worker produced an invalid report");
+		}
+		return report as RuntimeGapBuildEvidence;
+	} finally {
+		rmSync(output, { force: true });
+		rmSync(`${output}.tmp`, { force: true });
+	}
+}
+
+export async function main(args: ReadonlyArray<string>): Promise<void> {
 	const options = parseOptions(args);
 	if (options === undefined) return;
 	const catalog = loadRuntimeGapCatalog();
-	const allDescriptors = catalog.cases;
+	const experiment =
+		options.experimentManifest === undefined
+			? undefined
+			: loadRuntimeGapExperiment(options.experimentManifest);
+	if (experiment !== undefined && catalog.cases.some(({ id }) => id === experiment.id)) {
+		throw new Error(
+			`runtime-gap experiment collides with catalog case: ${experiment.id}`,
+		);
+	}
+	const allDescriptors = [
+		...catalog.cases,
+		...(experiment === undefined ? [] : [experiment.case]),
+	];
 	if (allDescriptors.length === 0) throw new Error("runtime-gap catalog has no cases");
 	const knownCategories = new Set(allDescriptors.map(({ category }) => category));
 	const unknownCategories = [...options.categories].filter(
@@ -1058,6 +1197,13 @@ export function main(args: ReadonlyArray<string>): void {
 	);
 	if (unknownCases.length > 0)
 		throw new Error(`unknown selected kernels: ${unknownCases.join(", ")}`);
+	if (experiment !== undefined) {
+		for (const control of experiment.case.controls) {
+			if (!catalog.cases.some(({ id }) => id === control)) {
+				throw new Error(`${experiment.id} names unknown control: ${control}`);
+			}
+		}
+	}
 	if (descriptors.length === 0) throw new Error("no runtime-gap cases selected");
 	if (options.plan) {
 		console.log(
@@ -1107,8 +1253,8 @@ export function main(args: ReadonlyArray<string>): void {
 		const byGap = [...results].sort((left, right) => right.hostGapMs - left.hostGapMs);
 		const byAllocation = [...results].sort(
 			(left, right) =>
-				(right.maligator.resource.allocatedBytes ?? 0) -
-				(left.maligator.resource.allocatedBytes ?? 0),
+				(right.maligator.resource?.allocatedBytes ?? 0) -
+				(left.maligator.resource?.allocatedBytes ?? 0),
 		);
 		return {
 			schema: 3,
@@ -1135,6 +1281,12 @@ export function main(args: ReadonlyArray<string>): void {
 				selectedCases: descriptors.map(({ id }) => id),
 				catalog: path.relative(REPOSITORY_ROOT, RUNTIME_GAP_CATALOG),
 				catalogDigest: digest(RUNTIME_GAP_CATALOG),
+				...(experiment === undefined
+					? {}
+					: {
+							experimentManifest: path.relative(REPOSITORY_ROOT, experiment.path),
+							experimentManifestDigest: digest(experiment.path),
+						}),
 				caseFixtures: Object.fromEntries(
 					descriptors.map((descriptor) => [
 						descriptor.id,
@@ -1199,15 +1351,14 @@ export function main(args: ReadonlyArray<string>): void {
 		}
 		progress.stage(index + 1, descriptors.length, descriptor.id);
 		try {
-			const preparationStartedAt = performance.now();
-			const binary = buildNativeBinary({
-				fixture: descriptor.fixturePath,
-				name: `bench-runtime-gap-${descriptor.id}`,
-				config: CONFIG,
-				production: true,
-			});
-			preparationMs += performance.now() - preparationStartedAt;
-			results.push(measureKernel(binary, descriptor, options, deadline));
+			const build = await buildRuntimeGapCase(
+				descriptor,
+				path.dirname(options.output),
+				deadline,
+				options.caseTimeoutMs,
+			);
+			preparationMs += build.buildMs;
+			results.push(measureKernel(build.binaryPath, build, descriptor, options, deadline));
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {
 			progress.stageFailed(index + 1, descriptors.length, descriptor.id);
@@ -1268,5 +1419,5 @@ export function main(args: ReadonlyArray<string>): void {
 }
 
 if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-	main(process.argv.slice(2));
+	await main(process.argv.slice(2));
 }

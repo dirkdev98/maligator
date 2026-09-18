@@ -1,0 +1,47 @@
+{
+	"schema": 1,
+	"version": "2026-09-18",
+	"decisionThresholdPercent": 2,
+	"families": [
+		{
+			"id": "compiler-app",
+			"runner": "quick",
+			"weight": 1,
+			"primaryMetric": "compiler-app.wallMs",
+			"maxRegressionPercent": 15,
+			"budgetSeconds": 180
+		},
+		{
+			"id": "app-batch",
+			"runner": "quick",
+			"weight": 1,
+			"primaryMetric": "app-batch.wallMs",
+			"maxRegressionPercent": 15,
+			"budgetSeconds": 300
+		},
+		{
+			"id": "javascript",
+			"runner": "benchmark",
+			"weight": 1,
+			"primaryMetric": "javascript.modes.closed-compiled.wallMs",
+			"maxRegressionPercent": 15,
+			"budgetSeconds": 300
+		},
+		{
+			"id": "http",
+			"runner": "benchmark",
+			"weight": 1,
+			"primaryMetric": "http.express.workloads.routes.malRps",
+			"maxRegressionPercent": 15,
+			"budgetSeconds": 300
+		},
+		{
+			"id": "self-compile",
+			"runner": "benchmark",
+			"weight": 1,
+			"primaryMetric": "selfCompile.maligatorMs",
+			"maxRegressionPercent": 15,
+			"budgetSeconds": 900
+		}
+	]
+}

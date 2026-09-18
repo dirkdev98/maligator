@@ -298,7 +298,7 @@ function exportBase(
 	}
 }
 
-interface ComparisonOptions {
+export interface ComparisonOptions {
 	baseRef: string;
 	lanes: Array<string>;
 	pairs: number;
@@ -308,6 +308,7 @@ interface ComparisonOptions {
 	repository?: string;
 	budgetSeconds?: number;
 	resumeDirectory?: string;
+	outputDirectory?: string;
 }
 
 export function selfCompileStages(runs: number): Array<string> {
@@ -592,7 +593,9 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			),
 		),
 	};
-	const comparisonRoot = path.join(repository, ".cache", "bench-comparisons");
+	const comparisonRoot = path.resolve(
+		options.outputDirectory ?? path.join(repository, ".cache", "bench-comparisons"),
+	);
 	mkdirSync(comparisonRoot, { recursive: true });
 	const runDirectory =
 		options.resumeDirectory === undefined

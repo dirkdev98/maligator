@@ -21,5 +21,6 @@ scripts/local-gh-push.sh
 /bench/*.json
 !/bench/baseline.json
 !/bench/compiler-scale-manifest.json
+!/bench/performance-portfolio.json
 *.cpuprofile
 *.heapprofile

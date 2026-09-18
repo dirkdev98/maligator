@@ -1,14 +1,28 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
+import { RUNTIME_GAP_EXPERIMENTS } from "../scripts/runtime-gap-experiment.ts";
 import {
+	assertRuntimeGapParity,
+	captureOptionalResource,
 	parseKernelOutput,
+	RuntimeGapParityError,
 	summarizeRuntimeGapCategories,
 } from "../scripts/runtime-gap.ts";
-import type { CompilerHostGapKernelResult } from "../scripts/runtime-gap.ts";
+import type {
+	CompilerHostGapKernelResult,
+	KernelOutput,
+} from "../scripts/runtime-gap.ts";
 
 function fixtureOutput(id: string): {
 	readonly id: string;
@@ -228,5 +242,106 @@ describe("runtime-gap case catalog", () => {
 			minimumRatio: 20,
 			maximumRatio: 20,
 		});
+	});
+
+	it("retains timing when an optional resource probe is unavailable", () => {
+		expect(
+			captureOptionalResource(() => {
+				throw new Error("resource tool unavailable");
+			}),
+		).toEqual({ resourceFailure: "resource tool unavailable" });
+		expect(() =>
+			captureOptionalResource(() => {
+				throw new RuntimeGapParityError("work differs");
+			}),
+		).toThrow(RuntimeGapParityError);
+	});
+
+	it("rejects checksum changes in any measured pass", () => {
+		const reference = {
+			schema: 2,
+			workload: "runtime-gap-case-v2",
+			id: "case",
+			scale: 1,
+			operations: 10,
+			checksum: 20,
+			elapsedMs: 1,
+			measurementStartMs: 1,
+			measurementEndMs: 2,
+			warmupMs: [1, 1],
+		} satisfies KernelOutput;
+		expect(() =>
+			assertRuntimeGapParity(reference, { ...reference, checksum: 21 }),
+		).toThrow(RuntimeGapParityError);
+	});
+
+	it("scaffolds an ignored experiment and plans only its declared closure", () => {
+		const id = `unit-experiment-${process.pid}`;
+		const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
+		rmSync(directory, { recursive: true, force: true });
+		try {
+			execFileSync(process.execPath, [
+				"scripts/performance.ts",
+				"experiment",
+				"new",
+				id,
+				"--from",
+				"numeric-scalar-loops",
+				"--control",
+				"predictable-branches",
+			]);
+			const plan = JSON.parse(
+				execFileSync(
+					process.execPath,
+					[
+						"scripts/performance.ts",
+						"experiment",
+						"run",
+						id,
+						"--preset",
+						"smoke",
+						"--plan=json",
+					],
+					{ encoding: "utf8" },
+				),
+			) as { readonly cases: ReadonlyArray<{ readonly id: string }> };
+			expect(plan.cases.map(({ id: caseId }) => caseId).sort()).toEqual(
+				[id, "predictable-branches"].sort(),
+			);
+			expect(existsSync(path.join(directory, "report.json"))).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses to promote over an existing catalog case", () => {
+		const id = "numeric-scalar-loops";
+		const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
+		const catalogCase = loadRuntimeGapCatalog().cases.find(
+			(candidate) => candidate.id === id,
+		)!;
+		const destination = catalogCase.fixturePath;
+		const original = readFileSync(destination, "utf8");
+		rmSync(directory, { recursive: true, force: true });
+		mkdirSync(directory, { recursive: true });
+		const { fixturePath: _fixturePath, ...descriptor } = catalogCase;
+		writeFileSync(path.join(directory, "case.mjs"), original);
+		writeFileSync(
+			path.join(directory, "experiment.json"),
+			JSON.stringify({ schema: 1, id, case: { ...descriptor, fixture: "case.mjs" } }),
+		);
+		try {
+			expect(() =>
+				execFileSync(process.execPath, [
+					"scripts/performance.ts",
+					"experiment",
+					"promote",
+					id,
+				]),
+			).toThrow(/promotion target already exists/);
+			expect(readFileSync(destination, "utf8")).toBe(original);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

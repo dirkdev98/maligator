@@ -41,6 +41,12 @@ export interface RuntimeGapCatalog {
 	>;
 }
 
+export interface RuntimeGapExperiment {
+	readonly path: string;
+	readonly id: string;
+	readonly case: RuntimeGapCaseDescriptor & { readonly fixturePath: string };
+}
+
 const CATEGORIES: ReadonlySet<string> = new Set<RuntimeGapCategory>([
 	"statements-operators",
 	"api-builtins",
@@ -108,6 +114,18 @@ function descriptor(value: unknown): RuntimeGapCaseDescriptor {
 	};
 }
 
+function fixtureDescriptor(
+	value: unknown,
+	directory: string,
+): RuntimeGapCaseDescriptor & { readonly fixturePath: string } {
+	const caseDescriptor = descriptor(value);
+	const fixturePath = path.resolve(directory, caseDescriptor.fixture);
+	if (!fixturePath.startsWith(`${directory}${path.sep}`)) {
+		throw new Error(`runtime-gap fixture escapes its catalog: ${caseDescriptor.fixture}`);
+	}
+	return { ...caseDescriptor, fixturePath };
+}
+
 export function loadRuntimeGapCatalog(file = RUNTIME_GAP_CATALOG): RuntimeGapCatalog {
 	const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
 	const catalog = record(parsed, "runtime-gap catalog");
@@ -120,18 +138,12 @@ export function loadRuntimeGapCatalog(file = RUNTIME_GAP_CATALOG): RuntimeGapCat
 	const seen = new Set<string>();
 	const directory = path.dirname(file);
 	const cases = catalog.cases.map((value) => {
-		const caseDescriptor = descriptor(value);
+		const caseDescriptor = fixtureDescriptor(value, directory);
 		if (seen.has(caseDescriptor.id)) {
 			throw new Error(`runtime-gap catalog repeats case: ${caseDescriptor.id}`);
 		}
 		seen.add(caseDescriptor.id);
-		const fixturePath = path.resolve(directory, caseDescriptor.fixture);
-		if (!fixturePath.startsWith(`${directory}${path.sep}`)) {
-			throw new Error(
-				`runtime-gap fixture escapes its catalog: ${caseDescriptor.fixture}`,
-			);
-		}
-		return { ...caseDescriptor, fixturePath };
+		return caseDescriptor;
 	});
 	for (const id of [...quick, ...survey]) {
 		if (!seen.has(id)) throw new Error(`runtime-gap preset names unknown case: ${id}`);
@@ -144,4 +156,22 @@ export function loadRuntimeGapCatalog(file = RUNTIME_GAP_CATALOG): RuntimeGapCat
 		}
 	}
 	return { path: file, presets: { quick, survey }, cases };
+}
+
+export function loadRuntimeGapExperiment(file: string): RuntimeGapExperiment {
+	const absolute = path.resolve(file);
+	const parsed: unknown = JSON.parse(readFileSync(absolute, "utf8"));
+	const experiment = record(parsed, "runtime-gap experiment");
+	if (
+		experiment.schema !== 1 ||
+		typeof experiment.id !== "string" ||
+		!/^[a-z0-9][a-z0-9-]*$/.test(experiment.id)
+	) {
+		throw new Error("runtime-gap experiment schema is not supported");
+	}
+	const caseDescriptor = fixtureDescriptor(experiment.case, path.dirname(absolute));
+	if (caseDescriptor.id !== experiment.id) {
+		throw new Error("runtime-gap experiment ID differs from its case ID");
+	}
+	return { path: absolute, id: experiment.id, case: caseDescriptor };
 }
