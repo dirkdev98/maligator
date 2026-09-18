@@ -474,6 +474,7 @@ function privateFunctionArrayLoadTargets(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
+	localTransfers: CoreProgramFlowLocalTransfers,
 ): ReadonlyMap<CoreInstructionId, CoreCalleeTargets> {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -486,9 +487,9 @@ function privateFunctionArrayLoadTargets(
 		invalid: boolean;
 	}
 	const candidates = new Map<CoreValueId, Candidate>();
-	for (const instruction of fn.instructionIds()) {
+	for (let index = 0; index < localTransfers.operationCount; index++) {
+		const instruction = localTransfers.operationAt(index);
 		if (
-			fn.instructionKind(instruction) !== "operation" ||
 			fn.instructionOpcodeName(instruction) !== "createArray" ||
 			fn.kernel.instructionResultCount(instruction) !== 1
 		)
@@ -520,8 +521,8 @@ function privateFunctionArrayLoadTargets(
 		if (candidate !== undefined) candidate.invalid = true;
 	}
 
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
+	for (let index = 0; index < localTransfers.operationCount; index++) {
+		const instruction = localTransfers.operationAt(index);
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -804,7 +805,12 @@ function analyzeFunctionTargets(
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
 	);
-	const privateArrayLoads = privateFunctionArrayLoadTargets(program, fn, cfg);
+	const privateArrayLoads = privateFunctionArrayLoadTargets(
+		program,
+		fn,
+		cfg,
+		localTransfers,
+	);
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
 	const returnTargetDependencies = new Map<
