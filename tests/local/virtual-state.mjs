@@ -14,7 +14,17 @@ function escape(x, sink) {
 	sink(a);
 	return a;
 }
+function repeatedDataSpread(limit) {
+	const source = { kind: 3, flags: 5 };
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		const copy = { ...source, value: index, next: index + 1 };
+		total += copy.kind + copy.flags + copy.value + copy.next;
+	}
+	return total;
+}
 for (let i = 0; i < 3; i++) console.log(privateArray(i));
+console.log(repeatedDataSpread(4));
 let observed;
 const first = escape(42, (a) => {
 	observed = a;

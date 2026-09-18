@@ -168,6 +168,60 @@ describe("virtual local state", () => {
 		expect(inspected.structure.allocations).toBe(1);
 		expect(inspected.structure.genericCalls).toBe(2);
 	});
+	it("scalar-replaces repeated exact data spreads", () => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(limit) {
+				const source = {kind: 3, flags: 5};
+				const alias = source;
+				let total = 0;
+				for (let index = 0; index < limit; index++) {
+					const copy = {...alias, value: index, next: index + 1};
+					total += copy.kind + copy.flags + copy.value + copy.next;
+				}
+				return total;
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(inspected.structure.allocations).toBe(0);
+		expect(
+			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+		).toBe(false);
+		expect(
+			inspected.core.some((operation) =>
+				["defineProperty", "loadPropertyStatic"].includes(operation.opcode),
+			),
+		).toBe(false);
+	});
+	it.each([
+		"source.kind = limit;",
+		"sink(source);",
+		"const alias = source; alias.flags = limit;",
+	])("retains a spread when its source is not private and stable: %s", (effect) => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(limit, sink) {
+				const source = {kind: 3, flags: 5};
+				${effect}
+				const copy = {...source, value: limit};
+				return copy.kind + copy.value;
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(
+			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+		).toBe(true);
+	});
+	it("retains enumerable getter behavior during spread", () => {
+		const inspected = inspectStaticValueFunction(
+			`function probe(effect) {
+				const source = {get value() { return effect(); }};
+				return {...source}.value;
+			} globalThis.probe = probe;`,
+			"probe",
+		);
+		expect(
+			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+		).toBe(true);
+	});
 	it.each([
 		"const a = [1, 2]; a.push(x); const last = a.pop(); return last + a.length;",
 		"const a = [1, 2]; a[0] = x; delete a[1]; a.length = 1; return a[0];",

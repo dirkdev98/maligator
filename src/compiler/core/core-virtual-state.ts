@@ -67,6 +67,20 @@ export const materializeVirtualState: CoreFunctionPass = {
 			);
 		const primitiveValue = (value: CoreValueId) => {
 			for (let depth = 0; depth < 32; depth++) {
+				if (
+					["f64", "i32", "boolean", "string", "string-span"].includes(
+						fn.valueRepresentation(value),
+					)
+				)
+					return true;
+				const fact = analysis.query(value);
+				if (
+					fact.kind === "known" &&
+					["undefined", "null", "boolean", "number", "string", "bigint"].includes(
+						fact.brand,
+					)
+				)
+					return true;
 				if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
 				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 				if (fn.instructionKind(definition) !== "operation") return false;
@@ -76,6 +90,66 @@ export const materializeVirtualState: CoreFunctionPass = {
 				value = argsOf(definition)[0]!;
 			}
 			return false;
+		};
+		const stableDataCopySource = (value: CoreValueId) => {
+			const source = analysis.query(value);
+			if (
+				source.kind !== "known" ||
+				source.state !== "initial-allocation" ||
+				source.identity?.kind !== "fresh-per-evaluation" ||
+				source.identity.function !== fn.id
+			)
+				return undefined;
+			const description = program.staticDescriptions.description(source.description);
+			if (
+				description.kind !== "object" ||
+				description.ownKeysComplete === false ||
+				description.properties.length > LIMIT ||
+				description.properties.some(
+					(property) =>
+						typeof property.key !== "string" || property.descriptor.kind !== "data",
+				)
+			)
+				return undefined;
+			const origin = source.identity.value;
+			if (fn.kernel.valueDefinitionKind(origin) !== 1) return undefined;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(origin));
+			if (
+				fn.instructionKind(definition) !== "operation" ||
+				!["createObject", "createObjectShaped"].includes(
+					fn.instructionOpcodeName(definition),
+				)
+			)
+				return undefined;
+			const pending = [origin],
+				aliases = new Set<CoreValueId>([origin]);
+			while (pending.length > 0) {
+				const alias = pending.pop()!;
+				if (fn.kernel.valueHandlerUseCount(alias) !== 0) return undefined;
+				for (
+					let use = fn.kernel.valueFirstUse(alias);
+					use >= 0;
+					use = fn.kernel.useNext(use)
+				) {
+					if (++visits > 4096) return undefined;
+					const instruction = fn.kernel.useInstruction(use);
+					if (fn.instructionKind(instruction) !== "operation") return undefined;
+					const op = fn.instructionOpcodeName(instruction),
+						operand = fn.kernel.useOperand(use);
+					if (op === "move" && operand === 0) {
+						const result = fn.kernel.resultAt(
+							fn.kernel.instructionResultStart(instruction),
+						);
+						if (!aliases.has(result)) {
+							aliases.add(result);
+							pending.push(result);
+						}
+						continue;
+					}
+					if (op !== "mergeDataProperties" || operand !== 1) return undefined;
+				}
+			}
+			return source;
 		};
 		for (const root of fn.instructionIds()) {
 			if (++visits > 4096) return undefined;
@@ -368,6 +442,42 @@ export const materializeVirtualState: CoreFunctionPass = {
 				) {
 					boundary = instruction;
 					break;
+				}
+				if (op === "mergeDataProperties") {
+					const source = stableDataCopySource(args[1]!);
+					if (source === undefined) {
+						boundary = instruction;
+						break;
+					}
+					const description = program.staticDescriptions.description(source.description),
+						copied: Array<readonly [string, Cell]> = [];
+					if (description.kind !== "object") throw new Error("Expected object source");
+					for (const property of description.properties) {
+						if (!property.enumerable) continue;
+						if (typeof property.key !== "string" || property.descriptor.kind !== "data")
+							throw new Error("Expected data-only copy source");
+						const cell = coreStaticMemberOperation(
+							program,
+							property.descriptor.value,
+							source.operands,
+						);
+						if (cell === undefined) {
+							boundary = instruction;
+							break;
+						}
+						copied.push([property.key, cell]);
+					}
+					if (boundary !== undefined) break;
+					if (new Set([...cells.keys(), ...copied.map(([key]) => key)]).size > LIMIT) {
+						boundary = instruction;
+						break;
+					}
+					analysis.verify(source, instruction);
+					for (const [key, cell] of copied) cells.set(key, cell);
+					removals.add(instruction);
+					transitions++;
+					crossUnrelatedEffects = true;
+					continue;
 				}
 				if (
 					array &&
