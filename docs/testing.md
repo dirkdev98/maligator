@@ -314,7 +314,7 @@ differential follows the regular check matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The standalone smoke fuse measures its cumulative stages and fails if they exceed
-20 seconds on a warm four-worker run. It allows five minutes when the reusable
+20 seconds on a warm four-worker run. It allows ten minutes when the reusable
 native or Test262 cache roots are missing. Both limits scale inversely when fewer
 than four workers are selected and stay fixed above four workers. The cumulative
 check and full gates always use the scaled cold smoke completion budget because

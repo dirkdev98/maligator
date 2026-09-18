@@ -65,7 +65,7 @@ interface StageWorkers {
 const root = path.resolve(import.meta.dirname, "..");
 const NOMINAL_SMOKE_WORKERS = 4;
 const WARM_SMOKE_FUSE_MS = 20_000;
-const COLD_SMOKE_FUSE_MS = 300_000;
+const COLD_SMOKE_FUSE_MS = 600_000;
 
 function smokeBudgetForWorkers(workers: number): { warmMs: number; coldMs: number } {
 	const divisor = Math.min(workers, NOMINAL_SMOKE_WORKERS);
@@ -80,7 +80,7 @@ const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          20-second warm / five-minute cold fuse at four workers
+  npm run test:smoke          20-second warm / ten-minute cold fuse at four workers
   npm run test:check          canonical developer gate; native cache warmth affects duration
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required

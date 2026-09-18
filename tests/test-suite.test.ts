@@ -113,7 +113,7 @@ describe("test suite planner", () => {
 		expect(help).toContain("npm run test262:report      full Test262 report");
 		expect(help).toContain("approval required");
 		expect(help).toContain("npm run test262:regressions");
-		expect(help).toContain("20-second warm / five-minute cold fuse at four workers");
+		expect(help).toContain("20-second warm / ten-minute cold fuse at four workers");
 		expect(help).toContain("npm run test:check -- --list");
 		expect(help).toContain("--plan=json");
 	});
@@ -168,7 +168,7 @@ describe("test suite planner", () => {
 			expect(plan.smokeBudget).toEqual({
 				nominalWorkers: 4,
 				warmMs: Math.ceil((20_000 * 4) / Math.min(plan.workers, 4)),
-				coldMs: Math.ceil((300_000 * 4) / Math.min(plan.workers, 4)),
+				coldMs: Math.ceil((600_000 * 4) / Math.min(plan.workers, 4)),
 			});
 			for (const stage of plan.stages) {
 				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
