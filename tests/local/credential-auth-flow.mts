@@ -1,5 +1,5 @@
-// The teacher/student authentication flow this node:crypto slice exists for,
-// end to end, using only the compiled surface — no npm native addon, no N-API.
+// Exercises credential and session properties through the compiled node:crypto
+// surface without relying on an npm native addon or N-API.
 //
 // Each step is a property a credential store has to hold, not just an API call:
 // a per-credential nonce, a server-side pepper that never enters the stored
@@ -22,7 +22,7 @@ function check(name: string, ok: boolean): void {
 }
 
 // Server-side pepper: held in the process, never stored beside the credential.
-const PEPPER = Buffer.from("vonk-server-pepper-not-in-the-database", "utf8");
+const PEPPER = Buffer.from("test-server-pepper-not-in-the-database", "utf8");
 const ARGON2 = { memory: 512, passes: 2, parallelism: 1, tagLength: 32 };
 
 function encodeCredential(passcode: string): string {
@@ -82,7 +82,7 @@ check(
 		.slice(3)
 		.every((field) => !field.includes("=")),
 );
-check("credential record never contains the pepper", !record.includes("vonk-server"));
+check("credential record never contains the pepper", !record.includes("test-server"));
 check("the correct passcode verifies", verifyCredential(record, passcode));
 // 5. a wrong passcode is rejected
 check("a wrong passcode is rejected", !verifyCredential(record, "12345679"));
@@ -133,11 +133,11 @@ const sessions = new Map<string, string>();
 function digestOf(token: string): string {
 	return createHash("sha256").update(Buffer.from(token, "base64url")).digest("hex");
 }
-sessions.set(digestOf(sessionToken), "teacher:1");
+sessions.set(digestOf(sessionToken), "account:1");
 check("the session store holds no raw token", !sessions.has(sessionToken));
 check(
 	"a session is found by its digest",
-	sessions.get(digestOf(sessionToken)) === "teacher:1",
+	sessions.get(digestOf(sessionToken)) === "account:1",
 );
 check("an unknown token does not resolve", !sessions.has(digestOf("A".repeat(43))));
 check(
@@ -146,14 +146,14 @@ check(
 		createHash("sha256").update(Buffer.from(sessionToken, "base64url")).digest("hex"),
 );
 
-// 8. bias-free student codes and eight-digit passcodes
-function studentPasscode(): string {
+// 8. bias-free access codes and eight-digit passcodes
+function numericPasscode(): string {
 	return randomInt(0, 100_000_000).toString().padStart(8, "0");
 }
 let allEightDigits = true;
 const leadingZeroSeen = { value: false };
 for (let i = 0; i < 5000; i++) {
-	const code = studentPasscode();
+	const code = numericPasscode();
 	if (code.length !== 8 || !/^[0-9]{8}$/.test(code)) allEightDigits = false;
 	if (code.startsWith("0")) leadingZeroSeen.value = true;
 }
@@ -167,7 +167,7 @@ check(
 );
 check("leading-zero passcodes occur naturally", leadingZeroSeen.value);
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-function studentCode(length: number): string {
+function accessCode(length: number): string {
 	let code = "";
 	for (let i = 0; i < length; i++) code += codeAlphabet[randomInt(codeAlphabet.length)];
 	return code;
@@ -175,15 +175,15 @@ function studentCode(length: number): string {
 let codesValid = true;
 const codes = new Set<string>();
 for (let i = 0; i < 2000; i++) {
-	const code = studentCode(6);
+	const code = accessCode(6);
 	if (code.length !== 6) codesValid = false;
 	for (const character of code) {
 		if (!codeAlphabet.includes(character)) codesValid = false;
 	}
 	codes.add(code);
 }
-check("student codes draw only from the alphabet", codesValid);
-check("student codes are not obviously repeating", codes.size > 1900);
+check("access codes draw only from the alphabet", codesValid);
+check("access codes are not obviously repeating", codes.size > 1900);
 // This alphabet has 32 symbols, which divides 256 exactly, so even a bare
 // modulo would be unbiased over it — the check below is coverage of the
 // alphabet, not evidence about the sampler.
@@ -196,7 +196,7 @@ let spread = symbolCounts.size === codeAlphabet.length;
 for (const count of symbolCounts.values()) {
 	if (count < 600 || count > 1400) spread = false;
 }
-check("student-code symbols cover the whole alphabet", spread);
+check("access-code symbols cover the whole alphabet", spread);
 // Bias, where a range that does not divide 256 makes it visible: 256 % 200 = 56,
 // so a modulo shortcut hands out the first 56 values twice as often. A
 // deliberately awkward pool size is the honest place to look for that. This is

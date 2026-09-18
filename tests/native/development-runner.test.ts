@@ -86,7 +86,7 @@ describe("development wire runner", () => {
 				'const Decoder = globalThis["TextDecoder"];\n' +
 				"console.log(JSON.stringify({\n" +
 				"\ttypes: [typeof Encoder, typeof Decoder],\n" +
-				'\tdecoded: new Decoder().decode(new Encoder().encode("Vonk")),\n' +
+				'\tdecoded: new Decoder().decode(new Encoder().encode("Maligator")),\n' +
 				"}));\n",
 		);
 		writeFileSync(
@@ -115,7 +115,7 @@ describe("development wire runner", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({
 			types: ["function", "function"],
-			decoded: "Vonk",
+			decoded: "Maligator",
 		});
 		expect(result.stderr).toContain("Execution backend: interpreted development image");
 	}, 300_000);

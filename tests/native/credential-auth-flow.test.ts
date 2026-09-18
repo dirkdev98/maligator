@@ -11,26 +11,25 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// The authentication vertical slice this issue exists for, driven end to end
-// through the compiled surface. Also run under the installed Node, since every
-// API the flow touches is one where Maligator and Node agree.
-const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-vonk-auth-"));
-const FIXTURE = "tests/local/vonk-auth-flow.mts";
+// Run under installed Node as well because every API in this integration flow
+// is expected to have matching Maligator and Node behavior.
+const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-credential-auth-"));
+const FIXTURE = "tests/local/credential-auth-flow.mts";
 
-describe("Vonk authentication flow (surface.node)", () => {
+describe("credential authentication flow (surface.node)", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
 		compiled = buildNativeBinary({
 			fixture: FIXTURE,
-			name: "vonk-auth-flow-compiled",
+			name: "credential-auth-flow-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: FIXTURE,
-			name: "vonk-auth-flow-interpreted",
+			name: "credential-auth-flow-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
