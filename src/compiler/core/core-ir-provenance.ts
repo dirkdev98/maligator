@@ -2491,7 +2491,7 @@ function indexedLengthLoopCandidates(
 				!loop.blocks.has(instructionBlock) ||
 				!control.dominates(comparisonCoreBlock, instructionBlock) ||
 				(instructionBlock === comparisonCoreBlock &&
-					instructionIndex <= index.locationIndices[comparison]) ||
+					instructionIndex <= index.locationIndices[comparison]!) ||
 				instructionOperand(fn, instruction, 0) !== receiver ||
 				instructionOperand(fn, instruction, 1) !== induction
 			)
