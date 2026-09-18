@@ -328,35 +328,34 @@ and checked before building or publishing. Every prerelease is published explici
 under the npm `alpha` dist-tag. The release automation does not attempt to change or
 remove the registry's `latest` tag.
 
-```shell
-# Verify npm authentication before doing the expensive build.
-npm whoami
-
-# Prepare the next numeric alpha version.
-npm run version:alpha
-
-# Build and pack the default Apple Silicon macOS release.
-npm run release:build
-npm run release:smoke
-npm run release:pack
-
-# Commit the version and release preparation, then publish from a clean worktree.
-npm run release:publish -- --confirm "$(node -p "require('./package.json').version")"
-```
-
 `release:publish` verifies every selected tarball against `packages.json`, publishes
 the platform packages first, and publishes `@maligator/cli` last under the `alpha`
 dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
 stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
 pack, and publish log per-target progress and elapsed time.
 
-The `Publish npm alpha` GitHub Actions workflow provides the unattended publishing
-path. Build, smoke, and pack the Apple Silicon macOS release locally, using the
-explicit target to route the build through Zig. After the release commit is pushed
-to `main`, `release:create-github` verifies the clean commit and tarball checksums,
-creates the exact `v<package.json version>` tag and a draft GitHub prerelease,
-uploads every npm tarball plus `packages.json`, verifies the complete draft, and
-publishes the GitHub release. Publishing the prerelease triggers the workflow.
+The `Prepare release packages` GitHub Actions workflow is the preferred packaging
+path. Dispatch it on the exact release commit. It cross-builds all four targets on
+macOS ARM, executes the native binary and installed npm launcher on every supported
+host, and retains the validated tarballs plus `packages.json` for seven days. The
+intermediate multi-target workspace is deleted after the smoke matrix passes.
+
+Download the successful run's `maligator-<version>-packages` artifact into
+`dist/release/packs` in a clean checkout. `release:create-github` then verifies the
+commit and tarball checksums, creates the exact `v<package.json version>` tag and a
+draft GitHub prerelease, uploads every npm tarball plus `packages.json`, verifies the
+complete draft, and publishes the GitHub release. Publishing the prerelease triggers
+the separate `Publish npm alpha` workflow.
+
+```shell
+gh workflow run release-packages.yml --ref main
+run_id="$(gh run list --workflow release-packages.yml --commit "$(git rev-parse HEAD)" --event workflow_dispatch --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+version="$(node -p 'require("./package.json").version')"
+gh run download "$run_id" --name "maligator-$version-packages" --dir dist/release/packs
+npm run release:create-github -- --confirm "$(node -p "require('./package.json').version")"
+```
+
+The local single-target build remains available as a fallback:
 
 ```shell
 npm run release:build -- --target aarch64-apple-darwin
@@ -366,7 +365,7 @@ git push origin main
 npm run release:create-github -- --confirm "$(node -p "require('./package.json').version")"
 ```
 
-The Ubuntu workflow only checks out the tagged commit, validates its ancestry and
+The publish workflow only checks out the tagged commit, validates its ancestry and
 exact version tag, downloads the prepared assets, rechecks their manifest and
 checksums, and publishes through npm trusted publishing. It has `id-token: write`
 permission but no stored npm token. `--trusted-publishing` is accepted only for the

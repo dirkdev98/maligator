@@ -297,6 +297,25 @@ describe("npm launcher", () => {
 		expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/);
 	});
 
+	it("builds and smokes release packages on every supported GitHub host", () => {
+		const workflow = readFileSync(
+			path.resolve(import.meta.dirname, "../.github/workflows/release-packages.yml"),
+			"utf-8",
+		);
+		expect(workflow).toContain("workflow_dispatch:");
+		expect(workflow).toContain("release:build -- --all-targets");
+		expect(workflow).toContain("release:smoke");
+		expect(workflow).toContain("release:pack -- --all-targets");
+		for (const target of [
+			"aarch64-apple-darwin",
+			"x86_64-apple-darwin",
+			"aarch64-unknown-linux-gnu",
+			"x86_64-unknown-linux-gnu",
+		]) {
+			expect(workflow).toContain(`target: ${target}`);
+		}
+	});
+
 	it("resumes only when an existing package has identical tarball contents", () => {
 		const tarball = Buffer.from("prepared npm tarball");
 		const integrity = preparedTarballIntegrity(tarball);
