@@ -751,14 +751,11 @@ describe("Core control-flow analyses and passes", () => {
 		).toBe(false);
 	});
 
-	it("keeps signed bitwise loop results int32 at property and call boundaries", () => {
+	it("scalarizes signed bitwise results used only at property and call boundaries", () => {
 		const program = optimizeSource(`
-			function maskedCalls(values, callback, count) {
-				let checksum = 0;
-				for (let index = 0; index < count; index++) {
-					checksum += callback(values[index & 31], index & 255);
-				}
-				return checksum;
+			function maskedCalls(values, callback, index) {
+				const numeric = +index;
+				return callback(values[numeric & 31], numeric & 255);
 			}
 		`);
 		const fn = coreFunctionNamed(program, "maskedCalls");
@@ -769,7 +766,7 @@ describe("Core control-flow analyses and passes", () => {
 		expect(masks).toHaveLength(2);
 		for (const mask of masks) {
 			expect(fn.valueRepresentation(mask.outputs[0]!)).toBe("i32");
-			expect(fn.valueRepresentation(mask.inputs[0]!)).toBe("f64");
+			expect(fn.valueRepresentation(mask.inputs[0]!)).toBe("boxed");
 		}
 	});
 

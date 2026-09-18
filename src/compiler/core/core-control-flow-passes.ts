@@ -26,7 +26,6 @@ import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	corePrivateArrayLengthCandidates,
 } from "./core-ir-value-kinds.ts";
-import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -1097,33 +1096,6 @@ const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"typeofCompare",
 ]);
 
-const LOOP_INDEPENDENT_INT32_BINARY_OPERATORS: ReadonlySet<string> = new Set([
-	"&",
-	"|",
-	"^",
-	"<<",
-	">>",
-]);
-
-function loopIndependentInt32Result(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-	kinds: CoreValueKindAnalysis,
-): CoreValueId | undefined {
-	if (fn.kernel.instructionResultCount(instruction) !== 1) return undefined;
-	const opcode = fn.instructionOpcodeName(instruction);
-	const operator = fn.instructionAttributes(instruction).operator;
-	if (
-		(opcode !== "unary" || operator !== "~") &&
-		(opcode !== "binary" ||
-			typeof operator !== "string" ||
-			!LOOP_INDEPENDENT_INT32_BINARY_OPERATORS.has(operator))
-	)
-		return undefined;
-	const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-	return kinds.exactScalar(result) === "int32" ? result : undefined;
-}
-
 const selectLoopScalarRepresentations: CoreFunctionPass = {
 	name: "loop-scalar-representation-selection",
 	stage: "control-flow",
@@ -1209,7 +1181,6 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 				const operandCount = fn.kernel.instructionOperandCount(instruction);
 				const resultStart = fn.kernel.instructionResultStart(instruction);
 				const resultCount = fn.kernel.instructionResultCount(instruction);
-				const independentInt32 = loopIndependentInt32Result(fn, instruction, kinds);
 				if (
 					opcode === "move" &&
 					operandCount === 1 &&
@@ -1224,7 +1195,6 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 						index < operandCount
 							? fn.kernel.operandAt(operandStart + index)
 							: fn.kernel.resultAt(resultStart + index - operandCount);
-					if (value === independentInt32) continue;
 					if (!numeric(value)) continue;
 					if (firstConnected === undefined) firstConnected = value;
 					else connect(firstConnected, value);
