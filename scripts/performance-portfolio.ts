@@ -48,6 +48,12 @@ export interface PortfolioConfig {
 	readonly version: string;
 	readonly decisionThresholdPercent: number;
 	readonly minimumAcceptancePairs: number;
+	readonly aggregateUncertainty: {
+		readonly method: "independent-within-family-paired-bootstrap";
+		readonly confidenceLevel: number;
+		readonly iterations: number;
+		readonly seed: number;
+	};
 	readonly families: ReadonlyArray<PortfolioFamily>;
 }
 
@@ -68,8 +74,27 @@ export interface PortfolioDecision {
 		| "inconclusive"
 		| "incomplete";
 	readonly netImprovementPercent: number | null;
+	readonly confidenceInterval: readonly [number, number] | null;
 	readonly hardRegressions: ReadonlyArray<string>;
 	readonly missingFamilies: ReadonlyArray<string>;
+	readonly invalidFamilies: ReadonlyArray<string>;
+	readonly insufficientFamilies: ReadonlyArray<string>;
+	readonly method: {
+		readonly estimator: "fixed-weight-geometric-mean-of-family-median-cost-ratios";
+		readonly uncertainty: "independent-within-family-paired-bootstrap";
+		readonly confidenceLevel: number;
+		readonly iterations: number;
+		readonly seed: number;
+	};
+	readonly familyContributions: ReadonlyArray<{
+		readonly id: PortfolioFamilyId;
+		readonly weight: number;
+		readonly sampleCount: number;
+		readonly medianCostRatio: number;
+		readonly improvementPercent: number;
+	}>;
+	readonly assumptions: ReadonlyArray<string>;
+	readonly warnings: ReadonlyArray<string>;
 }
 
 export function portfolioExitCode(
@@ -116,9 +141,29 @@ function loadPortfolio(): PortfolioConfig {
 		typeof config.minimumAcceptancePairs !== "number" ||
 		!Number.isInteger(config.minimumAcceptancePairs) ||
 		config.minimumAcceptancePairs < 2 ||
+		typeof config.aggregateUncertainty !== "object" ||
+		config.aggregateUncertainty === null ||
 		!Array.isArray(config.families)
 	) {
 		throw new Error("performance portfolio schema is not supported");
+	}
+	const aggregateUncertainty = record(
+		config.aggregateUncertainty,
+		"performance portfolio aggregate uncertainty",
+	);
+	if (
+		aggregateUncertainty.method !== "independent-within-family-paired-bootstrap" ||
+		typeof aggregateUncertainty.confidenceLevel !== "number" ||
+		aggregateUncertainty.confidenceLevel <= 0 ||
+		aggregateUncertainty.confidenceLevel >= 1 ||
+		typeof aggregateUncertainty.iterations !== "number" ||
+		!Number.isSafeInteger(aggregateUncertainty.iterations) ||
+		aggregateUncertainty.iterations < 1_000 ||
+		typeof aggregateUncertainty.seed !== "number" ||
+		!Number.isSafeInteger(aggregateUncertainty.seed) ||
+		aggregateUncertainty.seed < 0
+	) {
+		throw new Error("performance portfolio aggregate uncertainty is invalid");
 	}
 	const ids = new Set<string>();
 	const families = config.families.map((value) => {
@@ -147,6 +192,12 @@ function loadPortfolio(): PortfolioConfig {
 		version: config.version,
 		decisionThresholdPercent: config.decisionThresholdPercent,
 		minimumAcceptancePairs: config.minimumAcceptancePairs,
+		aggregateUncertainty: {
+			method: aggregateUncertainty.method,
+			confidenceLevel: aggregateUncertainty.confidenceLevel,
+			iterations: aggregateUncertainty.iterations,
+			seed: aggregateUncertainty.seed,
+		},
 		families,
 	};
 }
@@ -160,6 +211,11 @@ function median(values: ReadonlyArray<number>): number {
 }
 
 export function metricCostRatio(metric: MetricResult): number | undefined {
+	const ratios = metricCostRatios(metric);
+	return ratios === undefined ? undefined : median(ratios);
+}
+
+function metricCostRatios(metric: MetricResult): ReadonlyArray<number> | undefined {
 	const ratios = metric.samples.map(({ base, head }) =>
 		metric.direction === "lower" ? head / base : base / head,
 	);
@@ -169,7 +225,7 @@ export function metricCostRatio(metric: MetricResult): number | undefined {
 	) {
 		return undefined;
 	}
-	return median(ratios);
+	return ratios;
 }
 
 function required(args: ReadonlyArray<string>, index: number, option: string): string {
@@ -243,6 +299,17 @@ export function classifyPortfolio(
 	config: PortfolioConfig,
 	outcomes: ReadonlyArray<PortfolioOutcome>,
 ): PortfolioDecision {
+	const method = {
+		estimator: "fixed-weight-geometric-mean-of-family-median-cost-ratios" as const,
+		uncertainty: config.aggregateUncertainty.method,
+		confidenceLevel: config.aggregateUncertainty.confidenceLevel,
+		iterations: config.aggregateUncertainty.iterations,
+		seed: config.aggregateUncertainty.seed,
+	};
+	const assumptions = [
+		"within-family matched pairs are exchangeable",
+		"cross-family uncertainty is modeled independently",
+	];
 	const outcomeById = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
 	const missingFamilies = config.families
 		.filter((family) => {
@@ -250,68 +317,144 @@ export function classifyPortfolio(
 			return outcome?.status !== "complete" || outcome.primary === undefined;
 		})
 		.map(({ id }) => id);
-	if (missingFamilies.length > 0) {
+	const entries = config.families
+		.flatMap((family) => {
+			const primary = outcomeById.get(family.id)?.primary;
+			if (primary === undefined) return [];
+			const ratios = metricCostRatios(primary);
+			return ratios === undefined ? [] : [{ family, primary, ratios }];
+		})
+		.sort((left, right) => left.family.id.localeCompare(right.family.id));
+	const invalidFamilies = config.families
+		.filter((family) => {
+			const primary = outcomeById.get(family.id)?.primary;
+			return primary !== undefined && metricCostRatios(primary) === undefined;
+		})
+		.map(({ id }) => id);
+	const familyContributions = entries.map(({ family, ratios }) => {
+		const medianCostRatio = median(ratios);
+		return {
+			id: family.id,
+			weight: family.weight,
+			sampleCount: ratios.length,
+			medianCostRatio,
+			improvementPercent: (1 - medianCostRatio) * 100,
+		};
+	});
+	const warnings = entries.some(({ ratios }) => ratios.length < 5)
+		? [
+				"Fewer than five pairs in at least one family make the aggregate bootstrap interval weakly calibrated.",
+			]
+		: [];
+	const common = {
+		method,
+		familyContributions,
+		assumptions,
+		warnings,
+	};
+	if (missingFamilies.length > 0 || invalidFamilies.length > 0) {
 		return {
 			status: "incomplete",
 			netImprovementPercent: null,
+			confidenceInterval: null,
 			hardRegressions: [],
 			missingFamilies,
+			invalidFamilies,
+			insufficientFamilies: [],
+			...common,
 		};
 	}
-	const hardRegressions = config.families
-		.filter(
-			(family) =>
-				outcomeById.get(family.id)!.primary!.medianRegressionPercent >
-				family.maxRegressionPercent,
-		)
-		.map(({ id }) => id);
+	const insufficientFamilies = entries
+		.filter(({ ratios }) => ratios.length < config.minimumAcceptancePairs)
+		.map(({ family }) => family.id);
 	let weightedLogRatio = 0;
 	let totalWeight = 0;
-	for (const family of config.families) {
-		const candidateToBaseline = metricCostRatio(outcomeById.get(family.id)!.primary!);
-		if (candidateToBaseline === undefined) {
-			return {
-				status: "inconclusive",
-				netImprovementPercent: null,
-				hardRegressions,
-				missingFamilies: [],
-			};
-		}
-		weightedLogRatio += family.weight * Math.log(candidateToBaseline);
+	for (const { family, ratios } of entries) {
+		weightedLogRatio += family.weight * Math.log(median(ratios));
 		totalWeight += family.weight;
 	}
 	const netImprovementPercent = (1 - Math.exp(weightedLogRatio / totalWeight)) * 100;
+	if (insufficientFamilies.length > 0) {
+		return {
+			status: "inconclusive",
+			netImprovementPercent,
+			confidenceInterval: null,
+			hardRegressions: [],
+			missingFamilies: [],
+			invalidFamilies: [],
+			insufficientFamilies,
+			...common,
+		};
+	}
+	const hardRegressions = entries
+		.filter(
+			({ family, primary }) =>
+				primary.medianRegressionPercent > family.maxRegressionPercent,
+		)
+		.map(({ family }) => family.id);
+	let state = config.aggregateUncertainty.seed >>> 0;
+	const random = (): number => {
+		state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+		return state / 0x1_0000_0000;
+	};
+	const bootstrap: Array<number> = [];
+	for (
+		let iteration = 0;
+		iteration < config.aggregateUncertainty.iterations;
+		iteration++
+	) {
+		let sampledLogRatio = 0;
+		for (const { family, ratios } of entries) {
+			const resampled: Array<number> = [];
+			for (let index = 0; index < ratios.length; index++) {
+				resampled.push(ratios[Math.floor(random() * ratios.length)]!);
+			}
+			sampledLogRatio += family.weight * Math.log(median(resampled));
+		}
+		bootstrap.push((1 - Math.exp(sampledLogRatio / totalWeight)) * 100);
+	}
+	bootstrap.sort((left, right) => left - right);
+	const tail = (1 - config.aggregateUncertainty.confidenceLevel) / 2;
+	const confidenceInterval = [
+		bootstrap[Math.floor(bootstrap.length * tail)]!,
+		bootstrap[Math.min(bootstrap.length - 1, Math.floor(bootstrap.length * (1 - tail)))]!,
+	] as const;
 	if (hardRegressions.length > 0) {
 		return {
 			status: "regression",
 			netImprovementPercent,
+			confidenceInterval,
 			hardRegressions,
 			missingFamilies: [],
+			invalidFamilies: [],
+			insufficientFamilies: [],
+			...common,
 		};
 	}
-	if (
-		config.families.some((family) => {
-			const primary = outcomeById.get(family.id)!.primary!;
-			return (
-				primary.status === "inconclusive" ||
-				primary.samples.length < config.minimumAcceptancePairs
-			);
-		})
+	const [lower, upper] = confidenceInterval;
+	let status: PortfolioDecision["status"];
+	if (netImprovementPercent >= config.decisionThresholdPercent && lower > 0) {
+		status = "improvement";
+	} else if (netImprovementPercent <= -config.decisionThresholdPercent && upper < 0) {
+		status = "regression";
+	} else if (
+		lower >= -config.decisionThresholdPercent &&
+		upper <= config.decisionThresholdPercent
 	) {
-		return {
-			status: "inconclusive",
-			netImprovementPercent,
-			hardRegressions: [],
-			missingFamilies: [],
-		};
+		status = "unchanged";
+	} else {
+		status = "inconclusive";
 	}
-	const status =
-		netImprovementPercent >= config.decisionThresholdPercent
-			? "improvement"
-			: netImprovementPercent <= -config.decisionThresholdPercent
-				? "regression"
-				: "unchanged";
-	return { status, netImprovementPercent, hardRegressions: [], missingFamilies: [] };
+	return {
+		status,
+		netImprovementPercent,
+		confidenceInterval,
+		hardRegressions: [],
+		missingFamilies: [],
+		invalidFamilies: [],
+		insufficientFamilies: [],
+		...common,
+	};
 }
 
 export function classifyExposedImpact(

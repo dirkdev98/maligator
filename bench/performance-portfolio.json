@@ -1,8 +1,14 @@
 {
 	"schema": 1,
-	"version": "2026-09-18.4",
+	"version": "2026-09-18.5",
 	"decisionThresholdPercent": 2,
 	"minimumAcceptancePairs": 2,
+	"aggregateUncertainty": {
+		"method": "independent-within-family-paired-bootstrap",
+		"confidenceLevel": 0.95,
+		"iterations": 20000,
+		"seed": 183510282
+	},
 	"families": [
 		{
 			"id": "compiler-app",

@@ -98,6 +98,13 @@ versioned, fixed-weight portfolio delegates to app-batch, compiler-app, JavaScri
 HTTP, and self-compile owners. Missing families remain incomplete and are never
 reweighted. A smaller related regression may be outweighed by a larger portfolio win,
 but every regression remains visible and explicit per-family guardrails still apply.
+Acceptance uses the fixed-weight geometric aggregate of family median cost ratios.
+Its interval comes from deterministic paired resampling within each family, with
+families resampled independently because sequential family runs do not share round
+identities. Individual inconclusive family classifications therefore do not veto a
+supported aggregate result. Reports retain the estimator, seed, iteration count,
+family contributions, assumptions, and a warning when the small number of pairs makes
+bootstrap calibration weak; bootstrap iterations are not additional measurements.
 One-pair runs remain screening evidence and cannot produce an acceptance decision.
 Families run independently under their declared budgets. JavaScript uses the
 production closed-compiled mode and HTTP uses one-second scenarios. Self-compile
