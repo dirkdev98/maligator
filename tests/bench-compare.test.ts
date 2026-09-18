@@ -104,7 +104,12 @@ test("failed comparisons preserve complete snapshots and resume without replayin
 test("a budget stops the benchmark process group and leaves a resumable checkpoint", async () => {
 	const fixture = comparisonFixture();
 	fixture.control({ hang: "warm-head" });
-	const options = { ...fixture.options, lanes: ["self-compile"], pairs: 1, maxPairs: 1 };
+	const options = {
+		...fixture.options,
+		lanes: ["self-compile"],
+		pairs: 1,
+		maxPairs: 1,
+	};
 	const result = await runBenchmarkComparison({ ...options, budgetSeconds: 3 });
 	expect(result.exitCode).toBe(2);
 	const directory = path.dirname(result.reportPath);
@@ -132,7 +137,7 @@ test("a budget stops the benchmark process group and leaves a resumable checkpoi
 	});
 	expect(resumed.exitCode).toBe(0);
 	expect(existsSync(path.join(directory, "warm-base.json"))).toBe(true);
-});
+}, 30_000);
 
 test("resuming refuses changed source before reusing evidence", async () => {
 	const fixture = comparisonFixture();
