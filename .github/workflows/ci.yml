@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-check:
+    name: Linux check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run the canonical developer gate
+        run: npm run test:check -- --workers 4
+
+      - name: Retain failure reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-check-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/mal-build/test-suite/report-check.json
+            .cache/mal-build/test262*/report-*.json
+            .cache/mal-build/wpt*/report-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos-arm-smoke:
+    name: macOS ARM smoke
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up macOS
+        uses: ./.github/actions/setup-macos
+        with:
+          cache-test262: "true"
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run smoke tests
+        run: npm run test:smoke -- --workers 3
+
+      - name: Retain failure reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-arm-smoke-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/mal-build/test-suite/report-smoke.json
+            .cache/mal-build/test262*/report-*.json
+            .cache/mal-build/wpt*/report-*.json
+          if-no-files-found: ignore
+          retention-days: 7
