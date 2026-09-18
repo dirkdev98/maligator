@@ -50,6 +50,7 @@ export interface CoreConstructionFunction {
 	readonly mappedArgumentSlots?: Array<number>;
 	readonly strict?: boolean;
 	readonly hasPrototype?: boolean;
+	readonly lexicalThis?: boolean;
 	readonly isGenerator?: boolean;
 	readonly isAsync?: boolean;
 	readonly bodyEntryBlock?: number;
