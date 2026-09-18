@@ -24,12 +24,11 @@
 	},
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
-		"bench:compiler-host-gap": "node ./scripts/bench-compiler-host-gap.ts",
 		"bench:compiler-scale": "node ./scripts/bench-compiler-scale.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
+		"bench:performance": "node ./scripts/performance.ts",
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
 		"bench:quick": "node ./scripts/bench-quick.ts",
-		"bench:runtime-gap": "node ./scripts/bench-runtime-gap.ts",
 		"bench:self-compile-experiment": "node ./scripts/self-compile-experiment.ts",
 		"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
 		"bench:translation-units": "node ./scripts/bench-translation-units.ts",

@@ -3,24 +3,27 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
 import {
 	parseKernelOutput,
 	summarizeRuntimeGapCategories,
-} from "../scripts/bench-compiler-host-gap.ts";
-import type { CompilerHostGapKernelResult } from "../scripts/bench-compiler-host-gap.ts";
-
-const fixture = "bench/compiler-host-gap.mjs";
+} from "../scripts/runtime-gap.ts";
+import type { CompilerHostGapKernelResult } from "../scripts/runtime-gap.ts";
 
 function fixtureOutput(id: string): {
 	readonly id: string;
 	readonly operations: number;
 	readonly checksum: number;
 } {
+	const descriptor = loadRuntimeGapCatalog().cases.find(
+		(candidate) => candidate.id === id,
+	);
+	if (descriptor === undefined) throw new Error(`unknown runtime-gap case: ${id}`);
 	const parsed: unknown = JSON.parse(
-		execFileSync(process.execPath, [fixture, id], { encoding: "utf8" }),
+		execFileSync(process.execPath, [descriptor.fixturePath, "1"], { encoding: "utf8" }),
 	);
 	if (typeof parsed !== "object" || parsed === null) {
-		throw new Error("compiler host-gap fixture produced an invalid report");
+		throw new Error("runtime-gap case produced an invalid report");
 	}
 	return parsed as {
 		readonly id: string;
@@ -29,11 +32,11 @@ function fixtureOutput(id: string): {
 	};
 }
 
-describe("compiler host-gap ladder", () => {
+describe("runtime-gap case catalog", () => {
 	it("finds the result record when V8 emits a trailing GC trace", () => {
 		const record = JSON.stringify({
-			schema: 1,
-			workload: "runtime-gap-v1",
+			schema: 2,
+			workload: "runtime-gap-case-v2",
 			id: "allocation-case",
 			operations: 10,
 			checksum: 42,
@@ -47,7 +50,7 @@ describe("compiler host-gap ladder", () => {
 		expect(parseKernelOutput(`${record}\n${trace}`).checksum).toBe(42);
 	});
 
-	it("plans the bounded runtime sentinel sweep without writing reports", () => {
+	it("plans the explicit bounded quick suite without writing reports", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-runtime-gap-plan-"));
 		const output = path.join(directory, "report.json");
 		const markdown = path.join(directory, "report.md");
@@ -56,7 +59,8 @@ describe("compiler host-gap ladder", () => {
 				execFileSync(
 					process.execPath,
 					[
-						"scripts/bench-runtime-gap.ts",
+						"scripts/performance.ts",
+						"gap",
 						"--output",
 						output,
 						"--markdown",
@@ -69,16 +73,12 @@ describe("compiler host-gap ladder", () => {
 				readonly preset: string;
 				readonly samples: number;
 				readonly targetNodeMs: number;
-				readonly cases: ReadonlyArray<{
-					readonly suite: string;
-					readonly sentinel: boolean;
-				}>;
+				readonly cases: ReadonlyArray<{ readonly id: string; readonly suite: string }>;
 			};
+			const catalog = loadRuntimeGapCatalog();
 			expect(plan).toMatchObject({ preset: "quick", samples: 3, targetNodeMs: 20 });
-			expect(plan.cases).toHaveLength(37);
-			expect(
-				plan.cases.every(({ suite, sentinel }) => suite === "runtime" && sentinel),
-			).toBe(true);
+			expect(plan.cases.map(({ id }) => id)).toEqual(catalog.presets.quick);
+			expect(plan.cases.every(({ suite }) => suite === "runtime")).toBe(true);
 			expect(existsSync(output)).toBe(false);
 			expect(existsSync(markdown)).toBe(false);
 		} finally {
@@ -86,19 +86,12 @@ describe("compiler host-gap ladder", () => {
 		}
 	});
 
-	it("covers the runtime sentinel matrix and compiler algorithm kernels", () => {
-		const kernels = JSON.parse(
-			execFileSync(process.execPath, [fixture, "--list"], { encoding: "utf8" }),
-		) as ReadonlyArray<{
-			readonly id: string;
-			readonly group: string;
-			readonly suite: string;
-			readonly sentinel: boolean;
-		}>;
+	it("covers explicit runtime suites and compiler algorithm cases", () => {
+		const catalog = loadRuntimeGapCatalog();
+		const kernels = catalog.cases;
 		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
-		expect(
-			kernels.filter(({ suite, sentinel }) => suite === "runtime" && sentinel),
-		).toHaveLength(37);
+		expect(catalog.presets.quick).toHaveLength(37);
+		expect(catalog.presets.survey).toHaveLength(66);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 	});

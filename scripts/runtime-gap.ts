@@ -18,46 +18,30 @@ import { fileURLToPath } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
+import { loadRuntimeGapCatalog, RUNTIME_GAP_CATALOG } from "./runtime-gap-catalog.ts";
+import type {
+	RuntimeGapCaseDescriptor,
+	RuntimeGapCategory,
+} from "./runtime-gap-catalog.ts";
 import { summarizeV8GcTrace } from "./v8-gc-trace.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const FIXTURE = path.join(REPOSITORY_ROOT, "bench/compiler-host-gap.mjs");
-const DEFAULT_JSON = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report.json");
-const DEFAULT_MARKDOWN = path.join(REPOSITORY_ROOT, ".cache/compiler-host-gap/report.md");
+const DEFAULT_JSON = path.join(REPOSITORY_ROOT, ".cache/performance/runtime-gap.json");
+const DEFAULT_MARKDOWN = path.join(REPOSITORY_ROOT, ".cache/performance/runtime-gap.md");
 const CONFIG = resolveBuildConfig({
 	engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
 	surface: { node: true, webPlatform: false, maligator: true },
 });
 
-interface KernelDescriptor {
-	readonly id: string;
-	readonly group: "primitive" | "runtime" | "algorithm";
-	readonly suite: "runtime" | "compiler";
-	readonly owner: string;
-	readonly category: HostGapCategory;
-	readonly mechanisms: ReadonlyArray<string>;
-	readonly inputShape: string;
-	readonly unit: string;
-	readonly sentinel: boolean;
-	readonly sourceSeam: string;
-}
-
-type HostGapCategory =
-	| "statements-operators"
-	| "api-builtins"
-	| "language-features"
-	| "object-array-representation"
-	| "allocation-gc"
-	| "memory-layout-usage"
-	| "host-apis"
-	| "compiler-algorithms"
-	| "unattributed-execution";
+type KernelDescriptor = RuntimeGapCaseDescriptor & { readonly fixturePath: string };
+type HostGapCategory = RuntimeGapCategory;
 
 type Preset = "quick" | "survey" | "confirm";
 
-export interface KernelOutput extends KernelDescriptor {
-	readonly schema: 1;
-	readonly workload: "runtime-gap-v1";
+export interface KernelOutput {
+	readonly schema: 2;
+	readonly workload: "runtime-gap-case-v2";
+	readonly id: string;
 	readonly scale: number;
 	readonly operations: number;
 	readonly checksum: number;
@@ -95,7 +79,10 @@ interface RuntimeGapFailure {
 	readonly message: string;
 }
 
-export interface CompilerHostGapKernelResult extends KernelDescriptor {
+export interface CompilerHostGapKernelResult extends Omit<
+	KernelDescriptor,
+	"fixturePath"
+> {
 	readonly scale: number;
 	readonly operations: number;
 	readonly checksum: number;
@@ -177,7 +164,7 @@ interface Options {
 	readonly selfCompile?: string;
 }
 
-const HELP = `Usage: npm run bench:compiler-host-gap -- [options]
+const HELP = `Usage: npm run bench:performance -- gap [options]
 
 Options:
   --samples N                paired timing samples per host (default: 5)
@@ -189,8 +176,8 @@ Options:
   --category NAME            select a report category; repeatable
   --group primitive|runtime|algorithm
   --case ID                  select a kernel; repeatable
-  --output PATH              JSON report (default: .cache/compiler-host-gap/report.json)
-  --markdown PATH            Markdown report (default: .cache/compiler-host-gap/report.md)
+  --output PATH              JSON report (default: .cache/performance/runtime-gap.json)
+  --markdown PATH            Markdown report (default: .cache/performance/runtime-gap.md)
   --skip-node-allocation     omit V8 sampled-allocation resource probes
   --self-compile PATH        merge a full self-compile owner artifact
   --plan=json                describe selected work without writing or building
@@ -326,7 +313,7 @@ function runProcess(
 	if (completed.error !== undefined) throw completed.error;
 	if (completed.status !== 0) {
 		throw new Error(
-			`compiler host-gap process failed (${String(completed.status)}): ${command} ${args.join(" ")}\n${completed.stdout}\n${completed.stderr}`,
+			`runtime-gap process failed (${String(completed.status)}): ${command} ${args.join(" ")}\n${completed.stdout}\n${completed.stderr}`,
 		);
 	}
 	return { stdout: String(completed.stdout), stderr: String(completed.stderr) };
@@ -341,8 +328,8 @@ export function parseKernelOutput(stdout: string): KernelOutput {
 			continue;
 		}
 		if (
-			parsed.schema === 1 &&
-			parsed.workload === "runtime-gap-v1" &&
+			parsed.schema === 2 &&
+			parsed.workload === "runtime-gap-case-v2" &&
 			typeof parsed.id === "string" &&
 			typeof parsed.operations === "number" &&
 			parsed.operations > 0 &&
@@ -358,14 +345,7 @@ export function parseKernelOutput(stdout: string): KernelOutput {
 			return parsed as KernelOutput;
 		}
 	}
-	throw new Error("compiler host-gap kernel produced no valid result record");
-}
-
-function listKernels(): ReadonlyArray<KernelDescriptor> {
-	const completed = runProcess(process.execPath, [FIXTURE, "--list"]);
-	const parsed = JSON.parse(completed.stdout.trim()) as ReadonlyArray<KernelDescriptor>;
-	if (parsed.length === 0) throw new Error("compiler host-gap fixture has no kernels");
-	return parsed;
+	throw new Error("runtime-gap case produced no valid result record");
 }
 
 function runKernel(
@@ -450,7 +430,7 @@ function profileSelfSize(node: unknown): number {
 }
 
 function nodeResourceSample(
-	id: string,
+	fixture: string,
 	scale: number,
 	sampleAllocation: boolean,
 	timeoutMs: number,
@@ -458,7 +438,7 @@ function nodeResourceSample(
 	if (!sampleAllocation) {
 		const measured = timeInvocation(
 			process.execPath,
-			["--trace-gc-nvp", FIXTURE, id, String(scale)],
+			["--trace-gc-nvp", fixture, String(scale)],
 			process.env,
 			timeoutMs,
 		);
@@ -485,8 +465,7 @@ function nodeResourceSample(
 				"--heap-prof",
 				`--heap-prof-interval=${interval}`,
 				`--heap-prof-dir=${profileRoot}`,
-				FIXTURE,
-				id,
+				fixture,
 				String(scale),
 			],
 			process.env,
@@ -523,13 +502,12 @@ function nodeResourceSample(
 
 function maligatorResourceSample(
 	binary: string,
-	id: string,
 	scale: number,
 	timeoutMs: number,
 ): ResourceSample {
 	const measured = timeInvocation(
 		binary,
-		[id, String(scale)],
+		[String(scale)],
 		{
 			...process.env,
 			MAL_GC_STATS: "1",
@@ -577,14 +555,10 @@ function calibrateScale(
 ): number {
 	const node = runKernel(
 		process.execPath,
-		[FIXTURE, descriptor.id, "1"],
+		[descriptor.fixturePath, "1"],
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
-	const maligator = runKernel(
-		binary,
-		[descriptor.id, "1"],
-		invocationTimeout(deadline, caseTimeoutMs),
-	);
+	const maligator = runKernel(binary, ["1"], invocationTimeout(deadline, caseTimeoutMs));
 	assertParity(node, maligator);
 	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
 	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
@@ -630,13 +604,13 @@ function measureKernel(
 		const runNode = (): KernelOutput =>
 			runKernel(
 				process.execPath,
-				[FIXTURE, descriptor.id, String(scale)],
+				[descriptor.fixturePath, String(scale)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
 		const runMaligator = (): KernelOutput =>
 			runKernel(
 				binary,
-				[descriptor.id, String(scale)],
+				[String(scale)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
 		const ordered = sample % 2 === 0 ? [runNode, runMaligator] : [runMaligator, runNode];
@@ -659,8 +633,9 @@ function measureKernel(
 		maligatorSamples.map(({ elapsedMs }) => elapsedMs),
 	);
 	const operations = reference!.operations;
+	const { fixturePath: _fixturePath, ...reportDescriptor } = descriptor;
 	return {
-		...descriptor,
+		...reportDescriptor,
 		scale,
 		operations,
 		checksum: reference!.checksum,
@@ -670,7 +645,7 @@ function measureKernel(
 			medianAbsoluteDeviationMs: nodeDeviationMs,
 			nsPerOperation: (nodeMedianMs * 1e6) / operations,
 			resource: nodeResourceSample(
-				descriptor.id,
+				descriptor.fixturePath,
 				scale,
 				!options.skipNodeAllocation,
 				invocationTimeout(deadline, options.caseTimeoutMs),
@@ -683,7 +658,6 @@ function measureKernel(
 			nsPerOperation: (maligatorMedianMs * 1e6) / operations,
 			resource: maligatorResourceSample(
 				binary,
-				descriptor.id,
 				scale,
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			),
@@ -1050,7 +1024,9 @@ function digest(file: string): string {
 export function main(args: ReadonlyArray<string>): void {
 	const options = parseOptions(args);
 	if (options === undefined) return;
-	const allDescriptors = listKernels();
+	const catalog = loadRuntimeGapCatalog();
+	const allDescriptors = catalog.cases;
+	if (allDescriptors.length === 0) throw new Error("runtime-gap catalog has no cases");
 	const knownCategories = new Set(allDescriptors.map(({ category }) => category));
 	const unknownCategories = [...options.categories].filter(
 		(category) => !knownCategories.has(category),
@@ -1061,20 +1037,21 @@ export function main(args: ReadonlyArray<string>): void {
 	if (options.preset === "confirm" && options.cases.size === 0) {
 		throw new Error("the confirm preset requires at least one explicit --case");
 	}
-	const implicitRuntimeSuite =
-		options.preset !== undefined &&
+	const implicitPresetSelection =
+		(options.preset === "quick" || options.preset === "survey") &&
 		options.suites.size === 0 &&
 		options.groups.size === 0 &&
 		options.cases.size === 0 &&
 		options.categories.size === 0;
+	const presetCases =
+		options.preset === "quick" ? catalog.presets.quick : catalog.presets.survey;
 	const descriptors = allDescriptors.filter(
 		(descriptor) =>
 			(options.groups.size === 0 || options.groups.has(descriptor.group)) &&
 			(options.suites.size === 0 || options.suites.has(descriptor.suite)) &&
 			(options.categories.size === 0 || options.categories.has(descriptor.category)) &&
 			(options.cases.size === 0 || options.cases.has(descriptor.id)) &&
-			(!implicitRuntimeSuite || descriptor.suite === "runtime") &&
-			(options.preset !== "quick" || !implicitRuntimeSuite || descriptor.sentinel),
+			(!implicitPresetSelection || presetCases.includes(descriptor.id)),
 	);
 	const unknownCases = [...options.cases].filter(
 		(id) => !descriptors.some((descriptor) => descriptor.id === id),
@@ -1087,7 +1064,7 @@ export function main(args: ReadonlyArray<string>): void {
 			JSON.stringify(
 				{
 					schema: 1,
-					workload: "runtime-gap",
+					workload: "performance-gap",
 					preset: options.preset ?? null,
 					cases: descriptors,
 					samples: options.samples,
@@ -1134,7 +1111,7 @@ export function main(args: ReadonlyArray<string>): void {
 				(left.maligator.resource.allocatedBytes ?? 0),
 		);
 		return {
-			schema: 2,
+			schema: 3,
 			status,
 			complete,
 			generatedAt: new Date().toISOString(),
@@ -1156,8 +1133,17 @@ export function main(args: ReadonlyArray<string>): void {
 				budgetSeconds: options.budgetSeconds,
 				caseTimeoutMs: options.caseTimeoutMs,
 				selectedCases: descriptors.map(({ id }) => id),
-				fixture: path.relative(REPOSITORY_ROOT, FIXTURE),
-				fixtureDigest: digest(FIXTURE),
+				catalog: path.relative(REPOSITORY_ROOT, RUNTIME_GAP_CATALOG),
+				catalogDigest: digest(RUNTIME_GAP_CATALOG),
+				caseFixtures: Object.fromEntries(
+					descriptors.map((descriptor) => [
+						descriptor.id,
+						{
+							path: path.relative(REPOSITORY_ROOT, descriptor.fixturePath),
+							digest: digest(descriptor.fixturePath),
+						},
+					]),
+				),
 				driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
 				driverDigest: digest(fileURLToPath(import.meta.url)),
 				build: CONFIG,
@@ -1198,28 +1184,8 @@ export function main(args: ReadonlyArray<string>): void {
 	};
 	persist("preparing", false);
 
-	const progress = new CommandProgress("compiler-host-gap");
+	const progress = new CommandProgress("runtime-gap");
 	progress.start(`${descriptors.length} kernels · ${options.samples} paired samples`);
-	progress.detail("build shared native kernel runner");
-	let binary: string;
-	const preparationStartedAt = performance.now();
-	try {
-		binary = buildNativeBinary({
-			fixture: FIXTURE,
-			name: "bench-compiler-host-gap",
-			config: CONFIG,
-			production: true,
-		});
-		preparationMs = performance.now() - preparationStartedAt;
-		persist("running", false);
-	} catch (error) {
-		preparationMs = performance.now() - preparationStartedAt;
-		failures.push(classifyFailure("shared-native-build", error));
-		persist("failed", false);
-		progress.failed();
-		process.exitCode = 2;
-		return;
-	}
 	for (const [index, descriptor] of descriptors.entries()) {
 		if (performance.now() >= deadline) {
 			for (const pending of descriptors.slice(index)) {
@@ -1233,6 +1199,14 @@ export function main(args: ReadonlyArray<string>): void {
 		}
 		progress.stage(index + 1, descriptors.length, descriptor.id);
 		try {
+			const preparationStartedAt = performance.now();
+			const binary = buildNativeBinary({
+				fixture: descriptor.fixturePath,
+				name: `bench-runtime-gap-${descriptor.id}`,
+				config: CONFIG,
+				production: true,
+			});
+			preparationMs += performance.now() - preparationStartedAt;
 			results.push(measureKernel(binary, descriptor, options, deadline));
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {
