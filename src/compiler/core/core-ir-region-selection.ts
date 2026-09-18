@@ -1112,10 +1112,10 @@ function guardedCallCandidates(
 			})
 			.exceptional().reachable;
 		const outgoing = targetSites.filter(
-				(site) =>
-					fn.isInstructionLive(site.instruction) &&
-					reachable.has(fn.instructionBlock(site.instruction)),
-			);
+			(site) =>
+				fn.isInstructionLive(site.instruction) &&
+				reachable.has(fn.instructionBlock(site.instruction)),
+		);
 		const globalTargetUses = new Map<CoreFunctionId, number>();
 		for (const site of outgoing) {
 			const target =

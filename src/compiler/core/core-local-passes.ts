@@ -2710,9 +2710,7 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			}
 			const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 			if (kinds.kindMask(key) !== COMPILER_VALUE_KIND_NUMBER) continue;
-			const range = context
-				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
-				.range(key, block);
+			const range = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).range(key, block);
 			if (range?.minimum !== 0 || range.maximum !== 1) continue;
 
 			let before = fn.blockTerminator(fn.entry);
@@ -2734,16 +2732,10 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			const editor = CoreEditor.open(program, item.function);
 			for (const argumentIndex of [startIndex, startIndex + 1]) {
 				if (snapshots.has(argumentIndex)) continue;
-				const snapshot = editor.insertInstruction(
-					fn.entry,
-					before,
-					"loadArgument",
-					[],
-					{
-						attributes: { index: argumentIndex },
-						sourcePosition: fn.instructionSourcePosition(producer),
-					},
-				).outputs[0]!;
+				const snapshot = editor.insertInstruction(fn.entry, before, "loadArgument", [], {
+					attributes: { index: argumentIndex },
+					sourcePosition: fn.instructionSourcePosition(producer),
+				}).outputs[0]!;
 				snapshots.set(argumentIndex, snapshot);
 			}
 			const alternate = editor.createBlock();

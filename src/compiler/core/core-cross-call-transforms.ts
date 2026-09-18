@@ -391,7 +391,11 @@ function collectInstanceMethodHints(
 			}
 			const stringIndex = directStringIndex(fn, key);
 			const target = coreDirectCreatedFunction(fn, value);
-			if (stringIndex === undefined || target === undefined || ambiguous.has(stringIndex)) {
+			if (
+				stringIndex === undefined ||
+				target === undefined ||
+				ambiguous.has(stringIndex)
+			) {
 				continue;
 			}
 			const existing = hints.get(stringIndex);
@@ -468,10 +472,7 @@ function offerFunctionCandidates(
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
 			(globalTargetUses.get(target) ?? 0) < 2;
-		if (
-			singleUseGlobal &&
-			(!inline?.argumentSnapshots || !inLoop)
-		) {
+		if (singleUseGlobal && (!inline?.argumentSnapshots || !inLoop)) {
 			continue;
 		}
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);

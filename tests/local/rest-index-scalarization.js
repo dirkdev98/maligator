@@ -54,7 +54,7 @@ function count(...rest) {
 }
 
 function chooseBounded(selector, ...rest) {
-	return rest[(+selector) & 1];
+	return rest[+selector & 1];
 }
 
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
@@ -84,9 +84,15 @@ check(
 );
 const objectPayload = { value: 73 };
 const symbolPayload = Symbol("rest-index-scalarization");
-check(chooseBounded(0, objectPayload, 79) === objectPayload, "bounded read preserves objects");
+check(
+	chooseBounded(0, objectPayload, 79) === objectPayload,
+	"bounded read preserves objects",
+);
 check(chooseBounded(1, 83, 89n) === 89n, "bounded read preserves bigints");
-check(chooseBounded(1, 97, symbolPayload) === symbolPayload, "bounded read preserves symbols");
+check(
+	chooseBounded(1, 97, symbolPayload) === symbolPayload,
+	"bounded read preserves symbols",
+);
 let coercions = 0;
 const coerciveSelector = {
 	valueOf() {

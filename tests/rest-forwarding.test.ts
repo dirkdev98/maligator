@@ -174,9 +174,7 @@ describe("rest forwarding allocation contract", () => {
 		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
 		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT_COUNT")).toBe(true);
 		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT")).toBe(true);
-		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
-			false,
-		);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
 	});
 
 	it("scalarizes a bounded terminal rest read into argument snapshots", () => {
