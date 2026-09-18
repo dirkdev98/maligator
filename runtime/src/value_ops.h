@@ -140,24 +140,13 @@ static inline MalValue mal_ops_construct_result(MalValue value, MalValue this_va
  * it (a chained guarded-numeric op re-boxing then re-unboxing) can fold to identity.
  */
 static inline MalValue mal_ops_number_value(f64 value) {
-    if (isnan(value)) {
-        return mal_value_new_nan();
+    if (value >= INT32_MIN && value <= INT32_MAX) {
+        i32 integer = (i32) value;
+        if ((f64) integer == value && (integer != 0 || !signbit(value))) {
+            return mal_value_from_i32(integer);
+        }
     }
 
-    // Negative zero is a distinct Number (Object.is, 1/x, sameValue) and must
-    // not be canonicalized to the int32 +0 the next branch would produce. Keep
-    // it as a raw f64 — the same encoding the interpreter stores for a `-0`
-    // literal — so arithmetic that yields -0 (e.g. -1 * 0) and the compiled
-    // backend's boundary boxing both preserve it.
-    if (value == 0.0 && signbit(value)) {
-        return mal_value_from_f64(value);
-    }
-
-    if (value >= INT32_MIN && value <= INT32_MAX && trunc(value) == value) {
-        return mal_value_from_i32((i32) value);
-    }
-
-    // Also maps infinities to their static encodings.
     return mal_value_from_f64_convert_nan(value);
 }
 

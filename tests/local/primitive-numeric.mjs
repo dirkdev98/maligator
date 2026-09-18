@@ -79,6 +79,38 @@ for (const [left, right] of [
 	dynamicRemainder(left, right);
 }
 
+function dynamicNumericBoxing(value, one) {
+	record(value * one);
+	record(value / one);
+}
+
+for (const value of [
+	-2147483649,
+	-2147483648.5,
+	-2147483648,
+	-2147483647,
+	-0.5,
+	-Number.MIN_VALUE,
+	-0,
+	0,
+	Number.MIN_VALUE,
+	0.5,
+	2147483646,
+	2147483647,
+	2147483647.5,
+	2147483648,
+	4294967296,
+	Number.MAX_SAFE_INTEGER,
+	-Number.MAX_SAFE_INTEGER,
+	Number.MAX_VALUE,
+	-Number.MAX_VALUE,
+	Infinity,
+	-Infinity,
+	NaN,
+]) {
+	dynamicNumericBoxing(value, 1);
+}
+
 const remainderCoercions = [];
 const remainderLeft = {
 	valueOf() {
