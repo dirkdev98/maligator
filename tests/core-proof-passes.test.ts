@@ -377,6 +377,15 @@ describe("Core local proofs and representations", () => {
 		const [sum] = builder.appendInstruction(entry, "binary", [one!, two!], {
 			attributes: { operator: "+" },
 		});
+		const [masked] = builder.appendInstruction(entry, "binary", [sum!, two!], {
+			attributes: { operator: "&" },
+		});
+		const [unsigned] = builder.appendInstruction(entry, "binary", [sum!, two!], {
+			attributes: { operator: ">>>" },
+		});
+		const [complement] = builder.appendInstruction(entry, "unary", [sum!], {
+			attributes: { operator: "~" },
+		});
 		const [comparison] = builder.appendInstruction(entry, "binary", [sum!, two!], {
 			attributes: { operator: ">" },
 		});
@@ -391,6 +400,9 @@ describe("Core local proofs and representations", () => {
 		expect(kinds.kindMask(comparison!)).toBe(COMPILER_VALUE_KIND_BOOLEAN);
 		expect(kinds.exactScalar(one!)).toBe("int32");
 		expect(kinds.exactScalar(sum!)).toBe("number");
+		expect(kinds.exactScalar(masked!)).toBe("int32");
+		expect(kinds.exactScalar(unsigned!)).toBe("number");
+		expect(kinds.exactScalar(complement!)).toBe("int32");
 	});
 
 	it("materializes primitive effects with stable proof references and scalar representations", () => {

@@ -612,6 +612,7 @@ export class DirectCoreFunctionConstruction {
 			isDerivedConstructor:
 				isClassConstructor && (this.#fn.classContext?.isDerivedConstructor ?? false),
 			hasPrototype: this.#fn.hasPrototype ?? true,
+			lexicalThis: this.#fn.lexicalThis ?? false,
 		};
 	}
 

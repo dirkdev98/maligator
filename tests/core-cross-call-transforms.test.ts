@@ -627,6 +627,85 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
+	it("finite-dispatches a private dense array of lexical-this callees", () => {
+		let optimized: CoreProgram | undefined;
+		let report: CoreOptimizationReport | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function caller(count) {
+					const handlers = [
+						(value) => value + 1,
+						(value) => value * 3,
+						(value) => value - 7,
+						(value) => value ^ 85,
+					];
+					let total = 0;
+					for (let index = 0; index < count; index++) {
+						total += handlers[index & 3](index & 1023);
+					}
+					return total;
+				}
+				caller(10);`,
+				"core-finite-array-dispatch.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials: "locked", realms: false } }),
+				),
+				coreInstrumentation: "full",
+				afterCoreOptimization(program, _context, optimizationReport) {
+					optimized = program;
+					report = optimizationReport;
+				},
+			},
+		);
+
+		const caller = coreFunctionNamed(optimized!, "caller")!;
+		const operations = coreOperations(caller);
+		expect(operations.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(
+			operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(3);
+		expect(report!.transforms.appliedByKind["finite-dispatch"]).toBe(1);
+		expect(
+			[...optimized!.functionIds()].filter(
+				(id) => optimized!.function(id).metadata.lexicalThis,
+			),
+		).toHaveLength(4);
+	});
+
+	it("keeps private arrays of receiver-observing functions on generic dispatch", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function caller(count) {
+					const handlers = [
+						function first(value) { this[0] = first; return value + 1; },
+						function second(value) { return value + 2; },
+					];
+					let total = 0;
+					for (let index = 0; index < count; index++) total += handlers[index & 1](index);
+					return total;
+				}
+				caller(10);`,
+				"core-private-array-receiver-mutation.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials: "locked", realms: false } }),
+				),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const caller = coreFunctionNamed(optimized!, "caller")!;
+		expect(coreOperations(caller).some(({ opcode }) => opcode === "call")).toBe(true);
+		expect(
+			coreOperations(caller).some(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toBe(false);
+	});
+
 	it("does not speculate on ambiguous or cold instance-method names", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

@@ -722,6 +722,7 @@ export interface CoreFunctionMetadata {
 	readonly isClassConstructor: boolean;
 	readonly isDerivedConstructor: boolean;
 	readonly hasPrototype: boolean;
+	readonly lexicalThis: boolean;
 }
 
 export interface CoreBlockParameterSpec {

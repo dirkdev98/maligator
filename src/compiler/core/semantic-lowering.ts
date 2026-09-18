@@ -471,6 +471,7 @@ interface CoreFrontendFunction {
 	 * accessor / arrow sites set it false.
 	 */
 	hasPrototype?: boolean;
+	lexicalThis?: boolean;
 
 	/**
 	 * For a derived constructor whose `this` is captured by a nested arrow: the
@@ -2725,6 +2726,7 @@ function compileNewFunctionExpression(
 		classContext,
 		inFieldInitializer: isArrow ? fn.inFieldInitializer : undefined,
 		hasPrototype,
+		lexicalThis: isArrow,
 		strict: functionStrict(fn.semanticFile, functionNode),
 		isGenerator,
 		isAsync: functionNode.async === true,

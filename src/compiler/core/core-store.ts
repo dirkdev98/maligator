@@ -318,6 +318,7 @@ function defaultMetadata(parameterCount: number): CoreFunctionMetadata {
 		isClassConstructor: false,
 		isDerivedConstructor: false,
 		hasPrototype: true,
+		lexicalThis: false,
 	};
 }
 

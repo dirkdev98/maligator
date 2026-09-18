@@ -751,6 +751,28 @@ describe("Core control-flow analyses and passes", () => {
 		).toBe(false);
 	});
 
+	it("keeps signed bitwise loop results int32 at property and call boundaries", () => {
+		const program = optimizeSource(`
+			function maskedCalls(values, callback, count) {
+				let checksum = 0;
+				for (let index = 0; index < count; index++) {
+					checksum += callback(values[index & 31], index & 255);
+				}
+				return checksum;
+			}
+		`);
+		const fn = coreFunctionNamed(program, "maskedCalls");
+		if (fn === undefined) throw new Error("missing maskedCalls");
+		const masks = coreOperations(fn).filter(
+			({ opcode, attributes }) => opcode === "binary" && attributes.operator === "&",
+		);
+		expect(masks).toHaveLength(2);
+		for (const mask of masks) {
+			expect(fn.valueRepresentation(mask.outputs[0]!)).toBe("i32");
+			expect(fn.valueRepresentation(mask.inputs[0]!)).toBe("f64");
+		}
+	});
+
 	it("hoists pure loop invariants while retaining observable identity creation", () => {
 		const context = lockedMathContext;
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });

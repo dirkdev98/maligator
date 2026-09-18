@@ -274,7 +274,8 @@ function sameFunctionMetadata(
 		left.strict === right.strict &&
 		left.isClassConstructor === right.isClassConstructor &&
 		left.isDerivedConstructor === right.isDerivedConstructor &&
-		left.hasPrototype === right.hasPrototype
+		left.hasPrototype === right.hasPrototype &&
+		left.lexicalThis === right.lexicalThis
 	);
 }
 

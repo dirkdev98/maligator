@@ -110,6 +110,13 @@ const NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	">>",
 	">>>",
 ]);
+const SIGNED_INT32_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+]);
 const COMPARISON_OPERATORS: ReadonlySet<string> = new Set([
 	"<",
 	"<=",
@@ -789,6 +796,15 @@ export function analyzeCoreValueKinds(
 		if (
 			(opcode === "createNumber" || opcode === "createF64") &&
 			numberIsExactInt32(fn.instructionAttributes(definition).value)
+		)
+			exactInt32[value] = 1;
+		const operator = fn.instructionAttributes(definition).operator;
+		if (
+			masks[value] === COMPILER_VALUE_KIND_NUMBER &&
+			((opcode === "unary" && operator === "~") ||
+				(opcode === "binary" &&
+					typeof operator === "string" &&
+					SIGNED_INT32_BINARY_OPERATORS.has(operator)))
 		)
 			exactInt32[value] = 1;
 	}

@@ -736,6 +736,19 @@ function scalarConsumer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 	);
 }
 
+function scalarBoundaryConsumer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	operand: number,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	return (
+		(opcode === "loadProperty" && operand === 1) ||
+		(opcode === "call" && operand >= 2) ||
+		(opcode === "callKnown" && operand >= 1)
+	);
+}
+
 function scalarConsumersOnly(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -744,9 +757,11 @@ function scalarConsumersOnly(
 	let use = fn.kernel.valueFirstUse(value);
 	while (use >= 0) {
 		const instruction = fn.kernel.useInstruction(use);
+		const operand = fn.kernel.useOperand(use);
 		if (
 			fn.instructionKind(instruction) === "operation" &&
-			!scalarConsumer(fn, instruction)
+			!scalarConsumer(fn, instruction) &&
+			!scalarBoundaryConsumer(fn, instruction, operand)
 		)
 			return false;
 		use = fn.kernel.useNext(use);

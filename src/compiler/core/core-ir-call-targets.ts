@@ -1,7 +1,11 @@
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+	coreValueControlFlowUseMask,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalCallSite } from "./core-ir-interprocedural-flow.ts";
 import { analyzeCoreInterproceduralValueFlow } from "./core-ir-interprocedural-flow.ts";
@@ -394,6 +398,230 @@ function directStringIndex(
 		: undefined;
 }
 
+function directNumberIndex(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): number | undefined {
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	const opcode = fn.instructionOpcodeName(definition);
+	if (opcode === "move") {
+		const input = instructionOperand(fn, definition, 0);
+		return input === undefined ? undefined : directNumberIndex(fn, input, seen);
+	}
+	if (opcode !== "createNumber" && opcode !== "createF64") return undefined;
+	const constant = fn.instructionAttributes(definition).value;
+	return typeof constant === "number" && Number.isSafeInteger(constant)
+		? constant
+		: undefined;
+}
+
+function privateArrayIndexIsInBounds(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	length: number,
+): boolean {
+	const constant = directNumberIndex(fn, value);
+	if (constant !== undefined) return constant >= 0 && constant < length;
+	if ((length & (length - 1)) !== 0 || fn.kernel.valueDefinitionKind(value) !== 1)
+		return false;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (
+		fn.instructionOpcodeName(definition) !== "binary" ||
+		fn.instructionAttributes(definition).operator !== "&"
+	)
+		return false;
+	const left = instructionOperand(fn, definition, 0);
+	const right = instructionOperand(fn, definition, 1);
+	if (left === undefined || right === undefined) return false;
+	const masked =
+		directNumberIndex(fn, left) === length - 1
+			? right
+			: directNumberIndex(fn, right) === length - 1
+				? left
+				: undefined;
+	return (
+		masked !== undefined &&
+		(fn.valueRepresentation(masked) === "f64" || fn.valueRepresentation(masked) === "i32")
+	);
+}
+
+function instructionDominatesInstruction(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	dominator: CoreInstructionId,
+	instruction: CoreInstructionId,
+): boolean {
+	const dominatorBlock = fn.instructionBlock(dominator);
+	const instructionBlock = fn.instructionBlock(instruction);
+	if (dominatorBlock !== instructionBlock) {
+		return cfg.dominates(dominatorBlock, instructionBlock);
+	}
+	for (
+		let cursor = fn.kernel.blockFirstInstruction(dominatorBlock);
+		cursor >= 0;
+		cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+	) {
+		if (cursor === dominator) return true;
+		if (cursor === instruction) return false;
+	}
+	return false;
+}
+
+function privateFunctionArrayLoadTargets(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+): ReadonlyMap<CoreInstructionId, CoreCalleeTargets> {
+	const roots = coreCanonicalValueRoots(fn, cfg);
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	interface Candidate {
+		readonly length: number;
+		readonly definitions: Map<number, CoreInstructionId>;
+		readonly targets: Map<number, CoreFunctionId>;
+		readonly loads: Array<CoreInstructionId>;
+		readonly receiverCalls: Array<CoreInstructionId>;
+		invalid: boolean;
+	}
+	const candidates = new Map<CoreValueId, Candidate>();
+	for (const instruction of fn.instructionIds()) {
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "createArray" ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		const length = fn.instructionAttributes(instruction).length;
+		if (
+			typeof length !== "number" ||
+			!Number.isSafeInteger(length) ||
+			length < 2 ||
+			length > CORE_CALLEE_TARGET_CAP
+		)
+			continue;
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		candidates.set(root(value), {
+			length,
+			definitions: new Map(),
+			targets: new Map(),
+			loads: [],
+			receiverCalls: [],
+			invalid: false,
+		});
+	}
+	if (candidates.size === 0) return new Map();
+	const edgeUses = coreValueControlFlowUseMask(fn);
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = valueIndex as CoreValueId;
+		if (!fn.isValueLive(value) || edgeUses[value] === 0) continue;
+		const candidate = candidates.get(root(value));
+		if (candidate !== undefined) candidate.invalid = true;
+	}
+
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		for (let position = 0; position < operandCount; position++) {
+			const candidate = candidates.get(
+				root(fn.kernel.operandAt(operandStart + position)),
+			);
+			if (candidate === undefined || candidate.invalid) continue;
+			if (
+				position === 0 &&
+				(opcode === "move" || opcode === "rootUse" || opcode === "throwIfTdz")
+			)
+				continue;
+			if (position === 0 && opcode === "defineProperty" && operandCount === 3) {
+				const key = directNumberIndex(fn, fn.kernel.operandAt(operandStart + 1));
+				const target = coreDirectCreatedFunction(
+					fn,
+					fn.kernel.operandAt(operandStart + 2),
+				);
+				if (
+					key === undefined ||
+					key < 0 ||
+					key >= candidate.length ||
+					target === undefined ||
+					target >= program.functionCapacity ||
+					!program.function(target).metadata.lexicalThis ||
+					candidate.targets.has(key)
+				) {
+					candidate.invalid = true;
+					continue;
+				}
+				candidate.definitions.set(key, instruction);
+				candidate.targets.set(key, target);
+				continue;
+			}
+			if (position === 0 && opcode === "loadProperty" && operandCount === 2) {
+				if (
+					!privateArrayIndexIsInBounds(
+						fn,
+						fn.kernel.operandAt(operandStart + 1),
+						candidate.length,
+					)
+				) {
+					candidate.invalid = true;
+					continue;
+				}
+				candidate.loads.push(instruction);
+				continue;
+			}
+			if (position === 1 && opcode === "call") {
+				candidate.receiverCalls.push(instruction);
+				continue;
+			}
+			candidate.invalid = true;
+		}
+	}
+
+	const result = new Map<CoreInstructionId, CoreCalleeTargets>();
+	for (const candidate of candidates.values()) {
+		if (
+			candidate.invalid ||
+			candidate.targets.size !== candidate.length ||
+			candidate.loads.length === 0
+		)
+			continue;
+		if (
+			candidate.loads.some((load) =>
+				[...candidate.definitions.values()].some(
+					(definition) => !instructionDominatesInstruction(fn, cfg, definition, load),
+				),
+			)
+		)
+			continue;
+		const loadResults = new Set(
+			candidate.loads.map((load) =>
+				root(fn.kernel.resultAt(fn.kernel.instructionResultStart(load))),
+			),
+		);
+		if (
+			candidate.receiverCalls.some((call) => {
+				const callee = instructionOperand(fn, call, 0);
+				return callee === undefined || !loadResults.has(root(callee));
+			})
+		)
+			continue;
+		const targets = [...new Set(candidate.targets.values())].sort(
+			(left, right) => left - right,
+		);
+		if (targets.length < 2 || targets.length > CORE_CALLEE_TARGET_CAP) continue;
+		const closed = Object.freeze({
+			functions: Object.freeze(targets),
+			anyScript: false,
+			opaque: false,
+			nonCallable: false,
+		});
+		for (const load of candidate.loads) result.set(load, closed);
+	}
+	return result;
+}
+
 function collectKnownFunctionProperties(
 	fn: CoreFunctionStore,
 	functionCapacity: number,
@@ -576,6 +804,7 @@ function analyzeFunctionTargets(
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
 	);
+	const privateArrayLoads = privateFunctionArrayLoadTargets(program, fn, cfg);
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
 	const returnTargetDependencies = new Map<
@@ -668,6 +897,8 @@ function analyzeFunctionTargets(
 					key === undefined
 						? CORE_CALLEE_TARGETS_OPEN
 						: (cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
+			} else if (opcode === "loadProperty" && privateArrayLoads.has(instruction)) {
+				resultTargets = privateArrayLoads.get(instruction)!;
 			} else if (opcode === "loadPropertyStatic") {
 				const receiver = instructionOperand(fn, instruction, 0);
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;

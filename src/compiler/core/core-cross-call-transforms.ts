@@ -457,6 +457,71 @@ function offerFunctionCandidates(
 			})
 			.ordinary()
 			.loops.some((loop) => loop.blocks.has(fn.instructionBlock(site.instruction)));
+		const resultCount = fn.kernel.instructionResultCount(site.instruction);
+		const result =
+			resultCount === 1
+				? fn.kernel.resultAt(fn.kernel.instructionResultStart(site.instruction))
+				: undefined;
+		const finiteTargets =
+			inLoop &&
+			!coreCalleeTargetsAreOpen(site.targets) &&
+			site.targets.functions.length > 1
+				? site.targets.functions
+				: undefined;
+		if (finiteTargets !== undefined) {
+			const inlines = finiteTargets.map((target) => inlineTarget(program, target));
+			const bridgesResult =
+				result !== undefined &&
+				inlines.every(
+					(inline) =>
+						inline !== undefined &&
+						inline.returnValues.every((value) =>
+							canBridgeInlineResult(
+								inline.function.valueRepresentation(value),
+								fn.valueRepresentation(result),
+							),
+						),
+				);
+			service.offer(
+				Object.freeze({
+					kind: "finite-dispatch",
+					caller: functionId,
+					site: site.instruction,
+					revision: finiteTargets.reduce(
+						(revision, target) => revision * 31 + summaries.version(target),
+						0,
+					),
+					priorityClass: 2,
+					priorityScore: 0,
+					targets: Object.freeze([...finiteTargets]),
+					generatedCodeCost: inlines.reduce(
+						(cost, inline) =>
+							cost +
+							(inline?.instructions.length ?? 0) +
+							(inline?.linear === false ? inline.blocks.length : 0) +
+							1,
+						0,
+					),
+					compilerWorkCost: inlines.reduce(
+						(cost, inline) =>
+							cost +
+							(inline?.instructions.length ?? 0) +
+							(inline?.function.valueCapacity ?? 0) +
+							4,
+						0,
+					),
+					expansive: true,
+					...(finiteTargets.includes(functionId)
+						? { unsupportedReason: "recursive" as const }
+						: inlines.some((inline) => inline === undefined)
+							? { unsupportedReason: "unsupported-graph" as const }
+							: !bridgesResult
+								? { unsupportedReason: "representation" as const }
+								: {}),
+				}),
+			);
+			continue;
+		}
 		const exactTarget =
 			site.targets.functions.length === 1 ? site.targets.functions[0] : undefined;
 		const hintedTarget =
@@ -476,11 +541,6 @@ function offerFunctionCandidates(
 			continue;
 		}
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
-		const resultCount = fn.kernel.instructionResultCount(site.instruction);
-		const result =
-			resultCount === 1
-				? fn.kernel.resultAt(fn.kernel.instructionResultStart(site.instruction))
-				: undefined;
 		const bridgesResult =
 			inline !== undefined &&
 			result !== undefined &&
@@ -1021,6 +1081,67 @@ function applyGuardedInline(
 	};
 }
 
+function applyFiniteDispatch(
+	program: CoreProgram,
+	candidate: CoreTransformCandidate,
+	editor: CoreEditor,
+): AppliedTransform | undefined {
+	if (candidate.targets.length < 2) return undefined;
+	const caller = program.function(candidate.caller);
+	if (
+		!caller.isInstructionLive(candidate.site) ||
+		caller.instructionKind(candidate.site) !== "operation" ||
+		caller.instructionKind(
+			caller.blockTerminator(caller.instructionBlock(candidate.site)),
+		) === "guard"
+	)
+		return undefined;
+	const descriptor = caller.registry.byId(caller.instructionOpcode(candidate.site));
+	if (
+		descriptor.callTransfer?.invocation !== "call" ||
+		descriptor.callTransfer.result !== "call-completion" ||
+		descriptor.callTransfer.arguments.kind !== "positional" ||
+		caller.kernel.instructionResultCount(candidate.site) !== 1
+	)
+		return undefined;
+	const result = caller.kernel.resultAt(
+		caller.kernel.instructionResultStart(candidate.site),
+	);
+	const representation = caller.valueRepresentation(result);
+	if (
+		candidate.targets.some((target) => {
+			const inline = inlineTarget(program, target);
+			return (
+				inline === undefined ||
+				inline.returnValues.some(
+					(value) =>
+						!canBridgeInlineResult(
+							inline.function.valueRepresentation(value),
+							representation,
+						),
+				)
+			);
+		})
+	)
+		return undefined;
+	let instructionsIntroduced = 0;
+	let blocksIntroduced = 0;
+	for (const [index, target] of candidate.targets.entries()) {
+		const applied = applyGuardedInline(
+			program,
+			{ ...candidate, targets: [target] },
+			editor,
+			index + 1 < candidate.targets.length,
+		);
+		if (applied === undefined) {
+			throw new Error("Validated finite dispatch became inapplicable during expansion");
+		}
+		instructionsIntroduced += applied.instructionsIntroduced;
+		blocksIntroduced += applied.blocksIntroduced;
+	}
+	return { instructionsIntroduced, blocksIntroduced };
+}
+
 function applyCandidate(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
@@ -1028,6 +1149,8 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
+		case "finite-dispatch":
+			return applyFiniteDispatch(program, candidate, editor);
 		case "inline":
 			return applyLinearInline(program, candidate, editor);
 		case "guarded-inline":
