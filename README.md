@@ -340,6 +340,9 @@ macOS ARM, executes the native binary and installed npm launcher on every suppor
 host, and retains the validated tarballs plus `packages.json` for seven days. The
 intermediate multi-target workspace is deleted after the smoke matrix passes.
 
+Prepare the next numeric alpha with `npm run version:alpha`, commit the release
+preparation, and push that exact commit to `main` before dispatching the workflow.
+
 Download the successful run's `maligator-<version>-packages` artifact into
 `dist/release/packs` in a clean checkout. `release:create-github` then verifies the
 commit and tarball checksums, creates the exact `v<package.json version>` tag and a
