@@ -31,6 +31,26 @@ async function eventuallyExists(file: string): Promise<boolean> {
 }
 
 describe("bounded performance processes", () => {
+	it("streams child progress while retaining the complete result", async () => {
+		const streamed = { stdout: "", stderr: "" };
+		const result = await runBoundedProcess(
+			process.execPath,
+			["-e", "console.log('phase started'); console.error('diagnostic')"],
+			{
+				environment: process.env,
+				timeoutMs: 5_000,
+				onStdout: (chunk) => (streamed.stdout += chunk),
+				onStderr: (chunk) => (streamed.stderr += chunk),
+			},
+		);
+		expect(result).toMatchObject({
+			exitCode: 0,
+			stdout: streamed.stdout,
+			stderr: streamed.stderr,
+		});
+		expect(streamed).toEqual({ stdout: "phase started\n", stderr: "diagnostic\n" });
+	});
+
 	it("kills descendants when a worker exceeds its deadline", async () => {
 		if (process.platform === "win32") return;
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-perf-process-"));

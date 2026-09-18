@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyMetricSamples, runBenchmarkComparison } from "./bench-compare.ts";
+import {
+	classifyMetricSamples,
+	performanceSourceIdentity,
+	runBenchmarkComparison,
+} from "./bench-compare.ts";
 import type { MetricResult, MetricSample } from "./bench-compare.ts";
 import {
 	PerformanceProcessInterruptedError,
@@ -446,6 +450,8 @@ async function quickOutcome(
 				cwd: REPOSITORY_ROOT,
 				environment: cleanTestEnvironment(),
 				timeoutMs: budget * 1_000 + 5_000,
+				onStdout: (chunk) => process.stdout.write(chunk),
+				onStderr: (chunk) => process.stderr.write(chunk),
 			},
 		);
 		const reportPath = path.join(output, "report.json");
@@ -547,10 +553,20 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 	mkdirSync(path.join(options.output, "families"), { recursive: true });
 	const startedAt = performance.now();
 	const deadline = startedAt + options.budgetSeconds * 1_000;
+	const candidateIdentity = performanceSourceIdentity(REPOSITORY_ROOT);
+	const baselineCommit = git(["rev-parse", `${options.baseline}^{commit}`]);
+	const assertCandidateIdentity = () => {
+		if (performanceSourceIdentity(REPOSITORY_ROOT).digest !== candidateIdentity.digest) {
+			throw new Error(
+				"working source changed during the portfolio; results cannot be combined",
+			);
+		}
+	};
 	const outcomes: Array<PortfolioOutcome> = [];
+	let activeFamily: PortfolioFamilyId | undefined;
 	const persist = (status: string) => {
 		writeJson(path.join(options.output, "report.json"), {
-			schema: 1,
+			schema: 2,
 			status,
 			complete:
 				selected.length === config.families.length &&
@@ -560,9 +576,11 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 			configuration: config,
 			selection: selected.map(({ id }) => id),
 			baseline: options.baseline,
+			identity: { baselineCommit, candidate: candidateIdentity },
 			pairs: options.pairs,
 			budgetSeconds: options.budgetSeconds,
 			elapsedMs: performance.now() - startedAt,
+			activeFamily,
 			outcomes,
 			decision: classifyPortfolio(config, outcomes),
 		});
@@ -573,32 +591,29 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 		const quick = selected.filter((family) => family.runner === "quick");
 		if (quick.length > 0) {
 			baselineDirectory = path.join(options.output, "baseline");
-			materializePortfolioBaseline(options.baseline, options.output);
+			materializePortfolioBaseline(baselineCommit, options.output);
 		}
-		if (quick.length > 0) {
-			if (baselineDirectory === undefined) throw new Error("missing portfolio baseline");
-			const quickBaseline = baselineDirectory;
-			for (const family of quick) {
-				if (performance.now() >= deadline) {
-					outcomes.push({
-						id: family.id,
-						status: "incomplete",
-						error: "budget exhausted",
-					});
-				} else {
-					outcomes.push(await quickOutcome(family, options, quickBaseline, deadline));
-				}
-				persist("running");
-			}
-		}
-		const benchmark = selected.filter((family) => family.runner === "benchmark");
-		for (const family of benchmark) {
+		for (const family of selected) {
+			assertCandidateIdentity();
+			activeFamily = family.id;
+			persist("running");
+			console.log(
+				`[portfolio] ${family.id} start; budget ${Math.min(
+					family.budgetSeconds,
+					remainingSeconds(deadline),
+				)}s`,
+			);
+			let outcome: PortfolioOutcome;
 			if (performance.now() >= deadline) {
-				outcomes.push({
+				outcome = {
 					id: family.id,
 					status: "incomplete",
 					error: "budget exhausted",
-				});
+				};
+			} else if (family.runner === "quick") {
+				if (baselineDirectory === undefined)
+					throw new Error("missing portfolio baseline");
+				outcome = await quickOutcome(family, options, baselineDirectory, deadline);
 			} else {
 				if (family.id === "self-compile") {
 					throw new Error("self-compile portfolio family must use the quick runner");
@@ -608,7 +623,7 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 						? ["--mode", "closed-compiled"]
 						: ["--http-seconds", "1"];
 				const comparison = await runBenchmarkComparison({
-					baseRef: options.baseline,
+					baseRef: baselineCommit,
 					lanes: [family.id],
 					pairs: options.pairs,
 					maxPairs: options.pairs,
@@ -620,7 +635,7 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 				const primary = comparison.metrics.find(
 					(metric) => metric.path === family.primaryMetric,
 				);
-				outcomes.push({
+				outcome = {
 					id: family.id,
 					status: completed && primary !== undefined ? "complete" : "incomplete",
 					evidence: comparison.reportPath,
@@ -629,10 +644,15 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 						metric.path.startsWith(`${family.id}.`),
 					),
 					...(completed ? {} : { error: "benchmark comparison incomplete" }),
-				});
+				};
 			}
+			outcomes.push(outcome);
+			assertCandidateIdentity();
+			activeFamily = undefined;
+			console.log(`[portfolio] ${family.id} ${outcome.status}`);
 			persist("running");
 		}
+		assertCandidateIdentity();
 	} catch (error) {
 		persist("incomplete");
 		throw error;

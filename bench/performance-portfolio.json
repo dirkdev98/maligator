@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"version": "2026-09-18.2",
+	"version": "2026-09-18.3",
 	"decisionThresholdPercent": 2,
 	"minimumAcceptancePairs": 2,
 	"families": [

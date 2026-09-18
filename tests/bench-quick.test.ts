@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -12,7 +13,9 @@ import * as path from "node:path";
 import { expect, it, onTestFinished } from "vitest";
 
 const script = path.resolve("scripts/bench-quick.ts");
-function fixture(failure: "none" | "output" | "timeout" = "none") {
+function fixture(
+	failure: "none" | "output" | "self-compile-output" | "timeout" = "none",
+) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-bench-quick-"));
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 	const checkout = (label: string) => {
@@ -21,6 +24,34 @@ function fixture(failure: "none" | "output" | "timeout" = "none") {
 			"package.json": '{"type":"module"}',
 			"package-lock.json": '{"lockfileVersion":3}',
 			".gitignore": "node_modules/\n.cache/\n",
+			"bench/self-compile.mts": `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
+const output = process.argv[3];
+mkdirSync(output, { recursive: true });
+writeFileSync(path.join(output, 'self-compile-output.c'), ${JSON.stringify(`${label} node output`)});
+`,
+			"src/index.ts": `
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
+const artifact = process.argv[process.argv.indexOf('--artifact') + 1];
+const name = 'self-compile-fixture';
+const binary = path.join(artifact, 'bin', name);
+mkdirSync(path.dirname(binary), { recursive: true });
+writeFileSync(binary, ${JSON.stringify(`#!/usr/bin/env node
+import { mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
+const output = process.argv[3];
+mkdirSync(output, { recursive: true });
+writeFileSync(path.join(output, 'self-compile-output.c'), ${JSON.stringify(
+				failure === "self-compile-output" && label === "candidate"
+					? "deterministic native miscompile"
+					: `${label} node output`,
+			)});
+`)});
+chmodSync(binary, 0o755);
+writeFileSync(path.join(artifact, 'artifact.json'), JSON.stringify({ name, production: true }));
+`,
 			"src/build-config.ts": "export const resolveBuildConfig = (config) => config;",
 			"src/compiler/frontend/compact-type-strip.ts":
 				"export const stripCompactTypes = (source) => source;",
@@ -59,6 +90,13 @@ export function compileEntrypoint(input) {
 	};
 	const baseline = checkout("baseline");
 	const candidate = checkout("candidate");
+	const tools = path.join(root, "tools");
+	mkdirSync(tools);
+	for (const tool of ["cc", "rustc"]) {
+		const executable = path.join(tools, tool);
+		writeFileSync(executable, `#!/bin/sh\necho ${tool} fixture\n`);
+		chmodSync(executable, 0o755);
+	}
 	const output = path.join(root, "result");
 	const run = (...extra: Array<string>) =>
 		spawnSync(
@@ -75,7 +113,15 @@ export function compileEntrypoint(input) {
 				"2",
 				...extra,
 			],
-			{ encoding: "utf8", timeout: 20_000 },
+			{
+				encoding: "utf8",
+				timeout: 20_000,
+				env: {
+					...process.env,
+					CC: "cc",
+					PATH: `${tools}${path.delimiter}${process.env.PATH}`,
+				},
+			},
 		);
 	const report = () =>
 		JSON.parse(readFileSync(path.join(output, "report.json"), "utf8")) as {
@@ -107,12 +153,45 @@ it("plans one prepared self-hosted compiler pair loop without diagnostic repetit
 		workload: "self-compile",
 		work: [
 			"freeze the baseline compiler graph and build two self-hosted compilers once",
-			"output oracle",
+			"revision-specific Node output oracles",
 			"one warmup per revision",
 			"2 alternating pairs with output validation",
 		],
 	});
 	expect(existsSync(test.output)).toBe(false);
+});
+
+it("rejects a deterministic native self-compile miscompile against its revision's Node oracle", () => {
+	const test = fixture("self-compile-output");
+	const result = test.run(
+		"--workload",
+		"self-compile",
+		"--pairs",
+		"1",
+		"--budget-seconds",
+		"20",
+	);
+	expect(result.status, result.stderr).toBe(2);
+	expect(test.report()).toMatchObject({
+		status: "failed",
+		complete: false,
+		pairs: [],
+	});
+	expect(test.report().error).toContain(
+		"warm-candidate output differs from the candidate frozen reference",
+	);
+	expect(
+		readFileSync(
+			path.join(test.output, "node-oracle-candidate/output/self-compile-output.c"),
+			"utf8",
+		),
+	).toBe("candidate node output");
+	expect(
+		readFileSync(
+			path.join(test.output, "warm-candidate/output/self-compile-output.c"),
+			"utf8",
+		),
+	).toBe("deterministic native miscompile");
 });
 
 it("compares both compiler revisions on frozen baseline input, preserving alternating pairs and peak RSS", () => {

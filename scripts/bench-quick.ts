@@ -21,6 +21,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { createCacheLease } from "../src/cache-management.ts";
 import { prepareSelfCompileSource } from "./self-compile-workload.ts";
+import { cleanTestEnvironment } from "./test-environment.ts";
 
 type Workload = "compiler-app" | "app-batch" | "self-compile";
 type Revision = "baseline" | "candidate";
@@ -80,12 +81,14 @@ compiler-app compiles one frozen Express application graph to C using each Node-
 compiler directly. app-batch builds production binaries once, then runs a fixed dataset
 through parsing, validation, grouping, sorting, and serialization. self-compile builds
 each revision's production self-hosted compiler once, then compiles the same frozen
-baseline compiler graph. All workloads use one warmup per revision. app-batch requires
-both revisions to match the Node reference; compiler output may change between revisions
-but must remain deterministic within each revision. Fresh processes are timed end to end;
-warmups warm caches, not a persistent JavaScript process. No cold-start, calibration,
-profiling, diagnostic instrumentation, or adaptive extra pairs run.
-Exit 2 means failed or incomplete. Completed quick runs are screening evidence only.
+baseline compiler graph. All workloads use one warmup per revision. app-batch matches
+one Node reference; self-compile matches each native compiler to its revision's Node-hosted
+output. Compiler output may change between revisions, while compiler-app must remain
+deterministic within each revision. Fresh processes are timed end to end; warmups warm
+caches, not a persistent JavaScript process. No cold-start, calibration, profiling,
+diagnostic instrumentation, or adaptive extra pairs run.
+Exit 2 means failed or incomplete. Standalone runs provide family evidence; only the
+complete configured portfolio makes an acceptance decision.
 `;
 
 function options(args: Array<string>): Options | undefined {
@@ -306,7 +309,9 @@ async function run(value: Options): Promise<void> {
 				"fresh processes after one warmup per revision; native cache hits remain visible in build logs",
 			evidence: value.prepareOnly
 				? "preparation only; no performance samples"
-				: "screening only; no performance acceptance or baseline update",
+				: value.pairs < 2
+					? "single-pair screening only; no baseline update"
+					: "family evidence; portfolio completion is required for acceptance",
 			summary:
 				pairs.length === 0
 					? null
@@ -357,7 +362,12 @@ async function run(value: Options): Promise<void> {
 					timed
 						? [process.platform === "darwin" ? "-lp" : "-v", executable, ...args]
 						: args,
-					{ cwd, stdio: ["ignore", out, err], detached: true },
+					{
+						cwd,
+						env: cleanTestEnvironment(),
+						stdio: ["ignore", out, err],
+						detached: true,
+					},
 				);
 				const kill = () => {
 					if (child.pid !== undefined) {
@@ -563,11 +573,26 @@ async function run(value: Options): Promise<void> {
 						: digest(JSON.stringify(files(output))),
 			};
 		};
+		const nodeSelfCompileOracle = async (revision: Revision): Promise<string> => {
+			const label = `node-oracle-${revision}`;
+			const output = path.join(value.output, label, "output");
+			await execute(
+				label,
+				process.execPath,
+				[path.join(value[revision], "bench/self-compile.mts"), target, output],
+				value[revision],
+			);
+			return digest(JSON.stringify(files(output)));
+		};
 		await inPhase("oracle", async () => {
 			if (oracle !== undefined) return;
-			if (value.workload !== "app-batch")
+			if (value.workload === "self-compile") {
+				revisionOracles.baseline = await nodeSelfCompileOracle("baseline");
+				revisionOracles.candidate = await nodeSelfCompileOracle("candidate");
+				oracle = digest(JSON.stringify(revisionOracles));
+			} else if (value.workload === "compiler-app") {
 				oracle = (await sample("oracle", "baseline")).digest;
-			else {
+			} else {
 				const reference = await execute(
 					"oracle",
 					process.execPath,
@@ -591,8 +616,11 @@ async function run(value: Options): Promise<void> {
 				oracle = digest(readFileSync(reference.stdout));
 			}
 		});
-		revisionOracles.baseline = oracle!;
-		if (value.workload === "app-batch") revisionOracles.candidate = oracle!;
+		if (value.workload === "compiler-app") revisionOracles.baseline = oracle!;
+		else if (value.workload === "app-batch") {
+			revisionOracles.baseline = oracle!;
+			revisionOracles.candidate = oracle!;
+		}
 		if (value.workload === "app-batch" && value.prepared === undefined) {
 			prepared = {
 				schema: 1,
@@ -623,7 +651,7 @@ async function run(value: Options): Promise<void> {
 		if (!value.prepareOnly) {
 			await inPhase("warmup", async () => {
 				await checked("warm-baseline", "baseline");
-				await checked("warm-candidate", "candidate", value.workload !== "app-batch");
+				await checked("warm-candidate", "candidate", value.workload === "compiler-app");
 			});
 			await inPhase("measurement", async () => {
 				for (let index = 0; index < value.pairs; index++) {
@@ -677,7 +705,9 @@ if (import.meta.main) {
 										? "freeze dataset and build two production binaries once"
 										: "freeze the baseline compiler graph and build two self-hosted compilers once"
 								: "verify matching prepared artifacts",
-							"output oracle",
+							value.workload === "self-compile"
+								? "revision-specific Node output oracles"
+								: "output oracle",
 							...(value.prepareOnly
 								? []
 								: [
@@ -685,7 +715,10 @@ if (import.meta.main) {
 										`${value.pairs} alternating pairs with output validation`,
 									]),
 						],
-						evidence: "screening only",
+						evidence:
+							value.pairs < 2
+								? "single-pair screening only"
+								: "family evidence; portfolio completion required",
 						budgetIncludesPreparation: true,
 					},
 					null,

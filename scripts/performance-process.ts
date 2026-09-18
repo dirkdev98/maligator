@@ -41,6 +41,8 @@ export function runBoundedProcess(
 		readonly environment: NodeJS.ProcessEnv;
 		readonly timeoutMs: number;
 		readonly cwd?: string;
+		readonly onStdout?: (chunk: string) => void;
+		readonly onStderr?: (chunk: string) => void;
 	},
 ): Promise<BoundedProcessResult> {
 	return new Promise((resolve, reject) => {
@@ -81,8 +83,14 @@ export function runBoundedProcess(
 		timeout.unref();
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
-		child.stdout?.on("data", (chunk: string) => (stdout += chunk));
-		child.stderr?.on("data", (chunk: string) => (stderr += chunk));
+		child.stdout?.on("data", (chunk: string) => {
+			stdout += chunk;
+			options.onStdout?.(chunk);
+		});
+		child.stderr?.on("data", (chunk: string) => {
+			stderr += chunk;
+			options.onStderr?.(chunk);
+		});
 		child.once("error", (error) => {
 			if (settled) return;
 			settled = true;

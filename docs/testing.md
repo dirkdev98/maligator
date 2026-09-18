@@ -103,10 +103,11 @@ Families run independently under their declared budgets. JavaScript uses the
 production closed-compiled mode and HTTP uses one-second scenarios. Self-compile
 builds each exact revision's production compiler once, then runs the requested
 interleaved pairs over one frozen baseline source graph and requires each revision's
-output to remain deterministic.
-Cold-start, instrumentation, owner, resource, alternate-mode, and longer HTTP samples
-remain in the specialized benchmark commands; they are diagnostics rather than work
-silently repeated inside every portfolio sample.
+native output to match its Node-hosted output. Self-compile cold-start,
+instrumentation, owner, and resource samples remain in the specialized command and
+are not repeated inside portfolio samples. JavaScript and HTTP still use their full
+benchmark snapshots, including their resource probes; their family budgets include
+that work. Alternate modes and longer HTTP samples remain specialized diagnostics.
 The specialized benchmark commands remain available for their owning diagnostics;
 the performance entrypoint supersedes them as the normal experiment and acceptance
 workflow. None of these commands updates `bench/baseline.json`.

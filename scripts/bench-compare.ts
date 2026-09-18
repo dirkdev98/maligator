@@ -342,7 +342,10 @@ interface ComparisonIdentity {
 	toolchainEnvironment: Record<string, string>;
 }
 
-function sourceIdentity(repository: string): { commit: string; digest: string } {
+export function performanceSourceIdentity(repository: string): {
+	commit: string;
+	digest: string;
+} {
 	const commit = command("git", ["rev-parse", "HEAD"], { cwd: repository }).trim();
 	const digest = createHash("sha256").update(commit);
 	digest.update(command("git", ["diff", "--binary", "HEAD"], { cwd: repository }));
@@ -556,7 +559,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			? Infinity
 			: started + options.budgetSeconds * 1000;
 	const repository = path.resolve(options.repository ?? process.cwd());
-	const head = sourceIdentity(repository);
+	const head = performanceSourceIdentity(repository);
 	const identity: ComparisonIdentity = {
 		baseCommit: command("git", ["rev-parse", options.baseRef], {
 			cwd: repository,
@@ -649,7 +652,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		});
 	};
 	const assertSource = () => {
-		if (sourceIdentity(repository).digest !== head.digest) {
+		if (performanceSourceIdentity(repository).digest !== head.digest) {
 			resumeAllowed = false;
 			throw new Error(
 				"working source changed during comparison; results cannot be combined",
