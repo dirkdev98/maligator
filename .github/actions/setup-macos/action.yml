@@ -25,13 +25,30 @@ runs:
       shell: bash
       run: |
         xcode-select --print-path
+        rustup_home="$RUNNER_TEMP/rustup-home"
+        cargo_home="$RUNNER_TEMP/cargo-home"
+        rustup_init="$RUNNER_TEMP/rustup-init"
+        # The hosted ARM image's Homebrew Rustup can install unusable proxies: https://github.com/actions/runner-images/issues/14097
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          https://static.rust-lang.org/rustup/archive/1.29.0/aarch64-apple-darwin/rustup-init \
+          --output "$rustup_init"
+        echo "aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1  $rustup_init" | shasum -a 256 --check
+        chmod +x "$rustup_init"
+        RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
+          "$rustup_init" -y --no-modify-path --default-toolchain none
+        rustup="$cargo_home/bin/rustup"
         toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' runtime/rust/rust-toolchain.toml)"
         test -n "$toolchain"
-        rustup toolchain install "$toolchain" --profile minimal --no-self-update
+        RUSTUP_HOME="$rustup_home" "$rustup" toolchain install "$toolchain" --profile minimal --no-self-update
+        export RUSTUP_HOME="$rustup_home"
         export RUSTUP_TOOLCHAIN="$toolchain"
-        rustup which cargo
-        rustup which rustc
+        "$rustup" which cargo
+        "$rustup" which rustc
+        "$("$rustup" which cargo)" --version
+        "$("$rustup" which rustc)" --version
+        echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
         echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+        echo "$cargo_home/bin" >> "$GITHUB_PATH"
 
     - name: Configure the bounded Maligator cache
       shell: bash
