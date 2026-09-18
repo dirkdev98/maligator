@@ -690,6 +690,13 @@ static bool dns_next_terminal(
         task->kind == MAL_HOST_TASK_TERMINAL && task->operation == operation;
 }
 
+static bool host_drain_reactor_and_is_idle(MalHost *host) {
+    while (mal_reactor_has_pending(&host->reactor)) {
+        mal_reactor_wait(&host->reactor);
+    }
+    return !mal_host_has_pending_work(host);
+}
+
 static bool dns_numeric_literals_bypass_workers(void) {
     MalHost *host = g_cross_thread_host;
     MalHostHandle ipv4 = 0;
@@ -740,7 +747,7 @@ static bool dns_localhost_owned_addresses(void) {
     if (task._node != nullptr) {
         mal_host_task_release(&host->tasks, &task);
     }
-    return ok && (ipv4 || ipv6) && !mal_host_has_pending_work(host);
+    return ok && (ipv4 || ipv6) && host_drain_reactor_and_is_idle(host);
 }
 
 typedef struct DnsResolverGate {
@@ -870,10 +877,7 @@ static void dns_test_host_free(DnsTestHost *context) {
 
 static bool dns_test_host_stop_and_is_idle(DnsTestHost *context) {
     mal_dns_shutdown(&context->host->dns);
-    while (mal_reactor_has_pending(&context->host->reactor)) {
-        mal_reactor_wait(&context->host->reactor);
-    }
-    return !mal_host_has_pending_work(context->host);
+    return host_drain_reactor_and_is_idle(context->host);
 }
 
 typedef struct DnsPostGate {
