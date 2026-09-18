@@ -72,7 +72,15 @@ import {
 	corePrivatePackedRestArrayElementPlans,
 	coreUnsignedArithmeticPlans,
 } from "./core-native-numeric-analysis.ts";
+import type {
+	CoreBuiltinInputPlan,
+	CoreOperatorInputPlan,
+	CorePrivateNumericArrayElementPlan,
+	CorePrivatePackedRestArrayElementPlan,
+	CoreUnsignedArithmeticPlan,
+} from "./core-native-numeric-analysis.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
+import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
@@ -113,20 +121,18 @@ export interface CoreLocalCandidateSummary {
 
 export interface CoreLocalOptimizationPlanInput {
 	readonly function: CoreFunctionId;
+	readonly context: CoreCompilationContext | undefined;
 	readonly scanned: boolean;
 	readonly candidateSummaries: ReadonlyArray<CoreLocalCandidateSummary>;
 	readonly pending: ReadonlyArray<CorePendingOptimizationCandidate>;
+	readonly operatorInputs: ReadonlyArray<CoreOperatorInputPlan>;
+	readonly builtinInputs: ReadonlyArray<CoreBuiltinInputPlan>;
+	readonly privateNumericArrayElements: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
+	readonly privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>;
+	readonly unsignedArithmetic: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly blocks: ReadonlyArray<CoreBlockId>;
 	readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
-	readonly versions: Pick<
-		CoreFunctionVersions,
-		| "body"
-		| "cfg"
-		| "exceptionFlow"
-		| "memoryEffects"
-		| "representations"
-		| "specializationInputs"
-	>;
+	readonly versions: CoreFunctionVersions;
 	readonly dataVersion: number;
 }
 
@@ -1046,23 +1052,32 @@ export function buildCoreLocalOptimizationPlanInput(
 	const versions = fn.versions;
 	return Object.freeze({
 		function: functionId,
+		context,
 		scanned,
 		candidateSummaries: Object.freeze(
 			candidates.map(({ kind, fanOut }) => Object.freeze({ kind, fanOut })),
 		),
 		pending: Object.freeze(pending),
+		operatorInputs: coreOperatorInputPlans(program, analyses, [functionId]),
+		builtinInputs: coreBuiltinInputPlans(program, analyses, [functionId]),
+		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
+			program,
+			analyses,
+			[functionId],
+			context,
+		),
+		privatePackedRestArrayElements: corePrivatePackedRestArrayElementPlans(
+			program,
+			analyses,
+			[functionId],
+			context,
+		),
+		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, [functionId]),
 		blocks,
 		omittedBlocks: Object.freeze(
 			[...fn.blockIds()].filter((block) => !included.has(block)),
 		),
-		versions: Object.freeze({
-			body: versions.body,
-			cfg: versions.cfg,
-			exceptionFlow: versions.exceptionFlow,
-			memoryEffects: versions.memoryEffects,
-			representations: versions.representations,
-			specializationInputs: versions.specializationInputs,
-		}),
+		versions: Object.freeze(versions),
 		dataVersion: program.programVersion("data"),
 	});
 }
@@ -1070,16 +1085,12 @@ export function buildCoreLocalOptimizationPlanInput(
 function localOptimizationPlanInputIsCurrent(
 	program: CoreProgram,
 	input: CoreLocalOptimizationPlanInput,
+	context: CoreCompilationContext | undefined,
 ): boolean {
-	const versions = program.function(input.function).versions;
 	return (
+		input.context === context &&
 		program.programVersion("data") === input.dataVersion &&
-		versions.body === input.versions.body &&
-		versions.cfg === input.versions.cfg &&
-		versions.exceptionFlow === input.versions.exceptionFlow &&
-		versions.memoryEffects === input.versions.memoryEffects &&
-		versions.representations === input.versions.representations &&
-		versions.specializationInputs === input.versions.specializationInputs
+		coreFunctionVersionsAreCurrent(program.function(input.function), input.versions)
 	);
 }
 
@@ -1092,15 +1103,15 @@ function guardedCallCandidates(
 	const candidates: Array<CorePendingOptimizationCandidate> = [];
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
+		const targetSites = summaries.targets.outgoing(caller);
+		if (targetSites.length === 0) continue;
 		const reachable = analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 				scope: "function",
 				function: caller,
 			})
 			.exceptional().reachable;
-		const outgoing = summaries.targets
-			.outgoing(caller)
-			.filter(
+		const outgoing = targetSites.filter(
 				(site) =>
 					fn.isInstructionLive(site.instruction) &&
 					reachable.has(fn.instructionBlock(site.instruction)),
@@ -1231,6 +1242,8 @@ function directEntryCandidates(
 	}
 	for (const caller of [...live].sort((left, right) => left - right)) {
 		const fn = program.function(caller);
+		const outgoing = summaries.targets.outgoing(caller);
+		if (outgoing.length === 0) continue;
 		const reachable = analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 				scope: "function",
@@ -1248,7 +1261,7 @@ function directEntryCandidates(
 				? undefined
 				: String.fromCharCode(...units);
 		};
-		for (const site of summaries.targets.outgoing(caller)) {
+		for (const site of outgoing) {
 			if (
 				!fn.isInstructionLive(site.instruction) ||
 				!reachable.has(fn.instructionBlock(site.instruction)) ||
@@ -1625,7 +1638,8 @@ export function buildCoreOptimizationPlan(
 	for (const functionId of liveFunctions) {
 		const prepared = localInputs.get(functionId);
 		const input =
-			prepared !== undefined && localOptimizationPlanInputIsCurrent(program, prepared)
+			prepared !== undefined &&
+			localOptimizationPlanInputIsCurrent(program, prepared, options.context)
 				? prepared
 				: buildCoreLocalOptimizationPlanInput(
 						program,
@@ -1812,21 +1826,21 @@ export function buildCoreOptimizationPlan(
 				directEntries,
 			),
 		),
-		operatorInputs: coreOperatorInputPlans(program, analyses, liveFunctions),
-		builtinInputs: coreBuiltinInputPlans(program, analyses, liveFunctions),
-		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
-			program,
-			analyses,
-			liveFunctions,
-			options.context,
+		operatorInputs: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.operatorInputs),
 		),
-		privatePackedRestArrayElements: corePrivatePackedRestArrayElementPlans(
-			program,
-			analyses,
-			liveFunctions,
-			options.context,
+		builtinInputs: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.builtinInputs),
 		),
-		unsignedArithmetic: coreUnsignedArithmeticPlans(program, analyses, liveFunctions),
+		privateNumericArrayElements: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.privateNumericArrayElements),
+		),
+		privatePackedRestArrayElements: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.privatePackedRestArrayElements),
+		),
+		unsignedArithmetic: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.unsignedArithmetic),
+		),
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,
 	});

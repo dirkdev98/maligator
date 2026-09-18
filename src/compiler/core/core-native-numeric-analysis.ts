@@ -115,8 +115,9 @@ export function corePrivateNumericArrayElementPlans(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	functions: ReadonlyArray<CoreFunctionId>,
-	context: CoreCompilationContext,
+	context: CoreCompilationContext | undefined,
 ): ReadonlyArray<CorePrivateNumericArrayElementPlan> {
+	if (context === undefined) return Object.freeze([]);
 	const plans: Array<CorePrivateNumericArrayElementPlan> = [];
 	for (const functionId of functions) {
 		const fn = program.function(functionId);
@@ -139,8 +140,9 @@ export function corePrivatePackedRestArrayElementPlans(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	functions: ReadonlyArray<CoreFunctionId>,
-	context: CoreCompilationContext,
+	context: CoreCompilationContext | undefined,
 ): ReadonlyArray<CorePrivatePackedRestArrayElementPlan> {
+	if (context === undefined) return Object.freeze([]);
 	const plans: Array<CorePrivatePackedRestArrayElementPlan> = [];
 	for (const functionId of functions) {
 		const fn = program.function(functionId);

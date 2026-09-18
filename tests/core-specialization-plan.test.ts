@@ -556,7 +556,7 @@ describe("late Core specialization plan", () => {
 		expect(candidates).toBeGreaterThan(0);
 	});
 
-	it("reuses current local planning inputs and rebuilds stale ones", () => {
+	it("reuses current local planning inputs only in their compilation context", () => {
 		const { program, function: functionId } = numericProgram();
 		const prepared = planning(program, [functionId]);
 		const input = buildCoreLocalOptimizationPlanInput(
@@ -577,6 +577,19 @@ describe("late Core specialization plan", () => {
 
 		expect(current).toEqual(prepared.plan);
 		expect(currentReport.finish(program, current).analyses).toEqual([]);
+
+		const differentContext = programAnalysisContext();
+		const differentContextReport = new CoreOptimizationReportBuilder(program, "full");
+		const replanned = buildCoreOptimizationPlan(
+			program,
+			new CoreAnalysisManager(program, differentContext, differentContextReport),
+			prepared.summaries,
+			[functionId],
+			{ context: differentContext, localInputs: [input] },
+		);
+		expect(
+			differentContextReport.finish(program, replanned).analyses.length,
+		).toBeGreaterThan(0);
 
 		const editor = CoreEditor.open(program, functionId);
 		const unreachable = editor.createBlock();
