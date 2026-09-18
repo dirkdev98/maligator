@@ -483,14 +483,6 @@ entropy, cancellation, and reactor completions.
 
 ## Active host work
 
-- [ ] Resolve the intermittent GC-stressed `reactortest` mocked DNS system-error/
-      metadata assertion. Retain the original failure and distinguish a test
-      quiescence error from a worker completion/work-release lifecycle defect using
-      controlled scheduling and explicit ownership observations. The suspected
-      handoff race is unconfirmed; successful repeated runs do not close it. Add
-      deterministic regression coverage without retries, sleeps, or disabled checks
-      as the correctness fix.
-
 - [ ] Finish H1 with Happy Eyeballs racing, bounded teardown for resolvers stuck in
       getaddrinfo, a public one-turn pump, embedder access to the wake source, and
       runtime-owned timer state.

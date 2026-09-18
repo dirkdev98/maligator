@@ -246,24 +246,22 @@ static void *mal_dns_worker(void *data) {
                 : MAL_HOST_TERMINAL_ERROR;
         }
 
-        pthread_mutex_lock(&state->mutex);
-        request->completed = true;
-        request->result = nullptr;
-        if (cancelled) {
-            mal_dns_remove_request(state, request);
-        }
-        pthread_mutex_unlock(&state->mutex);
-
         bool posted = !cancelled && mal_host_post_complete(
             state->host, operation, terminal, result, mal_dns_result_destroy);
         if (!posted) {
             mal_dns_result_release(result);
-            if (!cancelled) {
-                pthread_mutex_lock(&state->mutex);
-                mal_dns_remove_request(state, request);
-                pthread_mutex_unlock(&state->mutex);
-            }
         }
+
+        pthread_mutex_lock(&state->mutex);
+        request->result = nullptr;
+        if (posted) {
+            // The reaper may take a completed request as soon as the operation stops being active.
+            request->completed = true;
+        } else {
+            mal_dns_remove_request(state, request);
+        }
+        pthread_mutex_unlock(&state->mutex);
+
         (void) mal_reactor_release_work(&state->host->reactor);
         if (!posted) {
             free(request);

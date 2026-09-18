@@ -868,6 +868,59 @@ static void dns_test_host_free(DnsTestHost *context) {
     mal_host_free(context->host);
 }
 
+static bool dns_test_host_stop_and_is_idle(DnsTestHost *context) {
+    mal_dns_shutdown(&context->host->dns);
+    while (mal_reactor_has_pending(&context->host->reactor)) {
+        mal_reactor_wait(&context->host->reactor);
+    }
+    return !mal_host_has_pending_work(context->host);
+}
+
+typedef struct DnsPostGate {
+    pthread_mutex_t mutex;
+    pthread_cond_t ready;
+    bool entered;
+    bool released;
+} DnsPostGate;
+
+static void dns_post_gate_init(DnsPostGate *gate) {
+    memset(gate, 0, sizeof(*gate));
+    pthread_mutex_init(&gate->mutex, nullptr);
+    pthread_cond_init(&gate->ready, nullptr);
+}
+
+static void dns_post_gate_free(DnsPostGate *gate) {
+    pthread_cond_destroy(&gate->ready);
+    pthread_mutex_destroy(&gate->mutex);
+}
+
+static bool dns_post_gate_reject(void *data) {
+    DnsPostGate *gate = data;
+    pthread_mutex_lock(&gate->mutex);
+    gate->entered = true;
+    pthread_cond_broadcast(&gate->ready);
+    while (!gate->released) {
+        pthread_cond_wait(&gate->ready, &gate->mutex);
+    }
+    pthread_mutex_unlock(&gate->mutex);
+    return false;
+}
+
+static void dns_post_gate_wait_entered(DnsPostGate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    while (!gate->entered) {
+        pthread_cond_wait(&gate->ready, &gate->mutex);
+    }
+    pthread_mutex_unlock(&gate->mutex);
+}
+
+static void dns_post_gate_release(DnsPostGate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    gate->released = true;
+    pthread_cond_broadcast(&gate->ready);
+    pthread_mutex_unlock(&gate->mutex);
+}
+
 static bool dns_nxdomain_is_structured(void) {
     DnsResolverGate gate;
     DnsTestHost context = {0};
@@ -891,7 +944,7 @@ static bool dns_nxdomain_is_structured(void) {
         mal_host_task_release(&context.host->tasks, &task);
     }
     ok = ok && gate.calls == 1 && gate.releases == 0 && gate.valid_hints &&
-        !mal_host_has_pending_work(context.host);
+        dns_test_host_stop_and_is_idle(&context);
     dns_test_host_free(&context);
     dns_gate_free(&gate);
     return ok;
@@ -1030,9 +1083,48 @@ static bool dns_system_error_is_structured(void) {
         mal_host_task_release(&context.host->tasks, &task);
     }
     ok = ok && gate.calls == 1 && gate.releases == 0 &&
-        !mal_host_has_pending_work(context.host);
+        dns_test_host_stop_and_is_idle(&context);
     dns_test_host_free(&context);
     dns_gate_free(&gate);
+    return ok;
+}
+
+static bool dns_post_failure_preserves_request_ownership(void) {
+    DnsResolverGate resolver_gate;
+    DnsPostGate post_gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&resolver_gate, false);
+    dns_post_gate_init(&post_gate);
+    bool ok = dns_test_host_init(&context, &resolver_gate);
+    if (ok) {
+        mal_host_posted_tasks_free(&context.host->posted_tasks);
+        ok = mal_host_posted_tasks_init(
+            &context.host->posted_tasks, dns_post_gate_reject, &post_gate);
+    }
+
+    MalHostHandle operation = 0;
+    ok = ok && mal_dns_start(context.host, "nxdomain.test", "443", &operation) ==
+        MAL_DNS_START_OK;
+    if (ok) {
+        dns_post_gate_wait_entered(&post_gate);
+    }
+    ok = ok && mal_dns_cancel(context.host, operation);
+    MalHostTask task = {0};
+    ok = ok && mal_host_next_task(&context.host->tasks, &task) &&
+        task.kind == MAL_HOST_TASK_TERMINAL &&
+        task.result == MAL_HOST_TERMINAL_CANCELLED && task.operation == operation;
+    if (task._node != nullptr) {
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    mal_dns_reap_completed(&context.host->dns);
+    dns_post_gate_release(&post_gate);
+
+    ok = dns_test_host_stop_and_is_idle(&context) && ok;
+    ok = ok && mal_host_posted_pending(&context.host->posted_tasks) == 0 &&
+        resolver_gate.calls == 1 && resolver_gate.releases == 0;
+    dns_test_host_free(&context);
+    dns_post_gate_free(&post_gate);
+    dns_gate_free(&resolver_gate);
     return ok;
 }
 
@@ -1197,6 +1289,7 @@ int main(void) {
         {"DNS bounds its queue, wakes, preserves order, and cancels stale completion", dns_saturation_cancellation_and_wake()},
         {"DNS queued cancellation releases capacity and rejects foreign handles", dns_queued_cancel_releases_capacity()},
         {"DNS preserves resolver system errors and request metadata", dns_system_error_is_structured()},
+        {"DNS rejected posting preserves in-flight request ownership", dns_post_failure_preserves_request_ownership()},
         {"DNS shutdown joins queued/in-flight work and releases retains", dns_shutdown_joins_queued_and_inflight()},
         {"shutdown drains accepted posts, rejects new ownership, and idles", host_post_shutdown_and_idle()},
     };
