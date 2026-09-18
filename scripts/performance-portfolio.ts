@@ -94,7 +94,7 @@ const HELP = `Usage: npm run bench:performance -- portfolio --baseline REF [opti
 Options:
   --family ID              select a family; repeatable (default: complete portfolio)
   --pairs N                alternating baseline/candidate pairs (default: 3)
-  --budget-seconds N       whole portfolio budget (default: 3600)
+  --budget-seconds N       whole portfolio budget (default: 6300)
   --output DIRECTORY       evidence directory
   --plan=json              print fixed weights and planned runners without writing
 `;
@@ -198,7 +198,7 @@ function parseOptions(
 	}
 	let baseline: string | undefined;
 	let pairs = 3;
-	let budgetSeconds = 3600;
+	let budgetSeconds = 6300;
 	let output = path.join(
 		REPOSITORY_ROOT,
 		".cache/performance/portfolio",

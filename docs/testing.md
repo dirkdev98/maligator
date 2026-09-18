@@ -108,6 +108,11 @@ instrumentation, owner, and resource samples remain in the specialized command a
 are not repeated inside portfolio samples. JavaScript and HTTP still use their full
 benchmark snapshots, including their resource probes; their family budgets include
 that work. Alternate modes and longer HTTP samples remain specialized diagnostics.
+Families run in manifest order, so compiler-app, app-batch, JavaScript, and HTTP
+usually provide broad preliminary evidence before the deliberately longer
+self-compile acceptance tail. The default whole-portfolio budget includes three
+warmed self-compile pairs; a smaller explicit budget may retain earlier family
+results but must leave the portfolio incomplete.
 The specialized benchmark commands remain available for their owning diagnostics;
 the performance entrypoint supersedes them as the normal experiment and acceptance
 workflow. None of these commands updates `bench/baseline.json`.
