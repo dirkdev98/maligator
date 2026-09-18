@@ -243,6 +243,19 @@ interface SelfCompileMetrics {
 	};
 }
 
+interface SelfCompileOrdinaryMetrics {
+	readonly profile: "ordinary";
+	readonly world: "closed";
+	readonly maligatorMs: number;
+	readonly units: number;
+	readonly codeUnits: number;
+	readonly digest: string;
+	readonly phases: SelfCompilePhases;
+	readonly platform: string;
+	readonly arch: string;
+	readonly nativeBuild: NativeOutputBuildMetrics;
+}
+
 interface SelfCompileCheckpoint {
 	readonly schema: 2;
 	readonly source: NonNullable<BenchmarkSnapshot["source"]>;
@@ -304,6 +317,7 @@ interface BenchmarkSnapshot {
 	javascript?: JavascriptMetrics;
 	http?: HttpMetrics;
 	selfCompile?: SelfCompileMetrics;
+	selfCompileOrdinary?: SelfCompileOrdinaryMetrics;
 }
 
 function median(values: ReadonlyArray<number>): number {
@@ -343,6 +357,7 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 		"bench/self-compile.mts",
 		"scripts/bench.ts",
 		"scripts/compiler-owner-ledger.ts",
+		"scripts/self-compile-workload.ts",
 		"package-lock.json",
 	];
 	const benchmarkDigest = createHash("sha256");
@@ -980,6 +995,46 @@ function assembleSelfCompileMetrics(input: {
 		countersSample: input.countersSample,
 		ownerSample: input.ownerSample,
 	};
+}
+
+function benchSelfCompileOrdinary(
+	input: string,
+	nativeCacheDirectory?: string,
+): SelfCompileOrdinaryMetrics {
+	const nativeBuild = nativeBuildRecorder();
+	const fixture = path.resolve("bench/self-compile.mts");
+	const binary = buildNativeBinary({
+		fixture,
+		name: "bench-self-compile-ordinary",
+		config: SELF_COMPILE_CONFIG,
+		cacheDirectory: nativeCacheDirectory,
+		onNativeBuildPhase: nativeBuild.observe,
+		measureNativeBuildResources: true,
+		onNativeCommandResource: nativeBuild.observeResource,
+	});
+	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-ordinary-"));
+	try {
+		progress.detail("self-compile ordinary sample");
+		const sample = runSelfCompile(
+			binary,
+			[path.resolve(input)],
+			path.join(root, "output"),
+		);
+		return {
+			profile: "ordinary",
+			world: "closed",
+			maligatorMs: sample.wallMs,
+			units: sample.units,
+			codeUnits: sample.codeUnits,
+			digest: sample.digest,
+			phases: sample.phases,
+			platform: process.platform,
+			arch: process.arch,
+			nativeBuild: nativeBuild.metrics("bench-self-compile-ordinary"),
+		};
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 }
 
 function benchSelfCompile(
@@ -1796,6 +1851,12 @@ function report(
 	if (current.selfCompile !== undefined) {
 		reportSelfCompile(current.selfCompile, previous?.selfCompile);
 	}
+	if (current.selfCompileOrdinary !== undefined) {
+		console.log("self-compile (ordinary frozen-input sample):");
+		console.log(
+			`  Maligator ${(current.selfCompileOrdinary.maligatorMs / 1000).toFixed(1)}s, ${current.selfCompileOrdinary.units} units`,
+		);
+	}
 }
 
 const HELP = `Usage: node scripts/bench.ts [javascript|http|self-compile] [options]
@@ -1824,6 +1885,8 @@ Options:
   --native-cache-dir PATH
                       Isolate native artifacts for build-cost measurements
   --checkpoint PATH   Run one resumable self-compile stage and save its state
+  --self-compile-sample PATH
+                      Measure one ordinary self-hosted compile of a frozen source graph
   --ablate-core-family FAMILY
                       Omit one Core optimization family for output attribution
   --update            Update selected sections in bench/baseline.json
@@ -1844,6 +1907,7 @@ interface Options {
 	jsonOut?: string;
 	nativeCacheDirectory?: string;
 	checkpointPath?: string;
+	selfCompileSample?: string;
 	coreOptimizationAblation?: CoreOptimizationFamily;
 	mode?: JavascriptMode;
 	lanes: Array<string>;
@@ -1910,6 +1974,9 @@ function parseOptions(args: Array<string>): Options | undefined {
 			index++;
 		} else if (arg === "--checkpoint") {
 			options.checkpointPath = path.resolve(requiredValue(args, index, arg));
+			index++;
+		} else if (arg === "--self-compile-sample") {
+			options.selfCompileSample = path.resolve(requiredValue(args, index, arg));
 			index++;
 		} else if (arg === "--ablate-core-family") {
 			const family = requiredValue(args, index, arg);
@@ -1993,6 +2060,27 @@ if (options.checkpointPath !== undefined && options.jsonOut === undefined) {
 if (options.checkpointPath !== undefined && options.compareRef !== undefined) {
 	throw new Error("--checkpoint cannot be combined with --compare");
 }
+if (
+	options.selfCompileSample !== undefined &&
+	(requestedLanes.length !== 1 || requestedLanes[0] !== "self-compile")
+) {
+	throw new Error("--self-compile-sample requires only the self-compile family");
+}
+if (options.selfCompileSample !== undefined && options.checkpointPath !== undefined) {
+	throw new Error("--self-compile-sample cannot be combined with --checkpoint");
+}
+if (options.selfCompileSample !== undefined && options.update) {
+	throw new Error(
+		"an ordinary self-compile sample cannot replace the benchmark baseline",
+	);
+}
+if (
+	options.selfCompileSample !== undefined &&
+	options.compareRef === undefined &&
+	options.jsonOut === undefined
+) {
+	throw new Error("--self-compile-sample requires --json-out or --compare");
+}
 if (options.plan) {
 	const comparison = options.compareRef !== undefined;
 	const snapshotRuns = comparison ? 1 : options.runs;
@@ -2016,10 +2104,13 @@ if (options.plan) {
 				perSnapshot: {
 					runs: snapshotRuns,
 					selfCompileStages: requestedLanes.includes("self-compile")
-						? selfCompileStages(snapshotRuns)
+						? options.selfCompileSample === undefined
+							? selfCompileStages(snapshotRuns)
+							: ["native build", "ordinary frozen-input sample"]
 						: [],
 					selfCompileCheckpointed:
 						comparison &&
+						options.selfCompileSample === undefined &&
 						requestedLanes.length === 1 &&
 						requestedLanes[0] === "self-compile",
 				},
@@ -2056,6 +2147,9 @@ if (options.compareRef !== undefined) {
 				? []
 				: ["--native-cache-dir", options.nativeCacheDirectory]),
 			...(options.mode === undefined ? [] : ["--mode", options.mode]),
+			...(options.selfCompileSample === undefined
+				? []
+				: ["--self-compile-sample", options.selfCompileSample]),
 		],
 		headExtraArgs:
 			options.coreOptimizationAblation === undefined
@@ -2112,6 +2206,13 @@ const implementations: Record<string, () => void | Promise<void>> = {
 		);
 	},
 	"self-compile": () => {
+		if (options.selfCompileSample !== undefined) {
+			entry.selfCompileOrdinary = benchSelfCompileOrdinary(
+				options.selfCompileSample,
+				options.nativeCacheDirectory,
+			);
+			return;
+		}
 		const measured =
 			options.checkpointPath === undefined
 				? benchSelfCompile(options.runs, options.nativeCacheDirectory)

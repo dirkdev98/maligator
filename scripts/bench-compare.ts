@@ -545,6 +545,30 @@ function assertComparableSnapshots(base: unknown, head: unknown): void {
 	}
 }
 
+function assertRevisionSnapshotStable(reference: unknown, actual: unknown): void {
+	type Snapshot = {
+		selfCompileOrdinary?: {
+			profile: string;
+			units: number;
+			codeUnits: number;
+			digest: string;
+		};
+	};
+	const left = (reference as Snapshot).selfCompileOrdinary;
+	const right = (actual as Snapshot).selfCompileOrdinary;
+	if (left === undefined && right === undefined) return;
+	if (
+		left === undefined ||
+		right === undefined ||
+		left.profile !== right.profile ||
+		left.units !== right.units ||
+		left.codeUnits !== right.codeUnits ||
+		left.digest !== right.digest
+	) {
+		throw new Error("self-compile output changed between samples of one revision");
+	}
+}
+
 export async function runBenchmarkComparison(options: ComparisonOptions): Promise<{
 	exitCode: number;
 	reportPath: string;
@@ -627,6 +651,8 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	let pairCount = 0;
 	let activeSnapshot: string | undefined;
 	let resumeAllowed = true;
+	let baseReference: unknown;
+	let headReference: unknown;
 	const persist = (
 		status: "running" | "complete" | "incomplete" | "failed",
 		error?: string,
@@ -671,6 +697,13 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		);
 		assertSource();
 		activeSnapshot = undefined;
+		const reference = isBase ? baseReference : headReference;
+		if (reference === undefined) {
+			if (isBase) baseReference = result;
+			else headReference = result;
+		} else {
+			assertRevisionSnapshotStable(reference, result);
+		}
 		return result;
 	};
 	persist("running");

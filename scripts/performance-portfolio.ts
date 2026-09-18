@@ -18,6 +18,7 @@ import {
 	PerformanceProcessInterruptedError,
 	runBoundedProcess,
 } from "./performance-process.ts";
+import { prepareSelfCompileSource } from "./self-compile-workload.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -90,7 +91,7 @@ const HELP = `Usage: npm run bench:performance -- portfolio --baseline REF [opti
 Options:
   --family ID              select a family; repeatable (default: complete portfolio)
   --pairs N                alternating baseline/candidate pairs (default: 3)
-  --budget-seconds N       whole portfolio budget (default: 1800)
+  --budget-seconds N       whole portfolio budget (default: 3600)
   --output DIRECTORY       evidence directory
   --plan=json              print fixed weights and planned runners without writing
 `;
@@ -194,7 +195,7 @@ function parseOptions(
 	}
 	let baseline: string | undefined;
 	let pairs = 3;
-	let budgetSeconds = 1800;
+	let budgetSeconds = 3600;
 	let output = path.join(
 		REPOSITORY_ROOT,
 		".cache/performance/portfolio",
@@ -506,7 +507,21 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 					families: selected,
 					completePortfolio: selected.length === config.families.length,
 					pairs: options.pairs,
+					maximumPairs: options.pairs,
 					budgetSeconds: options.budgetSeconds,
+					benchmarkScheduling: "independent",
+					benchmarkProfiles: Object.fromEntries(
+						selected
+							.filter(({ runner }) => runner === "benchmark")
+							.map(({ id }) => [
+								id,
+								id === "javascript"
+									? "closed-compiled"
+									: id === "http"
+										? "one-second scenarios"
+										: "ordinary frozen-input sample",
+							]),
+					),
 					writes: false,
 					builds: false,
 				},
@@ -543,11 +558,22 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 	};
 	persist("running");
 	let baselineDirectory: string | undefined;
+	let frozenSelfCompileInput: string | undefined;
 	try {
 		const quick = selected.filter((family) => family.runner === "quick");
-		if (quick.length > 0) {
+		if (quick.length > 0 || selected.some(({ id }) => id === "self-compile")) {
 			baselineDirectory = path.join(options.output, "baseline");
 			materializePortfolioBaseline(options.baseline, options.output);
+			if (selected.some(({ id }) => id === "self-compile")) {
+				frozenSelfCompileInput = prepareSelfCompileSource(
+					path.join(options.output, "frozen-self-compile"),
+					baselineDirectory,
+				);
+			}
+		}
+		if (quick.length > 0) {
+			if (baselineDirectory === undefined) throw new Error("missing portfolio baseline");
+			const quickBaseline = baselineDirectory;
 			for (const family of quick) {
 				if (performance.now() >= deadline) {
 					outcomes.push({
@@ -556,48 +582,53 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 						error: "budget exhausted",
 					});
 				} else {
-					outcomes.push(await quickOutcome(family, options, baselineDirectory, deadline));
+					outcomes.push(await quickOutcome(family, options, quickBaseline, deadline));
 				}
 				persist("running");
 			}
 		}
 		const benchmark = selected.filter((family) => family.runner === "benchmark");
-		if (benchmark.length > 0) {
+		for (const family of benchmark) {
 			if (performance.now() >= deadline) {
-				for (const family of benchmark) {
-					outcomes.push({
-						id: family.id,
-						status: "incomplete",
-						error: "budget exhausted",
-					});
-				}
+				outcomes.push({
+					id: family.id,
+					status: "incomplete",
+					error: "budget exhausted",
+				});
 			} else {
+				const extraArgs =
+					family.id === "javascript"
+						? ["--mode", "closed-compiled"]
+						: family.id === "http"
+							? ["--http-seconds", "1"]
+							: ["--self-compile-sample", frozenSelfCompileInput!];
 				const comparison = await runBenchmarkComparison({
 					baseRef: options.baseline,
-					lanes: benchmark.map(({ id }) => id),
+					lanes: [family.id],
 					pairs: options.pairs,
-					budgetSeconds: remainingSeconds(deadline),
-					outputDirectory: path.join(options.output, "families", "benchmark"),
+					maxPairs: options.pairs,
+					extraArgs,
+					budgetSeconds: Math.min(family.budgetSeconds, remainingSeconds(deadline)),
+					outputDirectory: path.join(options.output, "families", family.id),
 				});
 				const completed = benchmarkComparisonCompleted(comparison.exitCode);
-				for (const family of benchmark) {
-					const primary = comparison.metrics.find(
-						(metric) => metric.path === family.primaryMetric,
-					);
-					outcomes.push({
-						id: family.id,
-						status: completed && primary !== undefined ? "complete" : "incomplete",
-						evidence: comparison.reportPath,
-						...(primary === undefined ? {} : { primary }),
-						metrics: comparison.metrics.filter((metric) =>
-							metric.path.startsWith(
-								family.id === "self-compile" ? "selfCompile." : `${family.id}.`,
-							),
+				const primary = comparison.metrics.find(
+					(metric) => metric.path === family.primaryMetric,
+				);
+				outcomes.push({
+					id: family.id,
+					status: completed && primary !== undefined ? "complete" : "incomplete",
+					evidence: comparison.reportPath,
+					...(primary === undefined ? {} : { primary }),
+					metrics: comparison.metrics.filter((metric) =>
+						metric.path.startsWith(
+							family.id === "self-compile" ? "selfCompileOrdinary." : `${family.id}.`,
 						),
-						...(completed ? {} : { error: "benchmark comparison incomplete" }),
-					});
-				}
+					),
+					...(completed ? {} : { error: "benchmark comparison incomplete" }),
+				});
 			}
+			persist("running");
 		}
 	} catch (error) {
 		persist("incomplete");
@@ -606,6 +637,12 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 		rmSync(path.join(options.output, "baseline.tar"), { force: true });
 		if (baselineDirectory !== undefined) {
 			rmSync(baselineDirectory, { recursive: true, force: true });
+		}
+		if (frozenSelfCompileInput !== undefined) {
+			rmSync(path.dirname(path.dirname(frozenSelfCompileInput)), {
+				recursive: true,
+				force: true,
+			});
 		}
 	}
 	const decision = classifyPortfolio(config, outcomes);

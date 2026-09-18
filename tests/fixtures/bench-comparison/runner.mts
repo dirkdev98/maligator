@@ -8,7 +8,13 @@ const label = path.basename(output, ".json");
 const controlDirectory = JSON.parse(readFileSync("control-path.json", "utf8")) as string;
 const control = JSON.parse(
 	readFileSync(path.join(controlDirectory, "control.json"), "utf8"),
-) as { fail?: string; hang?: string; checksumMismatch?: boolean; mutate?: string };
+) as {
+	fail?: string;
+	hang?: string;
+	checksumMismatch?: boolean;
+	selfCompileDigestMismatch?: string;
+	mutate?: string;
+};
 appendFileSync(path.join(controlDirectory, "calls.jsonl"), `${JSON.stringify(label)}\n`);
 process.stdout.write(`fixture started ${label}\n`);
 if (control.mutate === label)
@@ -31,6 +37,8 @@ if (args.includes("--checkpoint")) {
 		process.exit(0);
 	}
 }
+const base = label.endsWith("base");
+const selfCompile = args.includes("self-compile");
 writeFileSync(
 	output,
 	JSON.stringify({
@@ -38,14 +46,31 @@ writeFileSync(
 			commit: process.env.MAL_INTERNAL_BENCH_SOURCE_COMMIT ?? "candidate",
 			digest: "fixture",
 		},
-		javascript: {
-			workload: "fixture",
-			phaseChecksums: {
-				main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,
-			},
-			wallMs: label.endsWith("base") ? 100 : 90,
-		},
+		...(selfCompile
+			? {
+					selfCompileOrdinary: {
+						profile: "ordinary",
+						units: 3,
+						codeUnits: 1000,
+						digest:
+							control.selfCompileDigestMismatch === label
+								? "changed-output"
+								: base
+									? "base-output"
+									: "head-output",
+						maligatorMs: base ? 100 : 90,
+					},
+				}
+			: {
+					javascript: {
+						workload: "fixture",
+						phaseChecksums: {
+							main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,
+						},
+						wallMs: base ? 100 : 90,
+					},
+				}),
 		nativePlan: { compiler: "fixture" },
-		nativeBuild: label.endsWith("base") ? { peakRssBytes: 1024 } : {},
+		nativeBuild: base ? { peakRssBytes: 1024 } : {},
 	}),
 );

@@ -163,12 +163,18 @@ describe("performance portfolio decisions", () => {
 			),
 		) as {
 			readonly completePortfolio: boolean;
+			readonly maximumPairs: number;
+			readonly benchmarkScheduling: string;
+			readonly benchmarkProfiles: Readonly<Record<string, string>>;
 			readonly writes: boolean;
 			readonly builds: boolean;
 			readonly families: ReadonlyArray<{ readonly id: string }>;
 		};
 		expect(plan).toMatchObject({
 			completePortfolio: false,
+			maximumPairs: 3,
+			benchmarkScheduling: "independent",
+			benchmarkProfiles: { javascript: "closed-compiled" },
 			writes: false,
 			builds: false,
 		});

@@ -99,6 +99,14 @@ HTTP, and self-compile owners. Missing families remain incomplete and are never
 reweighted. A smaller related regression may be outweighed by a larger portfolio win,
 but every regression remains visible and explicit per-family guardrails still apply.
 One-pair runs remain screening evidence and cannot produce an acceptance decision.
+Benchmark-owned families run independently under their declared budgets: JavaScript
+uses the production closed-compiled mode, HTTP uses one-second scenarios, and
+self-compile times ordinary self-hosted compilation of one frozen baseline source
+graph. The comparator warms each revision, runs exactly the requested interleaved
+pairs, and requires each revision's self-compile output to remain deterministic.
+Cold-start, instrumentation, owner, resource, alternate-mode, and longer HTTP samples
+remain in the specialized benchmark commands; they are diagnostics rather than work
+silently repeated inside every portfolio sample.
 The specialized benchmark commands remain available for their owning diagnostics;
 the performance entrypoint supersedes them as the normal experiment and acceptance
 workflow. None of these commands updates `bench/baseline.json`.

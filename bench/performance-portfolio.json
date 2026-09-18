@@ -1,6 +1,6 @@
 {
 	"schema": 1,
-	"version": "2026-09-18.1",
+	"version": "2026-09-18.2",
 	"decisionThresholdPercent": 2,
 	"minimumAcceptancePairs": 2,
 	"families": [
@@ -26,7 +26,7 @@
 			"weight": 1,
 			"primaryMetric": "javascript.modes.closed-compiled.wallMs",
 			"maxRegressionPercent": 15,
-			"budgetSeconds": 300
+			"budgetSeconds": 900
 		},
 		{
 			"id": "http",
@@ -34,15 +34,15 @@
 			"weight": 1,
 			"primaryMetric": "http.express.workloads.routes.malRps",
 			"maxRegressionPercent": 15,
-			"budgetSeconds": 300
+			"budgetSeconds": 600
 		},
 		{
 			"id": "self-compile",
 			"runner": "benchmark",
 			"weight": 1,
-			"primaryMetric": "selfCompile.maligatorMs",
+			"primaryMetric": "selfCompileOrdinary.maligatorMs",
 			"maxRegressionPercent": 15,
-			"budgetSeconds": 900
+			"budgetSeconds": 2400
 		}
 	]
 }

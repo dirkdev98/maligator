@@ -49,16 +49,23 @@ function copyStrippedTree(source: string, destination: string): void {
 	}
 }
 
-export function prepareSelfCompileSource(root: string): string {
+export function prepareSelfCompileSource(
+	root: string,
+	sourceRoot = path.resolve("."),
+): string {
 	mkdirSync(root, { recursive: true });
 	writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
-	copyStrippedTree(path.resolve("src"), path.join(root, "src"));
+	copyStrippedTree(path.join(sourceRoot, "src"), path.join(root, "src"));
 	mkdirSync(path.join(root, "bench"), { recursive: true });
-	const fixture = path.resolve("bench/self-compile.mts");
+	const fixture = path.join(sourceRoot, "bench/self-compile.mts");
 	writeFileSync(
 		path.join(root, "bench/self-compile.mts"),
 		stripCompactTypes(readFileSync(fixture, "utf8"), fixture),
 	);
-	symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
+	symlinkSync(
+		path.join(sourceRoot, "node_modules"),
+		path.join(root, "node_modules"),
+		"dir",
+	);
 	return path.join(root, "bench/self-compile.mts");
 }

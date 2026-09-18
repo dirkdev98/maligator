@@ -167,6 +167,26 @@ test("a workload mismatch is retained as failed evidence rather than a speedup",
 	expect(result.metrics).toEqual([]);
 });
 
+test("ordinary self-compile samples may differ by revision but stay stable within one", async () => {
+	const fixture = comparisonFixture();
+	const options = {
+		...fixture.options,
+		lanes: ["self-compile"],
+		pairs: 1,
+		maxPairs: 1,
+	};
+	const complete = await runBenchmarkComparison(options);
+	expect(complete.exitCode).toBe(0);
+	fixture.control({ selfCompileDigestMismatch: "pair-0-base" });
+	const failed = await runBenchmarkComparison(options);
+	expect(failed.exitCode).toBe(2);
+	expect(JSON.parse(readFileSync(failed.reportPath, "utf8"))).toMatchObject({
+		status: "failed",
+		completedPairs: 0,
+		error: "self-compile output changed between samples of one revision",
+	});
+});
+
 test("source changes during execution invalidate resumption even after source restoration", async () => {
 	const fixture = comparisonFixture();
 	fixture.control({ mutate: "warm-head" });
