@@ -558,6 +558,46 @@ describe("bounded Core cross-call transforms", () => {
 		expect(calls[0]!.attributes.directFunctionIndex).toBeUndefined();
 	});
 
+	it("bridges scalar arguments into guarded non-linear callees", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer(value) {
+					let handler = (input, fallback) => {
+						if (input === undefined) return "";
+						if (fallback === undefined) return input;
+						return input + fallback;
+					};
+					function install(other) { handler = other; }
+					globalThis.install = install;
+					try { return handler("", value) + "tail"; }
+					catch (error) { return error; }
+				}`,
+				"core-guarded-inline-scalar-argument.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		const operations = coreOperations(outer);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(
+			operations.some(
+				({ opcode, inputs, outputs }) =>
+					opcode === "move" &&
+					inputs.length === 1 &&
+					outputs.length === 1 &&
+					outer.valueRepresentation(inputs[0]!) === "string" &&
+					outer.valueRepresentation(outputs[0]!) === "boxed",
+			),
+		).toBe(true);
+	});
+
 	it("guards and inlines a known class static method without assuming the property is closed", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

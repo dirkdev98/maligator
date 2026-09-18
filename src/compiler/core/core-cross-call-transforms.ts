@@ -638,9 +638,14 @@ function applyLinearInline(
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
-	const returnRepresentation = inline.function.valueRepresentation(inline.returnValue);
 	const callRepresentation = caller.valueRepresentation(callResult);
-	if (!canBridgeInlineResult(returnRepresentation, callRepresentation)) return undefined;
+	if (
+		!canBridgeInlineResult(
+			inline.function.valueRepresentation(inline.returnValue),
+			callRepresentation,
+		)
+	)
+		return undefined;
 	const receiverIndex = descriptor.callTransfer.receiverOperand;
 	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
 	const firstArgument =
@@ -668,11 +673,34 @@ function applyLinearInline(
 	);
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = 0;
+	const bridgeValue = (
+		value: CoreValueId,
+		representation: CoreRepresentation,
+		position: number | undefined,
+	): CoreValueId => {
+		const sourceRepresentation = caller.valueRepresentation(value);
+		if (sourceRepresentation === representation) return value;
+		if (!canBridgeInlineResult(sourceRepresentation, representation)) {
+			throw new Error("Validated inline input became representation-incompatible");
+		}
+		introduced++;
+		return editor.insertInstruction(block, candidate.site, "move", [value], {
+			outputRepresentations: [representation],
+			sourcePosition: position,
+		}).outputs[0]!;
+	};
 	for (let index = 0; index < inline.function.parameterCount; index++) {
 		const parameter = inline.function.kernel.functionParameter(index);
 		const argument = arguments_[index];
 		if (argument !== undefined) {
-			values.set(parameter, argument);
+			values.set(
+				parameter,
+				bridgeValue(
+					argument,
+					inline.function.valueRepresentation(parameter),
+					callerPosition,
+				),
+			);
 			continue;
 		}
 		const created = editor.insertInstruction(
@@ -706,7 +734,14 @@ function applyLinearInline(
 					return undefined;
 				const argument = arguments_[index];
 				if (argument !== undefined) {
-					values.set(output, argument);
+					values.set(
+						output,
+						bridgeValue(
+							argument,
+							inline.function.valueRepresentation(output),
+							sourcePositions.get(instruction),
+						),
+					);
 					continue;
 				}
 				const created = editor.insertInstruction(
@@ -728,7 +763,14 @@ function applyLinearInline(
 								inline.function.kernel.instructionResultStart(instruction),
 							);
 				if (output === undefined || receiver === undefined) return undefined;
-				values.set(output, receiver);
+				values.set(
+					output,
+					bridgeValue(
+						receiver,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
 				continue;
 			}
 			const inputStart = inline.function.kernel.instructionOperandStart(instruction);
@@ -764,7 +806,11 @@ function applyLinearInline(
 	if (replacement === undefined) {
 		throw new Error("Validated inline return has no caller value");
 	}
-	if (returnRepresentation !== callRepresentation) {
+	const replacementRepresentation = caller.valueRepresentation(replacement);
+	if (!canBridgeInlineResult(replacementRepresentation, callRepresentation)) {
+		throw new Error("Validated inline result became representation-incompatible");
+	}
+	if (replacementRepresentation !== callRepresentation) {
 		const bridge = editor.insertInstruction(
 			block,
 			candidate.site,
@@ -900,6 +946,25 @@ function applyGuardedInline(
 
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = guarded ? 1 : 0;
+	const bridgeValue = (
+		destination: CoreBlockId,
+		value: CoreValueId,
+		representation: CoreRepresentation,
+		position: number | undefined,
+	): CoreValueId => {
+		const sourceRepresentation = caller.valueRepresentation(value);
+		if (sourceRepresentation === representation) return value;
+		if (!canBridgeInlineResult(sourceRepresentation, representation)) {
+			throw new Error(
+				"Validated guarded inline input became representation-incompatible",
+			);
+		}
+		introduced++;
+		return editor.appendInstruction(destination, "move", [value], {
+			outputRepresentations: [representation],
+			sourcePosition: position,
+		}).outputs[0]!;
+	};
 	const clonedBlocks = new Map<CoreBlockId, CoreBlockId>([[inline.function.entry, fast]]);
 	if (!inline.linear) {
 		for (const inlineBlock of inline.blocks) {
@@ -928,7 +993,15 @@ function applyGuardedInline(
 		const parameter = inline.function.kernel.functionParameter(index);
 		const argument = arguments_[index];
 		if (argument !== undefined) {
-			values.set(parameter, argument);
+			values.set(
+				parameter,
+				bridgeValue(
+					fast,
+					argument,
+					inline.function.valueRepresentation(parameter),
+					callerPosition,
+				),
+			);
 			continue;
 		}
 		const created = editor.appendInstruction(fast, "createUndefined", [], {
@@ -941,7 +1014,13 @@ function applyGuardedInline(
 		let result = values.get(value);
 		if (result === undefined)
 			throw new Error("Validated inline return has no caller value");
-		if (inline.function.valueRepresentation(value) !== callRepresentation) {
+		const resultRepresentation = caller.valueRepresentation(result);
+		if (!canBridgeInlineResult(resultRepresentation, callRepresentation)) {
+			throw new Error(
+				"Validated guarded inline result became representation-incompatible",
+			);
+		}
+		if (resultRepresentation !== callRepresentation) {
 			result = editor.appendInstruction(destination, "move", [result], {
 				outputRepresentations: [callRepresentation],
 				sourcePosition: callerPosition,
@@ -976,7 +1055,15 @@ function applyGuardedInline(
 					throw new Error("Validated guarded inline argument snapshot is invalid");
 				const argument = arguments_[index];
 				if (argument !== undefined) {
-					values.set(output, argument);
+					values.set(
+						output,
+						bridgeValue(
+							destination,
+							argument,
+							inline.function.valueRepresentation(output),
+							sourcePositions.get(instruction),
+						),
+					);
 					continue;
 				}
 				const created = editor.appendInstruction(destination, "createUndefined", [], {
@@ -995,7 +1082,15 @@ function applyGuardedInline(
 							);
 				if (output === undefined || receiver === undefined)
 					throw new Error("Validated guarded inline receiver is unavailable");
-				values.set(output, receiver);
+				values.set(
+					output,
+					bridgeValue(
+						destination,
+						receiver,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
 				continue;
 			}
 			const inputStart = inline.function.kernel.instructionOperandStart(instruction);
