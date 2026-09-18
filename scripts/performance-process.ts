@@ -24,6 +24,15 @@ export interface BoundedProcessResult {
 	readonly exitCode: number;
 }
 
+export class PerformanceProcessInterruptedError extends Error {
+	readonly signal: NodeJS.Signals;
+
+	constructor(signal: NodeJS.Signals) {
+		super(`process interrupted by ${signal}`);
+		this.signal = signal;
+	}
+}
+
 /** A timeout owns the complete descendant process group, not only its shell parent. */
 export function runBoundedProcess(
 	executable: string,
@@ -44,12 +53,30 @@ export function runBoundedProcess(
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
+		let interrupted: NodeJS.Signals | undefined;
+		let settled = false;
 		let forceStop: NodeJS.Timeout | undefined;
+		const forceAfterGrace = (signal: NodeJS.Signals) => {
+			stopProcessGroup(child, signal);
+			forceStop ??= setTimeout(() => stopProcessGroup(child, "SIGKILL"), 2_000);
+		};
+		const interrupt = (signal: NodeJS.Signals) => {
+			interrupted ??= signal;
+			forceAfterGrace(signal);
+		};
+		const onInterrupt = () => interrupt("SIGINT");
+		const onTerminate = () => interrupt("SIGTERM");
+		process.once("SIGINT", onInterrupt);
+		process.once("SIGTERM", onTerminate);
+		const cleanup = () => {
+			clearTimeout(timeout);
+			if (forceStop !== undefined) clearTimeout(forceStop);
+			process.removeListener("SIGINT", onInterrupt);
+			process.removeListener("SIGTERM", onTerminate);
+		};
 		const timeout = setTimeout(() => {
 			timedOut = true;
-			stopProcessGroup(child, "SIGTERM");
-			forceStop = setTimeout(() => stopProcessGroup(child, "SIGKILL"), 2_000);
-			forceStop.unref();
+			forceAfterGrace("SIGTERM");
 		}, options.timeoutMs);
 		timeout.unref();
 		child.stdout?.setEncoding("utf8");
@@ -57,17 +84,23 @@ export function runBoundedProcess(
 		child.stdout?.on("data", (chunk: string) => (stdout += chunk));
 		child.stderr?.on("data", (chunk: string) => (stderr += chunk));
 		child.once("error", (error) => {
-			clearTimeout(timeout);
-			if (forceStop !== undefined) clearTimeout(forceStop);
+			if (settled) return;
+			settled = true;
+			cleanup();
 			stopProcessGroup(child, "SIGKILL");
 			reject(error);
 		});
 		child.once("close", (code, signal) => {
-			clearTimeout(timeout);
-			if (forceStop !== undefined) clearTimeout(forceStop);
+			if (settled) return;
+			settled = true;
+			cleanup();
 			stopProcessGroup(child, "SIGKILL");
 			if (timedOut) {
 				reject(new Error(`process timed out after ${options.timeoutMs} ms`));
+				return;
+			}
+			if (interrupted !== undefined) {
+				reject(new PerformanceProcessInterruptedError(interrupted));
 				return;
 			}
 			if (signal !== null) {

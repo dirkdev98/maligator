@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,6 +46,8 @@ export interface RuntimeGapExperiment {
 	readonly id: string;
 	readonly case: RuntimeGapCaseDescriptor & { readonly fixturePath: string };
 }
+
+const EXPERIMENT_RUNNER_IMPORT = "../../../../bench/runtime-gap/case-runner.mjs";
 
 const CATEGORIES: ReadonlySet<string> = new Set<RuntimeGapCategory>([
 	"statements-operators",
@@ -172,6 +174,33 @@ export function loadRuntimeGapExperiment(file: string): RuntimeGapExperiment {
 	const caseDescriptor = fixtureDescriptor(experiment.case, path.dirname(absolute));
 	if (caseDescriptor.id !== experiment.id) {
 		throw new Error("runtime-gap experiment ID differs from its case ID");
+	}
+	if (caseDescriptor.fixture !== "case.mjs") {
+		throw new Error(
+			"runtime-gap experiments require the self-contained case.mjs fixture",
+		);
+	}
+	if (!lstatSync(caseDescriptor.fixturePath).isFile()) {
+		throw new Error("runtime-gap experiment case.mjs must be a regular file");
+	}
+	const directory = path.dirname(absolute);
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		if (entry.name !== "case.mjs" && /\.[cm]?[jt]s$/.test(entry.name)) {
+			throw new Error("runtime-gap experiments permit only one source file: case.mjs");
+		}
+	}
+	const source = readFileSync(caseDescriptor.fixturePath, "utf8");
+	const relativeSpecifiers = [
+		...source.matchAll(/\b(?:import|export)\s+(?:[^"'()]*?\s+from\s*)?["']([^"']+)["']/g),
+		...source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g),
+		...source.matchAll(/\brequire\s*\(\s*["']([^"']+)["']/g),
+	]
+		.map((match) => match[1]!)
+		.filter((specifier) => specifier.startsWith(".") || specifier.startsWith("/"));
+	if (relativeSpecifiers.some((specifier) => specifier !== EXPERIMENT_RUNNER_IMPORT)) {
+		throw new Error(
+			"runtime-gap experiment case.mjs must be self-contained except for the case runner",
+		);
 	}
 	return { path: absolute, id: experiment.id, case: caseDescriptor };
 }

@@ -14,7 +14,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyMetricSamples, runBenchmarkComparison } from "./bench-compare.ts";
 import type { MetricResult, MetricSample } from "./bench-compare.ts";
-import { runBoundedProcess } from "./performance-process.ts";
+import {
+	PerformanceProcessInterruptedError,
+	runBoundedProcess,
+} from "./performance-process.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -40,6 +43,7 @@ export interface PortfolioConfig {
 	readonly schema: 1;
 	readonly version: string;
 	readonly decisionThresholdPercent: number;
+	readonly minimumAcceptancePairs: number;
 	readonly families: ReadonlyArray<PortfolioFamily>;
 }
 
@@ -62,6 +66,14 @@ export interface PortfolioDecision {
 	readonly netImprovementPercent: number | null;
 	readonly hardRegressions: ReadonlyArray<string>;
 	readonly missingFamilies: ReadonlyArray<string>;
+}
+
+export function portfolioExitCode(
+	complete: boolean,
+	status: PortfolioDecision["status"],
+): 0 | 1 | 2 {
+	if (!complete || status === "incomplete") return 2;
+	return status === "regression" ? 1 : 0;
 }
 
 interface Options {
@@ -97,6 +109,9 @@ function loadPortfolio(): PortfolioConfig {
 		config.schema !== 1 ||
 		typeof config.version !== "string" ||
 		typeof config.decisionThresholdPercent !== "number" ||
+		typeof config.minimumAcceptancePairs !== "number" ||
+		!Number.isInteger(config.minimumAcceptancePairs) ||
+		config.minimumAcceptancePairs < 2 ||
 		!Array.isArray(config.families)
 	) {
 		throw new Error("performance portfolio schema is not supported");
@@ -127,8 +142,30 @@ function loadPortfolio(): PortfolioConfig {
 		schema: 1,
 		version: config.version,
 		decisionThresholdPercent: config.decisionThresholdPercent,
+		minimumAcceptancePairs: config.minimumAcceptancePairs,
 		families,
 	};
+}
+
+function median(values: ReadonlyArray<number>): number {
+	const sorted = [...values].sort((left, right) => left - right);
+	const middle = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 0
+		? (sorted[middle - 1]! + sorted[middle]!) / 2
+		: sorted[middle]!;
+}
+
+export function metricCostRatio(metric: MetricResult): number | undefined {
+	const ratios = metric.samples.map(({ base, head }) =>
+		metric.direction === "lower" ? head / base : base / head,
+	);
+	if (
+		ratios.length === 0 ||
+		ratios.some((ratio) => !Number.isFinite(ratio) || ratio <= 0)
+	) {
+		return undefined;
+	}
+	return median(ratios);
 }
 
 function required(args: ReadonlyArray<string>, index: number, option: string): string {
@@ -227,9 +264,8 @@ export function classifyPortfolio(
 	let weightedLogRatio = 0;
 	let totalWeight = 0;
 	for (const family of config.families) {
-		const regression = outcomeById.get(family.id)!.primary!.medianRegressionPercent;
-		const candidateToBaseline = 1 + regression / 100;
-		if (!(candidateToBaseline > 0)) {
+		const candidateToBaseline = metricCostRatio(outcomeById.get(family.id)!.primary!);
+		if (candidateToBaseline === undefined) {
 			return {
 				status: "inconclusive",
 				netImprovementPercent: null,
@@ -250,9 +286,13 @@ export function classifyPortfolio(
 		};
 	}
 	if (
-		config.families.some(
-			(family) => outcomeById.get(family.id)!.primary!.status === "inconclusive",
-		)
+		config.families.some((family) => {
+			const primary = outcomeById.get(family.id)!.primary!;
+			return (
+				primary.status === "inconclusive" ||
+				primary.samples.length < config.minimumAcceptancePairs
+			);
+		})
 	) {
 		return {
 			status: "inconclusive",
@@ -308,7 +348,8 @@ function git(args: ReadonlyArray<string>): string {
 	return String(result.stdout).trim();
 }
 
-function materializeBaseline(ref: string, directory: string): string {
+export function materializePortfolioBaseline(ref: string, directory: string): string {
+	const commit = git(["rev-parse", `${ref}^{commit}`]);
 	const currentLock = readFileSync(
 		path.join(REPOSITORY_ROOT, "package-lock.json"),
 		"utf8",
@@ -336,6 +377,31 @@ function materializeBaseline(ref: string, directory: string): string {
 	});
 	if (extracted.error !== undefined) throw extracted.error;
 	if (extracted.status !== 0) throw new Error(String(extracted.stderr));
+	const initialize = (args: ReadonlyArray<string>): string => {
+		const result = spawnSync("git", [...args], { cwd: baseline, encoding: "utf8" });
+		if (result.error !== undefined) throw result.error;
+		if (result.status !== 0) throw new Error(String(result.stderr));
+		return String(result.stdout).trim();
+	};
+	initialize(["init", "-q"]);
+	const objectDirectory = git([
+		"rev-parse",
+		"--path-format=absolute",
+		"--git-path",
+		"objects",
+	]);
+	mkdirSync(path.join(baseline, ".git/objects/info"), { recursive: true });
+	writeFileSync(
+		path.join(baseline, ".git/objects/info/alternates"),
+		`${objectDirectory}\n`,
+	);
+	writeFileSync(path.join(baseline, ".git/info/exclude"), "node_modules\n");
+	initialize(["update-ref", "refs/heads/baseline", commit]);
+	initialize(["symbolic-ref", "HEAD", "refs/heads/baseline"]);
+	initialize(["reset", "--mixed", "--quiet", commit]);
+	if (initialize(["status", "--porcelain=v1"]) !== "") {
+		throw new Error("materialized baseline differs from its Git source");
+	}
 	if (existsSync(path.join(REPOSITORY_ROOT, "node_modules"))) {
 		symlinkSync(
 			path.join(REPOSITORY_ROOT, "node_modules"),
@@ -414,6 +480,7 @@ async function quickOutcome(
 			metrics: [primary],
 		};
 	} catch (error) {
+		if (error instanceof PerformanceProcessInterruptedError) throw error;
 		return {
 			id: family.id,
 			status: "failed",
@@ -479,7 +546,8 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 	try {
 		const quick = selected.filter((family) => family.runner === "quick");
 		if (quick.length > 0) {
-			baselineDirectory = materializeBaseline(options.baseline, options.output);
+			baselineDirectory = path.join(options.output, "baseline");
+			materializePortfolioBaseline(options.baseline, options.output);
 			for (const family of quick) {
 				if (performance.now() >= deadline) {
 					outcomes.push({
@@ -531,7 +599,11 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 				}
 			}
 		}
+	} catch (error) {
+		persist("incomplete");
+		throw error;
 	} finally {
+		rmSync(path.join(options.output, "baseline.tar"), { force: true });
 		if (baselineDirectory !== undefined) {
 			rmSync(baselineDirectory, { recursive: true, force: true });
 		}
@@ -543,5 +615,5 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 		outcomes.every((outcome) => outcome.status === "complete");
 	persist(complete ? "complete" : "incomplete");
 	console.log(`report: ${path.join(options.output, "report.json")}`);
-	if (!complete || decision.status === "incomplete") process.exitCode = 2;
+	process.exitCode = portfolioExitCode(complete, decision.status);
 }

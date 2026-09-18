@@ -89,13 +89,16 @@ Use `bench:performance -- experiment new ID [--from CASE] [--control CASE]` for 
 scratch work. `experiment run ID` supports `smoke`, `verify`, and `confirm` presets;
 promotion refuses collisions and does not add the new case to a default suite unless
 `--preset survey` or `--preset quick` is explicit. `experiment remove ID` deletes only
-that experiment. The queue transports only the selected scratch closure.
+that experiment. `case.mjs` is the only scratch source file and may import only the
+committed runtime-gap case runner; this makes the queue's selected two-file transport
+and later promotion exact rather than best-effort.
 
 `bench:performance -- portfolio --baseline REF` is the broad acceptance path. Its
 versioned, fixed-weight portfolio delegates to app-batch, compiler-app, JavaScript,
 HTTP, and self-compile owners. Missing families remain incomplete and are never
 reweighted. A smaller related regression may be outweighed by a larger portfolio win,
 but every regression remains visible and explicit per-family guardrails still apply.
+One-pair runs remain screening evidence and cannot produce an acceptance decision.
 The specialized benchmark commands remain available for their owning diagnostics;
 the performance entrypoint supersedes them as the normal experiment and acceptance
 workflow. None of these commands updates `bench/baseline.json`.

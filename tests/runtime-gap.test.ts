@@ -10,6 +10,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { PerformanceProcessInterruptedError } from "../scripts/performance-process.ts";
 import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
 import { RUNTIME_GAP_EXPERIMENTS } from "../scripts/runtime-gap-experiment.ts";
 import {
@@ -244,17 +245,22 @@ describe("runtime-gap case catalog", () => {
 		});
 	});
 
-	it("retains timing when an optional resource probe is unavailable", () => {
+	it("retains timing when an optional resource probe is unavailable", async () => {
 		expect(
-			captureOptionalResource(() => {
+			await captureOptionalResource(() => {
 				throw new Error("resource tool unavailable");
 			}),
 		).toEqual({ resourceFailure: "resource tool unavailable" });
-		expect(() =>
+		await expect(
 			captureOptionalResource(() => {
 				throw new RuntimeGapParityError("work differs");
 			}),
-		).toThrow(RuntimeGapParityError);
+		).rejects.toThrow(RuntimeGapParityError);
+		await expect(
+			captureOptionalResource(() => {
+				throw new PerformanceProcessInterruptedError("SIGTERM");
+			}),
+		).rejects.toThrow(PerformanceProcessInterruptedError);
 	});
 
 	it("rejects checksum changes in any measured pass", () => {
@@ -309,6 +315,31 @@ describe("runtime-gap case catalog", () => {
 				[id, "predictable-branches"].sort(),
 			);
 			expect(existsSync(path.join(directory, "report.json"))).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects scratch dependencies outside the transported two-file closure", () => {
+		const id = `unit-experiment-dependency-${process.pid}`;
+		const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
+		rmSync(directory, { recursive: true, force: true });
+		try {
+			execFileSync(process.execPath, ["scripts/performance.ts", "experiment", "new", id]);
+			writeFileSync(path.join(directory, "helper.mjs"), "export const value = 1;\n");
+			writeFileSync(
+				path.join(directory, "case.mjs"),
+				'import { value } from "./helper.mjs"; console.log(value);\n',
+			);
+			expect(() =>
+				execFileSync(process.execPath, [
+					"scripts/performance.ts",
+					"experiment",
+					"run",
+					id,
+					"--plan=json",
+				]),
+			).toThrow(/only one source file|self-contained/);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

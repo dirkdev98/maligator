@@ -188,12 +188,12 @@ function promoteExperiment(args: ReadonlyArray<string>): void {
 	const unknown = args.filter((argument) => !known.has(argument));
 	if (unknown.length > 0) throw new Error(`unknown experiment option: ${unknown[0]}`);
 	const directory = experimentDirectory(id);
-	const experiment = loadRuntimeGapExperiment(path.join(directory, "experiment.json"));
 	const catalog = loadRuntimeGapCatalog();
 	const destination = path.join(REPOSITORY_ROOT, "bench/runtime-gap/cases", `${id}.mjs`);
 	if (existsSync(destination) || catalog.cases.some((candidate) => candidate.id === id)) {
 		throw new Error(`promotion target already exists: ${id}`);
 	}
+	const experiment = loadRuntimeGapExperiment(path.join(directory, "experiment.json"));
 	const raw = JSON.parse(readFileSync(RUNTIME_GAP_CATALOG, "utf8")) as {
 		schema: 1;
 		presets: { quick: Array<string>; survey: Array<string> };

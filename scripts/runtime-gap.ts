@@ -17,7 +17,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { runBoundedProcess } from "./performance-process.ts";
+import {
+	PerformanceProcessInterruptedError,
+	runBoundedProcess,
+} from "./performance-process.ts";
 import {
 	loadRuntimeGapCatalog,
 	loadRuntimeGapExperiment,
@@ -334,7 +337,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	};
 }
 
-function runProcess(
+function runSynchronousProcess(
 	command: string,
 	args: ReadonlyArray<string>,
 	environment: NodeJS.ProcessEnv = process.env,
@@ -353,6 +356,25 @@ function runProcess(
 		);
 	}
 	return { stdout: String(completed.stdout), stderr: String(completed.stderr) };
+}
+
+async function runMeasuredProcess(
+	command: string,
+	args: ReadonlyArray<string>,
+	environment: NodeJS.ProcessEnv,
+	timeoutMs: number,
+): Promise<{ readonly stdout: string; readonly stderr: string }> {
+	const completed = await runBoundedProcess(command, args, {
+		cwd: REPOSITORY_ROOT,
+		environment,
+		timeoutMs,
+	});
+	if (completed.exitCode !== 0) {
+		throw new Error(
+			`runtime-gap process failed (${completed.exitCode}): ${command} ${args.join(" ")}\n${completed.stdout}\n${completed.stderr}`,
+		);
+	}
+	return completed;
 }
 
 export function parseKernelOutput(stdout: string): KernelOutput {
@@ -384,13 +406,13 @@ export function parseKernelOutput(stdout: string): KernelOutput {
 	throw new Error("runtime-gap case produced no valid result record");
 }
 
-function runKernel(
+async function runKernel(
 	command: string,
 	args: ReadonlyArray<string>,
 	timeoutMs: number,
-): KernelOutput {
+): Promise<KernelOutput> {
 	return parseKernelOutput(
-		runProcess(command, args, cleanTestEnvironment(), timeoutMs).stdout,
+		(await runMeasuredProcess(command, args, cleanTestEnvironment(), timeoutMs)).stdout,
 	);
 }
 
@@ -408,20 +430,20 @@ function medianAbsoluteDeviation(values: ReadonlyArray<number>): number {
 	return median(values.map((value) => Math.abs(value - center)));
 }
 
-function timeInvocation(
+async function timeInvocation(
 	command: string,
 	args: ReadonlyArray<string>,
 	environment: NodeJS.ProcessEnv,
 	timeoutMs: number,
-): {
+): Promise<{
 	readonly output: KernelOutput;
 	readonly cpuMs: number;
 	readonly peakRssBytes: number;
 	readonly stderr: string;
 	readonly traceOutput: string;
-} {
+}> {
 	const timeFlag = process.platform === "darwin" ? "-l" : "-v";
-	const completed = runProcess(
+	const completed = await runMeasuredProcess(
 		"/usr/bin/time",
 		[timeFlag, command, ...args],
 		environment,
@@ -467,15 +489,15 @@ function profileSelfSize(node: unknown): number {
 	);
 }
 
-function nodeResourceSample(
+async function nodeResourceSample(
 	fixture: string,
 	scale: number,
 	sampleAllocation: boolean,
 	timeoutMs: number,
 	reference: KernelOutput,
-): ResourceSample {
+): Promise<ResourceSample> {
 	if (!sampleAllocation) {
-		const measured = timeInvocation(
+		const measured = await timeInvocation(
 			process.execPath,
 			["--trace-gc-nvp", fixture, String(scale)],
 			cleanTestEnvironment(),
@@ -498,7 +520,7 @@ function nodeResourceSample(
 	const profileRoot = mkdtempSync(path.join(os.tmpdir(), "mal-host-gap-heap-"));
 	try {
 		const interval = 1_024;
-		const measured = timeInvocation(
+		const measured = await timeInvocation(
 			process.execPath,
 			[
 				"--trace-gc-nvp",
@@ -541,13 +563,13 @@ function nodeResourceSample(
 	}
 }
 
-function maligatorResourceSample(
+async function maligatorResourceSample(
 	binary: string,
 	scale: number,
 	timeoutMs: number,
 	reference: KernelOutput,
-): ResourceSample {
-	const measured = timeInvocation(
+): Promise<ResourceSample> {
+	const measured = await timeInvocation(
 		binary,
 		[String(scale)],
 		cleanTestEnvironment({
@@ -587,14 +609,19 @@ export function assertRuntimeGapParity(
 	}
 }
 
-export function captureOptionalResource<T>(probe: () => T): {
+export async function captureOptionalResource<T>(probe: () => T | Promise<T>): Promise<{
 	readonly resource?: T;
 	readonly resourceFailure?: string;
-} {
+}> {
 	try {
-		return { resource: probe() };
+		return { resource: await probe() };
 	} catch (error) {
-		if (error instanceof RuntimeGapParityError) throw error;
+		if (
+			error instanceof RuntimeGapParityError ||
+			error instanceof PerformanceProcessInterruptedError
+		) {
+			throw error;
+		}
 		return { resourceFailure: error instanceof Error ? error.message : String(error) };
 	}
 }
@@ -605,19 +632,23 @@ function invocationTimeout(deadline: number, caseTimeoutMs: number): number {
 	return Math.min(caseTimeoutMs, remaining);
 }
 
-function calibrateScale(
+async function calibrateScale(
 	binary: string,
 	descriptor: KernelDescriptor,
 	targetNodeMs: number,
 	deadline: number,
 	caseTimeoutMs: number,
-): number {
-	const node = runKernel(
+): Promise<number> {
+	const node = await runKernel(
 		process.execPath,
 		[descriptor.fixturePath, "1"],
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
-	const maligator = runKernel(binary, ["1"], invocationTimeout(deadline, caseTimeoutMs));
+	const maligator = await runKernel(
+		binary,
+		["1"],
+		invocationTimeout(deadline, caseTimeoutMs),
+	);
 	assertRuntimeGapParity(node, maligator);
 	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
 	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
@@ -640,7 +671,7 @@ function timedSample(output: KernelOutput): TimedKernelSample {
 	};
 }
 
-function measureKernel(
+async function measureKernel(
 	binary: string,
 	build: RuntimeGapBuildEvidence,
 	descriptor: KernelDescriptor,
@@ -649,8 +680,8 @@ function measureKernel(
 		"samples" | "targetNodeMs" | "skipNodeAllocation" | "caseTimeoutMs"
 	>,
 	deadline: number,
-): CompilerHostGapKernelResult {
-	const scale = calibrateScale(
+): Promise<CompilerHostGapKernelResult> {
+	const scale = await calibrateScale(
 		binary,
 		descriptor,
 		options.targetNodeMs,
@@ -661,21 +692,21 @@ function measureKernel(
 	const maligatorSamples: Array<TimedKernelSample> = [];
 	let reference: KernelOutput | undefined;
 	for (let sample = 0; sample < options.samples; sample++) {
-		const runNode = (): KernelOutput =>
+		const runNode = (): Promise<KernelOutput> =>
 			runKernel(
 				process.execPath,
 				[descriptor.fixturePath, String(scale)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
-		const runMaligator = (): KernelOutput =>
+		const runMaligator = (): Promise<KernelOutput> =>
 			runKernel(
 				binary,
 				[String(scale)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
 		const ordered = sample % 2 === 0 ? [runNode, runMaligator] : [runMaligator, runNode];
-		const first = ordered[0]!();
-		const second = ordered[1]!();
+		const first = await ordered[0]!();
+		const second = await ordered[1]!();
 		const node = sample % 2 === 0 ? first : second;
 		const maligator = sample % 2 === 0 ? second : first;
 		reference ??= node;
@@ -694,7 +725,7 @@ function measureKernel(
 	);
 	const operations = reference!.operations;
 	const { fixturePath: _fixturePath, ...reportDescriptor } = descriptor;
-	const nodeResource = captureOptionalResource(() =>
+	const nodeResource = await captureOptionalResource(() =>
 		nodeResourceSample(
 			descriptor.fixturePath,
 			scale,
@@ -703,7 +734,7 @@ function measureKernel(
 			reference!,
 		),
 	);
-	const maligatorResource = captureOptionalResource(() =>
+	const maligatorResource = await captureOptionalResource(() =>
 		maligatorResourceSample(
 			binary,
 			scale,
@@ -1058,7 +1089,7 @@ ${categorySections}
 }
 
 function gitOutput(args: ReadonlyArray<string>): string {
-	return runProcess("git", args).stdout.trim();
+	return runSynchronousProcess("git", args).stdout.trim();
 }
 
 function sourceIdentity(): {
@@ -1098,7 +1129,6 @@ async function buildRuntimeGapCase(
 	descriptor: KernelDescriptor,
 	outputDirectory: string,
 	deadline: number,
-	caseTimeoutMs: number,
 ): Promise<RuntimeGapBuildEvidence> {
 	const token = createHash("sha256").update(descriptor.id).digest("hex").slice(0, 8);
 	const output = path.join(
@@ -1120,7 +1150,7 @@ async function buildRuntimeGapCase(
 			{
 				cwd: REPOSITORY_ROOT,
 				environment: cleanTestEnvironment(),
-				timeoutMs: invocationTimeout(deadline, caseTimeoutMs),
+				timeoutMs: invocationTimeout(deadline, Number.MAX_SAFE_INTEGER),
 			},
 		);
 		if (completed.exitCode !== 0) {
@@ -1355,15 +1385,27 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 				descriptor,
 				path.dirname(options.output),
 				deadline,
-				options.caseTimeoutMs,
 			);
 			preparationMs += build.buildMs;
-			results.push(measureKernel(build.binaryPath, build, descriptor, options, deadline));
+			results.push(
+				await measureKernel(build.binaryPath, build, descriptor, options, deadline),
+			);
 			progress.stagePassed(index + 1, descriptors.length, descriptor.id);
 		} catch (error) {
 			progress.stageFailed(index + 1, descriptors.length, descriptor.id);
 			const failure = classifyFailure(descriptor.id, error);
 			failures.push(failure);
+			if (error instanceof PerformanceProcessInterruptedError) {
+				for (const pending of descriptors.slice(index + 1)) {
+					failures.push({
+						id: pending.id,
+						status: "error",
+						message: `not started after ${error.signal}`,
+					});
+				}
+				persist("failed", false);
+				break;
+			}
 			if (failure.status === "budget") {
 				for (const pending of descriptors.slice(index + 1)) {
 					failures.push({
@@ -1408,7 +1450,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 	persist(status, complete);
 	const formatter = path.join(REPOSITORY_ROOT, "node_modules/.bin/oxfmt");
 	if (existsSync(formatter))
-		runProcess(formatter, ["--write", options.output, options.markdown]);
+		runSynchronousProcess(formatter, ["--write", options.output, options.markdown]);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.output)}`);
 	console.log(`wrote ${path.relative(REPOSITORY_ROOT, options.markdown)}`);
 	if (complete) progress.complete();
