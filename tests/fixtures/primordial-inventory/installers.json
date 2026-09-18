@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "445afc011e4e283a7d79e4d8b7b2167497ca9f965db15013a20cd75686c998d7"
+		"sha256": "1356b37aa763c073fee21c470955a1093501ba768a56de19571baf94bf2ba0c1"
 	},
 	{
 		"file": "builtin_map.c",

@@ -436,7 +436,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                     mal_rooted_key_snapshot_append(&keys, key);
                 }
             }
-        } else {
+        } else if (shape_snapshot == nullptr) {
             ok = mal_rooted_key_snapshot_own_keys(vm, value, &own_keys);
             for (usize i = 0; ok && i < own_keys.count; i++) {
                 if (own_keys.keys[i].kind == MAL_KEY_SYMBOL) {
