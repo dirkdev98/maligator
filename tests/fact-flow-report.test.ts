@@ -62,9 +62,7 @@ test("fact flow records finite guarded target sets in both outputs", () => {
 				return input - 2;
 			}
 			const handler = useSecond ? second : first;
-			let total = 0;
-			for (let index = 0; index < 3; index++) total += handler(value + index);
-			return total;
+			return handler(value);
 		}
 		globalThis.result = caller(globalThis.useSecond, globalThis.value);
 	`);
