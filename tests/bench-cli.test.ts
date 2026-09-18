@@ -120,37 +120,4 @@ describe("benchmark CLI", () => {
 			"--checkpoint requires only the self-compile benchmark family",
 		);
 	});
-
-	it("plans the ordinary frozen-input self-compile profile without diagnostics", () => {
-		const result = spawnSync(
-			process.execPath,
-			[
-				"scripts/bench.ts",
-				"self-compile",
-				"--compare",
-				"HEAD",
-				"--runs",
-				"2",
-				"--max-pairs",
-				"2",
-				"--self-compile-sample",
-				"bench/self-compile.mts",
-				"--plan=json",
-			],
-			{ cwd: process.cwd(), encoding: "utf8" },
-		);
-
-		expect(result.status, result.stderr).toBe(0);
-		const plan = JSON.parse(result.stdout) as {
-			perSnapshot: {
-				selfCompileStages: Array<string>;
-				selfCompileCheckpointed: boolean;
-			};
-		};
-		expect(plan.perSnapshot).toEqual({
-			runs: 1,
-			selfCompileStages: ["native build", "ordinary frozen-input sample"],
-			selfCompileCheckpointed: false,
-		});
-	});
 });

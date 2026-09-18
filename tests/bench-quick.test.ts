@@ -99,6 +99,22 @@ it("plans explicit quick work without preparing sources or writing output", () =
 	expect(existsSync(test.output)).toBe(false);
 });
 
+it("plans one prepared self-hosted compiler pair loop without diagnostic repetitions", () => {
+	const test = fixture();
+	const result = test.run("--workload", "self-compile", "--plan=json");
+	expect(result.status, result.stderr).toBe(0);
+	expect(JSON.parse(result.stdout)).toMatchObject({
+		workload: "self-compile",
+		work: [
+			"freeze the baseline compiler graph and build two self-hosted compilers once",
+			"output oracle",
+			"one warmup per revision",
+			"2 alternating pairs with output validation",
+		],
+	});
+	expect(existsSync(test.output)).toBe(false);
+});
+
 it("compares both compiler revisions on frozen baseline input, preserving alternating pairs and peak RSS", () => {
 	const test = fixture();
 	const result = test.run();

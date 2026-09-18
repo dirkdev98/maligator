@@ -12,7 +12,6 @@ const control = JSON.parse(
 	fail?: string;
 	hang?: string;
 	checksumMismatch?: boolean;
-	selfCompileDigestMismatch?: string;
 	mutate?: string;
 };
 appendFileSync(path.join(controlDirectory, "calls.jsonl"), `${JSON.stringify(label)}\n`);
@@ -31,9 +30,6 @@ if (control.hang === label) {
 	await new Promise(() => {});
 }
 if (args.includes("--checkpoint")) {
-	if (args.includes("--self-compile-sample")) {
-		throw new Error("ordinary self-compile samples cannot use diagnostic checkpoints");
-	}
 	const checkpoint = args[args.indexOf("--checkpoint") + 1]!;
 	if (!existsSync(checkpoint)) {
 		writeFileSync(checkpoint, '{"stage":"prepared"}');
@@ -41,7 +37,6 @@ if (args.includes("--checkpoint")) {
 	}
 }
 const base = label.endsWith("base");
-const selfCompile = args.includes("self-compile");
 writeFileSync(
 	output,
 	JSON.stringify({
@@ -49,30 +44,13 @@ writeFileSync(
 			commit: process.env.MAL_INTERNAL_BENCH_SOURCE_COMMIT ?? "candidate",
 			digest: "fixture",
 		},
-		...(selfCompile
-			? {
-					selfCompileOrdinary: {
-						profile: "ordinary",
-						units: 3,
-						codeUnits: 1000,
-						digest:
-							control.selfCompileDigestMismatch === label
-								? "changed-output"
-								: base
-									? "base-output"
-									: "head-output",
-						maligatorMs: base ? 100 : 90,
-					},
-				}
-			: {
-					javascript: {
-						workload: "fixture",
-						phaseChecksums: {
-							main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,
-						},
-						wallMs: base ? 100 : 90,
-					},
-				}),
+		javascript: {
+			workload: "fixture",
+			phaseChecksums: {
+				main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,
+			},
+			wallMs: base ? 100 : 90,
+		},
 		nativePlan: { compiler: "fixture" },
 		nativeBuild: base ? { peakRssBytes: 1024 } : {},
 	}),

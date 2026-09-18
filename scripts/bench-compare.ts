@@ -478,10 +478,7 @@ async function runSnapshot(
 	mkdirSync(pendingDirectory, { recursive: true });
 	const pendingOutput = path.join(pendingDirectory, `${label}.json`);
 	rmSync(pendingOutput, { force: true });
-	const checkpointedSelfCompile =
-		lanes.length === 1 &&
-		lanes[0] === "self-compile" &&
-		!extraArgs.includes("--self-compile-sample");
+	const selfCompile = lanes.length === 1 && lanes[0] === "self-compile";
 	const checkpoint = path.join(runDirectory, `${label}.checkpoint.json`);
 	const scratchDirectory = path.join(runDirectory, "scratch", label);
 	do {
@@ -489,7 +486,7 @@ async function runSnapshot(
 			? readFileSync(checkpoint, "utf8")
 			: undefined;
 		console.log(
-			`[bench-compare] ${label}${checkpointedSelfCompile ? " advance checkpoint" : ""}; log: ${label}.log`,
+			`[bench-compare] ${label}${selfCompile ? " advance checkpoint" : ""}; log: ${label}.log`,
 		);
 		await runLoggedCommand(
 			repository,
@@ -501,7 +498,7 @@ async function runSnapshot(
 				"--json-out",
 				pendingOutput,
 				...extraArgs,
-				...(checkpointedSelfCompile ? ["--checkpoint", checkpoint] : []),
+				...(selfCompile ? ["--checkpoint", checkpoint] : []),
 			],
 			path.join(runDirectory, `${label}.log`),
 			deadline,
@@ -511,7 +508,7 @@ async function runSnapshot(
 		if (existsSync(pendingOutput)) {
 			JSON.parse(readFileSync(pendingOutput, "utf8"));
 			renameSync(pendingOutput, output);
-		} else if (!checkpointedSelfCompile) {
+		} else if (!selfCompile) {
 			throw new Error(`benchmark did not write ${output}`);
 		} else if (
 			!existsSync(checkpoint) ||
@@ -545,30 +542,6 @@ function assertComparableSnapshots(base: unknown, head: unknown): void {
 		) {
 			throw new Error("base/head JavaScript workload or checksums differ");
 		}
-	}
-}
-
-function assertRevisionSnapshotStable(reference: unknown, actual: unknown): void {
-	type Snapshot = {
-		selfCompileOrdinary?: {
-			profile: string;
-			units: number;
-			codeUnits: number;
-			digest: string;
-		};
-	};
-	const left = (reference as Snapshot).selfCompileOrdinary;
-	const right = (actual as Snapshot).selfCompileOrdinary;
-	if (left === undefined && right === undefined) return;
-	if (
-		left === undefined ||
-		right === undefined ||
-		left.profile !== right.profile ||
-		left.units !== right.units ||
-		left.codeUnits !== right.codeUnits ||
-		left.digest !== right.digest
-	) {
-		throw new Error("self-compile output changed between samples of one revision");
 	}
 }
 
@@ -654,8 +627,6 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	let pairCount = 0;
 	let activeSnapshot: string | undefined;
 	let resumeAllowed = true;
-	let baseReference: unknown;
-	let headReference: unknown;
 	const persist = (
 		status: "running" | "complete" | "incomplete" | "failed",
 		error?: string,
@@ -700,13 +671,6 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		);
 		assertSource();
 		activeSnapshot = undefined;
-		const reference = isBase ? baseReference : headReference;
-		if (reference === undefined) {
-			if (isBase) baseReference = result;
-			else headReference = result;
-		} else {
-			assertRevisionSnapshotStable(reference, result);
-		}
 		return result;
 	};
 	persist("running");

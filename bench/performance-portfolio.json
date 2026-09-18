@@ -38,9 +38,9 @@
 		},
 		{
 			"id": "self-compile",
-			"runner": "benchmark",
+			"runner": "quick",
 			"weight": 1,
-			"primaryMetric": "selfCompileOrdinary.maligatorMs",
+			"primaryMetric": "self-compile.wallMs",
 			"maxRegressionPercent": 15,
 			"budgetSeconds": 2400
 		}

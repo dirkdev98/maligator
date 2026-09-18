@@ -18,7 +18,6 @@ import {
 	PerformanceProcessInterruptedError,
 	runBoundedProcess,
 } from "./performance-process.ts";
-import { prepareSelfCompileSource } from "./self-compile-workload.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -522,6 +521,18 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 										: "ordinary frozen-input sample",
 							]),
 					),
+					quickProfiles: Object.fromEntries(
+						selected
+							.filter(({ runner }) => runner === "quick")
+							.map(({ id }) => [
+								id,
+								id === "compiler-app"
+									? "node-hosted frozen app compile"
+									: id === "app-batch"
+										? "prepared application batch"
+										: "prepared self-hosted frozen compiler graph",
+							]),
+					),
 					writes: false,
 					builds: false,
 				},
@@ -558,18 +569,11 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 	};
 	persist("running");
 	let baselineDirectory: string | undefined;
-	let frozenSelfCompileInput: string | undefined;
 	try {
 		const quick = selected.filter((family) => family.runner === "quick");
-		if (quick.length > 0 || selected.some(({ id }) => id === "self-compile")) {
+		if (quick.length > 0) {
 			baselineDirectory = path.join(options.output, "baseline");
 			materializePortfolioBaseline(options.baseline, options.output);
-			if (selected.some(({ id }) => id === "self-compile")) {
-				frozenSelfCompileInput = prepareSelfCompileSource(
-					path.join(options.output, "frozen-self-compile"),
-					baselineDirectory,
-				);
-			}
 		}
 		if (quick.length > 0) {
 			if (baselineDirectory === undefined) throw new Error("missing portfolio baseline");
@@ -596,12 +600,13 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 					error: "budget exhausted",
 				});
 			} else {
+				if (family.id === "self-compile") {
+					throw new Error("self-compile portfolio family must use the quick runner");
+				}
 				const extraArgs =
 					family.id === "javascript"
 						? ["--mode", "closed-compiled"]
-						: family.id === "http"
-							? ["--http-seconds", "1"]
-							: ["--self-compile-sample", frozenSelfCompileInput!];
+						: ["--http-seconds", "1"];
 				const comparison = await runBenchmarkComparison({
 					baseRef: options.baseline,
 					lanes: [family.id],
@@ -621,9 +626,7 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 					evidence: comparison.reportPath,
 					...(primary === undefined ? {} : { primary }),
 					metrics: comparison.metrics.filter((metric) =>
-						metric.path.startsWith(
-							family.id === "self-compile" ? "selfCompileOrdinary." : `${family.id}.`,
-						),
+						metric.path.startsWith(`${family.id}.`),
 					),
 					...(completed ? {} : { error: "benchmark comparison incomplete" }),
 				});
@@ -637,12 +640,6 @@ export async function runPortfolio(args: ReadonlyArray<string>): Promise<void> {
 		rmSync(path.join(options.output, "baseline.tar"), { force: true });
 		if (baselineDirectory !== undefined) {
 			rmSync(baselineDirectory, { recursive: true, force: true });
-		}
-		if (frozenSelfCompileInput !== undefined) {
-			rmSync(path.dirname(path.dirname(frozenSelfCompileInput)), {
-				recursive: true,
-				force: true,
-			});
 		}
 	}
 	const decision = classifyPortfolio(config, outcomes);

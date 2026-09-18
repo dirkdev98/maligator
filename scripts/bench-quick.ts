@@ -20,8 +20,9 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { createCacheLease } from "../src/cache-management.ts";
+import { prepareSelfCompileSource } from "./self-compile-workload.ts";
 
-type Workload = "compiler-app" | "app-batch";
+type Workload = "compiler-app" | "app-batch" | "self-compile";
 type Revision = "baseline" | "candidate";
 interface Options {
 	baseline: string;
@@ -60,10 +61,14 @@ const APP_CONFIG = {
 	engine: { eval: false, realms: false, intl: { enabled: false } },
 	surface: { node: true, webPlatform: false, maligator: false },
 } satisfies MaligatorBuildConfig;
+const SELF_COMPILE_BUILD_CONFIG = {
+	engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
+	surface: { webPlatform: false, node: true, maligator: true },
+} satisfies MaligatorBuildConfig;
 const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
 
   --candidate CHECKOUT       candidate source (default: current repository)
-  --workload compiler-app|app-batch (default: compiler-app)
+  --workload compiler-app|app-batch|self-compile (default: compiler-app)
   --pairs N                  fixed alternating pairs, 1..15 (default: 3)
   --budget-seconds N         includes preparation, oracle, warmups, and samples (default: 300)
   --output DIRECTORY         new evidence directory (default: .cache/bench-quick/<timestamp>)
@@ -73,12 +78,13 @@ const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
 
 compiler-app compiles one frozen Express application graph to C using each Node-hosted
 compiler directly. app-batch builds production binaries once, then runs a fixed dataset
-through parsing, validation, grouping, sorting, and serialization. Both use one warmup
-per revision. app-batch requires both revisions to match the Node reference;
-compiler-app permits compiler output to change between revisions but requires each
-revision to remain deterministic across its samples. Fresh processes are timed end to
-end; warmups warm caches, not a persistent JavaScript process.
-No native self-hosted compiler, calibration, profiling, or adaptive extra pairs run.
+through parsing, validation, grouping, sorting, and serialization. self-compile builds
+each revision's production self-hosted compiler once, then compiles the same frozen
+baseline compiler graph. All workloads use one warmup per revision. app-batch requires
+both revisions to match the Node reference; compiler output may change between revisions
+but must remain deterministic within each revision. Fresh processes are timed end to end;
+warmups warm caches, not a persistent JavaScript process. No cold-start, calibration,
+profiling, diagnostic instrumentation, or adaptive extra pairs run.
 Exit 2 means failed or incomplete. Completed quick runs are screening evidence only.
 `;
 
@@ -115,7 +121,7 @@ function options(args: Array<string>): Options | undefined {
 		else if (argument === "--prepared") value.prepared = path.resolve(next);
 		else if (
 			argument === "--workload" &&
-			(next === "compiler-app" || next === "app-batch")
+			(next === "compiler-app" || next === "app-batch" || next === "self-compile")
 		)
 			value.workload = next;
 		else if (argument === "--pairs") value.pairs = Number(next);
@@ -208,12 +214,18 @@ function identity(value: Options) {
 		throw new Error("baseline and candidate dependency lockfiles differ");
 	return {
 		workload: value.workload,
-		version: 1,
+		version: 2,
 		baseline,
 		candidate,
 		harness: digest(readFileSync(import.meta.filename)),
 		fixture: digest(
-			readFileSync(value.workload === "app-batch" ? batchFixture : compilerWorker),
+			readFileSync(
+				value.workload === "app-batch"
+					? batchFixture
+					: value.workload === "self-compile"
+						? path.join(root, "bench/self-compile.mts")
+						: compilerWorker,
+			),
 		),
 		host: {
 			platform: process.platform,
@@ -222,19 +234,21 @@ function identity(value: Options) {
 			cpu: os.cpus()[0]?.model,
 			parallelism: os.availableParallelism(),
 			compiler:
-				value.workload === "app-batch"
+				value.workload !== "compiler-app"
 					? command(process.env.CC ?? "cc", ["--version"])
 					: null,
-			rust: value.workload === "app-batch" ? command("rustc", ["--version"]) : null,
+			rust: value.workload !== "compiler-app" ? command("rustc", ["--version"]) : null,
 		},
 		build:
-			value.workload === "app-batch"
-				? "production"
-				: "Node-hosted JS-to-C; instrumentation off; no native build",
+			value.workload === "compiler-app"
+				? "Node-hosted JS-to-C; instrumentation off; no native build"
+				: "production",
 		work:
 			value.workload === "app-batch"
 				? { rows: ROWS, iterations: ITERATIONS }
-				: { entry: "tests/fixtures/express-5/app.js" },
+				: value.workload === "self-compile"
+					? { entry: "bench/self-compile.mts", input: "frozen baseline source graph" }
+					: { entry: "tests/fixtures/express-5/app.js" },
 	};
 }
 
@@ -449,24 +463,29 @@ async function run(value: Options): Promise<void> {
 					);
 					target = path.join(preparation, "express/app.js");
 				} else {
-					copyFileSync(batchFixture, target);
+					if (value.workload === "app-batch") copyFileSync(batchFixture, target);
+					else target = prepareSelfCompileSource(preparation, value.baseline);
 					writeFileSync(
 						path.join(preparation, "maligator.build.mts"),
-						`export default ${JSON.stringify(APP_CONFIG)};\n`,
+						`export default ${JSON.stringify(
+							value.workload === "app-batch" ? APP_CONFIG : SELF_COMPILE_BUILD_CONFIG,
+						)};\n`,
 					);
-					writeFileSync(
-						input,
-						JSON.stringify(
-							Array.from({ length: ROWS }, (_, id) => ({
-								id,
-								region: `region-${id % 7}`,
-								category: `category-${(id * 13) % 11}`,
-								quantity: (id % 9) + 1,
-								price: ((id * 97) % 2000) + 1,
-								cancelled: id % 17 === 0,
-							})),
-						),
-					);
+					if (value.workload === "app-batch") {
+						writeFileSync(
+							input,
+							JSON.stringify(
+								Array.from({ length: ROWS }, (_, id) => ({
+									id,
+									region: `region-${id % 7}`,
+									category: `category-${(id * 13) % 11}`,
+									quantity: (id % 9) + 1,
+									price: ((id * 97) % 2000) + 1,
+									cancelled: id % 17 === 0,
+								})),
+							),
+						);
+					}
 					for (const revision of ["baseline", "candidate"] as const) {
 						const artifact = path.join(preparation, revision);
 						await execute(
@@ -475,7 +494,9 @@ async function run(value: Options): Promise<void> {
 							[
 								path.join(value[revision], "src/index.ts"),
 								"build",
-								target,
+								value.workload === "self-compile"
+									? path.join(value[revision], "bench/self-compile.mts")
+									: target,
 								"--production",
 								"--config",
 								path.join(preparation, "maligator.build.mts"),
@@ -516,27 +537,35 @@ async function run(value: Options): Promise<void> {
 							value[revision],
 							true,
 						)
-					: await execute(
-							label,
-							path.join(preparation, binaries[revision]),
-							[input, String(ITERATIONS)],
-							preparation,
-							true,
-						);
+					: value.workload === "app-batch"
+						? await execute(
+								label,
+								path.join(preparation, binaries[revision]),
+								[input, String(ITERATIONS)],
+								preparation,
+								true,
+							)
+						: await execute(
+								label,
+								path.join(preparation, binaries[revision]),
+								[target, output],
+								preparation,
+								true,
+							);
 			return {
 				label,
 				revision,
 				wallMs: measured.wallMs,
 				peakRssBytes: measured.peakRssBytes,
 				digest:
-					value.workload === "compiler-app"
-						? digest(JSON.stringify(files(output)))
-						: digest(readFileSync(measured.stdout)),
+					value.workload === "app-batch"
+						? digest(readFileSync(measured.stdout))
+						: digest(JSON.stringify(files(output))),
 			};
 		};
 		await inPhase("oracle", async () => {
 			if (oracle !== undefined) return;
-			if (value.workload === "compiler-app")
+			if (value.workload !== "app-batch")
 				oracle = (await sample("oracle", "baseline")).digest;
 			else {
 				const reference = await execute(
@@ -594,7 +623,7 @@ async function run(value: Options): Promise<void> {
 		if (!value.prepareOnly) {
 			await inPhase("warmup", async () => {
 				await checked("warm-baseline", "baseline");
-				await checked("warm-candidate", "candidate", value.workload === "compiler-app");
+				await checked("warm-candidate", "candidate", value.workload !== "app-batch");
 			});
 			await inPhase("measurement", async () => {
 				for (let index = 0; index < value.pairs; index++) {
@@ -644,7 +673,9 @@ if (import.meta.main) {
 							value.prepared === undefined
 								? value.workload === "compiler-app"
 									? "freeze one Express graph; no native compiler build"
-									: "freeze dataset and build two production binaries once"
+									: value.workload === "app-batch"
+										? "freeze dataset and build two production binaries once"
+										: "freeze the baseline compiler graph and build two self-hosted compilers once"
 								: "verify matching prepared artifacts",
 							"output oracle",
 							...(value.prepareOnly
