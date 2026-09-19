@@ -106,14 +106,17 @@ describe("runtime-gap case catalog", () => {
 		const kernels = catalog.cases;
 		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
 		expect(catalog.presets.quick).toHaveLength(37);
-		expect(catalog.presets.survey).toHaveLength(66);
-		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
+		expect(catalog.presets.survey).toHaveLength(67);
+		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(17);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 	});
 
 	it.each([
 		"map-operations",
 		"memory-versions",
+		"tiny-collection-lifecycles",
+		"core-lowering-replay",
+		"c-emitter-fragments",
 		"array-map",
 		"holey-array-traversal",
 		"json-stringify-shape-mutation",

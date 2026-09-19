@@ -45,6 +45,7 @@
 			"typed-array-operations",
 			"dynamic-array-operations",
 			"map-operations",
+			"tiny-collection-lifecycles",
 			"set-operations",
 			"stable-shape-properties",
 			"short-lived-records",
@@ -161,6 +162,19 @@
 			"sourceSeam": "src/compiler/core/core-ir-memory.ts",
 			"fixture": "cases/map-operations.mjs",
 			"controls": []
+		},
+		{
+			"id": "tiny-collection-lifecycles",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "small Map, Set, nested-state and record-array lifecycles",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties", "allocation-gc"],
+			"inputShape": "small-biased compiler collection lifecycle mix",
+			"unit": "collection operation",
+			"sourceSeam": "src/compiler/core/core-ir-memory.ts",
+			"fixture": "cases/tiny-collection-lifecycles.mjs",
+			"controls": ["map-operations", "set-operations", "short-lived-records"]
 		},
 		{
 			"id": "set-operations",
@@ -1162,6 +1176,32 @@
 			"sourceSeam": "src/compiler/target/lower-execution.ts",
 			"fixture": "cases/core-to-execution.mjs",
 			"controls": []
+		},
+		{
+			"id": "core-lowering-replay",
+			"group": "algorithm",
+			"suite": "compiler",
+			"owner": "real Core-to-Execution and Execution-to-Image replay",
+			"category": "compiler-algorithms",
+			"mechanisms": ["allocation-gc", "runtime-collections-properties"],
+			"inputShape": "optimized Core with many small functions and control-flow tails",
+			"unit": "input Core instruction",
+			"sourceSeam": "src/compiler/target/lower-execution.ts",
+			"fixture": "cases/core-lowering-replay.mjs",
+			"controls": ["core-to-execution"]
+		},
+		{
+			"id": "c-emitter-fragments",
+			"group": "algorithm",
+			"suite": "compiler",
+			"owner": "real generated-C fragment assembly and consumption",
+			"category": "compiler-algorithms",
+			"mechanisms": ["string-allocation", "allocation-gc"],
+			"inputShape": "lowered program image with numeric, branch and handler mixes",
+			"unit": "generated C code unit",
+			"sourceSeam": "src/compiler/target/emit-program-image.ts",
+			"fixture": "cases/c-emitter-fragments.mjs",
+			"controls": ["string-concatenation"]
 		}
 	]
 }
