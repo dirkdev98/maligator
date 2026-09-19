@@ -555,6 +555,23 @@ static bool mal_builtin_array_numeric_search_matches(
         (nan_matches && isnan(element_number) && isnan(search_number));
 }
 
+static bool mal_builtin_array_int32_search_matches(
+    MalValue element,
+    MalValue search,
+    f64 search_number
+) {
+    if (element == search) {
+        return true;
+    }
+    if (mal_value_is_int32(element)) {
+        return false;
+    }
+    if (element == MAL_VALUE_NEGATIVE_ZERO) {
+        return search_number == 0.0;
+    }
+    return mal_value_is_f64(element) && mal_value_to_f64(element) == search_number;
+}
+
 static bool mal_builtin_array_dense_range_present(
     const MalArrayObject *array, u32 start, u32 end
 ) {
@@ -1646,6 +1663,18 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
+        if (mal_value_is_int32(search)) {
+            f64 search_number = (f64) mal_value_to_i32(search);
+            for (u32 index = (u32) start; index < dense->length; index++) {
+                MalValue element;
+                if (mal_array_object_dense_get(dense, index, &element) &&
+                    mal_builtin_array_int32_search_matches(
+                        element, search, search_number)) {
+                    return mal_value_from_u32(index);
+                }
+            }
+            return mal_value_from_i32(-1);
+        }
         bool numeric_search = mal_ops_is_number(search);
         f64 search_number = numeric_search
             ? mal_ops_number_as_f64(search)
@@ -1715,6 +1744,19 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
+        if (mal_value_is_int32(search)) {
+            f64 search_number = (f64) mal_value_to_i32(search);
+            for (u32 index = (u32) start;; index--) {
+                MalValue element;
+                if (mal_array_object_dense_get(dense, index, &element) &&
+                    mal_builtin_array_int32_search_matches(
+                        element, search, search_number)) {
+                    return mal_value_from_u32(index);
+                }
+                if (index == 0) break;
+            }
+            return mal_value_from_i32(-1);
+        }
         bool numeric_search = mal_ops_is_number(search);
         f64 search_number = numeric_search
             ? mal_ops_number_as_f64(search)
@@ -1772,6 +1814,17 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && dense->length == length) {
+        if (mal_value_is_int32(search)) {
+            f64 search_number = (f64) mal_value_to_i32(search);
+            u32 end = dense->dense_count < length ? dense->dense_count : length;
+            for (u32 index = start; index < end; index++) {
+                if (mal_builtin_array_int32_search_matches(
+                        dense->elements[index], search, search_number)) {
+                    return mal_value_new_boolean(true);
+                }
+            }
+            return mal_value_new_boolean(false);
+        }
         bool numeric_search = mal_ops_is_number(search);
         f64 search_number = numeric_search
             ? mal_ops_number_as_f64(search)
