@@ -648,11 +648,10 @@ export function calibrationScaleTimeoutCap(
 	slowerMs: number,
 	warmupBlocks: number,
 ): number {
-	const totalBlocks = warmupBlocks + 1;
-	return Math.max(
-		1,
-		Math.floor((caseTimeoutMs * 0.75) / (Math.max(1, slowerMs) * totalBlocks)),
-	);
+	const scaleUnits = (caseTimeoutMs * 0.75) / Math.max(1, slowerMs);
+	const fullScaleCap = Math.floor(scaleUnits - warmupBlocks * 4);
+	if (fullScaleCap >= 4) return fullScaleCap;
+	return Math.max(1, Math.floor(scaleUnits / (warmupBlocks + 1)));
 }
 
 async function calibrateScale(

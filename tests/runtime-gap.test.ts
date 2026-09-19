@@ -50,7 +50,8 @@ function fixtureOutput(id: string): {
 
 describe("runtime-gap case catalog", () => {
 	it("accounts for every warmup block when capping calibration scale", () => {
-		expect(calibrationScaleTimeoutCap(60_000, 1_000, 5)).toBe(7);
+		expect(calibrationScaleTimeoutCap(60_000, 1_000, 5)).toBe(25);
+		expect(calibrationScaleTimeoutCap(60_000, 10_000, 5)).toBe(1);
 	});
 
 	it("keeps generated operation microcases current", () => {
