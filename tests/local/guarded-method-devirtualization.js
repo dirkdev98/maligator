@@ -39,6 +39,49 @@ class UniqueCalculator {
 
 check(new UniqueCalculator().compute(4) === 5, "unique class method");
 
+function makeCapturedCalculator(delta, bias) {
+	class CapturedCalculator {
+		#bias;
+		constructor() {
+			this.#bias = bias;
+		}
+		adjustCaptured(value) {
+			return value + delta + this.#bias;
+		}
+	}
+	return new CapturedCalculator();
+}
+
+function capturedLoop(receivers) {
+	let total = 0;
+	for (let index = 0; index < 8; index++) {
+		total += receivers[index & 1].adjustCaptured(index);
+	}
+	return total;
+}
+
+const capturedFirst = makeCapturedCalculator(1, 10);
+const capturedSecond = makeCapturedCalculator(5, 20);
+check(
+	capturedLoop([capturedFirst, capturedSecond]) === 172,
+	"captured method uses the loaded callee environment",
+);
+const capturedShadow = makeCapturedCalculator(2, 30);
+capturedShadow.adjustCaptured = (value) => value + 100;
+check(
+	capturedLoop([capturedFirst, capturedShadow]) === 472,
+	"captured method own shadow falls back",
+);
+const wrongBrand = makeCapturedCalculator(5, 20);
+wrongBrand.adjustCaptured = capturedFirst.adjustCaptured;
+let wrongBrandThrew = false;
+try {
+	capturedLoop([wrongBrand, wrongBrand]);
+} catch (error) {
+	wrongBrandThrew = error instanceof TypeError;
+}
+check(wrongBrandThrew, "captured method keeps its private brand");
+
 function finiteDispatch(useSecond, value) {
 	function first(input) {
 		if (input > 0) return input + 1;

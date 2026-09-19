@@ -667,6 +667,49 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
+	it("plans guarded direct dispatch for a unique captured instance method", () => {
+		let optimized: CoreProgram | undefined;
+		let plan: CoreOptimizationPlan | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Counter {
+					#add(value) { return value + 10; }
+					run(value) { return this.#add(value); }
+				}
+				function caller(counter, value) {
+					let total = 0;
+					for (let index = 0; index < 4; index++) total += counter.run(value + index);
+					return total;
+				}
+				caller(new Counter(), 1);`,
+				"core-guarded-instance-direct.js",
+			),
+			{
+				afterCoreOptimization(program, _context, _report, optimizationPlan) {
+					optimized = program;
+					plan = optimizationPlan;
+				},
+			},
+		);
+		expect(optimized).toBeDefined();
+		const caller = coreFunctionNamed(optimized!, "caller")!;
+		const target = coreFunctionNamed(optimized!, "run")!;
+		const operations = coreOperations(caller);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(false);
+		const call = operations.find(({ opcode }) => opcode === "call");
+		expect(call).toBeDefined();
+		expect(
+			plan === undefined ? [] : projectCoreSpecializationRecipes(plan.recipes),
+		).toContainEqual(
+			expect.objectContaining({
+				kind: "guarded-direct-call",
+				function: caller.id,
+				anchors: [call!.id],
+				targetFunctions: [target.id],
+			}),
+		);
+	});
+
 	it("finite-dispatches a private dense array of lexical-this callees", () => {
 		let optimized: CoreProgram | undefined;
 		let report: CoreOptimizationReport | undefined;

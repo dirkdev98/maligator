@@ -16,6 +16,10 @@ import {
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
+import {
+	coreInstanceMethodHint,
+	coreInstanceMethodHints,
+} from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	coreDirectBuiltinCallbackTarget,
@@ -1101,16 +1105,19 @@ function guardedCallCandidates(
 	analyses: CoreAnalysisManager,
 ): ReadonlyArray<CorePendingOptimizationCandidate> {
 	const candidates: Array<CorePendingOptimizationCandidate> = [];
+	const instanceMethodHints = coreInstanceMethodHints(program);
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		const targetSites = summaries.targets.outgoing(caller);
 		if (targetSites.length === 0) continue;
-		const reachable = analyses
-			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-				scope: "function",
-				function: caller,
-			})
-			.exceptional().reachable;
+		const controlFlow = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			scope: "function",
+			function: caller,
+		});
+		const reachable = controlFlow.exceptional().reachable;
+		const loopBlocks = new Set(
+			controlFlow.ordinary().loops.flatMap((loop) => [...loop.blocks]),
+		);
 		const outgoing = targetSites.filter(
 			(site) =>
 				fn.isInstructionLive(site.instruction) &&
@@ -1126,14 +1133,22 @@ function guardedCallCandidates(
 			globalTargetUses.set(target, (globalTargetUses.get(target) ?? 0) + 1);
 		}
 		for (const site of outgoing) {
+			const hintedTarget =
+				site.targets.functions.length === 0 &&
+				site.open &&
+				loopBlocks.has(fn.instructionBlock(site.instruction))
+					? coreInstanceMethodHint(fn, site.callee, site.receiver, instanceMethodHints)
+					: undefined;
+			const targetFunctions = Object.freeze(
+				hintedTarget === undefined ? [...site.targets.functions] : [hintedTarget],
+			);
 			if (
-				site.targets.functions.length === 0 ||
+				targetFunctions.length === 0 ||
 				fn.instructionAttributes(site.instruction)[
 					CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
 				] === true
 			)
 				continue;
-			const targetFunctions = Object.freeze([...site.targets.functions]);
 			if (
 				targetFunctions.length === 1 &&
 				coreValueIsLoadedGlobalProperty(fn, site.callee) &&
