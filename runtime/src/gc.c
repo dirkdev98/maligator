@@ -1110,10 +1110,6 @@ static void mal_gc_scan_fiber_exec(
 }
 
 static void mal_gc_scan_roots(MalVm *vm) {
-    // This opportunistic cache is not a root: no collection cycle may retain its
-    // last Map or key. Every sync/concurrent/verify root scan passes through here.
-    mal_vm_invalidate_map_get_set_cache(vm);
-
     // The heap-owned transition tree retains keys even when no live object
     // currently owns an intermediate shape.
     mal_shape_visit_transition_keys(&vm->heap, mal_gc_mark_value);

@@ -104,6 +104,40 @@ check(
 	iteratedSecond.value.join(":") === "second:3" && iterator.next().done,
 );
 
+const compacted = new Map();
+for (let i = 0; i < 128; i++) compacted.set(i, i);
+check("compaction hint setup", compacted.get(127) === 127);
+const compactionIterator = compacted.entries();
+for (let i = 0; i < 96; i++) compacted.delete(i);
+while (!compactionIterator.next().done) {}
+compacted.set(127, 999);
+check(
+	"compaction revalidates numeric hint",
+	compacted.size === 32 && compacted.get(127) === 999,
+);
+
+function interleavedCollections(count) {
+	const maps = Array.from(
+		{ length: count },
+		(_, offset) => new Map(Array.from({ length: 16 }, (__, key) => [key, key + offset])),
+	);
+	for (let iteration = 0; iteration < 64; iteration++) {
+		const key = iteration & 15;
+		const values = maps.map((map) => map.get(key));
+		for (let index = 0; index < maps.length; index++) {
+			maps[index].set(key, values[index] + 1);
+		}
+	}
+	return maps.every(
+		(map, offset) =>
+			Array.from(map.values()).reduce((sum, value) => sum + value, 0) ===
+			120 + 64 + offset * 16,
+	);
+}
+check("two interleaved maps", interleavedCollections(2));
+check("three interleaved maps", interleavedCollections(3));
+check("eight interleaved maps", interleavedCollections(8));
+
 const gcKey = { name: "key" };
 const gcMap = new Map([[gcKey, { generation: 1 }]]);
 gc();

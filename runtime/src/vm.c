@@ -500,13 +500,6 @@ static uptr mal_vm_compute_stack_limit(void) {
 #endif
 }
 
-void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
-    vm->map_get_set_cache = (MalMapGetSetCacheEntry) {
-        .collection = mal_value_new_undefined(),
-        .stored_key = mal_value_new_undefined(),
-    };
-}
-
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
     vm->literal_cache_count = 0;
@@ -664,7 +657,6 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->node_sqlite_run_result_shape = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
-    mal_vm_invalidate_map_get_set_cache(vm);
     vm->exact_script_call = nullptr;
     vm->global_capacity = program->global_count > 0 ? program->global_count : 1;
 #if !MAL_REALMS

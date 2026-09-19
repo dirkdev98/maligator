@@ -58,6 +58,7 @@ typedef struct MalTable {
     u32 entry_capacity;  // allocated `entries` cells
     u32 iterator_pins;   // persistent JS + transient native storage-order iterators
     bool owner_released; // Map/Set finalizer ran; last iterator pin owns teardown
+    u32 map_entry_hint;  // 1-based entry index for the last successful Map-family access
     i32 *slots;
     MalTableEntry *entries;
     // Most compiler Maps/Sets never outgrow four hash slots. Co-locate that
@@ -296,6 +297,7 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     table->entry_capacity = 0;
     table->iterator_pins = 0;
     table->owner_released = false;
+    table->map_entry_hint = 0;
     table->slots = nullptr;
     table->entries = nullptr;
 
@@ -713,19 +715,21 @@ bool mal_table_entry_matches(
         mal_key_value_equals(candidate->key, key.value);
 }
 
-bool mal_table_entry_matches_stored_key(
-    const MalTable *table, const void *entry, u64 handle_epoch,
-    MalValue stored_key
-) {
-    if (entry == nullptr || handle_epoch != table->handle_epoch) {
-        return false;
-    }
-    u32 index = mal_table_handle_index(entry);
-    if (index >= table->entry_count) {
-        return false;
-    }
+void *mal_table_map_entry_hint(const MalTable *table, MalKey key) {
+    u32 index = table->map_entry_hint - 1;
+    if (index >= table->entry_count) return nullptr;
     const MalTableEntry *candidate = &table->entries[index];
-    return candidate->live && candidate->key == stored_key;
+    u64 hash = mal_table_hash_value(key.value);
+    if (!candidate->live ||
+        candidate->hash_fingerprint != mal_table_hash_fingerprint(hash) ||
+        !mal_key_value_equals(candidate->key, key.value)) {
+        return nullptr;
+    }
+    return mal_table_handle(index);
+}
+
+void mal_table_remember_map_entry(MalTable *table, const void *entry) {
+    table->map_entry_hint = entry == nullptr ? 0 : (u32) (uptr) entry;
 }
 
 bool mal_table_read_entry_hint(

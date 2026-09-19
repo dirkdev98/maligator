@@ -166,11 +166,11 @@ bool mal_table_entry_matches(
     const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
 );
 
-/** Validate a cached handle and its exact stored-key identity without hashing. */
-bool mal_table_entry_matches_stored_key(
-    const MalTable *table, const void *entry, u64 handle_epoch,
-    MalValue stored_key
-);
+/** Validate the per-table Map-family hint against the current live key. */
+void *mal_table_map_entry_hint(const MalTable *table, MalKey key);
+
+/** Remember one Map-family entry without retaining its key or owner. */
+void mal_table_remember_map_entry(MalTable *table, const void *entry);
 
 // Cross-table hints require a live value entry with exact key identity.
 bool mal_table_read_entry_hint(

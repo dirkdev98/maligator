@@ -1277,15 +1277,6 @@ typedef struct MalGlobalPropertyCacheEntry {
     i32 string_index;
 } MalGlobalPropertyCacheEntry;
 
-/** One isolate-wide handle cache for adjacent ordinary Map get/set operations. */
-typedef struct MalMapGetSetCacheEntry {
-    MalValue collection;
-    MalValue stored_key;
-    MalTable *table;
-    void *entry;
-    u64 table_handle_epoch;
-} MalMapGetSetCacheEntry;
-
 /**
  * Per-VM versions of broad semantic assumptions used by compiled proof regions.
  * Every word starts at one and saturates to zero on theoretical u64 exhaustion;
@@ -1455,9 +1446,6 @@ typedef struct MalVm {
 
     /** Bounded cache indexed by runtime-image string index; see vm_ops.c. */
     MalGlobalPropertyCacheEntry *global_property_cache;
-
-    /** Ordinary Map.prototype.get -> set cache; direct collection helpers bypass it. */
-    MalMapGetSetCacheEntry map_get_set_cache;
 
     /** Innermost generated-code proof for a native builtin's script callback. */
     MalExactScriptCall *exact_script_call;
@@ -1778,9 +1766,6 @@ static inline MalVm *mal_vm_from_heap(MalHeap *heap) {
 
 /** Lazily materialize one function's property and shaped-literal cache rows. */
 void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index);
-
-/** Drop the ordinary Map get/set cache without retaining its collection or key. */
-void mal_vm_invalidate_map_get_set_cache(MalVm *vm);
 
 #if MAL_REALMS
 /**

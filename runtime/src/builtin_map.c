@@ -38,36 +38,22 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalValue new_target, MalValue callee);
 
 static void *mal_builtin_map_cached_entry(
-    MalVm *vm, MalValue collection, MalMapObject *map, MalKey key
+    MalMapObject *map, MalKey key
 ) {
-    MalMapGetSetCacheEntry *cache = &vm->map_get_set_cache;
-    if (cache->entry == nullptr || cache->collection != collection) {
-        return nullptr;
-    }
     MAL_PERF_COUNT(map_get_set_cache_checks);
-    if (cache->table == map->entries &&
-        mal_key_value_equals(cache->stored_key, key.value) &&
-        mal_table_entry_matches_stored_key(
-            map->entries, cache->entry, cache->table_handle_epoch,
-            cache->stored_key)) {
+    void *entry = mal_table_map_entry_hint(map->entries, key);
+    if (entry != nullptr) {
         MAL_PERF_COUNT(map_get_set_cache_hits);
-        return cache->entry;
+        return entry;
     }
     MAL_PERF_COUNT(map_get_set_cache_misses);
     return nullptr;
 }
 
 static void mal_builtin_map_cache_entry(
-    MalVm *vm, MalValue collection, MalMapObject *map,
-    void *entry
+    MalMapObject *map, void *entry
 ) {
-    vm->map_get_set_cache = (MalMapGetSetCacheEntry) {
-        .collection = collection,
-        .stored_key = mal_table_entry_key(map->entries, entry).value,
-        .table = map->entries,
-        .entry = entry,
-        .table_handle_epoch = mal_table_handle_epoch(map->entries),
-    };
+    mal_table_remember_map_entry(map->entries, entry);
 }
 
 /**
@@ -338,9 +324,10 @@ static MalValue mal_builtin_weak_map_constructor(MalVm *vm, MalValue this_value,
 static MalValue mal_builtin_map_get_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key_value
 ) {
+    (void) vm;
+    (void) this_value;
     MalKey key = mal_map_key_from_value(key_value);
-    void *entry = mal_builtin_map_cached_entry(
-        vm, this_value, map, key);
+    void *entry = mal_builtin_map_cached_entry(map, key);
     if (entry != nullptr) {
         return mal_table_entry_value(map->entries, entry);
     }
@@ -349,29 +336,31 @@ static MalValue mal_builtin_map_get_value(
         return mal_value_new_undefined();
     }
 
-    mal_builtin_map_cache_entry(vm, this_value, map, lookup.entry);
+    mal_builtin_map_cache_entry(map, lookup.entry);
     return mal_table_entry_value(map->entries, lookup.entry);
 }
 
 static bool mal_builtin_map_has_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key_value
 ) {
+    (void) vm;
+    (void) this_value;
     MalKey key = mal_map_key_from_value(key_value);
-    if (mal_builtin_map_cached_entry(vm, this_value, map, key) != nullptr) {
+    if (mal_builtin_map_cached_entry(map, key) != nullptr) {
         return true;
     }
     MalTableLookup lookup = mal_table_lookup(map->entries, key);
     if (!lookup.present) return false;
-    mal_builtin_map_cache_entry(vm, this_value, map, lookup.entry);
+    mal_builtin_map_cache_entry(map, lookup.entry);
     return true;
 }
 
 static MalValue mal_builtin_map_set_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key, MalValue value
 ) {
+    (void) vm;
     MalKey canonical_key = mal_map_key_from_value(key);
-    void *entry = mal_builtin_map_cached_entry(
-        vm, this_value, map, canonical_key);
+    void *entry = mal_builtin_map_cached_entry(map, canonical_key);
 
     if (entry == nullptr) {
         entry = mal_table_upsert_entry(map->entries, canonical_key, nullptr);
@@ -379,7 +368,7 @@ static MalValue mal_builtin_map_set_value(
     mal_table_entry_set_value(map->entries, entry, value);
     mal_gc_card(&map->object.header, key);
     mal_gc_card(&map->object.header, value);
-    mal_builtin_map_cache_entry(vm, this_value, map, entry);
+    mal_builtin_map_cache_entry(map, entry);
 
     return this_value;
 }
@@ -543,9 +532,6 @@ MalCompletion mal_builtin_collection_direct(
             MalMapObject *map = mal_value_to_map_object(this_value);
             if (exact_map || !map->weak) {
                 if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                if (vm->map_get_set_cache.collection == this_value) {
-                    mal_vm_invalidate_map_get_set_cache(vm);
-                }
                 MAL_PERF_COUNT(collection_direct_map_delete_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -621,9 +607,6 @@ static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value,
         return mal_value_new_undefined();
     }
 
-    if (vm->map_get_set_cache.collection == this_value) {
-        mal_vm_invalidate_map_get_set_cache(vm);
-    }
     return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
@@ -641,9 +624,7 @@ MalValue mal_builtin_map_has_known(
 }
 
 bool mal_builtin_map_delete_key(MalVm *vm, MalValue this_value, MalValue key) {
-    if (vm->map_get_set_cache.collection == this_value) {
-        mal_vm_invalidate_map_get_set_cache(vm);
-    }
+    (void) vm;
     return mal_map_object_delete(mal_value_to_map_object(this_value), key);
 }
 
@@ -665,9 +646,6 @@ static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, 
         return mal_value_new_undefined();
     }
 
-    if (vm->map_get_set_cache.collection == this_value) {
-        mal_vm_invalidate_map_get_set_cache(vm);
-    }
     mal_map_object_clear(map);
 
     return mal_value_new_undefined();
