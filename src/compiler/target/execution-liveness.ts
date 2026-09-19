@@ -165,17 +165,15 @@ export function executionSafepointRootRegisters(
 	const liveIn: Array<Uint32Array> = fn.blocks.map(() => new Uint32Array(wordCount));
 	const worklist = fn.blocks.map((_, block) => block);
 	const queued = new Uint8Array(fn.blocks.length).fill(1);
-	let workScratch: Uint32Array = new Uint32Array(wordCount);
 	while (worklist.length > 0) {
 		const block = worklist.pop()!;
 		queued[block] = 0;
-		workScratch.fill(0);
+		const out = new Uint32Array(wordCount);
 		for (const successor of successors[block]!) {
-			unionInto(workScratch, liveIn[successor]!);
+			unionInto(out, liveIn[successor]!);
 		}
-		const live = transfer(block, workScratch);
+		const live = transfer(block, out);
 		if (sameRegisters(live, liveIn[block]!)) continue;
-		workScratch = liveIn[block]!;
 		liveIn[block] = live;
 		for (const predecessor of predecessors[block]!) {
 			if (queued[predecessor] !== 0) continue;
@@ -185,12 +183,10 @@ export function executionSafepointRootRegisters(
 	}
 
 	const roots = new Map<CompilerInstruction, ReadonlyArray<number>>();
-	const live = new Uint32Array(wordCount);
-	const atSafepoint = new Uint32Array(wordCount);
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
-		live.fill(0);
+		const live = new Uint32Array(wordCount);
 		for (const successor of successors[block]!) {
 			unionInto(live, liveIn[successor]!);
 		}
@@ -198,7 +194,7 @@ export function executionSafepointRootRegisters(
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
 			if (safepoints.has(instruction)) {
-				atSafepoint.set(live);
+				const atSafepoint = live.slice();
 				for (const register of instructionOperands.reads) add(atSafepoint, register);
 				for (const register of instructionOperands.writes) add(atSafepoint, register);
 				roots.set(instruction, rootRegisters(atSafepoint));
