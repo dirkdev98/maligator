@@ -202,7 +202,7 @@ const HELP = `Usage: npm run bench:performance -- gap [options]
 Options:
   --samples N                paired timing samples per host (default: 5)
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
-  --warmup-blocks N          recorded warmup blocks per process (default: 2)
+  --warmup-blocks N          recorded warmup blocks per process (default: 5)
   --budget-seconds N         whole-run budget including the shared build (default: 300)
   --case-timeout-ms N        timeout for one child invocation (default: 10000)
   --preset quick|survey|confirm
@@ -252,7 +252,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	const preset = presetValue;
 	let samples = preset === "quick" ? 3 : preset === "confirm" ? 9 : 5;
 	let targetNodeMs = preset === "quick" ? 20 : preset === "confirm" ? 100 : 40;
-	let warmupBlocks = 2;
+	let warmupBlocks = 5;
 	let budgetSeconds = 300;
 	let caseTimeoutMs = 10_000;
 	let output = DEFAULT_JSON;

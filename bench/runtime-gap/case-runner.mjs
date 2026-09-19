@@ -5,7 +5,7 @@ export function runRuntimeGapCase(id, run, verify) {
 	if (!Number.isSafeInteger(scale) || scale < 1) {
 		throw new Error("scale must be a positive integer");
 	}
-	const warmupBlocks = Number(process.argv[3] ?? "2");
+	const warmupBlocks = Number(process.argv[3] ?? "5");
 	if (!Number.isSafeInteger(warmupBlocks) || warmupBlocks < 1 || warmupBlocks > 16) {
 		throw new Error("warmup blocks must be an integer from 1 through 16");
 	}
