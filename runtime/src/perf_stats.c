@@ -11,7 +11,7 @@
 #define MAL_PERF_INTRINSIC_NAME_MAX_LENGTH 63
 #define MAL_PERF_NATIVE_NAME_CAPACITY 512
 #define MAL_PERF_NATIVE_NAME_MAX_LENGTH 63
-#define MAL_PERF_COLLECTION_RECORD_CAPACITY (1u << 18)
+#define MAL_PERF_COLLECTION_RECORD_INITIAL_CAPACITY (1u << 16)
 
 typedef struct MalPerfIntrinsicName {
     u64 hash;
@@ -40,12 +40,15 @@ typedef struct MalPerfCollectionRecord {
 } MalPerfCollectionRecord;
 
 static u32 mal_perf_collection_latest_epoch;
+static usize mal_perf_collection_record_capacity;
+static usize mal_perf_collection_record_live;
+static usize mal_perf_collection_record_occupied;
 
 bool mal_perf_stats_enabled = false;
 MalPerfStats mal_perf_stats;
 static MalPerfIntrinsicName mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
 static MalPerfNativeName mal_perf_native_names[MAL_PERF_NATIVE_NAME_CAPACITY];
-static MalPerfCollectionRecord mal_perf_collection_records[MAL_PERF_COLLECTION_RECORD_CAPACITY];
+static MalPerfCollectionRecord *mal_perf_collection_records;
 
 static const char *const mal_perf_collection_kinds[MAL_PERF_COLLECTION_KIND_COUNT] = {
     "array",
@@ -55,30 +58,90 @@ static const char *const mal_perf_collection_kinds[MAL_PERF_COLLECTION_KIND_COUN
     "weak_set",
 };
 
-static usize mal_perf_collection_record_index(const void *collection) {
+static usize mal_perf_collection_record_index(
+    const void *collection, usize capacity
+) {
     uptr hash = (uptr) collection >> 4;
     hash ^= hash >> 17;
     hash *= (uptr) 0xed5ad4bbU;
-    return (usize) hash & (MAL_PERF_COLLECTION_RECORD_CAPACITY - 1);
+    return (usize) hash & (capacity - 1);
+}
+
+static bool mal_perf_collection_records_resize(usize capacity) {
+    MalPerfCollectionRecord *records = calloc(
+        capacity, sizeof(MalPerfCollectionRecord));
+    if (records == nullptr) return false;
+
+    usize live = 0;
+    for (usize index = 0; index < mal_perf_collection_record_capacity; index++) {
+        MalPerfCollectionRecord record = mal_perf_collection_records[index];
+        if (record.collection == nullptr ||
+            record.collection == (const void *) (uptr) 1) {
+            continue;
+        }
+        usize destination = mal_perf_collection_record_index(
+            record.collection, capacity);
+        while (records[destination].collection != nullptr) {
+            destination = (destination + 1) & (capacity - 1);
+        }
+        records[destination] = record;
+        live++;
+    }
+
+    free(mal_perf_collection_records);
+    mal_perf_collection_records = records;
+    mal_perf_collection_record_capacity = capacity;
+    mal_perf_collection_record_live = live;
+    mal_perf_collection_record_occupied = live;
+    return true;
+}
+
+static bool mal_perf_collection_records_prepare_insert(void) {
+    if (mal_perf_collection_record_capacity == 0) {
+        return mal_perf_collection_records_resize(
+            MAL_PERF_COLLECTION_RECORD_INITIAL_CAPACITY);
+    }
+    if ((mal_perf_collection_record_occupied + 1) * 10 <
+        mal_perf_collection_record_capacity * 7) {
+        return true;
+    }
+    usize capacity = (mal_perf_collection_record_live + 1) * 10 >=
+            mal_perf_collection_record_capacity * 7
+        ? mal_perf_collection_record_capacity * 2
+        : mal_perf_collection_record_capacity;
+    return capacity > mal_perf_collection_record_capacity ||
+            mal_perf_collection_record_live < mal_perf_collection_record_capacity
+        ? mal_perf_collection_records_resize(capacity)
+        : false;
 }
 
 static MalPerfCollectionRecord *mal_perf_collection_record(
     const void *collection, bool insert
 ) {
-    usize index = mal_perf_collection_record_index(collection);
+    if (insert && !mal_perf_collection_records_prepare_insert()) return nullptr;
+    if (mal_perf_collection_record_capacity == 0) return nullptr;
+    usize index = mal_perf_collection_record_index(
+        collection, mal_perf_collection_record_capacity);
     MalPerfCollectionRecord *tombstone = nullptr;
-    for (usize probe = 0; probe < MAL_PERF_COLLECTION_RECORD_CAPACITY; probe++) {
+    for (usize probe = 0; probe < mal_perf_collection_record_capacity; probe++) {
         MalPerfCollectionRecord *record = &mal_perf_collection_records[index];
         if (record->collection == collection) return record;
         if (record->collection == nullptr) {
             if (!insert) return nullptr;
-            return tombstone == nullptr ? record : tombstone;
+            if (tombstone != nullptr) {
+                mal_perf_collection_record_live++;
+                return tombstone;
+            }
+            mal_perf_collection_record_live++;
+            mal_perf_collection_record_occupied++;
+            return record;
         }
         if (record->collection == (const void *) (uptr) 1 && tombstone == nullptr) {
             tombstone = record;
         }
-        index = (index + 1) & (MAL_PERF_COLLECTION_RECORD_CAPACITY - 1);
+        index = (index + 1) & (mal_perf_collection_record_capacity - 1);
     }
+    if (tombstone != nullptr && insert) mal_perf_collection_record_live++;
     return tombstone;
 }
 
@@ -185,6 +248,7 @@ static void mal_perf_collection_summarize(
         mal_perf_stats.collection_mutations[kind][mal_perf_collection_mutation_bucket(record->mutations)]++;
         mal_perf_stats.collection_iterations[kind][mal_perf_collection_iteration_bucket(record->iterations)]++;
         record->collection = (const void *) (uptr) 1;
+        mal_perf_collection_record_live--;
     }
     if (kind != MAL_PERF_COLLECTION_ARRAY) return;
     if (array_deoptimized) {
@@ -222,7 +286,7 @@ void mal_perf_collection_finalize(
 }
 
 static void mal_perf_collection_snapshot_live(void) {
-    for (usize index = 0; index < MAL_PERF_COLLECTION_RECORD_CAPACITY; index++) {
+    for (usize index = 0; index < mal_perf_collection_record_capacity; index++) {
         MalPerfCollectionRecord *record = &mal_perf_collection_records[index];
         if (record->collection == nullptr ||
             record->collection == (const void *) (uptr) 1) {
@@ -1182,7 +1246,14 @@ void mal_perf_stats_reset(void) {
     memset(&mal_perf_stats, 0, sizeof(mal_perf_stats));
     memset(mal_perf_intrinsic_names, 0, sizeof(mal_perf_intrinsic_names));
     memset(mal_perf_native_names, 0, sizeof(mal_perf_native_names));
-    memset(mal_perf_collection_records, 0, sizeof(mal_perf_collection_records));
+    if (mal_perf_collection_records != nullptr) {
+        memset(
+            mal_perf_collection_records,
+            0,
+            mal_perf_collection_record_capacity * sizeof(MalPerfCollectionRecord));
+    }
+    mal_perf_collection_record_live = 0;
+    mal_perf_collection_record_occupied = 0;
     mal_perf_collection_latest_epoch = 0;
 }
 #else

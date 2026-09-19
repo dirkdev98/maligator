@@ -27,5 +27,9 @@ for (const value of arrays[0]) {
 	total += typeof value === "number" ? value : 0;
 }
 
-if (total !== 97) throw new Error(`unexpected collection checksum: ${total}`);
+const retained = [];
+for (let index = 0; index < 70_000; index++) retained.push([index]);
+total += retained.length + retained[69_999][0];
+
+if (total !== 140_096) throw new Error(`unexpected collection checksum: ${total}`);
 console.log("collection-perf-stats PASS 1/1");
