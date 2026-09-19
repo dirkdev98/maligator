@@ -422,4 +422,28 @@ function iterableFrom(next, close) {
 	);
 }
 
+{
+	const iteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+	let closeCalls = 0;
+	Object.defineProperty(iteratorPrototype, "return", {
+		configurable: true,
+		value() {
+			closeCalls++;
+			return {};
+		},
+	});
+	function sumPair(pair) {
+		const [left, right] = pair;
+		return left + right;
+	}
+	try {
+		ok(
+			"fixed pair observes Array iterator return mutation",
+			sumPair([2, 3]) === 5 && closeCalls === 1,
+		);
+	} finally {
+		delete iteratorPrototype.return;
+	}
+}
+
 console.log("array-destructuring-close PASS " + passed + "/" + passed);

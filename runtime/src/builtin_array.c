@@ -1970,6 +1970,37 @@ bool mal_builtin_array_iterator_protocol_guard(MalVm *vm) {
 #endif
 }
 
+bool mal_builtin_array_pair_destructure_try(
+    MalVm *vm, MalValue source,
+    MalValue *first_out, bool *first_done_out,
+    MalValue *second_out, bool *second_done_out
+) {
+    // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
+    if (!mal_primitive_method_protector || !mal_value_is_array_object(source)) {
+        return false;
+    }
+    MalArrayObject *array = mal_value_to_array_object(source);
+    if (array->object.prototype !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
+        mal_object_get_own(
+            &array->object,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present) {
+        return false;
+    }
+
+    *first_out = MAL_VALUE_UNDEFINED;
+    *second_out = MAL_VALUE_UNDEFINED;
+    *first_done_out = array->length == 0;
+    *second_done_out = array->length <= 1;
+    if (array->length > 0 && !mal_array_object_dense_get(array, 0, first_out)) {
+        return false;
+    }
+    if (array->length > 1 && !mal_array_object_dense_get(array, 1, second_out)) {
+        return false;
+    }
+    return true;
+}
+
 MalCompletion mal_builtin_array_push_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,

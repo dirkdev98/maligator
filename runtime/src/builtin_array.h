@@ -116,6 +116,12 @@ bool mal_builtin_array_push_try_direct(
 /** Side-effect-free proof for iterating a fresh current-realm Array. */
 bool mal_builtin_array_iterator_protocol_guard(MalVm *vm);
 
+bool mal_builtin_array_pair_destructure_try(
+    MalVm *vm, MalValue source,
+    MalValue *first_out, bool *first_done_out,
+    MalValue *second_out, bool *second_done_out
+);
+
 MalValue mal_builtin_array_sort(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue receiver,

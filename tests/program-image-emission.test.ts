@@ -2328,6 +2328,20 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_typed_array_object_get(vm,");
 	});
 
+	it("virtualizes the default dense Array protocol for fixed pair destructuring", () => {
+		const output = emit(
+			`"use strict"; function pair(values) { const [left, right] = values; return left + right; } globalThis.pair = pair;`,
+		);
+		expect(output).toContain("mal_builtin_array_pair_destructure_try(vm,");
+		expect(output).toContain("mal_vm_get_iterator(vm,");
+		expect(output).toContain("mal_vm_iterator_close_normal(vm,");
+
+		const effectful = emit(
+			`"use strict"; function pair(values) { const [left = sideEffect(), right] = values; return left + right; } globalThis.pair = pair;`,
+		);
+		expect(effectful).not.toContain("mal_builtin_array_pair_destructure_try(vm,");
+	});
+
 	it("does not retain raw dense iterator cursors across generator suspension", () => {
 		const output = emit(
 			`"use strict"; function* values() { for (const value of [1, 2]) yield value; } globalThis.values = values;`,

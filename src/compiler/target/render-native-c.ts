@@ -1802,6 +1802,15 @@ interface NativeIteratorCursorAction {
 	readonly role: "initialize" | "step";
 }
 
+interface NativeArrayPairDestructureAction {
+	readonly cursor: Extract<
+		NativeIteratorCursor,
+		{ readonly kind: "array-values-iterator-cursor" }
+	>;
+	readonly role: "initialize" | "step" | "close";
+	readonly index?: 0 | 1;
+}
+
 interface NativeIteratorResultVirtualizationAction {
 	readonly region: Extract<VmRegion, { kind: "iterator-result-virtualization" }>;
 }
@@ -2357,6 +2366,66 @@ function emitBody(
 			});
 		}
 	}
+	const nativeArrayPairDestructureActionByIp = new Map<
+		number,
+		NativeArrayPairDestructureAction
+	>();
+	for (const action of nativeIteratorCursorActionByIp.values()) {
+		const cursor = action.cursor;
+		if (
+			action.role !== "initialize" ||
+			cursor.kind !== "array-values-iterator-cursor" ||
+			cursor.stepIps.length !== 2
+		) {
+			continue;
+		}
+		const [firstStepIp, secondStepIp] = cursor.stepIps as [number, number];
+		const firstStep = fn.instructions[firstStepIp];
+		const secondStep = fn.instructions[secondStepIp];
+		const branch = fn.instructions[secondStepIp + 1];
+		const closeJump = fn.instructions[secondStepIp + 2];
+		const closeIp = secondStepIp + 3;
+		const close = fn.instructions[closeIp];
+		const afterClose = fn.instructions[secondStepIp + 4];
+		const continuationIp = secondStepIp + 5;
+		if (
+			firstStepIp !== cursor.initializeIp + 1 ||
+			secondStepIp !== firstStepIp + 1 ||
+			firstStep?.opcode !== "ITERATOR_STEP" ||
+			secondStep?.opcode !== "ITERATOR_STEP" ||
+			branch?.opcode !== "JUMP_IF" ||
+			branch.cond !== secondStep.doneDst ||
+			branch.targetIp !== continuationIp ||
+			closeJump?.opcode !== "JUMP" ||
+			closeJump.targetIp !== closeIp ||
+			close?.opcode !== "ITERATOR_CLOSE" ||
+			!close.normal ||
+			close.iterator !== cursor.iterator ||
+			afterClose?.opcode !== "JUMP" ||
+			afterClose.targetIp !== continuationIp
+		) {
+			continue;
+		}
+		const common = { cursor } as const;
+		nativeArrayPairDestructureActionByIp.set(cursor.initializeIp, {
+			...common,
+			role: "initialize",
+		});
+		nativeArrayPairDestructureActionByIp.set(firstStepIp, {
+			...common,
+			role: "step",
+			index: 0,
+		});
+		nativeArrayPairDestructureActionByIp.set(secondStepIp, {
+			...common,
+			role: "step",
+			index: 1,
+		});
+		nativeArrayPairDestructureActionByIp.set(closeIp, {
+			...common,
+			role: "close",
+		});
+	}
 	const jumpTargets = new Set<number>();
 	let ownsCaptureEnvironment = coro === null && fn.capturedCount > 0;
 	for (const instruction of fn.instructions) {
@@ -2574,6 +2643,17 @@ function emitBody(
 		if (action.role !== "initialize") continue;
 		lines.push(
 			`MalIteratorObject *__iter_cursor_${action.cursor.initializeIp} = nullptr;`,
+		);
+	}
+	for (const action of nativeArrayPairDestructureActionByIp.values()) {
+		if (action.role !== "initialize") continue;
+		const id = action.cursor.initializeIp;
+		lines.push(
+			`bool __array_pair_${id}_fast = false;`,
+			`MalValue __array_pair_${id}_first = MAL_VALUE_UNDEFINED;`,
+			`MalValue __array_pair_${id}_second = MAL_VALUE_UNDEFINED;`,
+			`bool __array_pair_${id}_first_done = false;`,
+			`bool __array_pair_${id}_second_done = false;`,
 		);
 	}
 	for (const action of nativeIteratorEntryPairVirtualizationActionByIp.values()) {
@@ -2910,6 +2990,7 @@ function emitBody(
 				nativeBuiltinCollectionCallChainAction:
 					nativeBuiltinCollectionCallChainActionByIp.get(ip),
 				nativeIteratorCursorAction: nativeIteratorCursorActionByIp.get(ip),
+				nativeArrayPairDestructureAction: nativeArrayPairDestructureActionByIp.get(ip),
 				nativeIteratorResultVirtualizationAction:
 					nativeIteratorResultVirtualizationActionByIp.get(ip),
 				nativeIteratorEntryPairVirtualizationAction:
@@ -3243,6 +3324,7 @@ interface NativeInstructionContext {
 	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
+	readonly nativeArrayPairDestructureAction?: NativeArrayPairDestructureAction;
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
@@ -3332,6 +3414,7 @@ function emitInstruction(
 		nativeStringCharCodeAtChainAction,
 		nativeBuiltinCollectionCallChainAction,
 		nativeIteratorCursorAction,
+		nativeArrayPairDestructureAction,
 		nativeIteratorResultVirtualizationAction,
 		nativeIteratorEntryPairVirtualizationAction,
 		numericFusionAction,
@@ -7337,6 +7420,19 @@ function emitInstruction(
 					`__iter_cursor_${cursor.initializeIp} = mal_vm_iterator_protocol_cursor(&${rec}, ${nativeIteratorCursorProtocol(cursor)});`,
 				);
 			}
+			if (nativeArrayPairDestructureAction?.role === "initialize") {
+				const id = nativeArrayPairDestructureAction.cursor.initializeIp;
+				return [
+					`__array_pair_${id}_fast = mal_builtin_array_pair_destructure_try(vm, ${boxed(instruction.source)}, &__array_pair_${id}_first, &__array_pair_${id}_first_done, &__array_pair_${id}_second, &__array_pair_${id}_second_done);`,
+					`if (__array_pair_${id}_fast) {`,
+					`  r${instruction.iteratorDst} = MAL_VALUE_UNDEFINED;`,
+					`  r${instruction.nextDst} = MAL_VALUE_UNDEFINED;`,
+					`  __iter_cursor_${id} = nullptr;`,
+					`} else {`,
+					...lines.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (nativeIteratorEntryPairVirtualizationAction?.role === "innerInitialize") {
 				const id = nativeIteratorEntryPairVirtualizationAction.region.outerStepIp;
 				return [
@@ -7450,7 +7546,7 @@ function emitInstruction(
 						: `r${instruction.doneDst} = ${profileCall("boxing", `mal_value_new_boolean(${done})`)};`,
 				];
 			}
-			return [
+			const lines = [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,
 				`if (!(${step})) ${onThrow()}`,
@@ -7459,6 +7555,23 @@ function emitInstruction(
 					? `r${instruction.doneDst} = ${done};`
 					: `r${instruction.doneDst} = ${profileCall("boxing", `mal_value_new_boolean(${done})`)};`,
 			];
+			if (nativeArrayPairDestructureAction?.role === "step") {
+				const id = nativeArrayPairDestructureAction.cursor.initializeIp;
+				const suffix = nativeArrayPairDestructureAction.index === 0 ? "first" : "second";
+				return [
+					`if (__array_pair_${id}_fast) {`,
+					`  r${instruction.valueDst} = __array_pair_${id}_${suffix};`,
+					...(reps[instruction.doneDst] === "boolean"
+						? [`  r${instruction.doneDst} = __array_pair_${id}_${suffix}_done;`]
+						: [
+								`  r${instruction.doneDst} = ${profileCall("boxing", `mal_value_new_boolean(__array_pair_${id}_${suffix}_done)`)};`,
+							]),
+					`} else {`,
+					...lines.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
+			return lines;
 		}
 		case "ITERATOR_CLOSE": {
 			if (nativeIteratorEntryPairVirtualizationAction?.role === "innerClose") {
@@ -7475,10 +7588,19 @@ function emitInstruction(
 			if (instruction.normal) {
 				// Normal-completion close: propagate return()'s throw and TypeError
 				// on a non-object result.
-				return [
+				const lines = [
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
 					`if (!mal_vm_iterator_close_normal(vm, &${rec})) ${onThrow()}`,
 				];
+				if (nativeArrayPairDestructureAction?.role === "close") {
+					const id = nativeArrayPairDestructureAction.cursor.initializeIp;
+					return [
+						`if (!__array_pair_${id}_fast) {`,
+						...lines.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return lines;
 			}
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
