@@ -61,6 +61,16 @@ check(
 		mapPrototypeGets === 1,
 );
 
+const singletonBigintMap = new Map([[9007199254740993n, "large"]]);
+check(
+	"Map singleton lookup preserves BigInt equality and tombstones",
+	singletonBigintMap.get(9007199254740993n) === "large" &&
+		singletonBigintMap.get(9007199254740995n) === undefined &&
+		singletonBigintMap.delete(9007199254740993n) &&
+		singletonBigintMap.set(9007199254740993n, "reinserted") === singletonBigintMap &&
+		singletonBigintMap.get(9007199254740993n) === "reinserted",
+);
+
 let setPrototypeGets = 0;
 const derivedSet = Reflect.construct(
 	Set,
