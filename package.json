@@ -94,7 +94,7 @@
 		"supports-color": "7.2.0",
 		"typescript": "6.0.3",
 		"valibot": "1.4.2",
-		"vitest": "4.1.7",
+		"vitest": "4.1.11",
 		"yaml": "2.9.0"
 	},
 	"engines": {
