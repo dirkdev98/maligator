@@ -123,6 +123,7 @@
 				"src/compiler/core/core-function-features.ts",
 				"src/compiler/core/core-function-kernel.ts",
 				"src/compiler/core/core-function-optimization-session.ts",
+				"src/compiler/core/core-instance-method-hints.ts",
 				"src/compiler/core/core-internal-attributes.ts",
 				"src/compiler/core/core-ir-call-targets.ts",
 				"src/compiler/core/core-ir-control-flow.ts",
