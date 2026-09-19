@@ -117,6 +117,11 @@ describe("runtime-gap case catalog", () => {
 		expect(catalog.presets.survey).toHaveLength(67);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(17);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
+		expect(
+			kernels
+				.filter(({ engineFeatures }) => engineFeatures.includes("regexp"))
+				.map(({ id }) => id),
+		).toEqual(["core-lowering-replay", "c-emitter-fragments"]);
 	});
 
 	it.each([

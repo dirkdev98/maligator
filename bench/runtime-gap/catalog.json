@@ -1188,7 +1188,8 @@
 			"unit": "input Core instruction",
 			"sourceSeam": "src/compiler/target/lower-execution.ts",
 			"fixture": "cases/core-lowering-replay.mjs",
-			"controls": ["core-to-execution"]
+			"controls": ["core-to-execution"],
+			"engineFeatures": ["regexp"]
 		},
 		{
 			"id": "c-emitter-fragments",
@@ -1201,7 +1202,8 @@
 			"unit": "generated C code unit",
 			"sourceSeam": "src/compiler/target/emit-program-image.ts",
 			"fixture": "cases/c-emitter-fragments.mjs",
-			"controls": ["string-concatenation"]
+			"controls": ["string-concatenation"],
+			"engineFeatures": ["regexp"]
 		}
 	]
 }

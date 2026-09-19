@@ -11,11 +11,6 @@ import type {
 import { buildNativeBinaryResult } from "../src/test-harness.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
-const CONFIG = resolveBuildConfig({
-	engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-	surface: { node: true, webPlatform: false, maligator: true },
-});
-
 function required(args: ReadonlyArray<string>, option: string): string {
 	const index = args.indexOf(option);
 	const value = index < 0 ? undefined : args[index + 1];
@@ -27,6 +22,15 @@ function main(args: ReadonlyArray<string>): void {
 	const fixture = path.resolve(required(args, "--fixture"));
 	const output = path.resolve(required(args, "--output"));
 	const name = required(args, "--name");
+	const config = resolveBuildConfig({
+		engine: {
+			eval: false,
+			realms: false,
+			regexp: args.includes("--enable-regexp"),
+			intl: { enabled: false },
+		},
+		surface: { node: true, webPlatform: false, maligator: true },
+	});
 	const binaryDirectory = path.join(path.dirname(output), "runtime-gap-binaries");
 	mkdirSync(binaryDirectory, { recursive: true });
 	const frontend: Array<{ readonly cache: "hit" | "miss"; readonly entrypoint: string }> =
@@ -37,7 +41,7 @@ function main(args: ReadonlyArray<string>): void {
 	const result = buildNativeBinaryResult({
 		fixture,
 		name,
-		config: CONFIG,
+		config,
 		production: true,
 		outDir: binaryDirectory,
 		environment: cleanTestEnvironment(),

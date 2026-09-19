@@ -1146,6 +1146,7 @@ async function buildRuntimeGapCase(
 				`malgap-${token}`,
 				"--output",
 				output,
+				...(descriptor.engineFeatures.includes("regexp") ? ["--enable-regexp"] : []),
 			],
 			{
 				cwd: REPOSITORY_ROOT,

@@ -19,6 +19,8 @@ export type RuntimeGapCategory =
 	| "compiler-algorithms"
 	| "unattributed-execution";
 
+export type RuntimeGapEngineFeature = "regexp";
+
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
 	readonly group: "primitive" | "runtime" | "algorithm";
@@ -31,6 +33,7 @@ export interface RuntimeGapCaseDescriptor {
 	readonly sourceSeam: string;
 	readonly fixture: string;
 	readonly controls: ReadonlyArray<string>;
+	readonly engineFeatures: ReadonlyArray<RuntimeGapEngineFeature>;
 }
 
 export interface RuntimeGapCatalog {
@@ -84,6 +87,13 @@ function descriptor(value: unknown): RuntimeGapCaseDescriptor {
 	const candidate = record(value, "runtime-gap case");
 	const mechanisms = names(candidate.mechanisms, "runtime-gap mechanisms");
 	const controls = names(candidate.controls, "runtime-gap controls");
+	const engineFeatures = names(
+		candidate.engineFeatures ?? [],
+		"runtime-gap engine features",
+	);
+	if (engineFeatures.some((feature) => feature !== "regexp")) {
+		throw new Error("runtime-gap catalog contains an unknown engine feature");
+	}
 	if (
 		typeof candidate.id !== "string" ||
 		!/^[a-z0-9][a-z0-9-]*$/.test(candidate.id) ||
@@ -113,6 +123,7 @@ function descriptor(value: unknown): RuntimeGapCaseDescriptor {
 		sourceSeam: candidate.sourceSeam,
 		fixture: candidate.fixture,
 		controls,
+		engineFeatures: engineFeatures as ReadonlyArray<RuntimeGapEngineFeature>,
 	};
 }
 
