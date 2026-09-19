@@ -1,13 +1,14 @@
 import { emitProgramTranslationUnits } from "../../../src/compiler/target/emit-program-image.ts";
-import { lowerCoreCompilationToExecution } from "../../../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../../../src/compiler/target/lower-native-program-image.ts";
 import { runRuntimeGapCase } from "../case-runner.mjs";
-import { compilerReplayCompilation } from "../compiler-replay-workload.mjs";
+import {
+	compilerEmitterFixtureFingerprint,
+	compilerEmitterImage,
+} from "../fixtures/compiler-emitter-image.mjs";
 
 const MODULUS = 1_000_000_007;
-const image = lowerExecutionToProgramImage(
-	lowerCoreCompilationToExecution(compilerReplayCompilation, { reuseRegisters: true }),
-	false,
+const fingerprintSeed = Number.parseInt(
+	compilerEmitterFixtureFingerprint.slice(0, 8),
+	16,
 );
 
 function consumeSource(source, checksum) {
@@ -18,10 +19,10 @@ function consumeSource(source, checksum) {
 }
 
 function emitFragments(scale) {
-	let checksum = 0;
+	let checksum = fingerprintSeed;
 	let operations = 0;
 	for (let round = 0; round < scale; round++) {
-		const units = emitProgramTranslationUnits(image, {
+		const units = emitProgramTranslationUnits(compilerEmitterImage, {
 			debugInfo: false,
 			maligatorSurface: true,
 		});

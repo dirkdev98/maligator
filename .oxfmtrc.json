@@ -3,6 +3,7 @@
 	"ignorePatterns": [
 		"scripts/test262.json",
 		"bench/baseline.json",
+		"bench/runtime-gap/fixtures/compiler-emitter-image.mjs",
 		"runtime/src/generated/primordial_registry.inc",
 		"runtime/src/generated/bytecode_operations.inc",
 		"runtime/src/generated/known_*.inc",
