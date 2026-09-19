@@ -719,9 +719,13 @@ void *mal_table_map_entry_hint(const MalTable *table, MalKey key) {
     u32 index = table->map_entry_hint - 1;
     if (index >= table->entry_count) return nullptr;
     const MalTableEntry *candidate = &table->entries[index];
+    if (!candidate->live) return nullptr;
+    if (candidate->key == key.value) return mal_table_handle(index);
+    if (!mal_value_is_string(key.value) && !mal_value_is_bigint(key.value)) {
+        return nullptr;
+    }
     u64 hash = mal_table_hash_value(key.value);
-    if (!candidate->live ||
-        candidate->hash_fingerprint != mal_table_hash_fingerprint(hash) ||
+    if (candidate->hash_fingerprint != mal_table_hash_fingerprint(hash) ||
         !mal_key_value_equals(candidate->key, key.value)) {
         return nullptr;
     }

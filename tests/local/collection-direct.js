@@ -124,6 +124,14 @@ ok(
 	"Map key canonicalization",
 	special.get(Number("nan")) === "nan" && special.get(0) === "zero",
 );
+const equivalentKeys = new Map();
+equivalentKeys.set(["dynamic", "string"].join("-"), "string");
+equivalentKeys.set(BigInt("9007199254740993"), "bigint");
+ok(
+	"Map equal nonidentical primitive keys",
+	equivalentKeys.get("dynamic-string".split("").join("")) === "string" &&
+		equivalentKeys.get(BigInt("9007199254740993")) === "bigint",
+);
 
 const plain = {
 	value: 1,
