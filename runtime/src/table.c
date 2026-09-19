@@ -420,6 +420,15 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
         if (stats != nullptr) stats->lookup_misses++;
         return (MalTableLookup) {.present = false, .entry = nullptr};
     }
+    if (table->entry_count == 1) {
+        const MalTableEntry *entry = &table->entries[0];
+        if (entry->live && mal_key_value_equals(entry->key, key.value)) {
+            if (stats != nullptr) stats->lookup_hits++;
+            return (MalTableLookup) {.present = true, .entry = mal_table_handle(0)};
+        }
+        if (stats != nullptr) stats->lookup_misses++;
+        return (MalTableLookup) {.present = false, .entry = nullptr};
+    }
     if (key.kind == MAL_KEY_INDEX && table->mode == MAL_TABLE_MODE_OBJECT) {
         u32 index = mal_key_index_value(key);
         if (index < table->entry_count) {
