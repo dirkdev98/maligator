@@ -321,7 +321,7 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
         "get_set_cache_misses=%llu exact_receiver_hits=%llu "
-        "direct_get_hits=%llu direct_set_hits=%llu "
+        "direct_get_hits=%llu direct_weak_get_hits=%llu direct_set_hits=%llu "
         "direct_map_has_hits=%llu direct_map_delete_hits=%llu "
         "direct_add_hits=%llu direct_set_has_hits=%llu "
         "direct_set_delete_hits=%llu direct_fallbacks=%llu "
@@ -331,6 +331,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.map_get_set_cache_misses,
         (unsigned long long) mal_perf_stats.collection_exact_receiver_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_get_hits,
+        (unsigned long long) mal_perf_stats.collection_direct_weak_map_get_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_set_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_has_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_delete_hits,

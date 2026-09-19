@@ -186,6 +186,7 @@ typedef struct MalPerfStats {
     u64 map_get_set_cache_misses;
     u64 collection_exact_receiver_hits;
     u64 collection_direct_map_get_hits;
+    u64 collection_direct_weak_map_get_hits;
     u64 collection_direct_map_set_hits;
     u64 collection_direct_map_has_hits;
     u64 collection_direct_map_delete_hits;
