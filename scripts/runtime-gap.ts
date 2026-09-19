@@ -181,6 +181,7 @@ interface FullCompilerAnalysis {
 interface Options {
 	readonly samples: number;
 	readonly targetNodeMs: number;
+	readonly warmupBlocks: number;
 	readonly budgetSeconds: number;
 	readonly caseTimeoutMs: number;
 	readonly output: string;
@@ -201,6 +202,7 @@ const HELP = `Usage: npm run bench:performance -- gap [options]
 Options:
   --samples N                paired timing samples per host (default: 5)
   --target-node-ms N         minimum calibrated Node kernel time (default: 40)
+  --warmup-blocks N          recorded warmup blocks per process (default: 2)
   --budget-seconds N         whole-run budget including the shared build (default: 300)
   --case-timeout-ms N        timeout for one child invocation (default: 10000)
   --preset quick|survey|confirm
@@ -250,6 +252,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	const preset = presetValue;
 	let samples = preset === "quick" ? 3 : preset === "confirm" ? 9 : 5;
 	let targetNodeMs = preset === "quick" ? 20 : preset === "confirm" ? 100 : 40;
+	let warmupBlocks = 2;
 	let budgetSeconds = 300;
 	let caseTimeoutMs = 10_000;
 	let output = DEFAULT_JSON;
@@ -269,6 +272,10 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 			index++;
 		} else if (option === "--target-node-ms") {
 			targetNodeMs = positiveInteger(requiredValue(args, index), option);
+			index++;
+		} else if (option === "--warmup-blocks") {
+			warmupBlocks = positiveInteger(requiredValue(args, index), option);
+			if (warmupBlocks > 16) throw new Error(`${option} must not exceed 16`);
 			index++;
 		} else if (option === "--budget-seconds") {
 			budgetSeconds = positiveInteger(requiredValue(args, index), option);
@@ -321,6 +328,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	return {
 		samples,
 		targetNodeMs,
+		warmupBlocks,
 		budgetSeconds,
 		caseTimeoutMs,
 		output,
@@ -492,6 +500,7 @@ function profileSelfSize(node: unknown): number {
 async function nodeResourceSample(
 	fixture: string,
 	scale: number,
+	warmupBlocks: number,
 	sampleAllocation: boolean,
 	timeoutMs: number,
 	reference: KernelOutput,
@@ -499,7 +508,7 @@ async function nodeResourceSample(
 	if (!sampleAllocation) {
 		const measured = await timeInvocation(
 			process.execPath,
-			["--trace-gc-nvp", fixture, String(scale)],
+			["--trace-gc-nvp", fixture, String(scale), String(warmupBlocks)],
 			cleanTestEnvironment(),
 			timeoutMs,
 		);
@@ -529,6 +538,7 @@ async function nodeResourceSample(
 				`--heap-prof-dir=${profileRoot}`,
 				fixture,
 				String(scale),
+				String(warmupBlocks),
 			],
 			cleanTestEnvironment(),
 			timeoutMs,
@@ -566,12 +576,13 @@ async function nodeResourceSample(
 async function maligatorResourceSample(
 	binary: string,
 	scale: number,
+	warmupBlocks: number,
 	timeoutMs: number,
 	reference: KernelOutput,
 ): Promise<ResourceSample> {
 	const measured = await timeInvocation(
 		binary,
-		[String(scale)],
+		[String(scale), String(warmupBlocks)],
 		cleanTestEnvironment({
 			MAL_GC_STATS: "1",
 			MAL_GC_CONTROL: "1",
@@ -636,17 +647,18 @@ async function calibrateScale(
 	binary: string,
 	descriptor: KernelDescriptor,
 	targetNodeMs: number,
+	warmupBlocks: number,
 	deadline: number,
 	caseTimeoutMs: number,
 ): Promise<number> {
 	const node = await runKernel(
 		process.execPath,
-		[descriptor.fixturePath, "1"],
+		[descriptor.fixturePath, "1", String(warmupBlocks)],
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
 	const maligator = await runKernel(
 		binary,
-		["1"],
+		["1", String(warmupBlocks)],
 		invocationTimeout(deadline, caseTimeoutMs),
 	);
 	assertRuntimeGapParity(node, maligator);
@@ -677,7 +689,7 @@ async function measureKernel(
 	descriptor: KernelDescriptor,
 	options: Pick<
 		Options,
-		"samples" | "targetNodeMs" | "skipNodeAllocation" | "caseTimeoutMs"
+		"samples" | "targetNodeMs" | "warmupBlocks" | "skipNodeAllocation" | "caseTimeoutMs"
 	>,
 	deadline: number,
 ): Promise<CompilerHostGapKernelResult> {
@@ -685,6 +697,7 @@ async function measureKernel(
 		binary,
 		descriptor,
 		options.targetNodeMs,
+		options.warmupBlocks,
 		deadline,
 		options.caseTimeoutMs,
 	);
@@ -695,13 +708,13 @@ async function measureKernel(
 		const runNode = (): Promise<KernelOutput> =>
 			runKernel(
 				process.execPath,
-				[descriptor.fixturePath, String(scale)],
+				[descriptor.fixturePath, String(scale), String(options.warmupBlocks)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
 		const runMaligator = (): Promise<KernelOutput> =>
 			runKernel(
 				binary,
-				[String(scale)],
+				[String(scale), String(options.warmupBlocks)],
 				invocationTimeout(deadline, options.caseTimeoutMs),
 			);
 		const ordered = sample % 2 === 0 ? [runNode, runMaligator] : [runMaligator, runNode];
@@ -729,6 +742,7 @@ async function measureKernel(
 		nodeResourceSample(
 			descriptor.fixturePath,
 			scale,
+			options.warmupBlocks,
 			!options.skipNodeAllocation,
 			invocationTimeout(deadline, options.caseTimeoutMs),
 			reference!,
@@ -738,6 +752,7 @@ async function measureKernel(
 		maligatorResourceSample(
 			binary,
 			scale,
+			options.warmupBlocks,
 			invocationTimeout(deadline, options.caseTimeoutMs),
 			reference!,
 		),
@@ -1146,7 +1161,6 @@ async function buildRuntimeGapCase(
 				`malgap-${token}`,
 				"--output",
 				output,
-				...(descriptor.engineFeatures.includes("regexp") ? ["--enable-regexp"] : []),
 			],
 			{
 				cwd: REPOSITORY_ROOT,
@@ -1246,6 +1260,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 					cases: descriptors,
 					samples: options.samples,
 					targetNodeMs: options.targetNodeMs,
+					warmupBlocks: options.warmupBlocks,
 					budgetSeconds: options.budgetSeconds,
 					caseTimeoutMs: options.caseTimeoutMs,
 					nodeAllocation: !options.skipNodeAllocation,
@@ -1307,6 +1322,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 				preset: options.preset ?? null,
 				samples: options.samples,
 				targetNodeMs: options.targetNodeMs,
+				warmupBlocks: options.warmupBlocks,
 				budgetSeconds: options.budgetSeconds,
 				caseTimeoutMs: options.caseTimeoutMs,
 				selectedCases: descriptors.map(({ id }) => id),

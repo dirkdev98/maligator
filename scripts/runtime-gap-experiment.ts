@@ -127,7 +127,6 @@ function newExperiment(args: ReadonlyArray<string>): void {
 		sourceSeam: source?.sourceSeam ?? "scratch experiment",
 		fixture: "case.mjs",
 		controls,
-		engineFeatures: source?.engineFeatures ?? [],
 	};
 	writeFileSync(
 		path.join(directory, "experiment.json"),

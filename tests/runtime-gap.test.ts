@@ -48,10 +48,10 @@ function fixtureOutput(id: string): {
 }
 
 describe("runtime-gap case catalog", () => {
-	it("keeps the captured compiler emitter fixture current", () => {
+	it("keeps generated operation microcases current", () => {
 		execFileSync(
 			process.execPath,
-			["scripts/generate-runtime-gap-compiler-fixture.mts", "--check"],
+			["scripts/generate-runtime-gap-microcases.mts", "--check"],
 			{ stdio: "pipe" },
 		);
 	});
@@ -114,22 +114,60 @@ describe("runtime-gap case catalog", () => {
 		const kernels = catalog.cases;
 		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
 		expect(catalog.presets.quick).toHaveLength(37);
-		expect(catalog.presets.survey).toHaveLength(67);
-		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(17);
+		expect(catalog.presets.survey).toHaveLength(66);
+		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
+		const operationMicrocases = kernels.filter(({ id }) =>
+			/^(?:(?:private|public)-(?:field-read|method-call)-|(?:weakmap|map)-get-(?:hit|miss)-|map-get-set-|pair-|(?:typed-array|array)-(?:at-negative|last-index-control)-)/.test(
+				id,
+			),
+		);
+		expect(operationMicrocases).toHaveLength(60);
 		expect(
-			kernels
-				.filter(({ engineFeatures }) => engineFeatures.includes("regexp"))
-				.map(({ id }) => id),
-		).toEqual(["core-lowering-replay", "c-emitter-fragments"]);
+			operationMicrocases.every(
+				({ id }) =>
+					!catalog.presets.quick.includes(id) && !catalog.presets.survey.includes(id),
+			),
+		).toBe(true);
+	});
+
+	it("records a configurable sequence of warmup blocks", () => {
+		const descriptor = loadRuntimeGapCatalog().cases.find(
+			({ id }) => id === "pair-indexed-control",
+		)!;
+		const output = JSON.parse(
+			execFileSync(process.execPath, [descriptor.fixturePath, "1", "5"], {
+				encoding: "utf8",
+			}),
+		) as { readonly warmupMs: ReadonlyArray<number> };
+		expect(output.warmupMs).toHaveLength(5);
+	});
+
+	it.each([
+		["private-field-read-32-last-known", "public-field-read-32-last-known"],
+		["private-field-read-32-last-selected", "public-field-read-32-last-selected"],
+		["private-method-call-known", "public-method-call-known"],
+		["private-method-call-selected", "public-method-call-selected"],
+		["weakmap-get-hit-256-known", "map-get-hit-256-known"],
+		["weakmap-get-hit-256-selected", "map-get-hit-256-selected"],
+		["weakmap-get-miss-256-known", "map-get-miss-256-known"],
+		["weakmap-get-miss-256-selected", "map-get-miss-256-selected"],
+		["map-get-set-interleaved", "map-get-set-adjacent"],
+		["pair-destructure", "pair-indexed-control"],
+		["array-at-negative-known", "array-last-index-control-known"],
+		["array-at-negative-selected", "array-last-index-control-selected"],
+		["typed-array-at-negative-known", "typed-array-last-index-control-known"],
+		["typed-array-at-negative-selected", "typed-array-last-index-control-selected"],
+	])("keeps %s matched to %s", (target, control) => {
+		const targetOutput = fixtureOutput(target);
+		const controlOutput = fixtureOutput(control);
+		expect(targetOutput.operations).toBe(controlOutput.operations);
+		expect(targetOutput.checksum).toBe(controlOutput.checksum);
 	});
 
 	it.each([
 		"map-operations",
 		"memory-versions",
-		"tiny-collection-lifecycles",
-		"core-lowering-replay",
-		"c-emitter-fragments",
 		"array-map",
 		"holey-array-traversal",
 		"json-stringify-shape-mutation",
@@ -142,15 +180,6 @@ describe("runtime-gap case catalog", () => {
 		expect(second.operations).toBe(first.operations);
 		expect(second.checksum).toBe(first.checksum);
 		expect(first.operations).toBeGreaterThan(0);
-	});
-
-	it.each([
-		["core-lowering-replay", 250, 1_000],
-		["c-emitter-fragments", 50_000, 250_000],
-	])("keeps %s between primitive and macro workload sizes", (id, minimum, maximum) => {
-		const output = fixtureOutput(id);
-		expect(output.operations).toBeGreaterThanOrEqual(minimum);
-		expect(output.operations).toBeLessThanOrEqual(maximum);
 	});
 
 	it("keeps rest probes matched to their controls", () => {

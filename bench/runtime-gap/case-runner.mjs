@@ -1,12 +1,16 @@
 import { performance } from "node:perf_hooks";
 
-export function runRuntimeGapCase(id, run) {
+export function runRuntimeGapCase(id, run, verify) {
 	const scale = Number(process.argv[2] ?? "1");
 	if (!Number.isSafeInteger(scale) || scale < 1) {
 		throw new Error("scale must be a positive integer");
 	}
+	const warmupBlocks = Number(process.argv[3] ?? "2");
+	if (!Number.isSafeInteger(warmupBlocks) || warmupBlocks < 1 || warmupBlocks > 16) {
+		throw new Error("warmup blocks must be an integer from 1 through 16");
+	}
 	const warmupMs = [];
-	for (let warmup = 0; warmup < 2; warmup++) {
+	for (let warmup = 0; warmup < warmupBlocks; warmup++) {
 		const warmupStartedAt = performance.now();
 		run(Math.min(scale, 4));
 		warmupMs.push(performance.now() - warmupStartedAt);
@@ -20,6 +24,7 @@ export function runRuntimeGapCase(id, run) {
 	const startedAt = performance.now();
 	const measured = run(scale);
 	const finishedAt = performance.now();
+	verify?.(measured);
 	const afterAllocated =
 		typeof allocatedReader === "function" ? allocatedReader() : undefined;
 	const afterCollections =
