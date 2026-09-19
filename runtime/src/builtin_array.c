@@ -2824,15 +2824,6 @@ bool mal_builtin_array_at_try_direct(
             mal_value_to_native_function_object(callee)) != mal_builtin_array_at) {
         return false;
     }
-    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
-    if (!mal_value_is_array_object(prototype)) return false;
-    MalPropertyLookup live = mal_object_get_own(
-        mal_value_to_object(prototype), mal_intrinsic_string_key(vm, "at"));
-    if (!live.present || (live.desc.flags & MAL_PROPERTY_ACCESSOR) ||
-        live.desc.value != callee) {
-        return false;
-    }
-
     f64 relative = arg_count == 0 ? 0 :
         mal_ops_number_to_integer_or_infinity(mal_ops_number_as_f64(args[0]));
     u32 length = mal_value_to_array_object(this_value)->length;
