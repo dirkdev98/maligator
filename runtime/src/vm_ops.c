@@ -2755,7 +2755,8 @@ bool mal_op_call_guarded_builtin(
     switch ((MalGuardedBuiltinCallOp) operation) {
         case MAL_GUARDED_BUILTIN_MAP_GET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
-            receiver_matches = mal_value_is_map_object(receiver);
+            receiver_matches = mal_value_is_map_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
             break;
         case MAL_GUARDED_BUILTIN_MAP_SET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
@@ -2791,15 +2792,7 @@ bool mal_op_call_guarded_builtin(
             return false;
     }
     MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
-    if (!receiver_matches) return false;
-    if (operation == MAL_GUARDED_BUILTIN_MAP_GET) {
-        if (!mal_builtin_map_get_callee_matches(
-                vm, callee, mal_value_to_map_object(receiver)->weak)) {
-            return false;
-        }
-    } else if (callee != vm->intrinsics[expected]) {
-        return false;
-    }
+    if (!receiver_matches || callee != vm->intrinsics[expected]) return false;
 
     MalValue arguments[2] = {
         mal_value_new_undefined(),

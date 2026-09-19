@@ -45,14 +45,8 @@ MalValue mal_builtin_map_delete_known(
     i32 arg_count
 );
 
-bool mal_builtin_map_get_callee_matches(
-    MalVm *vm,
-    MalValue callee,
-    bool weak
-);
-
 /**
- * Guarded native-backend dispatch for direct collection scalar-operation sites.
+ * Guarded native-backend dispatch for direct Map/Set scalar-operation sites.
  * Exact intrinsic-callee and receiver-brand hits execute the collection body
  * without a native call frame; every miss retains ordinary cached dispatch.
  */

@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_map.c",
-		"sha256": "78720d68748da70c79cd493e7e340f7c35abf92cc2db4a66ec2018d560ae6563"
+		"sha256": "5fc9ece9560d8b70283fee6ff2c2c6504cddf7b4721a2a646d788f2996a1ae1a"
 	},
 	{
 		"file": "builtin_math.c",
@@ -689,7 +689,7 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "83bffc20debed0fd7b18859c2b4ba5d5db87d4b5154e2d501c9629ba63c90de0"
+		"sha256": "1009f857c010b61dbf043519646861ebac2c4f8d4f825b37642edc2ca52fb7b2"
 	},
 	{
 		"file": "vm_ops.h",

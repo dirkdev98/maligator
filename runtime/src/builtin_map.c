@@ -472,9 +472,6 @@ MalCompletion mal_builtin_collection_direct(
     const bool unknown_receiver =
         receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN;
     const bool callee_matches =
-        (operation == MAL_GUARDED_BUILTIN_MAP_GET &&
-         (mal_builtin_map_get_callee_matches(vm, callee, false) ||
-          mal_builtin_map_get_callee_matches(vm, callee, true))) ||
         callee == vm->intrinsics[expected] ||
         (has_operation &&
          (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] ||
@@ -488,11 +485,9 @@ MalCompletion mal_builtin_collection_direct(
         if (operation == MAL_GUARDED_BUILTIN_MAP_GET &&
             (exact_map || (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            const bool weak = !exact_map && map->weak;
-            if (mal_builtin_map_get_callee_matches(vm, callee, weak)) {
+            if (exact_map || !map->weak) {
                 if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_map_get_hits);
-                if (weak) MAL_PERF_COUNT(collection_direct_weak_map_get_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
                     .value = mal_builtin_map_get_value(
@@ -825,15 +820,6 @@ static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_valu
     }
 
     return mal_map_object_get(map, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-}
-
-bool mal_builtin_map_get_callee_matches(MalVm *vm, MalValue callee, bool weak) {
-    if (!mal_value_is_native_function_object(callee)) return false;
-    return weak
-        ? mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) ==
-            mal_builtin_weak_map_prototype_get
-        : callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_GET];
 }
 
 static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
