@@ -5,8 +5,8 @@ import { buildCoreSpecializationRecipeTable } from "../../src/compiler/core/core
 import { CoreProgram } from "../../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../../src/compiler/shared/compiler-facts.ts";
 
-const FUNCTION_COUNT = 32;
-const DIAMONDS_PER_FUNCTION = 16;
+const FUNCTION_COUNT = 8;
+const DIAMONDS_PER_FUNCTION = 6;
 const sourcePath = "/runtime-gap/core-lowering-replay.js";
 
 function compilationContext() {

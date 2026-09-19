@@ -144,6 +144,15 @@ describe("runtime-gap case catalog", () => {
 		expect(first.operations).toBeGreaterThan(0);
 	});
 
+	it.each([
+		["core-lowering-replay", 250, 1_000],
+		["c-emitter-fragments", 50_000, 250_000],
+	])("keeps %s between primitive and macro workload sizes", (id, minimum, maximum) => {
+		const output = fixtureOutput(id);
+		expect(output.operations).toBeGreaterThanOrEqual(minimum);
+		expect(output.operations).toBeLessThanOrEqual(maximum);
+	});
+
 	it("keeps rest probes matched to their controls", () => {
 		const fixed = fixtureOutput("fixed-arity-parameters");
 		const scalarized = fixtureOutput("rest-parameters");
