@@ -5320,6 +5320,19 @@ static MalValue mal_vm_op_load_property_ic_impl(
         }
         return mal_ops_number_value((f64) ((const MalArrayObject *) mal_value_to_heap(object_value))->length);
     }
+    if (mal_value_is_string(key_value) &&
+        mal_array_key_is_length((MalKey) {.kind = MAL_KEY_STRING, .value = key_value})) {
+        MalTypedArrayObject *array;
+        u32 length;
+        if (mal_vm_admit_typed_array_length(vm, object_value, &array, &length)) {
+            if (mal_ic_key_is_stable_string(key_value)) {
+                mal_ic_record_special(
+                    vm, ic, MAL_IC_MODE_TYPED_ARRAY_LENGTH, 0, key_value,
+                    mal_value_new_undefined(), nullptr);
+            }
+            return mal_value_from_i32((i32) length);
+        }
+    }
     MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
     if (slot_object != nullptr) {
         MalObject *object = slot_object;

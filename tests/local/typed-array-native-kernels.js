@@ -202,6 +202,15 @@ const shadowedLength = new Uint8Array([7, 8, 9]);
 Object.defineProperty(shadowedLength, "length", { value: 1 });
 check("indexed loop falls back for an own length", indexedSum(shadowedLength) === 7);
 
+function lastIndexed(values) {
+	return values[values.length - 1];
+}
+
+const cachedLength = new Uint8Array([4, 5, 6]);
+check("indexed length cache reads current length", lastIndexed(cachedLength) === 6);
+Object.defineProperty(cachedLength, "length", { value: 1 });
+check("indexed length cache rejects a later own length", lastIndexed(cachedLength) === 4);
+
 function indexedBigIntSum(values) {
 	let total = 0n;
 	for (let index = 0; index < values.length; index++) total += values[index];
