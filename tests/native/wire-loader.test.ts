@@ -897,6 +897,7 @@ describe("wire loader side-data validation", () => {
 			entrypoint,
 			`function guardedOperations(map, array, value) {
 				array.push(value);
+				globalThis.last = array.at(-1);
 				globalThis.formatted = [value.toFixed(), value.toExponential(2), value.toPrecision(2, 0, 0, 0, 0)];
 				globalThis.predicates = [Number.isNaN(value), Number.isFinite(value, 0, 0, 0, 0), Number.isInteger(), Number.isSafeInteger(value)];
 				return Math.round(value) + Math.max(value, 3) + map.get("answer");
@@ -942,10 +943,14 @@ describe("wire loader side-data validation", () => {
 		const arrayPush = guardedSites.find(
 			(site) => site.instruction.guardedBuiltinCall?.operation === "Array.prototype.push",
 		);
+		const arrayAt = guardedSites.find(
+			(site) => site.instruction.guardedBuiltinCall?.operation === "Array.prototype.at",
+		);
 		expect(unary).toBeDefined();
 		expect(binary).toBeDefined();
 		expect(collection).toBeDefined();
 		expect(arrayPush).toBeDefined();
+		expect(arrayAt).toBeDefined();
 		for (const method of ["toFixed", "toExponential", "toPrecision"])
 			expect(
 				guardedSites.some(
@@ -964,7 +969,8 @@ describe("wire loader side-data validation", () => {
 			unary === undefined ||
 			binary === undefined ||
 			collection === undefined ||
-			arrayPush === undefined
+			arrayPush === undefined ||
+			arrayAt === undefined
 		) {
 			throw new Error("expected guarded call sites");
 		}

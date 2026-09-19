@@ -7005,6 +7005,15 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (vmCallProvesBuiltin(callPlan, "Array.prototype.at")) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_array_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
 				const boundedArgument =
 					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;

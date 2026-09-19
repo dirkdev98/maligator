@@ -2809,6 +2809,60 @@ static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalVa
     return mal_builtin_array_get(vm, this_value, (u32) relative);
 }
 
+bool mal_builtin_array_at_try_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+) {
+    if (arg_count < 0 || !mal_value_is_array_object(this_value) ||
+        (arg_count >= 1 && !mal_ops_is_number(args[0])) ||
+        !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) != mal_builtin_array_at) {
+        return false;
+    }
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_array_object(prototype)) return false;
+    MalPropertyLookup live = mal_object_get_own(
+        mal_value_to_object(prototype), mal_intrinsic_string_key(vm, "at"));
+    if (!live.present || (live.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        live.desc.value != callee) {
+        return false;
+    }
+
+    f64 relative = arg_count == 0 ? 0 :
+        mal_ops_number_to_integer_or_infinity(mal_ops_number_as_f64(args[0]));
+    u32 length = mal_value_to_array_object(this_value)->length;
+    if (relative < 0) relative += (f64) length;
+    *result_out = relative < 0 || relative >= (f64) length
+        ? mal_value_new_undefined()
+        : mal_builtin_array_get(vm, this_value, (u32) relative);
+    return true;
+}
+
+MalCompletion mal_builtin_array_at_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalValue result;
+    if (mal_builtin_array_at_try_direct(
+            vm, callee, this_value, args, arg_count, &result)) {
+        return (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = result,
+        };
+    }
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
 static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();

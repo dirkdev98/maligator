@@ -49,6 +49,24 @@ MalCompletion mal_builtin_array_push_direct(
     bool *exact_hit_out
 );
 
+bool mal_builtin_array_at_try_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+);
+
+MalCompletion mal_builtin_array_at_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
 /** Array callback methods admitted by the compiler's known-builtin analysis. */
 typedef enum MalBuiltinArrayIterationOp {
     MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH,

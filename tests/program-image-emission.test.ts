@@ -2791,6 +2791,14 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 3, nullptr);");
 	});
 
+	it("emits guarded Array at dispatch from call metadata", () => {
+		const output = emit(`
+			function last(values) { return values.at(-1); }
+			globalThis.result = last([1, 2, 3]);
+		`);
+		expect(output).toContain("mal_builtin_array_at_direct(vm, &__cc_");
+	});
+
 	it("consumes the Core-owned String charCodeAt operation chain", () => {
 		const code = `
 			function codeUnit(value, index) {
