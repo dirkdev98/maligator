@@ -15,6 +15,7 @@ import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
 import { RUNTIME_GAP_EXPERIMENTS } from "../scripts/runtime-gap-experiment.ts";
 import {
 	assertRuntimeGapParity,
+	calibrationScaleTimeoutCap,
 	captureOptionalResource,
 	parseKernelOutput,
 	RuntimeGapParityError,
@@ -48,6 +49,10 @@ function fixtureOutput(id: string): {
 }
 
 describe("runtime-gap case catalog", () => {
+	it("accounts for every warmup block when capping calibration scale", () => {
+		expect(calibrationScaleTimeoutCap(60_000, 1_000, 5)).toBe(7);
+	});
+
 	it("keeps generated operation microcases current", () => {
 		execFileSync(
 			process.execPath,

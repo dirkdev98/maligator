@@ -643,6 +643,18 @@ function invocationTimeout(deadline: number, caseTimeoutMs: number): number {
 	return Math.min(caseTimeoutMs, remaining);
 }
 
+export function calibrationScaleTimeoutCap(
+	caseTimeoutMs: number,
+	slowerMs: number,
+	warmupBlocks: number,
+): number {
+	const totalBlocks = warmupBlocks + 1;
+	return Math.max(
+		1,
+		Math.floor((caseTimeoutMs * 0.75) / (Math.max(1, slowerMs) * totalBlocks)),
+	);
+}
+
 async function calibrateScale(
 	binary: string,
 	descriptor: KernelDescriptor,
@@ -665,10 +677,7 @@ async function calibrateScale(
 	const fasterMs = Math.max(0.01, Math.min(node.elapsedMs, maligator.elapsedMs));
 	const slowerMs = Math.max(node.elapsedMs, maligator.elapsedMs);
 	const targetScale = Math.max(1, Math.ceil(targetNodeMs / fasterMs));
-	const slowerScale = Math.max(
-		1,
-		Math.floor((caseTimeoutMs * 0.5) / Math.max(1, slowerMs)),
-	);
+	const slowerScale = calibrationScaleTimeoutCap(caseTimeoutMs, slowerMs, warmupBlocks);
 	return Math.min(256, targetScale, slowerScale);
 }
 
