@@ -150,6 +150,132 @@ function run(scale) {
 	}
 }
 
+for (const keyKind of ["int", "string", "symbol"] as const) {
+	for (const hit of [true, false]) {
+		const outcome = hit ? "hit" : "miss";
+		const id = `map-get-${outcome}-4096-selected-${keyKind}-key`;
+		const keys =
+			keyKind === "int"
+				? "Array.from({ length: 4_096 }, (_, index) => seed * 16_384 + index)"
+				: keyKind === "string"
+					? "Array.from({ length: 4_096 }, (_, index) => `key:${seed}:${index}`)"
+					: "Array.from({ length: 4_096 }, (_, index) => Symbol(`key:${seed}:${index}`))";
+		const misses =
+			keyKind === "int"
+				? "Array.from({ length: 4_096 }, (_, index) => (seed + 1) * 16_384 + index)"
+				: keyKind === "string"
+					? "Array.from({ length: 4_096 }, (_, index) => `miss:${seed}:${index}`)"
+					: "Array.from({ length: 4_096 }, (_, index) => Symbol(`miss:${seed}:${index}`))";
+		add(
+			id,
+			`const seed = Number(process.argv[2] ?? "1") & 255;
+const keys = ${keys};
+const misses = ${misses};
+const entries = keys.map((key, index) => [key, (index + seed) & 255]);
+const maps = [new Map(entries), new Map(entries)];
+const lookupKeys = ${hit ? "keys" : "misses"};
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 500_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const value = maps[(index >>> 8) & 1].get(lookupKeys[index & 4_095]);
+		checksum = (checksum + (value === undefined ? 1 : value)) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+		);
+	}
+}
+
+add(
+	"array-includes-int32-miss-long",
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+const arrays = Array.from({ length: 32 }, (_, arrayIndex) =>
+	Array.from({ length: 2_048 }, (_, index) => (seed + arrayIndex + index) & 2_047),
+);
+const misses = Array.from({ length: 2_048 }, (_, index) => -(index + 1));
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 200_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += arrays[(index >>> 8) & 31].includes(misses[index & 2_047]) ? 1 : 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+);
+
+add(
+	"array-includes-int32-hit-short",
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+const arrays = Array.from({ length: 32 }, (_, arrayIndex) =>
+	Array.from({ length: 8 }, (_, index) => seed + arrayIndex + index),
+);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 1_000_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const array = arrays[(index >>> 8) & 31];
+		checksum += array.includes(array[index & 7]) ? 1 : 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+);
+
+add(
+	"array-includes-mixed-number-hit",
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+const arrays = Array.from({ length: 32 }, (_, arrayIndex) =>
+	Array.from({ length: 2_048 }, (_, index) =>
+		index & 1 ? seed + arrayIndex + index + 0.5 : seed + arrayIndex + index,
+	),
+);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 200_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const array = arrays[(index >>> 8) & 31];
+		checksum += array.includes(array[index & 2_047]) ? 1 : 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+);
+
+add(
+	"array-includes-signed-zero",
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+const arrays = Array.from({ length: 32 }, () => [seed, -0, 0, seed + 1]);
+const needles = [-0, 0];
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 1_000_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += arrays[(index >>> 8) & 31].includes(needles[index & 1]) ? 1 : 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+);
+
+add(
+	"array-includes-nan",
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+const nan = Number(process.argv[3] ?? "not-a-number");
+const arrays = Array.from({ length: 32 }, (_, arrayIndex) => [seed + arrayIndex, nan]);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 1_000_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		checksum += arrays[(index >>> 8) & 31].includes(nan) ? 1 : 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}`,
+);
+
 for (const order of ["adjacent", "interleaved"]) {
 	const id = `map-get-set-${order}`;
 	const operations =

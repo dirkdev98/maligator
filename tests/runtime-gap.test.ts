@@ -124,17 +124,44 @@ describe("runtime-gap case catalog", () => {
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 		const operationMicrocases = kernels.filter(({ id }) =>
-			/^(?:(?:private|public)-(?:field-read|method-call)-|(?:weakmap|map)-get-(?:hit|miss)-|map-get-set-|pair-|(?:typed-array|array)-(?:at-negative|last-index-control)-)/.test(
+			/^(?:(?:private|public)-(?:field-read|method-call)-|(?:weakmap|map)-get-(?:hit|miss)-|map-get-set-|pair-|array-includes-|(?:typed-array|array)-(?:at-negative|last-index-control)-)/.test(
 				id,
 			),
 		);
-		expect(operationMicrocases).toHaveLength(60);
+		expect(operationMicrocases).toHaveLength(71);
 		expect(
 			operationMicrocases.every(
 				({ id }) =>
 					!catalog.presets.quick.includes(id) && !catalog.presets.survey.includes(id),
 			),
 		).toBe(true);
+	});
+
+	it.each(["hit", "miss"])("keeps Map %s key-kind probes matched", (outcome) => {
+		const objectKey = fixtureOutput(`map-get-${outcome}-4096-selected`);
+		for (const kind of ["int", "string", "symbol"]) {
+			expect(fixtureOutput(`map-get-${outcome}-4096-selected-${kind}-key`)).toMatchObject(
+				{
+					operations: objectKey.operations,
+					checksum: objectKey.checksum,
+				},
+			);
+		}
+	});
+
+	it.each([
+		"array-includes-int32-miss-long",
+		"array-includes-int32-hit-short",
+		"array-includes-mixed-number-hit",
+		"array-includes-signed-zero",
+		"array-includes-nan",
+	])("keeps %s work and checksums deterministic", (id) => {
+		const first = fixtureOutput(id);
+		const second = fixtureOutput(id);
+		expect(second.id).toBe(first.id);
+		expect(second.operations).toBe(first.operations);
+		expect(second.checksum).toBe(first.checksum);
+		expect(first.operations).toBeGreaterThan(0);
 	});
 
 	it("records a configurable sequence of warmup blocks", () => {
