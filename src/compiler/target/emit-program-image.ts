@@ -812,12 +812,13 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			definitionLines.push(lines[index]!);
 		}
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
+		const definitionSource = definitionLines.join("\n");
 		if (
 			(symbol.startsWith("mal_functions") ||
 				symbol.startsWith("mal_source_positions") ||
 				symbol.startsWith("mal_strings") ||
 				(symbol.startsWith("mal_function_") && symbol.includes("_instructions"))) &&
-			definitionLines.join("\n").length > Math.floor(maxCodeUnits / 2)
+			definitionSource.length > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
 			const mutableType = type.replace(/^const /, "");
@@ -866,7 +867,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			output.push("}");
 			continue;
 		}
-		definitions.push({ symbol, source: definitionLines.join("\n") });
+		definitions.push({ symbol, source: definitionSource });
 		output.push(`extern ${type} ${symbol}[];`);
 	}
 	if (splitInitializers.length > 0) {
