@@ -4,11 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "value.h"
+
 #if MAL_PERF_STATS
 #define MAL_PERF_INTRINSIC_NAME_CAPACITY 2048
 #define MAL_PERF_INTRINSIC_NAME_MAX_LENGTH 63
 #define MAL_PERF_NATIVE_NAME_CAPACITY 512
 #define MAL_PERF_NATIVE_NAME_MAX_LENGTH 63
+#define MAL_PERF_COLLECTION_RECORD_CAPACITY (1u << 18)
 
 typedef struct MalPerfIntrinsicName {
     u64 hash;
@@ -24,10 +27,246 @@ typedef struct MalPerfNativeName {
     c16 name[MAL_PERF_NATIVE_NAME_MAX_LENGTH + 1];
 } MalPerfNativeName;
 
+typedef struct MalPerfCollectionRecord {
+    const void *collection;
+    u64 iteration_steps;
+    usize peak_size;
+    usize current_size;
+    u32 birth_epoch;
+    u32 mutations;
+    u32 iterations;
+    MalPerfCollectionKind kind;
+    u8 array_element_mask;
+} MalPerfCollectionRecord;
+
+static u32 mal_perf_collection_latest_epoch;
+
 bool mal_perf_stats_enabled = false;
 MalPerfStats mal_perf_stats;
 static MalPerfIntrinsicName mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
 static MalPerfNativeName mal_perf_native_names[MAL_PERF_NATIVE_NAME_CAPACITY];
+static MalPerfCollectionRecord mal_perf_collection_records[MAL_PERF_COLLECTION_RECORD_CAPACITY];
+
+static const char *const mal_perf_collection_kinds[MAL_PERF_COLLECTION_KIND_COUNT] = {
+    "array",
+    "map",
+    "set",
+    "weak_map",
+    "weak_set",
+};
+
+static usize mal_perf_collection_record_index(const void *collection) {
+    uptr hash = (uptr) collection >> 4;
+    hash ^= hash >> 17;
+    hash *= (uptr) 0xed5ad4bbU;
+    return (usize) hash & (MAL_PERF_COLLECTION_RECORD_CAPACITY - 1);
+}
+
+static MalPerfCollectionRecord *mal_perf_collection_record(
+    const void *collection, bool insert
+) {
+    usize index = mal_perf_collection_record_index(collection);
+    MalPerfCollectionRecord *tombstone = nullptr;
+    for (usize probe = 0; probe < MAL_PERF_COLLECTION_RECORD_CAPACITY; probe++) {
+        MalPerfCollectionRecord *record = &mal_perf_collection_records[index];
+        if (record->collection == collection) return record;
+        if (record->collection == nullptr) {
+            if (!insert) return nullptr;
+            return tombstone == nullptr ? record : tombstone;
+        }
+        if (record->collection == (const void *) (uptr) 1 && tombstone == nullptr) {
+            tombstone = record;
+        }
+        index = (index + 1) & (MAL_PERF_COLLECTION_RECORD_CAPACITY - 1);
+    }
+    return tombstone;
+}
+
+static usize mal_perf_collection_size_bucket(usize size) {
+    if (size == 0) return 0;
+    if (size == 1) return 1;
+    if (size < 8) return 2;
+    if (size < 32) return 3;
+    if (size < 256) return 4;
+    return 5;
+}
+
+static usize mal_perf_collection_lifetime_bucket(u32 epochs) {
+    if (epochs == 0) return 0;
+    if (epochs == 1) return 1;
+    if (epochs < 4) return 2;
+    return 3;
+}
+
+static usize mal_perf_collection_mutation_bucket(u32 mutations) {
+    if (mutations == 0) return 0;
+    if (mutations == 1) return 1;
+    if (mutations < 8) return 2;
+    if (mutations < 32) return 3;
+    return 4;
+}
+
+static usize mal_perf_collection_iteration_bucket(u32 iterations) {
+    if (iterations == 0) return 0;
+    if (iterations == 1) return 1;
+    if (iterations < 8) return 2;
+    return 3;
+}
+
+void mal_perf_collection_new(
+    const void *collection, MalPerfCollectionKind kind, u32 epoch
+) {
+    if (!mal_perf_stats_enabled) return;
+    if (epoch > mal_perf_collection_latest_epoch) {
+        mal_perf_collection_latest_epoch = epoch;
+    }
+    mal_perf_stats.collection_allocations[kind]++;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, true);
+    if (record == nullptr) {
+        mal_perf_stats.collection_tracking_overflows++;
+        return;
+    }
+    *record = (MalPerfCollectionRecord) {
+        .collection = collection,
+        .birth_epoch = epoch,
+        .kind = kind,
+    };
+}
+
+void mal_perf_collection_mutation(const void *collection, usize size) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
+    if (record == nullptr) return;
+    record->mutations++;
+    record->current_size = size;
+    if (size > record->peak_size) record->peak_size = size;
+    mal_perf_stats.collection_mutation_events[record->kind]++;
+}
+
+void mal_perf_collection_iteration_start(const void *collection) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
+    if (record == nullptr) return;
+    record->iterations++;
+    mal_perf_stats.collection_iteration_starts[record->kind]++;
+}
+
+void mal_perf_collection_iteration_step(const void *collection) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
+    if (record == nullptr) return;
+    record->iteration_steps++;
+    mal_perf_stats.collection_iteration_steps[record->kind]++;
+}
+
+void mal_perf_collection_epoch(u32 epoch) {
+    if (mal_perf_stats_enabled && epoch > mal_perf_collection_latest_epoch) {
+        mal_perf_collection_latest_epoch = epoch;
+    }
+}
+
+static void mal_perf_collection_summarize(
+    MalPerfCollectionRecord *record,
+    MalPerfCollectionKind kind,
+    u32 epoch,
+    usize size,
+    u8 array_element_mask,
+    bool array_deoptimized,
+    bool live_snapshot
+) {
+    if (live_snapshot) mal_perf_stats.collection_live_snapshots[kind]++;
+    else mal_perf_stats.collection_finalizations[kind]++;
+    mal_perf_stats.collection_final_sizes[kind][mal_perf_collection_size_bucket(size)]++;
+    if (record == nullptr) {
+        mal_perf_stats.collection_tracking_misses++;
+    } else {
+        mal_perf_stats.collection_peak_sizes[kind][mal_perf_collection_size_bucket(record->peak_size)]++;
+        mal_perf_stats.collection_lifetimes[kind][mal_perf_collection_lifetime_bucket(epoch - record->birth_epoch)]++;
+        mal_perf_stats.collection_mutations[kind][mal_perf_collection_mutation_bucket(record->mutations)]++;
+        mal_perf_stats.collection_iterations[kind][mal_perf_collection_iteration_bucket(record->iterations)]++;
+        record->collection = (const void *) (uptr) 1;
+    }
+    if (kind != MAL_PERF_COLLECTION_ARRAY) return;
+    if (array_deoptimized) {
+        mal_perf_stats.array_final_deoptimized++;
+        return;
+    }
+    usize final_kind = array_element_mask == 0 ? 0 :
+        array_element_mask == 1 ? 1 :
+        array_element_mask == 2 ? 2 :
+        array_element_mask == 3 ? 3 :
+        array_element_mask == 4 ? 4 : 5;
+    mal_perf_stats.array_final_kinds[final_kind]++;
+}
+
+void mal_perf_collection_finalize(
+    const void *collection,
+    MalPerfCollectionKind kind,
+    u32 epoch,
+    usize size,
+    u8 array_element_mask,
+    bool array_deoptimized
+) {
+    if (!mal_perf_stats_enabled) return;
+    if (epoch > mal_perf_collection_latest_epoch) {
+        mal_perf_collection_latest_epoch = epoch;
+    }
+    mal_perf_collection_summarize(
+        mal_perf_collection_record(collection, false),
+        kind,
+        epoch,
+        size,
+        array_element_mask,
+        array_deoptimized,
+        false);
+}
+
+static void mal_perf_collection_snapshot_live(void) {
+    for (usize index = 0; index < MAL_PERF_COLLECTION_RECORD_CAPACITY; index++) {
+        MalPerfCollectionRecord *record = &mal_perf_collection_records[index];
+        if (record->collection == nullptr ||
+            record->collection == (const void *) (uptr) 1) {
+            continue;
+        }
+        mal_perf_collection_summarize(
+            record,
+            record->kind,
+            mal_perf_collection_latest_epoch,
+            record->current_size,
+            record->array_element_mask,
+            false,
+            true);
+    }
+}
+
+void mal_perf_collection_key_value(const void *collection, u64 value) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
+    if (record == nullptr) return;
+    usize kind = mal_value_is_int32(value) ? 0 :
+        (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
+            value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) ? 1 :
+        mal_value_is_string(value) ? 2 :
+        mal_value_is_symbol(value) ? 3 :
+        mal_value_is_object(value) ? 4 :
+        mal_value_is_bigint(value) ? 5 : 6;
+    mal_perf_stats.collection_key_kinds[record->kind][kind]++;
+}
+
+void mal_perf_array_element_write(const void *array, u64 value) {
+    if (!mal_perf_stats_enabled) return;
+    usize kind = mal_value_is_int32(value) ? 0 :
+        (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
+            value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) ? 1 : 2;
+    mal_perf_stats.array_element_writes[kind]++;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(array, false);
+    if (record == nullptr) return;
+    u8 bit = (u8) (1u << kind);
+    if ((record->array_element_mask & bit) == 0 && record->array_element_mask != 0) {
+        mal_perf_stats.array_element_kind_widenings++;
+    }
+    record->array_element_mask |= bit;
+}
 
 static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
     "object",
@@ -109,6 +348,7 @@ void mal_perf_native_call_name(const c16 *name, usize length) {
 }
 
 static void mal_perf_stats_print(void) {
+    mal_perf_collection_snapshot_live();
     fprintf(
         stderr,
         "[perf-string-stats] key_equals_calls=%llu key_pointer_hits=%llu "
@@ -340,6 +580,96 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.collection_direct_fallbacks,
         (unsigned long long) mal_perf_stats.iterator_entry_pair_hits,
         (unsigned long long) mal_perf_stats.iterator_entry_pair_fallbacks
+    );
+    for (usize i = 0; i < MAL_PERF_COLLECTION_KIND_COUNT; i++) {
+        fprintf(
+            stderr,
+            "[perf-collection-profile] kind=%s allocations=%llu observations=%llu "
+            "reclaimed=%llu live_at_exit=%llu "
+            "final_size_0=%llu final_size_1=%llu final_size_2_7=%llu "
+            "final_size_8_31=%llu final_size_32_255=%llu final_size_256_plus=%llu "
+            "peak_size_0=%llu peak_size_1=%llu peak_size_2_7=%llu "
+            "peak_size_8_31=%llu peak_size_32_255=%llu peak_size_256_plus=%llu "
+            "lifetime_epochs_0=%llu lifetime_epochs_1=%llu lifetime_epochs_2_3=%llu "
+            "lifetime_epochs_4_plus=%llu mutation_events=%llu mutations_0=%llu "
+            "mutations_1=%llu mutations_2_7=%llu mutations_8_31=%llu "
+            "mutations_32_plus=%llu iteration_starts=%llu iteration_steps=%llu "
+            "iterations_0=%llu iterations_1=%llu iterations_2_7=%llu "
+            "iterations_8_plus=%llu\n",
+            mal_perf_collection_kinds[i],
+            (unsigned long long) mal_perf_stats.collection_allocations[i],
+            (unsigned long long) (mal_perf_stats.collection_finalizations[i] +
+                mal_perf_stats.collection_live_snapshots[i]),
+            (unsigned long long) mal_perf_stats.collection_finalizations[i],
+            (unsigned long long) mal_perf_stats.collection_live_snapshots[i],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][0],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][1],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][2],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][3],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][4],
+            (unsigned long long) mal_perf_stats.collection_final_sizes[i][5],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][0],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][1],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][2],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][3],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][4],
+            (unsigned long long) mal_perf_stats.collection_peak_sizes[i][5],
+            (unsigned long long) mal_perf_stats.collection_lifetimes[i][0],
+            (unsigned long long) mal_perf_stats.collection_lifetimes[i][1],
+            (unsigned long long) mal_perf_stats.collection_lifetimes[i][2],
+            (unsigned long long) mal_perf_stats.collection_lifetimes[i][3],
+            (unsigned long long) mal_perf_stats.collection_mutation_events[i],
+            (unsigned long long) mal_perf_stats.collection_mutations[i][0],
+            (unsigned long long) mal_perf_stats.collection_mutations[i][1],
+            (unsigned long long) mal_perf_stats.collection_mutations[i][2],
+            (unsigned long long) mal_perf_stats.collection_mutations[i][3],
+            (unsigned long long) mal_perf_stats.collection_mutations[i][4],
+            (unsigned long long) mal_perf_stats.collection_iteration_starts[i],
+            (unsigned long long) mal_perf_stats.collection_iteration_steps[i],
+            (unsigned long long) mal_perf_stats.collection_iterations[i][0],
+            (unsigned long long) mal_perf_stats.collection_iterations[i][1],
+            (unsigned long long) mal_perf_stats.collection_iterations[i][2],
+            (unsigned long long) mal_perf_stats.collection_iterations[i][3]
+        );
+    }
+    fprintf(
+        stderr,
+        "[perf-array-kind-profile] final_empty=%llu final_int32=%llu final_f64=%llu "
+        "final_int32_f64=%llu final_other=%llu final_mixed_other=%llu "
+        "final_deoptimized=%llu write_int32=%llu write_f64=%llu write_other=%llu "
+        "kind_widenings=%llu\n",
+        (unsigned long long) mal_perf_stats.array_final_kinds[0],
+        (unsigned long long) mal_perf_stats.array_final_kinds[1],
+        (unsigned long long) mal_perf_stats.array_final_kinds[2],
+        (unsigned long long) mal_perf_stats.array_final_kinds[3],
+        (unsigned long long) mal_perf_stats.array_final_kinds[4],
+        (unsigned long long) mal_perf_stats.array_final_kinds[5],
+        (unsigned long long) mal_perf_stats.array_final_deoptimized,
+        (unsigned long long) mal_perf_stats.array_element_writes[0],
+        (unsigned long long) mal_perf_stats.array_element_writes[1],
+        (unsigned long long) mal_perf_stats.array_element_writes[2],
+        (unsigned long long) mal_perf_stats.array_element_kind_widenings
+    );
+    for (usize i = 0; i < MAL_PERF_COLLECTION_KIND_COUNT; i++) {
+        fprintf(
+            stderr,
+            "[perf-collection-key-profile] kind=%s int32=%llu f64=%llu "
+            "string=%llu symbol=%llu object=%llu bigint=%llu static=%llu\n",
+            mal_perf_collection_kinds[i],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][0],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][1],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][2],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][3],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][4],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][5],
+            (unsigned long long) mal_perf_stats.collection_key_kinds[i][6]
+        );
+    }
+    fprintf(
+        stderr,
+        "[perf-collection-tracking] overflows=%llu misses=%llu\n",
+        (unsigned long long) mal_perf_stats.collection_tracking_overflows,
+        (unsigned long long) mal_perf_stats.collection_tracking_misses
     );
     fprintf(
         stderr,
@@ -852,6 +1182,8 @@ void mal_perf_stats_reset(void) {
     memset(&mal_perf_stats, 0, sizeof(mal_perf_stats));
     memset(mal_perf_intrinsic_names, 0, sizeof(mal_perf_intrinsic_names));
     memset(mal_perf_native_names, 0, sizeof(mal_perf_native_names));
+    memset(mal_perf_collection_records, 0, sizeof(mal_perf_collection_records));
+    mal_perf_collection_latest_epoch = 0;
 }
 #else
 // Keep dead instrumentation references valid even in unoptimized diagnostic builds.

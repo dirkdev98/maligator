@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "./gc.h"
+#include "./perf_stats.h"
 #include "./profile.h"
 #include "./shape.h"
 
@@ -772,6 +773,7 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     // A cell may be freed (below) and its address later reused, so any identity cache
     // keyed on a raw cell pointer is only valid within one epoch (see MalHeap.epoch).
     heap->epoch++;
+    mal_perf_collection_epoch(heap->epoch);
     usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
 
@@ -798,6 +800,7 @@ void mal_heap_sweep_begin(MalHeap *heap) {
     // lists; the incremental step re-populates them per block as it sweeps. During
     // the gap the allocator carves fresh blocks (whose cells are black-allocated).
     heap->epoch++;
+    mal_perf_collection_epoch(heap->epoch);
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
     // Walk only the chunks that exist NOW: chunks prepended during the sweep sit
     // ahead of this cursor in the (newest-first) list, hold only black-allocated

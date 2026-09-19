@@ -268,3 +268,7 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value);
  * rejects it) and grows the length field. Use for spec Set on a user array.
  */
 bool mal_array_object_set(MalArrayObject *array, MalKey key, MalValue value);
+
+#if MAL_PERF_STATS
+u8 mal_array_object_perf_element_mask(const MalArrayObject *array);
+#endif

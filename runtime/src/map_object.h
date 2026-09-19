@@ -42,6 +42,9 @@ MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *pro
  */
 MalKey mal_map_key_from_value(MalValue value);
 
+/** Canonicalize a key and attribute its runtime kind to this collection. */
+MalKey mal_map_object_key_from_value(const MalMapObject *map, MalValue value);
+
 /**
  * Insert or update an entry (Map.prototype.set / Set.prototype.add).
  */

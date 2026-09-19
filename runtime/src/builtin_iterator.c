@@ -11,6 +11,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "map_object.h"
+#include "perf_stats.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 
@@ -62,6 +63,12 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
         target
     );
 
+    if (mal_value_is_array_object(target)) {
+        mal_perf_collection_iteration_start(mal_value_to_array_object(target));
+    } else if (mal_value_is_map_object(target) || mal_value_is_set_object(target)) {
+        mal_perf_collection_iteration_start(mal_value_to_map_object(target));
+    }
+
     return mal_value_from_iterator_object(iterator);
 }
 
@@ -108,6 +115,7 @@ static void mal_builtin_iterator_map_take_entry(
     iterator->index = (u64) table_iter.index;
     *key_out = key.value;
     *mapped_out = mal_table_entry_value(map->entries, entry);
+    mal_perf_collection_iteration_step(map);
     *done_out = false;
 }
 
@@ -163,6 +171,7 @@ static bool mal_builtin_iterator_array_advance(
             iterator->index++;
             *value_out = mal_ops_number_value((f64) index);
             *done_out = false;
+            mal_perf_collection_iteration_step(array);
             return true;
         }
         MalValue element;
@@ -173,6 +182,7 @@ static bool mal_builtin_iterator_array_advance(
                     vm, mal_ops_number_value((f64) index), element)
                 : element;
             *done_out = false;
+            mal_perf_collection_iteration_step(array);
             return true;
         }
         // Hole / beyond the dense region (still < length): fall through so the
@@ -232,6 +242,10 @@ static bool mal_builtin_iterator_array_advance(
 
     if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
         *value_out = mal_ops_number_value((f64) index);
+        if (mal_value_is_array_object(iterator->target)) {
+            mal_perf_collection_iteration_step(
+                mal_value_to_array_object(iterator->target));
+        }
         return true;
     }
 
@@ -248,10 +262,18 @@ static bool mal_builtin_iterator_array_advance(
     if (iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES) {
         *value_out = mal_builtin_iterator_pair(
             vm, mal_ops_number_value((f64) index), element);
+        if (mal_value_is_array_object(iterator->target)) {
+            mal_perf_collection_iteration_step(
+                mal_value_to_array_object(iterator->target));
+        }
         return true;
     }
 
     *value_out = element;
+    if (mal_value_is_array_object(iterator->target)) {
+        mal_perf_collection_iteration_step(
+            mal_value_to_array_object(iterator->target));
+    }
     return true;
 }
 

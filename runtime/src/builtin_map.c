@@ -155,7 +155,7 @@ static MalValue mal_builtin_map_construct(
                 goto done;
             }
             mal_map_object_set_canonical(
-                map, mal_map_key_from_value(roots[3]), roots[4]);
+                map, mal_map_object_key_from_value(map, roots[3]), roots[4]);
             continue;
         }
 
@@ -203,7 +203,7 @@ static MalValue mal_builtin_map_construct(
                 goto done;
             }
             mal_map_object_set_canonical(
-                map, mal_map_key_from_value(roots[3]), roots[4]);
+                map, mal_map_object_key_from_value(map, roots[3]), roots[4]);
             continue;
         }
 
@@ -287,10 +287,10 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
             mal_vm_iterator_close(vm, &record);
             goto done;
         }
-        MalKey key = mal_map_key_from_value(completion.value);
+        MalMapObject *result = mal_value_to_map_object(roots[0]);
+        MalKey key = mal_map_object_key_from_value(result, completion.value);
         roots[3] = key.value;
 
-        MalMapObject *result = mal_value_to_map_object(roots[0]);
         MalTableLookup lookup = mal_table_lookup(result->entries, key);
         if (lookup.present) {
             roots[4] = mal_table_entry_value(result->entries, lookup.entry);
@@ -326,7 +326,7 @@ static MalValue mal_builtin_map_get_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalKey key = mal_map_key_from_value(key_value);
+    MalKey key = mal_map_object_key_from_value(map, key_value);
     void *entry = mal_builtin_map_cached_entry(map, key);
     if (entry != nullptr) {
         return mal_table_entry_value(map->entries, entry);
@@ -345,7 +345,7 @@ static bool mal_builtin_map_has_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalKey key = mal_map_key_from_value(key_value);
+    MalKey key = mal_map_object_key_from_value(map, key_value);
     if (mal_builtin_map_cached_entry(map, key) != nullptr) {
         return true;
     }
@@ -359,7 +359,7 @@ static MalValue mal_builtin_map_set_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key, MalValue value
 ) {
     (void) vm;
-    MalKey canonical_key = mal_map_key_from_value(key);
+    MalKey canonical_key = mal_map_object_key_from_value(map, key);
     void *entry = mal_builtin_map_cached_entry(map, canonical_key);
 
     if (entry == nullptr) {
@@ -369,6 +369,7 @@ static MalValue mal_builtin_map_set_value(
     mal_gc_card(&map->object.header, key);
     mal_gc_card(&map->object.header, value);
     mal_builtin_map_cache_entry(map, entry);
+    mal_perf_collection_mutation(map, mal_table_size(map->entries));
 
     return this_value;
 }
@@ -669,7 +670,7 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
  */
 static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
     (void) vm;
-    MalKey canonical_key = mal_map_key_from_value(key);
+    MalKey canonical_key = mal_map_object_key_from_value(map, key);
     bool inserted;
     void *entry = mal_table_upsert_entry(
         map->entries, canonical_key, &inserted);
@@ -680,6 +681,7 @@ static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalV
     mal_table_entry_set_value(map->entries, entry, value);
     mal_gc_card(&map->object.header, canonical_key.value);
     mal_gc_card(&map->object.header, value);
+    mal_perf_collection_mutation(map, mal_table_size(map->entries));
     return value;
 }
 
@@ -694,7 +696,7 @@ static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *
         return mal_value_new_undefined();
     }
 
-    MalKey canonical_key = mal_map_key_from_value(key);
+    MalKey canonical_key = mal_map_object_key_from_value(map, key);
     MalTableLookup lookup = mal_table_lookup(map->entries, canonical_key);
     if (lookup.present) {
         return mal_table_entry_value(map->entries, lookup.entry);

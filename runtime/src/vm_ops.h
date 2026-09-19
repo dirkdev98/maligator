@@ -2073,6 +2073,7 @@ static inline bool mal_vm_iterator_try_dense_array_step(
                 iterator->index = index + 1;
                 *value_out = element;
                 *done_out = false;
+                mal_perf_collection_iteration_step(array);
                 return true;
             }
             // Hole / beyond the dense region (still < length): fall back for the Get.
@@ -2127,6 +2128,7 @@ static inline bool mal_vm_iterator_try_dense_array_cursor_step(
         iterator->index = index + 1;
         *value_out = element;
         *done_out = false;
+        mal_perf_collection_iteration_step(array);
         return true;
     }
     // Hole / beyond the dense region (still < length): fall back for the Get.

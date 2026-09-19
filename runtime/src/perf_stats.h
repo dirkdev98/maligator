@@ -9,6 +9,22 @@
 #define MAL_PERF_TABLE_ROLE_COUNT 4
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
 #define MAL_PERF_IC_MODE_COUNT 10
+#define MAL_PERF_COLLECTION_KIND_COUNT 5
+#define MAL_PERF_COLLECTION_SIZE_BUCKET_COUNT 6
+#define MAL_PERF_COLLECTION_LIFETIME_BUCKET_COUNT 4
+#define MAL_PERF_COLLECTION_MUTATION_BUCKET_COUNT 5
+#define MAL_PERF_COLLECTION_ITERATION_BUCKET_COUNT 4
+#define MAL_PERF_MAP_KEY_KIND_COUNT 7
+#define MAL_PERF_ARRAY_ELEMENT_KIND_COUNT 3
+#define MAL_PERF_ARRAY_FINAL_KIND_COUNT 6
+
+typedef enum MalPerfCollectionKind : u8 {
+    MAL_PERF_COLLECTION_ARRAY,
+    MAL_PERF_COLLECTION_MAP,
+    MAL_PERF_COLLECTION_SET,
+    MAL_PERF_COLLECTION_WEAK_MAP,
+    MAL_PERF_COLLECTION_WEAK_SET,
+} MalPerfCollectionKind;
 
 typedef struct MalPerfTableStats {
     u64 lookups;
@@ -446,6 +462,25 @@ typedef struct MalPerfStats {
     u64 prototype_dependency_invalidate_calls;
     u64 prototype_dependency_invalidate_scan_steps;
     u64 prototype_dependency_invalidate_removed;
+
+    u64 collection_allocations[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_finalizations[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_live_snapshots[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_final_sizes[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_SIZE_BUCKET_COUNT];
+    u64 collection_peak_sizes[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_SIZE_BUCKET_COUNT];
+    u64 collection_lifetimes[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_LIFETIME_BUCKET_COUNT];
+    u64 collection_mutation_events[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_mutations[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_MUTATION_BUCKET_COUNT];
+    u64 collection_iteration_starts[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_iteration_steps[MAL_PERF_COLLECTION_KIND_COUNT];
+    u64 collection_iterations[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_ITERATION_BUCKET_COUNT];
+    u64 collection_tracking_overflows;
+    u64 collection_tracking_misses;
+    u64 collection_key_kinds[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_MAP_KEY_KIND_COUNT];
+    u64 array_element_writes[MAL_PERF_ARRAY_ELEMENT_KIND_COUNT];
+    u64 array_element_kind_widenings;
+    u64 array_final_kinds[MAL_PERF_ARRAY_FINAL_KIND_COUNT];
+    u64 array_final_deoptimized;
 } MalPerfStats;
 
 extern MalPerfStats mal_perf_stats;
@@ -456,6 +491,20 @@ void mal_perf_stats_init(void);
 void mal_perf_stats_reset(void);
 void mal_perf_intrinsic_name(const byte *name, usize length);
 void mal_perf_native_call_name(const c16 *name, usize length);
+void mal_perf_collection_new(const void *collection, MalPerfCollectionKind kind, u32 epoch);
+void mal_perf_collection_mutation(const void *collection, usize size);
+void mal_perf_collection_iteration_start(const void *collection);
+void mal_perf_collection_iteration_step(const void *collection);
+void mal_perf_collection_epoch(u32 epoch);
+void mal_perf_collection_finalize(
+    const void *collection,
+    MalPerfCollectionKind kind,
+    u32 epoch,
+    usize size,
+    u8 array_element_mask,
+    bool array_deoptimized);
+void mal_perf_collection_key_value(const void *collection, u64 value);
+void mal_perf_array_element_write(const void *array, u64 value);
 
 #define MAL_PERF_COUNT(field) \
     do { \
@@ -482,6 +531,49 @@ static inline void mal_perf_intrinsic_name(const byte *name, usize length) {
 static inline void mal_perf_native_call_name(const c16 *name, usize length) {
     (void) name;
     (void) length;
+}
+static inline void mal_perf_collection_new(
+    const void *collection, MalPerfCollectionKind kind, u32 epoch
+) {
+    (void) collection;
+    (void) kind;
+    (void) epoch;
+}
+static inline void mal_perf_collection_mutation(const void *collection, usize size) {
+    (void) collection;
+    (void) size;
+}
+static inline void mal_perf_collection_iteration_start(const void *collection) {
+    (void) collection;
+}
+static inline void mal_perf_collection_iteration_step(const void *collection) {
+    (void) collection;
+}
+static inline void mal_perf_collection_epoch(u32 epoch) {
+    (void) epoch;
+}
+static inline void mal_perf_collection_finalize(
+    const void *collection,
+    MalPerfCollectionKind kind,
+    u32 epoch,
+    usize size,
+    u8 array_element_mask,
+    bool array_deoptimized
+) {
+    (void) collection;
+    (void) kind;
+    (void) epoch;
+    (void) size;
+    (void) array_element_mask;
+    (void) array_deoptimized;
+}
+static inline void mal_perf_collection_key_value(const void *collection, u64 value) {
+    (void) collection;
+    (void) value;
+}
+static inline void mal_perf_array_element_write(const void *array, u64 value) {
+    (void) array;
+    (void) value;
 }
 
 #define MAL_PERF_COUNT(field) ((void) 0)

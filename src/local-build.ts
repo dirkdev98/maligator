@@ -40,7 +40,7 @@ import { generatedHeaderDependencyHash, runtimeHeaderHash } from "./runtime-buil
 import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = maligatorBuildDirectory();
-const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 3, "cc");
+const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 4, "cc");
 const GENERATED_OBJECT_COST_PRODUCER = artifactProducer(
 	"generated-object-cost",
 	1,

@@ -3,11 +3,16 @@
 #include <math.h>
 
 #include "./gc.h"
+#include "./perf_stats.h"
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
     mal_object_init(heap, &map->object, type, prototype);
     map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
     map->weak = weak;
+    MalPerfCollectionKind kind = type == MAL_HEAP_SET_OBJECT
+        ? (weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET)
+        : (weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP);
+    mal_perf_collection_new(map, kind, heap->epoch);
 }
 
 MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *prototype, bool weak) {
@@ -64,6 +69,11 @@ MalKey mal_map_key_from_value(MalValue value) {
     return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
 }
 
+MalKey mal_map_object_key_from_value(const MalMapObject *map, MalValue value) {
+    mal_perf_collection_key_value(map, value);
+    return mal_map_key_from_value(value);
+}
+
 void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value) {
     void *entry = mal_table_upsert_entry(map->entries, key, nullptr);
     mal_table_entry_set_value(map->entries, entry, value);
@@ -73,10 +83,11 @@ void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value)
     // key reclaimed without dangling — tracing reaches both through `map`.
     mal_gc_card(&map->object.header, key.value);
     mal_gc_card(&map->object.header, value);
+    mal_perf_collection_mutation(map, mal_table_size(map->entries));
 }
 
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
-    mal_map_object_set_canonical(map, mal_map_key_from_value(key), value);
+    mal_map_object_set_canonical(map, mal_map_object_key_from_value(map, key), value);
 }
 
 bool mal_map_object_has_canonical(const MalMapObject *map, MalKey key) {
@@ -84,11 +95,12 @@ bool mal_map_object_has_canonical(const MalMapObject *map, MalKey key) {
 }
 
 bool mal_map_object_has(const MalMapObject *map, MalValue key) {
-    return mal_map_object_has_canonical(map, mal_map_key_from_value(key));
+    return mal_map_object_has_canonical(map, mal_map_object_key_from_value(map, key));
 }
 
 MalValue mal_map_object_get(const MalMapObject *map, MalValue key) {
-    MalTableLookup lookup = mal_table_lookup(map->entries, mal_map_key_from_value(key));
+    MalTableLookup lookup = mal_table_lookup(
+        map->entries, mal_map_object_key_from_value(map, key));
 
     if (!lookup.present) {
         return mal_value_new_undefined();
@@ -98,11 +110,14 @@ MalValue mal_map_object_get(const MalMapObject *map, MalValue key) {
 }
 
 bool mal_map_object_delete_canonical(MalMapObject *map, MalKey key) {
-    return mal_table_delete(map->entries, key);
+    bool deleted = mal_table_delete(map->entries, key);
+    if (deleted) mal_perf_collection_mutation(map, mal_table_size(map->entries));
+    return deleted;
 }
 
 bool mal_map_object_delete(MalMapObject *map, MalValue key) {
-    return mal_map_object_delete_canonical(map, mal_map_key_from_value(key));
+    return mal_map_object_delete_canonical(
+        map, mal_map_object_key_from_value(map, key));
 }
 
 usize mal_map_object_size(const MalMapObject *map) {
@@ -110,5 +125,7 @@ usize mal_map_object_size(const MalMapObject *map) {
 }
 
 void mal_map_object_clear(MalMapObject *map) {
+    bool had_entries = mal_table_size(map->entries) != 0;
     mal_table_clear(map->entries);
+    if (had_entries) mal_perf_collection_mutation(map, 0);
 }

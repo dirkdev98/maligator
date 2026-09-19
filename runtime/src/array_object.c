@@ -16,6 +16,38 @@
 // table storage rather than allocate a mostly-hole vector.
 #define MAL_ARRAY_DENSE_MAX_GAP 1024u
 
+#if MAL_PERF_STATS
+static usize mal_array_object_perf_value_kind(MalValue value) {
+    if (mal_value_is_int32(value)) return 0;
+    if (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
+        value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return 1;
+    }
+    return 2;
+}
+
+static void mal_array_object_perf_observe_value(
+    MalArrayObject *array, MalValue value
+) {
+    if (!mal_value_is_array_hole(value)) {
+        mal_perf_array_element_write(array, value);
+    }
+}
+
+u8 mal_array_object_perf_element_mask(const MalArrayObject *array) {
+    u8 mask = 0;
+    if (array->elements == nullptr) return mask;
+    for (u32 index = 0; index < array->dense_count; index++) {
+        MalValue value = array->elements[index];
+        if (mal_value_is_array_hole(value)) continue;
+        mask |= (u8) (1u << mal_array_object_perf_value_kind(value));
+    }
+    return mask;
+}
+#else
+#define mal_array_object_perf_observe_value(array, value) ((void) 0)
+#endif
+
 void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prototype) {
     mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
     array->length = 0;
@@ -27,6 +59,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->dense_maybe_holey = false;
     array->dense_elements_writable = true;
     array->dense_elements_configurable = true;
+    mal_perf_collection_new(array, MAL_PERF_COLLECTION_ARRAY, heap->epoch);
 }
 
 bool mal_array_object_is_dense(const MalArrayObject *array) {
@@ -180,9 +213,11 @@ bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) 
     // This slot was outside the traced [0, dense_count) region, so no SATB deletion
     // barrier is needed. Publish the value before extending that traced region.
     array->elements[index] = value;
+    mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
     mal_gc_card(&array->object.header, value); // old array -> young element
+    mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
     return true;
 }
@@ -199,9 +234,11 @@ void mal_array_object_fresh_dense_append_reserved(
     assert(array->elements != nullptr);
 
     array->elements[index] = value;
+    mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
     mal_gc_card(&array->object.header, value);
+    mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
 }
 
@@ -225,10 +262,12 @@ bool mal_array_object_dense_append_many(
     for (u32 i = 0; i < count; i++) {
         MalValue value = values[i];
         array->elements[start + i] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value);
     }
     array->dense_count = end;
     array->length = end;
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -255,10 +294,12 @@ bool mal_array_object_contained_dense_push(
     for (u32 i = 0; i < count; i++) {
         MalValue value = values[i];
         array->elements[start + i] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value);
     }
     array->dense_count = end;
     array->length = end;
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -280,6 +321,7 @@ bool mal_array_object_contained_dense_pop(
     mal_gc_write_barrier(value);
     array->dense_count = index;
     array->length = index;
+    mal_perf_collection_mutation(array, array->length);
     *value_out = value;
     return true;
 }
@@ -311,12 +353,14 @@ bool mal_array_object_dense_build_values(
     for (u32 index = 0; index < count; index++) {
         MalValue value = values[index];
         array->elements[start + index] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value);
     }
     array->dense_count = start + count;
     if (array->length < array->dense_count) {
         array->length = array->dense_count;
     }
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -328,12 +372,14 @@ bool mal_array_object_dense_build_fill(
     }
     for (u32 index = 0; index < count; index++) {
         array->elements[start + index] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value);
     }
     array->dense_count = start + count;
     if (array->length < array->dense_count) {
         array->length = array->dense_count;
     }
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -359,6 +405,7 @@ bool mal_array_object_dense_build_range(
             value = mal_value_new_undefined();
         }
         array->elements[start + index] = value;
+        mal_array_object_perf_observe_value(array, value);
         array->dense_maybe_holey =
             array->dense_maybe_holey || mal_value_is_array_hole(value);
         mal_gc_card(&array->object.header, value);
@@ -367,6 +414,7 @@ bool mal_array_object_dense_build_range(
     if (array->length < array->dense_count) {
         array->length = array->dense_count;
     }
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -398,6 +446,7 @@ void mal_array_object_dense_shift(MalArrayObject *array) {
         mal_array_object_dense_card_range(array, 0, count - 1);
     }
     array->length--;
+    mal_perf_collection_mutation(array, array->length);
 }
 
 bool mal_array_object_dense_unshift_many(
@@ -422,9 +471,13 @@ bool mal_array_object_dense_unshift_many(
             sizeof(MalValue) * (usize) old_count);
     }
     memcpy(array->elements, values, sizeof(MalValue) * (usize) count);
+    for (u32 index = 0; index < count; index++) {
+        mal_array_object_perf_observe_value(array, values[index]);
+    }
     array->dense_count = new_count;
     array->length += count;
     mal_array_object_dense_card_range(array, 0, new_count);
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -438,6 +491,7 @@ void mal_array_object_dense_reverse(MalArrayObject *array) {
         array->elements[right] = swap;
     }
     mal_array_object_dense_card_range(array, 0, count);
+    mal_perf_collection_mutation(array, array->length);
 }
 
 void mal_array_object_dense_fill(
@@ -446,8 +500,10 @@ void mal_array_object_dense_fill(
     mal_array_object_dense_barrier_range(array, start, end);
     for (u32 index = start; index < end; index++) {
         array->elements[index] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value);
     }
+    mal_perf_collection_mutation(array, array->length);
 }
 
 void mal_array_object_dense_copy_within(
@@ -460,6 +516,7 @@ void mal_array_object_dense_copy_within(
     memmove(array->elements + target, array->elements + start,
         sizeof(MalValue) * (usize) count);
     mal_array_object_dense_card_range(array, target, target + count);
+    mal_perf_collection_mutation(array, array->length);
 }
 
 bool mal_array_object_dense_splice(
@@ -489,10 +546,14 @@ bool mal_array_object_dense_splice(
     if (insert_count > 0) {
         memcpy(array->elements + start, values,
             sizeof(MalValue) * (usize) insert_count);
+        for (u32 index = 0; index < insert_count; index++) {
+            mal_array_object_perf_observe_value(array, values[index]);
+        }
     }
     array->dense_count = new_length;
     array->length = new_length;
     mal_array_object_dense_card_range(array, 0, new_length);
+    mal_perf_collection_mutation(array, array->length);
     return true;
 }
 
@@ -501,7 +562,9 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
     if (array->elements != nullptr && index < array->dense_count) {
         mal_gc_write_barrier(array->elements[index]);
         array->elements[index] = value;
+        mal_array_object_perf_observe_value(array, value);
         mal_gc_card(&array->object.header, value); // old array -> young element
+        mal_perf_collection_mutation(array, array->length);
         return MAL_ARRAY_DENSE_APPLIED;
     }
 
@@ -521,8 +584,10 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
         array->elements[i] = mal_value_new_array_hole();
     }
     array->elements[index] = value;
+    mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     mal_gc_card(&array->object.header, value); // old array -> young element
+    mal_perf_collection_mutation(array, array->length > index ? array->length : index + 1);
     return MAL_ARRAY_DENSE_APPLIED;
 }
 
@@ -533,6 +598,7 @@ void mal_array_object_dense_delete(MalArrayObject *array, u32 index) {
     mal_gc_write_barrier(array->elements[index]);
     array->elements[index] = mal_value_new_array_hole();
     array->dense_maybe_holey = true;
+    mal_perf_collection_mutation(array, array->length);
 }
 
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
@@ -617,6 +683,7 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
 }
 
 void mal_array_object_set_length(MalArrayObject *array, u32 length) {
+    u32 previous_length = array->length;
     if (length < array->length) {
         // Non-configurable elements may block the shrink; otherwise truncate the
         // dense region to the achieved length.
@@ -633,6 +700,9 @@ void mal_array_object_set_length(MalArrayObject *array, u32 length) {
     }
 
     array->length = length;
+    if (length != previous_length) {
+        mal_perf_collection_mutation(array, array->length);
+    }
 }
 
 bool mal_array_key_is_length(MalKey key) {

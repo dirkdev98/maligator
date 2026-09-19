@@ -1261,6 +1261,15 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_ARRAY_OBJECT: {
             MalArrayObject *array = (MalArrayObject *) cell;
+#if MAL_PERF_STATS
+            mal_perf_collection_finalize(
+                array,
+                MAL_PERF_COLLECTION_ARRAY,
+                g_gc_vm->heap.epoch,
+                array->length,
+                mal_array_object_perf_element_mask(array),
+                array->dense_deopted);
+#endif
             if (array->elements != nullptr) {
                 gc_free_raw(&g_gc_vm->heap, array->elements); // RAW-space dense vector
                 array->elements = nullptr;
@@ -1272,6 +1281,18 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_MAP_OBJECT:
         case MAL_HEAP_SET_OBJECT: {
             MalMapObject *map = (MalMapObject *) cell;
+#if MAL_PERF_STATS
+            MalPerfCollectionKind kind = cell->type == MAL_HEAP_SET_OBJECT
+                ? (map->weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET)
+                : (map->weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP);
+            mal_perf_collection_finalize(
+                map,
+                kind,
+                g_gc_vm->heap.epoch,
+                map->entries == nullptr ? 0 : mal_table_size(map->entries),
+                0,
+                false);
+#endif
             if (map->entries != nullptr) {
                 mal_table_release_owner(map->entries);
                 map->entries = nullptr;
