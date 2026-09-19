@@ -60,6 +60,14 @@ describe("collection performance statistics", () => {
 		for (const kind of ["int32", "string", "symbol", "object"]) {
 			expect(field(keys, kind)).toBeGreaterThan(0);
 		}
+		const keyShapes = reportLine(
+			result.stderr,
+			"[perf-collection-key-shape]",
+			"kind=map ",
+		);
+		for (const shape of ["int32", "f64", "string", "object"]) {
+			expect(field(keyShapes, shape)).toBeGreaterThan(0);
+		}
 		const tracking = reportLine(result.stderr, "[perf-collection-tracking]");
 		expect(field(tracking, "overflows")).toBe(0);
 	}, 180_000);

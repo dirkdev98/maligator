@@ -31,5 +31,13 @@ const retained = [];
 for (let index = 0; index < 70_000; index++) retained.push([index]);
 total += retained.length + retained[69_999][0];
 
-if (total !== 140_096) throw new Error(`unexpected collection checksum: ${total}`);
+const keyShapeMaps = [
+	new Map([[1, 1]]),
+	new Map([[1.5, 2]]),
+	new Map([["key", 3]]),
+	new Map([[objectKey, 4]]),
+];
+for (const shapedMap of keyShapeMaps) total += shapedMap.values().next().value;
+
+if (total !== 140_106) throw new Error(`unexpected collection checksum: ${total}`);
 console.log("collection-perf-stats PASS 1/1");

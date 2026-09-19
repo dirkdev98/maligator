@@ -129,3 +129,17 @@ void mal_map_object_clear(MalMapObject *map) {
     mal_table_clear(map->entries);
     if (had_entries) mal_perf_collection_mutation(map, 0);
 }
+
+#if MAL_PERF_STATS
+u8 mal_map_object_perf_key_mask(const MalMapObject *map) {
+    u8 mask = 0;
+    MalTableIter iterator;
+    mal_table_iter_init(&iterator, map->entries, MAL_TABLE_ITER_STORAGE);
+    MalKey key;
+    void *entry;
+    while (mal_table_iter_next(&iterator, &key, &entry)) {
+        mask |= mal_perf_collection_key_bit(key.value);
+    }
+    return mask;
+}
+#endif

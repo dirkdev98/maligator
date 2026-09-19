@@ -37,6 +37,7 @@ typedef struct MalPerfCollectionRecord {
     u32 iterations;
     MalPerfCollectionKind kind;
     u8 array_element_mask;
+    u8 collection_key_mask;
 } MalPerfCollectionRecord;
 
 static u32 mal_perf_collection_latest_epoch;
@@ -176,6 +177,21 @@ static usize mal_perf_collection_iteration_bucket(u32 iterations) {
     return 3;
 }
 
+static usize mal_perf_collection_key_shape(u8 mask) {
+    if (mask == 0) return 0;
+    if (mask == (1u << 0)) return 1;
+    if (mask == (1u << 1)) return 2;
+    if (mask == ((1u << 0) | (1u << 1))) return 3;
+    if (mask == (1u << 2)) return 4;
+    if (mask == (1u << 3)) return 5;
+    if (mask == (1u << 4)) return 6;
+    if ((mask & ((1u << 5) | (1u << 6))) != 0 &&
+        (mask & ~((1u << 5) | (1u << 6))) == 0) {
+        return 7;
+    }
+    return 8;
+}
+
 void mal_perf_collection_new(
     const void *collection, MalPerfCollectionKind kind, u32 epoch
 ) {
@@ -234,6 +250,7 @@ static void mal_perf_collection_summarize(
     u32 epoch,
     usize size,
     u8 array_element_mask,
+    u8 collection_key_mask,
     bool array_deoptimized,
     bool live_snapshot
 ) {
@@ -247,9 +264,12 @@ static void mal_perf_collection_summarize(
         mal_perf_stats.collection_lifetimes[kind][mal_perf_collection_lifetime_bucket(epoch - record->birth_epoch)]++;
         mal_perf_stats.collection_mutations[kind][mal_perf_collection_mutation_bucket(record->mutations)]++;
         mal_perf_stats.collection_iterations[kind][mal_perf_collection_iteration_bucket(record->iterations)]++;
+        if (live_snapshot) collection_key_mask = record->collection_key_mask;
         record->collection = (const void *) (uptr) 1;
         mal_perf_collection_record_live--;
     }
+    mal_perf_stats.collection_key_shapes[kind][
+        mal_perf_collection_key_shape(collection_key_mask)]++;
     if (kind != MAL_PERF_COLLECTION_ARRAY) return;
     if (array_deoptimized) {
         mal_perf_stats.array_final_deoptimized++;
@@ -269,6 +289,7 @@ void mal_perf_collection_finalize(
     u32 epoch,
     usize size,
     u8 array_element_mask,
+    u8 collection_key_mask,
     bool array_deoptimized
 ) {
     if (!mal_perf_stats_enabled) return;
@@ -281,6 +302,7 @@ void mal_perf_collection_finalize(
         epoch,
         size,
         array_element_mask,
+        collection_key_mask,
         array_deoptimized,
         false);
 }
@@ -298,15 +320,13 @@ static void mal_perf_collection_snapshot_live(void) {
             mal_perf_collection_latest_epoch,
             record->current_size,
             record->array_element_mask,
+            record->collection_key_mask,
             false,
             true);
     }
 }
 
-void mal_perf_collection_key_value(const void *collection, u64 value) {
-    if (!mal_perf_stats_enabled) return;
-    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
-    if (record == nullptr) return;
+u8 mal_perf_collection_key_bit(u64 value) {
     usize kind = mal_value_is_int32(value) ? 0 :
         (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
             value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) ? 1 :
@@ -314,7 +334,18 @@ void mal_perf_collection_key_value(const void *collection, u64 value) {
         mal_value_is_symbol(value) ? 3 :
         mal_value_is_object(value) ? 4 :
         mal_value_is_bigint(value) ? 5 : 6;
+    return (u8) (1u << kind);
+}
+
+void mal_perf_collection_key_value(const void *collection, u64 value) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfCollectionRecord *record = mal_perf_collection_record(collection, false);
+    if (record == nullptr) return;
+    u8 bit = mal_perf_collection_key_bit(value);
+    usize kind = 0;
+    while (((u8) (1u << kind) & bit) == 0) kind++;
     mal_perf_stats.collection_key_kinds[record->kind][kind]++;
+    record->collection_key_mask |= bit;
 }
 
 void mal_perf_array_element_write(const void *array, u64 value) {
@@ -727,6 +758,22 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) mal_perf_stats.collection_key_kinds[i][4],
             (unsigned long long) mal_perf_stats.collection_key_kinds[i][5],
             (unsigned long long) mal_perf_stats.collection_key_kinds[i][6]
+        );
+        fprintf(
+            stderr,
+            "[perf-collection-key-shape] kind=%s empty=%llu int32=%llu "
+            "f64=%llu numeric_mixed=%llu string=%llu symbol=%llu object=%llu "
+            "other=%llu mixed=%llu\n",
+            mal_perf_collection_kinds[i],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][0],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][1],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][2],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][3],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][4],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][5],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][6],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][7],
+            (unsigned long long) mal_perf_stats.collection_key_shapes[i][8]
         );
     }
     fprintf(

@@ -1268,6 +1268,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 g_gc_vm->heap.epoch,
                 array->length,
                 mal_array_object_perf_element_mask(array),
+                0,
                 array->dense_deopted);
 #endif
             if (array->elements != nullptr) {
@@ -1291,6 +1292,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 g_gc_vm->heap.epoch,
                 map->entries == nullptr ? 0 : mal_table_size(map->entries),
                 0,
+                map->entries == nullptr ? 0 : mal_map_object_perf_key_mask(map),
                 false);
 #endif
             if (map->entries != nullptr) {

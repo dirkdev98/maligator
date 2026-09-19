@@ -83,3 +83,7 @@ usize mal_map_object_size(const MalMapObject *map);
  * Remove all entries, keeping outstanding iterators valid.
  */
 void mal_map_object_clear(MalMapObject *map);
+
+#if MAL_PERF_STATS
+u8 mal_map_object_perf_key_mask(const MalMapObject *map);
+#endif
