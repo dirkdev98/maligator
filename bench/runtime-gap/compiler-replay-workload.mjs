@@ -1,10 +1,6 @@
 import { CoreFunctionBuilder } from "../../src/compiler/core/core-builder.ts";
-import { buildCoreControlFlow } from "../../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../../src/compiler/core/core-ir-opcodes.ts";
-import {
-	corePlanVersionStamp,
-	verifyCoreOptimizationPlan,
-} from "../../src/compiler/core/core-ir-region-validity.ts";
+import { certifyCoreOptimizationPlan } from "../../src/compiler/core/core-optimization-plan-certificate.ts";
 import { buildCoreSpecializationRecipeTable } from "../../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../../src/compiler/shared/compiler-facts.ts";
@@ -122,13 +118,60 @@ function appendReplayFunction(program, index) {
 	return builder.finish(entry).function;
 }
 
+function planVersionStamp(program) {
+	const programPart = Object.values(program.versions).join(":");
+	const functionPart = [...program.functionIds()]
+		.map(
+			(functionId) =>
+				`${functionId}:${Object.values(program.function(functionId).versions).join(":")}`,
+		)
+		.join("|");
+	return {
+		key: `p:${programPart}|f:${functionPart}`,
+		program: program.versions,
+		functions: [...program.functionIds()].map((functionId) => ({
+			function: functionId,
+			versions: program.function(functionId).versions,
+		})),
+	};
+}
+
+function replayBlockOrder(fn) {
+	const reached = new Set([fn.entry]);
+	const postorder = [];
+	const pending = [{ block: fn.entry, next: 0 }];
+	while (pending.length > 0) {
+		const frame = pending.at(-1);
+		const terminator = fn.blockTerminator(frame.block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		let target;
+		if (frame.next < edgeCount) {
+			target = fn.kernel.terminatorEdgeBlock(edgeStart + frame.next++);
+		} else if (frame.next === edgeCount) {
+			frame.next++;
+			target = fn.kernel.blockHandlerBlock(frame.block);
+		}
+		if (target !== undefined) {
+			if (!reached.has(target)) {
+				reached.add(target);
+				pending.push({ block: target, next: 0 });
+			}
+			continue;
+		}
+		postorder.push(frame.block);
+		pending.pop();
+	}
+	return postorder.reverse();
+}
+
 function emptyPlan(program, liveFunctions) {
 	return {
-		version: corePlanVersionStamp(program),
+		version: planVersionStamp(program),
 		liveFunctions,
 		blockOrders: liveFunctions.map((functionId) => ({
 			function: functionId,
-			blocks: buildCoreControlFlow(program, functionId).reversePostorder,
+			blocks: replayBlockOrder(program.function(functionId)),
 			omittedBlocks: [],
 		})),
 		directEntries: [],
@@ -170,7 +213,9 @@ const sealed = program.seal();
 export const compilerReplayCompilation = {
 	program: sealed,
 	context: compilationContext(),
-	plan: verifyCoreOptimizationPlan(sealed, plan),
+	// This fixture constructs a generic plan and checks its lowered artifact when
+	// generated; importing the optimizer verifier would dominate the replay closure.
+	plan: certifyCoreOptimizationPlan(sealed, plan),
 };
 
 let instructionCount = 0;

@@ -48,6 +48,14 @@ function fixtureOutput(id: string): {
 }
 
 describe("runtime-gap case catalog", () => {
+	it("keeps the captured compiler emitter fixture current", () => {
+		execFileSync(
+			process.execPath,
+			["scripts/generate-runtime-gap-compiler-fixture.mts", "--check"],
+			{ stdio: "pipe" },
+		);
+	});
+
 	it("finds the result record when V8 emits a trailing GC trace", () => {
 		const record = JSON.stringify({
 			schema: 2,
