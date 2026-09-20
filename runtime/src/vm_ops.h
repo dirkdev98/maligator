@@ -2189,6 +2189,16 @@ u64 mal_vm_stack_object_materialization_count(void);
 MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
+MalValue mal_vm_op_create_array_inline(MalVm *vm, i32 length, u32 capacity);
+
+MalCompletion mal_vm_construct_small_collection_hint(
+    MalVm *vm,
+    bool set,
+    u8 entry_capacity,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count
+);
 MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32 cache_slot);
 MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind, MalValue needle, MalValue from_index);
 

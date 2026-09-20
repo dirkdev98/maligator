@@ -855,6 +855,15 @@ MalValue mal_vm_op_create_array(MalVm *vm, i32 length) {
     return mal_value_from_array_object(array);
 }
 
+MalValue mal_vm_op_create_array_inline(MalVm *vm, i32 length, u32 capacity) {
+    MalArrayObject *array = mal_array_object_new_inline(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        capacity);
+    mal_array_object_set_length(array, (u32) length);
+    return mal_value_from_array_object(array);
+}
+
 void mal_op_create_array(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_array.dst] =
         mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
@@ -3119,6 +3128,33 @@ MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue ar
         mal_vm_construct_value(vm, callee, &vm->value_stack[base], argument_count);
     vm->value_stack_size = base;
     return completion;
+}
+
+MalCompletion mal_vm_construct_small_collection_hint(
+    MalVm *vm,
+    bool set,
+    u8 entry_capacity,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalIntrinsic constructor = set
+        ? MAL_INTRINSIC_SET_CONSTRUCTOR : MAL_INTRINSIC_MAP_CONSTRUCTOR;
+    if (arg_count != 0 || callee != vm->intrinsics[constructor]) {
+        return mal_vm_construct_value(vm, callee, args, arg_count);
+    }
+    MalIntrinsic prototype = set
+        ? MAL_INTRINSIC_SET_PROTOTYPE : MAL_INTRINSIC_MAP_PROTOTYPE;
+    MalHeapType type = set ? MAL_HEAP_SET_OBJECT : MAL_HEAP_MAP_OBJECT;
+    MalMapObject *collection = mal_map_object_new_inline_entries(
+        &vm->heap,
+        type,
+        mal_value_to_object(vm->intrinsics[prototype]),
+        entry_capacity);
+    return (MalCompletion) {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_from_map_object(collection),
+    };
 }
 
 void mal_op_construct(MalCallable *callable, const MalInstruction *instruction) {

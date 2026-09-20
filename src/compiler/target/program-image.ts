@@ -1262,7 +1262,13 @@ export type NativeInstructionPlan =
 			readonly directStringCharCodeAtPosition?: "inBounds";
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
+	| {
+			readonly kind: "small-collection-storage";
+			readonly brand: "Map" | "Set";
+			readonly entryCapacity: number;
+	  }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
+	| { readonly kind: "fresh-inline-array"; readonly capacity: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
@@ -1636,6 +1642,13 @@ function nativeInstructionPlanFromExecution(
 			};
 		}
 		case "construct":
+			if (instruction.collectionStorageHint !== undefined) {
+				return {
+					kind: "small-collection-storage",
+					brand: instruction.collectionStorageHint.brand,
+					entryCapacity: instruction.collectionStorageHint.entryCapacity,
+				};
+			}
 			return instruction.directFunctionIndex === undefined
 				? undefined
 				: {
@@ -1643,6 +1656,12 @@ function nativeInstructionPlanFromExecution(
 						directFunctionIndex: instruction.directFunctionIndex,
 					};
 		case "createArray":
+			if (instruction.freshInlineStorageCapacity !== undefined) {
+				return {
+					kind: "fresh-inline-array",
+					capacity: instruction.freshInlineStorageCapacity,
+				};
+			}
 			return instruction.freshDenseReserveLength === undefined
 				? undefined
 				: {
@@ -1696,6 +1715,13 @@ function nativeInstructionPlanFromExecution(
 				? undefined
 				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
 		case "callKnown":
+			if (instruction.collectionStorageHint !== undefined) {
+				return {
+					kind: "small-collection-storage",
+					brand: instruction.collectionStorageHint.brand,
+					entryCapacity: instruction.collectionStorageHint.entryCapacity,
+				};
+			}
 			return instruction.exactInputKindMasks === undefined
 				? undefined
 				: {

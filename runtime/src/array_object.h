@@ -49,6 +49,7 @@ typedef struct MalArrayObject {
     /** Uniform attributes synthesized for every present dense element. */
     bool dense_elements_writable : 1;
     bool dense_elements_configurable : 1;
+    bool dense_inline : 1;
 } MalArrayObject;
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
@@ -237,6 +238,8 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  * Allocate and initialize a new array object.
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
+MalArrayObject *mal_array_object_new_inline(
+    MalHeap *heap, MalObject *prototype, u32 capacity);
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 
 /**

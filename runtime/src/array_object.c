@@ -59,6 +59,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->dense_maybe_holey = false;
     array->dense_elements_writable = true;
     array->dense_elements_configurable = true;
+    array->dense_inline = false;
     mal_perf_collection_new(array, MAL_PERF_COLLECTION_ARRAY, heap->epoch);
 }
 
@@ -102,14 +103,26 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
     // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
     // detached old buffer is never observed by the collector.
-    MalValue *grown = gc_realloc_raw_profiled(
-        mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
-        MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
+    MalValue *grown;
+    if (array->dense_inline) {
+        grown = gc_realloc_raw_profiled(
+            mal_gc_current_heap(), nullptr, sizeof(MalValue) * (usize) needed,
+            MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
+        if (grown != nullptr && array->dense_count != 0) {
+            memcpy(grown, array->elements,
+                   sizeof(MalValue) * (usize) array->dense_count);
+        }
+    } else {
+        grown = gc_realloc_raw_profiled(
+            mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
+            MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
+    }
     if (grown == nullptr) {
         return false;
     }
     array->elements = grown;
     array->capacity = needed;
+    array->dense_inline = false;
     return true;
 }
 
@@ -127,10 +140,10 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
 
 bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
-        array->length != 0 || array->dense_count != 0 || array->capacity != 0 ||
-        array->elements != nullptr) {
+        array->length != 0 || array->dense_count != 0) {
         return false;
     }
+    if (needed <= array->capacity) return true;
     if (needed == 0) {
         return true;
     }
@@ -158,10 +171,10 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
     MalArrayObject *array, u32 needed
 ) {
     if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
-        array->length != 0 || array->dense_count != 0 || array->capacity != 0 ||
-        array->elements != nullptr) {
+        array->length != 0 || array->dense_count != 0) {
         return false;
     }
+    if (needed <= array->capacity) return true;
     if (needed == 0) {
         return true;
     }
@@ -176,6 +189,7 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
     }
     array->elements = elements;
     array->capacity = needed;
+    array->dense_inline = false;
 
     MAL_PERF_COUNT(array_fresh_dense_exact_reserves);
     MAL_PERF_ADD(array_fresh_dense_reserved_slots, needed);
@@ -605,6 +619,21 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
     MalArrayObject *array = mal_heap_alloc(heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
     mal_array_object_init(heap, array, prototype);
 
+    return array;
+}
+
+MalArrayObject *mal_array_object_new_inline(
+    MalHeap *heap, MalObject *prototype, u32 capacity
+) {
+    assert(capacity > 0 && capacity <= 4);
+    MalArrayObject *array = mal_heap_alloc(
+        heap,
+        sizeof(MalArrayObject) + sizeof(MalValue) * (usize) capacity,
+        MAL_HEAP_ARRAY_OBJECT);
+    mal_array_object_init(heap, array, prototype);
+    array->elements = (MalValue *) (array + 1);
+    array->capacity = capacity;
+    array->dense_inline = true;
     return array;
 }
 

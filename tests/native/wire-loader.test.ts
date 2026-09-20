@@ -950,8 +950,7 @@ describe("wire loader side-data validation", () => {
 		const arraySearches = ["includes", "indexOf", "lastIndexOf"].map((method) =>
 			guardedSites.find(
 				(site) =>
-					site.instruction.guardedBuiltinCall?.operation ===
-					`Array.prototype.${method}`,
+					site.instruction.guardedBuiltinCall?.operation === `Array.prototype.${method}`,
 			),
 		);
 		expect(unary).toBeDefined();

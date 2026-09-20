@@ -32,6 +32,8 @@ void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, Mal
  * Allocate and initialize a new map/set object.
  */
 MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *prototype, bool weak);
+MalMapObject *mal_map_object_new_inline_entries(
+    MalHeap *heap, MalHeapType type, MalObject *prototype, u8 entry_capacity);
 
 /**
  * Build the canonical table key for a JS value under SameValueZero: int32-

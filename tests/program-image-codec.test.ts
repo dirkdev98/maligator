@@ -1462,6 +1462,75 @@ describe("program-image-codec", () => {
 		);
 	});
 
+	it("round-trips statically proven inline collection storage", () => {
+		const arrayDefinition = withNativeFunctionPlan(
+			withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					registerCount: 1,
+					instructions: [{ opcode: "CREATE_ARRAY", dst: 0, length: 2 }],
+					positions: [0],
+					handlers: [],
+				},
+			]),
+			0,
+			(plan) => ({
+				...plan,
+				instructions: [{ kind: "fresh-inline-array", capacity: 2 }],
+			}),
+		);
+		const collectionDefinition = withNativeFunctionPlan(
+			withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					registerCount: 2,
+					instructions: [
+						{
+							opcode: "CONSTRUCT",
+							dst: 0,
+							callee: 1,
+							argumentCount: 0,
+							arguments: [],
+						},
+					],
+					positions: [0],
+					handlers: [],
+				},
+			]),
+			0,
+			(plan) => ({
+				...plan,
+				instructions: [
+					{ kind: "small-collection-storage", brand: "Map", entryCapacity: 3 },
+				],
+			}),
+		);
+
+		for (const image of [arrayDefinition, collectionDefinition]) {
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		}
+		expect(() =>
+			serializeCompilerArtifact(
+				withNativeFunctionPlan(arrayDefinition, 0, (plan) => ({
+					...plan,
+					instructions: [{ kind: "fresh-inline-array", capacity: 1 }],
+				})),
+			),
+		).toThrow(/invalid inline Array storage metadata/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withNativeFunctionPlan(collectionDefinition, 0, (plan) => ({
+					...plan,
+					instructions: [
+						{ kind: "small-collection-storage", brand: "Set", entryCapacity: 5 },
+					],
+				})),
+			),
+		).toThrow(/invalid small collection storage metadata/);
+	});
+
 	it("round-trips portable exact Array length operations and rejects stale proofs", () => {
 		const exactArrayLengthDefinition = (
 			stringConstants: Array<Array<number>>,

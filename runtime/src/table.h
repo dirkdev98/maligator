@@ -48,6 +48,8 @@ typedef struct MalTableLookup {
  * Create a new ordered table substrate.
  */
 MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
+MalTable *mal_table_new_inline_entries(
+    MalTableMode mode, MalTableRole role, u8 entry_capacity);
 
 /**
  * Destroy a table previously created with mal_table_new.

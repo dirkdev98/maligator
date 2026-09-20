@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 83;
+export const COMPILER_ARTIFACT_VERSION = 84;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -836,6 +836,25 @@ function writeCompilerArtifact(
 				w.u8(2);
 				w.i32(plan.directFunctionIndex);
 			} else if (
+				plan.kind === "small-collection-storage" &&
+				(instruction.opcode === "CONSTRUCT" ||
+					(instruction.opcode === "CALL_KNOWN" && instruction.construct === true))
+			) {
+				if (
+					instruction.argumentCount !== 0 ||
+					(plan.brand !== "Map" && plan.brand !== "Set") ||
+					!Number.isInteger(plan.entryCapacity) ||
+					plan.entryCapacity < 1 ||
+					plan.entryCapacity > 4
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid small collection storage metadata",
+					);
+				}
+				w.u8(21);
+				w.u8(plan.brand === "Map" ? 0 : 1);
+				w.u8(plan.entryCapacity);
+			} else if (
 				plan.kind === "fresh-dense-reserve" &&
 				instruction.opcode === "CREATE_ARRAY"
 			) {
@@ -846,6 +865,22 @@ function writeCompilerArtifact(
 				}
 				w.u8(12);
 				w.i32(plan.length);
+			} else if (
+				plan.kind === "fresh-inline-array" &&
+				instruction.opcode === "CREATE_ARRAY"
+			) {
+				if (
+					!Number.isInteger(plan.capacity) ||
+					plan.capacity < 1 ||
+					plan.capacity > 4 ||
+					instruction.length > plan.capacity
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid inline Array storage metadata",
+					);
+				}
+				w.u8(20);
+				w.u8(plan.capacity);
 			} else if (
 				plan.kind === "exact-array-length" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -3200,6 +3235,28 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "construct",
 					directFunctionIndex,
 				};
+			} else if (
+				tag === 21 &&
+				(instruction.opcode === "CONSTRUCT" ||
+					(instruction.opcode === "CALL_KNOWN" && instruction.construct === true))
+			) {
+				const brandTag = r.u8();
+				const entryCapacity = r.u8();
+				if (
+					instruction.argumentCount !== 0 ||
+					brandTag > 1 ||
+					entryCapacity < 1 ||
+					entryCapacity > 4
+				) {
+					throw new RangeError(
+						"program-image-codec: invalid small collection storage metadata",
+					);
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "small-collection-storage",
+					brand: brandTag === 0 ? "Map" : "Set",
+					entryCapacity,
+				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {
@@ -3210,6 +3267,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "fresh-dense-reserve",
 					length: reserveLength,
+				};
+			} else if (tag === 20 && instruction.opcode === "CREATE_ARRAY") {
+				const capacity = r.u8();
+				if (capacity < 1 || capacity > 4 || instruction.length > capacity) {
+					throw new RangeError(
+						"program-image-codec: invalid inline Array storage metadata",
+					);
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "fresh-inline-array",
+					capacity,
 				};
 			} else if (
 				tag === 14 &&

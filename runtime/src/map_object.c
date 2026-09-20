@@ -22,6 +22,20 @@ MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *pro
     return map;
 }
 
+MalMapObject *mal_map_object_new_inline_entries(
+    MalHeap *heap, MalHeapType type, MalObject *prototype, u8 entry_capacity
+) {
+    MalMapObject *map = mal_heap_alloc(heap, sizeof(MalMapObject), type);
+    mal_object_init(heap, &map->object, type, prototype);
+    map->entries = mal_table_new_inline_entries(
+        MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP, entry_capacity);
+    map->weak = false;
+    MalPerfCollectionKind kind = type == MAL_HEAP_SET_OBJECT
+        ? MAL_PERF_COLLECTION_SET : MAL_PERF_COLLECTION_MAP;
+    mal_perf_collection_new(map, kind, heap->epoch);
+    return map;
+}
+
 MalKey mal_map_key_from_value(MalValue value) {
     if (mal_value_is_string(value)) {
         return (MalKey) {.kind = MAL_KEY_STRING, .value = value};
