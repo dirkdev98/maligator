@@ -2598,7 +2598,6 @@ function reverseIndexedLengthLoopCandidates(
 				induction.step !== -1 ||
 				induction.representation !== "f64" ||
 				comparison?.operator !== ">" ||
-				!comparison.boundLoopInvariant ||
 				fn.valueRepresentation(induction.value) !== "boxed"
 			)
 				continue;
