@@ -34,6 +34,29 @@ check(run(1, 3) === 18, "changed wrapper takes the guarded fallback");
 check(reports === 21, "fallback does not execute the original wrapper");
 invokeWithReporting = originalInvoke;
 
+const fallbackCallbacks = [];
+invokeWithReporting = (callback) => {
+	fallbackCallbacks.push(callback);
+	return callback();
+};
+check(run(4, 3) === 18, "fallback retains callbacks without sharing environments");
+check(
+	fallbackCallbacks.map((callback) => callback()).join(",") === "5,6,7",
+	"retained fallback callbacks preserve per-iteration values",
+);
+
+const deferredCallbacks = [];
+invokeWithReporting = (callback) => {
+	deferredCallbacks.push(callback);
+	return 0;
+};
+check(run(8, 2) === 0, "fallback may retain callbacks without invoking them");
+check(
+	deferredCallbacks.map((callback) => callback()).join(",") === "9,10",
+	"deferred fallback callbacks remain valid after the loop",
+);
+invokeWithReporting = originalInvoke;
+
 function delayed(value) {
 	const callback = () => value;
 	value += 2;

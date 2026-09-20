@@ -342,7 +342,17 @@ describe("bounded Core cross-call transforms", () => {
 					attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
 			),
 		).toBe(true);
-		expect(operations.some(({ opcode }) => opcode === "loadCaptured")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadCaptured")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "envCopy")).toBe(false);
+		const fallback = operations.find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		)!;
+		expect(
+			operations
+				.filter(({ block }) => block === fallback.block)
+				.map(({ opcode }) => opcode),
+		).toEqual(["envPush", "storeCaptured", "createFunction", "call", "envPop"]);
 	});
 
 	it("guards and inlines hot global rest argument snapshots", () => {
@@ -822,7 +832,9 @@ describe("bounded Core cross-call transforms", () => {
 			),
 			{
 				facts: compilerProgramFactsFromConfig(
-					resolveBuildConfig({ engine: { primordials: "locked", realms: false } }),
+					resolveBuildConfig({
+						engine: { primordials: "locked", realms: false },
+					}),
 				),
 				coreInstrumentation: "full",
 				afterCoreOptimization(program, _context, optimizationReport) {
@@ -864,7 +876,9 @@ describe("bounded Core cross-call transforms", () => {
 			),
 			{
 				facts: compilerProgramFactsFromConfig(
-					resolveBuildConfig({ engine: { primordials: "locked", realms: false } }),
+					resolveBuildConfig({
+						engine: { primordials: "locked", realms: false },
+					}),
 				),
 				afterCoreOptimization(program) {
 					optimized = program;

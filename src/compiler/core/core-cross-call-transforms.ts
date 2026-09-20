@@ -45,6 +45,7 @@ import type {
 	CoreTransformBudgetStatistics,
 	CoreTransformCandidate,
 } from "./core-transform-candidates.ts";
+import { virtualizeGuardedCallbackEnvironment } from "./core-virtual-captures.ts";
 
 export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
 	readonly waves: number;
@@ -354,7 +355,11 @@ function inlineTarget(
 					fn.kernel.operandAt(argumentStart + offset),
 				]);
 		}
-		blocks.push({ id, instructions: [...fn.bodyInstructionIds(id)], parameters });
+		blocks.push({
+			id,
+			instructions: [...fn.bodyInstructionIds(id)],
+			parameters,
+		});
 	}
 	return {
 		argumentSnapshots: hasArgumentSnapshots,
@@ -1128,7 +1133,10 @@ function applyGuardedInline(
 			});
 			if (terminator.kind === "return") emitReturn(destination, terminator.value);
 			else if (terminator.kind === "jump")
-				editor.setTerminator(destination, { kind: "jump", edge: edge(terminator.edge) });
+				editor.setTerminator(destination, {
+					kind: "jump",
+					edge: edge(terminator.edge),
+				});
 			else if (terminator.kind === "branch")
 				editor.setTerminator(destination, {
 					kind: "branch",
@@ -1435,6 +1443,14 @@ export function runCoreCrossCallTransforms(
 			if (!appliedCallers.has(functionId)) {
 				editor.commit();
 				continue;
+			}
+			const virtualCapture = virtualizeGuardedCallbackEnvironment(
+				program,
+				functionId,
+				editor,
+			);
+			if (virtualCapture !== undefined) {
+				instructionsIntroduced += virtualCapture.instructionsIntroduced;
 			}
 			const optimized = optimizeCaller(wave, functionId, editor);
 			if (optimized.localPlanInput.function !== functionId) {
