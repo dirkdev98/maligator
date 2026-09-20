@@ -2849,6 +2849,53 @@ function emitBody(
 	const fieldLoads = new Map(
 		directFields?.loads.map((load) => [load.instructionIp, load.field]),
 	);
+	const staticPropertyProjectionActionByIp = new Map<
+		number,
+		NativeStaticPropertyProjectionAction
+	>();
+	const staticPropertyProjectionConflicts = (ip: number): boolean =>
+		nativeInstructions[ip] !== undefined ||
+		fieldLoads.has(ip) ||
+		stackObjectAccesses.has(ip) ||
+		stackObjectInheritedAccesses.has(ip) ||
+		indexedLengthLoopActionByIp.has(ip) ||
+		nativeStringSplitProjectionActionByIp.has(ip) ||
+		nativeStringSplitCursorActionByIp.has(ip) ||
+		nativeRegExpExecProjectionActionByIp.has(ip) ||
+		nativeRegExpIteratorProjectionActionByIp.has(ip) ||
+		nativeStringSliceNumberFusionActionByIp.has(ip) ||
+		nativeStringCharCodeAtChainActionByIp.has(ip) ||
+		nativeBuiltinCollectionCallChainActionByIp.has(ip);
+	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
+		const first = fn.instructions[ip]!;
+		const second = fn.instructions[ip + 1]!;
+		if (
+			first.opcode !== "LOAD_PROPERTY_STATIC" ||
+			second.opcode !== "LOAD_PROPERTY_STATIC" ||
+			first.object !== second.object ||
+			first.dst === first.object ||
+			reps[first.dst] !== "boxed" ||
+			reps[second.dst] !== "boxed" ||
+			jumpTargets.has(ip + 1) ||
+			staticPropertyProjectionConflicts(ip) ||
+			staticPropertyProjectionConflicts(ip + 1)
+		) {
+			continue;
+		}
+		const projection: NativeStaticPropertyProjection = {
+			firstIp: ip,
+			first,
+			second,
+		};
+		staticPropertyProjectionActionByIp.set(ip, { projection, role: "first" });
+		staticPropertyProjectionActionByIp.set(ip + 1, { projection, role: "second" });
+		lines.push(
+			`bool __property_projection_${ip}_fast = false;`,
+			`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
+			`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
+		);
+		ip++;
+	}
 	const switches = new Map(
 		fn.profileSiteIds === undefined
 			? literalSwitches?.map((site) => [site.instructionIp, site])
@@ -3056,6 +3103,7 @@ function emitBody(
 				nativeIteratorEntryPairVirtualizationAction:
 					nativeIteratorEntryPairVirtualizationActionByIp.get(ip),
 				numericFusionAction: numericFusionActionByIp.get(ip),
+				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				relocation,
 			},
 		);
@@ -3343,6 +3391,17 @@ interface NativeFieldCall {
 	}>;
 }
 
+interface NativeStaticPropertyProjection {
+	readonly firstIp: number;
+	readonly first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	readonly second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+}
+
+interface NativeStaticPropertyProjectionAction {
+	readonly projection: NativeStaticPropertyProjection;
+	readonly role: "first" | "second";
+}
+
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly resources: Set<NativeBodyResource>;
@@ -3388,6 +3447,7 @@ interface NativeInstructionContext {
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
+	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3479,6 +3539,7 @@ function emitInstruction(
 		nativeIteratorResultVirtualizationAction,
 		nativeIteratorEntryPairVirtualizationAction,
 		numericFusionAction,
+		staticPropertyProjectionAction,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -4213,14 +4274,15 @@ function emitInstruction(
 			// own-name binding. Only emitted in the entry prologue, so `callee` is the
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
-		case "LOAD_CAPTURED":
+		case "LOAD_CAPTURED": {
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
 			const loadOwner = relocation.ownerFunctionIndex(instruction.ownerFunctionIndex);
 			return [
 				`r${instruction.dst} = env != nullptr && env->function_index == ${loadOwner} ? env->slots[${instruction.index}] : mal_vm_load_captured(env, ${loadOwner}, ${instruction.index});`,
 			];
-		case "STORE_CAPTURED":
+		}
+		case "STORE_CAPTURED": {
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [
 					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
@@ -4237,6 +4299,7 @@ function emitInstruction(
 				`  mal_vm_store_captured(env, ${storeOwner}, ${instruction.index}, ${boxed(instruction.src)});`,
 				`}`,
 			];
+		}
 		case "ENV_PUSH":
 		case "ENV_COPY":
 		case "ENV_POP": {
@@ -4350,6 +4413,33 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				staticPropertyProjectionAction !== undefined
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const { projection, role } = staticPropertyProjectionAction;
+				const id = projection.firstIp;
+				const value = `__property_projection_${id}_${role}`;
+				if (role === "second") {
+					return [
+						`if (__property_projection_${id}_fast) {`,
+						`  r${instruction.dst} = ${value};`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return [
+					`__property_projection_${id}_fast = mal_vm_property_try_load_static_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${projection.first.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${projection.second.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
+					`if (__property_projection_${id}_fast) {`,
+					`  r${instruction.dst} = ${value};`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				nativeBuiltinCollectionCallChainAction?.role === "property"
@@ -7912,7 +8002,7 @@ function emitInstruction(
 				`mal_vm_op_init_private_fields(vm, ${boxed(instruction.object)}, ${instruction.keyRegisters.length}, (const MalValue[]){ ${instruction.keyRegisters.map((key) => boxed(key)).join(", ")} });`,
 				throwCheck(),
 			];
-		case "LOAD_PRIVATE":
+		case "LOAD_PRIVATE": {
 			const privateValue = `private_value_${ip}`;
 			return [
 				`MalValue ${privateValue};`,
@@ -7923,6 +8013,7 @@ function emitInstruction(
 				`  ${throwCheck()}`,
 				`}`,
 			];
+		}
 		case "STORE_PRIVATE":
 			// PrivateSet; the name must already be installed, else throws.
 			return [

@@ -1592,6 +1592,31 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, out);
 }
 
+/** Two adjacent fixed-name own-slot reads can share one receiver and shape guard. */
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_pair(
+    MalValue receiver,
+    const MalInlineCache *first,
+    const MalInlineCache *second,
+    MalValue *first_out,
+    MalValue *second_out
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr ||
+        first->mode != MAL_IC_MODE_SHAPE ||
+        second->mode != MAL_IC_MODE_SHAPE ||
+        first->slot == MAL_IC_VALUE_SLOT ||
+        second->slot == MAL_IC_VALUE_SLOT ||
+        object->shape != first->shape ||
+        first->shape != second->shape) {
+        return false;
+    }
+    *first_out = object->slots[first->slot];
+    *second_out = object->slots[second->slot];
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
 /**
  * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
  * Returns true when applied; false leaves the store to the general [[Set]].
