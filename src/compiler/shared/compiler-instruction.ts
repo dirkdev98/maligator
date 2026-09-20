@@ -189,9 +189,6 @@ export type CompilerInstruction =
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */
 			freshDenseReserveLength?: number;
-			/** COMPILE-ONLY: storage for a proven one-to-four-element lifetime may
-			 * live in the Array allocation and promote transparently on growth. */
-			freshInlineStorageCapacity?: number;
 			// [destination]
 			registers: [number];
 
@@ -430,11 +427,6 @@ export type CompilerInstruction =
 			argumentMode?: KnownArgumentMode;
 			specialized?: DirectBuiltinOperationId;
 			knownBuiltinCall: KnownBuiltinCall;
-			collectionStorageHint?: {
-				readonly brand: "Map" | "Set";
-				readonly entryCapacity: number;
-				readonly keyKind: "number";
-			};
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }
 	| {
@@ -448,13 +440,6 @@ export type CompilerInstruction =
 			 * and falls back to generic [[Construct]] dispatch on a mismatch.
 			 */
 			directFunctionIndex?: number;
-			/** COMPILE-ONLY: a contained numeric Map/Set may start with entries
-			 * co-allocated with its table header. */
-			collectionStorageHint?: {
-				readonly brand: "Map" | "Set";
-				readonly entryCapacity: number;
-				readonly keyKind: "number";
-			};
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }

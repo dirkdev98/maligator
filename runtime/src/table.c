@@ -58,7 +58,6 @@ typedef struct MalTable {
     u32 entry_capacity;  // allocated `entries` cells
     u32 iterator_pins;   // persistent JS + transient native storage-order iterators
     bool owner_released; // Map/Set finalizer ran; last iterator pin owns teardown
-    u8 inline_entry_capacity;
     u32 map_entry_hint;  // 1-based entry index for the last successful Map-family access
     i32 *slots;
     MalTableEntry *entries;
@@ -71,11 +70,6 @@ typedef struct MalTable {
 } MalTable;
 
 static_assert(sizeof(MalTable) <= 80, "MalTable outgrew its inline-slot size class");
-
-static bool mal_table_entries_are_inline(const MalTable *table) {
-    return table->inline_entry_capacity != 0 &&
-        table->entries == (MalTableEntry *) (table + 1);
-}
 
 static_assert(MAL_TABLE_ROLE_COUNT == MAL_PERF_TABLE_ROLE_COUNT, "table role stats mismatch");
 
@@ -188,14 +182,12 @@ static void mal_table_allocate_storage(MalTable *table) {
     MalHeap *heap = mal_gc_current_heap();
     table->slots = mal_table_allocate_slots(table, capacity);
     for (u32 i = 0; i < capacity; i++) table->slots[i] = MAL_TABLE_EMPTY;
-    if (table->entries == nullptr) {
-        table->entries =
-            mal_heap_alloc_raw_profiled(
-                heap, capacity * sizeof(*table->entries),
-                MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-        table->entry_capacity = capacity;
-    }
+    table->entries =
+        mal_heap_alloc_raw_profiled(
+            heap, capacity * sizeof(*table->entries),
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     table->slot_capacity = capacity;
+    table->entry_capacity = capacity;
     MAL_PERF_COUNT(tables[table->role].storage_allocations);
 }
 
@@ -272,21 +264,10 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
     }
 
     table->entry_capacity *= 2;
-    if (mal_table_entries_are_inline(table)) {
-        MalTableEntry *entries = mal_heap_alloc_raw_profiled(
-            mal_gc_current_heap(),
-            sizeof(MalTableEntry) * table->entry_capacity,
-            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-        memcpy(entries, table->entries,
-               sizeof(MalTableEntry) * table->entry_count);
-        table->entries = entries;
-        table->inline_entry_capacity = 0;
-    } else {
-        table->entries = gc_realloc_raw_profiled(
-            mal_gc_current_heap(), table->entries,
-            sizeof(MalTableEntry) * table->entry_capacity,
-            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-    }
+    table->entries = gc_realloc_raw_profiled(
+        mal_gc_current_heap(), table->entries,
+        sizeof(MalTableEntry) * table->entry_capacity,
+        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
 }
 
 static bool mal_table_should_compact(const MalTable *table) {
@@ -301,15 +282,10 @@ static bool mal_table_should_compact(const MalTable *table) {
 // emptied RAW block returns to the OS. The table is not a GC cell; it is traced via
 // its owner and freed explicitly by the owner's finalizer (or, for the VM-global
 // symbol/atom tables, by mal_vm_free BEFORE mal_heap_free — see mal_table_free).
-MalTable *mal_table_new_inline_entries(
-    MalTableMode mode, MalTableRole role, u8 entry_capacity
-) {
-    if (entry_capacity > MAL_TABLE_SMALL_MIN_CAPACITY) abort();
+MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     MalHeap *heap = mal_gc_current_heap();
     MalTable *table = mal_heap_alloc_raw_profiled(
-        heap,
-        sizeof(MalTable) + sizeof(MalTableEntry) * (usize) entry_capacity,
-        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+        heap, sizeof(MalTable), MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
 
     table->mode = mode;
     table->role = role;
@@ -321,17 +297,11 @@ MalTable *mal_table_new_inline_entries(
     table->entry_capacity = 0;
     table->iterator_pins = 0;
     table->owner_released = false;
-    table->inline_entry_capacity = entry_capacity;
     table->map_entry_hint = 0;
     table->slots = nullptr;
-    table->entries = entry_capacity == 0 ? nullptr : (MalTableEntry *) (table + 1);
-    table->entry_capacity = entry_capacity;
+    table->entries = nullptr;
 
     return table;
-}
-
-MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
-    return mal_table_new_inline_entries(mode, role, 0);
 }
 
 void mal_table_free(MalTable *table) {
@@ -349,7 +319,7 @@ void mal_table_free(MalTable *table) {
     }
 
     mal_table_free_slots(table, table->slots);
-    if (!mal_table_entries_are_inline(table)) gc_free_raw(heap, table->entries);
+    gc_free_raw(heap, table->entries);
     gc_free_raw(heap, table);
 }
 
@@ -403,32 +373,19 @@ bool mal_table_reserve(MalTable *table, usize desired_size) {
         for (u32 i = 0; i < target_slots; i++) {
             table->slots[i] = MAL_TABLE_EMPTY;
         }
-        if (target_entries > table->entry_capacity) {
-            table->entries = mal_heap_alloc_raw_profiled(
-                heap, target_entries * sizeof(*table->entries),
-                MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-            table->entry_capacity = target_entries;
-            table->inline_entry_capacity = 0;
-        }
+        table->entries = mal_heap_alloc_raw_profiled(
+            heap, target_entries * sizeof(*table->entries),
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
         table->slot_capacity = target_slots;
+        table->entry_capacity = target_entries;
         MAL_PERF_COUNT(tables[table->role].storage_allocations);
         return true;
     }
 
     if (target_entries > table->entry_capacity) {
-        if (mal_table_entries_are_inline(table)) {
-            MalTableEntry *entries = mal_heap_alloc_raw_profiled(
-                heap, sizeof(*entries) * target_entries,
-                MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-            memcpy(entries, table->entries,
-                   sizeof(*entries) * table->entry_count);
-            table->entries = entries;
-            table->inline_entry_capacity = 0;
-        } else {
-            table->entries = gc_realloc_raw_profiled(
-                heap, table->entries, sizeof(*table->entries) * target_entries,
-                MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-        }
+        table->entries = gc_realloc_raw_profiled(
+            heap, table->entries, sizeof(*table->entries) * target_entries,
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
         table->entry_capacity = target_entries;
     }
     if (target_slots > table->slot_capacity) {
@@ -640,14 +597,11 @@ void mal_table_compact(MalTable *table) {
     }
     if (table->size == 0) {
         mal_table_free_slots(table, table->slots);
-        if (!mal_table_entries_are_inline(table)) {
-            gc_free_raw(mal_gc_current_heap(), table->entries);
-            table->entries = table->inline_entry_capacity == 0
-                ? nullptr : (MalTableEntry *) (table + 1);
-        }
+        gc_free_raw(mal_gc_current_heap(), table->entries);
         table->slots = nullptr;
+        table->entries = nullptr;
         table->slot_capacity = 0;
-        table->entry_capacity = table->inline_entry_capacity;
+        table->entry_capacity = 0;
         MAL_PERF_COUNT(tables[table->role].storage_releases);
         return;
     }

@@ -4062,11 +4062,6 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_ARRAY":
-			if (nativePlan?.kind === "fresh-inline-array") {
-				return [
-					`r${instruction.dst} = ${profileCall("allocation", `mal_vm_op_create_array_inline(vm, ${instruction.length}, ${nativePlan.capacity})`)};`,
-				];
-			}
 			if (nativePlan?.kind === "fresh-dense-reserve") {
 				return [
 					`r${instruction.dst} = ${profileCall("allocation", `mal_vm_op_create_array(vm, ${instruction.length})`)};`,
@@ -5536,20 +5531,6 @@ function emitInstruction(
 			];
 		}
 		case "CALL_KNOWN": {
-			if (nativePlan?.kind === "small-collection-storage" && instruction.construct) {
-				const arguments_ = instruction.arguments;
-				const argumentsExpression =
-					arguments_.length === 0
-						? "nullptr"
-						: `((MalValue[]){ ${arguments_.map(boxedOperand).join(", ")} })`;
-				const result = `small_collection_${ip}`;
-				return [
-					`MalCompletion ${result} = mal_vm_construct_small_collection_hint(vm, ${nativePlan.brand === "Set" ? "true" : "false"}, ${nativePlan.entryCapacity}, ${boxedOperand(instruction.thisValue)}, ${argumentsExpression}, ${arguments_.length});`,
-					`if (${result}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`r${instruction.dst} = ${result}.value;`,
-					poll,
-				];
-			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
 				const character = STRING_CHARACTER_KERNELS[instruction.operation];
 				if (character !== undefined && operandIsString(instruction.thisValue)) {
@@ -7392,8 +7373,6 @@ function emitInstruction(
 		}
 		case "CONSTRUCT": {
 			const constructPlan = nativePlan?.kind === "construct" ? nativePlan : undefined;
-			const collectionPlan =
-				nativePlan?.kind === "small-collection-storage" ? nativePlan : undefined;
 			// `new callee(args)`: marshal args (boxing numbers) and dispatch through
 			// the guarded direct helper for exact script targets, otherwise generic
 			// construction. Both return the completed [[Construct]] result.
@@ -7404,20 +7383,15 @@ function emitInstruction(
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `construct_result_${ip}`;
 			const construct =
-				collectionPlan !== undefined
+				constructPlan === undefined
 					? profileCall(
 							"construct",
-							`mal_vm_construct_small_collection_hint(vm, ${collectionPlan.brand === "Set" ? "true" : "false"}, ${collectionPlan.entryCapacity}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`,
+							`mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`,
 						)
-					: constructPlan === undefined
-						? profileCall(
-								"construct",
-								`mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`,
-							)
-						: profileCall(
-								"construct",
-								`mal_vm_construct_direct(vm, ${relocation.functionIndex(constructPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`,
-							);
+					: profileCall(
+							"construct",
+							`mal_vm_construct_direct(vm, ${relocation.functionIndex(constructPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`,
+						);
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,

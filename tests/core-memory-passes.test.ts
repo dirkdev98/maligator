@@ -883,67 +883,6 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(fn.fact(refinement!.proof).kind).toBe("exact-collection-builtin-effects");
 	});
 
-	it.each([
-		["Map", "Map.prototype.set"],
-		["Set", "Set.prototype.add"],
-	] as const)(
-		"hints inline entry storage only for a contained numeric %s",
-		(brand, operation) => {
-			const build = (numeric: boolean) => {
-				const core = program();
-				const builder = new CoreFunctionBuilder(core);
-				const entry = builder.createBlock();
-				const [constructor] = builder.appendInstruction(entry, "loadIntrinsic", [], {
-					attributes: { intrinsic: brand },
-				});
-				const [collection] = builder.appendInstruction(entry, "construct", [
-					constructor!,
-				]);
-				const [key] = builder.appendInstruction(
-					entry,
-					numeric ? "createNumber" : "createString",
-					[],
-					{
-						attributes: numeric ? { value: 1 } : { stringIndex: 0 },
-						...(numeric ? { outputRepresentations: ["f64" as const] } : {}),
-					},
-				);
-				const operands =
-					brand === "Map" ? [collection!, key!, key!] : [collection!, key!];
-				builder.appendInstruction(entry, "callKnown", operands, {
-					attributes: {
-						operation,
-						specialized: operation,
-						worldAssumptions: {
-							...builtinWorldAssumptions(operation, "exact-builtin-proof"),
-						},
-					},
-				});
-				builder.setTerminator(entry, { kind: "return", value: key! });
-				const finished = builder.finish(entry);
-				const fn = optimizeCore({
-					program: core,
-					context: lockedContext,
-				}).compilation.program.function(finished.function);
-				const construct = [...fn.instructionIds()].find(
-					(instruction) =>
-						fn.instructionKind(instruction) === "operation" &&
-						fn.instructionOpcodeName(instruction) === "construct",
-				);
-				return construct === undefined
-					? undefined
-					: fn.instructionAttributes(construct).collectionStorageHint;
-			};
-
-			expect(build(true)).toEqual({
-				brand,
-				entryCapacity: 1,
-				keyKind: "number",
-			});
-			expect(build(false)).toBeUndefined();
-		},
-	);
-
 	it("publishes an exact numeric TypedArray brand on local dynamic accesses", () => {
 		const build = (compilationContext: CoreCompilationContext) => {
 			const core = program();

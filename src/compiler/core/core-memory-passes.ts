@@ -991,13 +991,12 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
-	changes: { cfg: false, calls: true, facts: true, representations: false },
+	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
-		const classes = facts.valueClasses;
+		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (
@@ -1044,65 +1043,6 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 					},
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					effectRefinement: { effects, proof },
-				},
-			);
-		}
-		for (const instruction of fn.instructionIds()) {
-			const opcode =
-				fn.instructionKind(instruction) === "operation"
-					? fn.instructionOpcodeName(instruction)
-					: undefined;
-			if (
-				(opcode !== "construct" &&
-					(opcode !== "callKnown" ||
-						fn.instructionAttributes(instruction).construct !== true)) ||
-				fn.kernel.instructionOperandCount(instruction) !== 1 ||
-				fn.kernel.instructionResultCount(instruction) !== 1
-			)
-				continue;
-			const result = instructionResultAt(fn, instruction, 0)!;
-			const brand = classes.containedCollection(result, instruction);
-			if (brand !== "Map" && brand !== "Set") continue;
-			const root = facts.roots.get(result) ?? result;
-			const insertionOperation =
-				brand === "Map" ? "Map.prototype.set" : "Set.prototype.add";
-			const insertions = (facts.index.uses.get(root) ?? []).filter(
-				({ instruction: use }) =>
-					fn.instructionKind(use) === "operation" &&
-					fn.instructionOpcodeName(use) === "callKnown" &&
-					fn.instructionAttributes(use).operation === insertionOperation,
-			);
-			if (insertions.length === 0 || insertions.length > 4) continue;
-			if (
-				insertions.some(({ instruction: use }) => {
-					const block = fn.instructionBlock(use);
-					if (
-						facts.control.loops.some((loop) => loop.blocks.has(block)) ||
-						facts.control.irreducibleCycles.some((cycle) => cycle.blocks.has(block))
-					)
-						return true;
-					const key = instructionOperandAt(fn, use, 1);
-					const scalar =
-						key === undefined ? undefined : facts.valueKinds.exactScalar(key);
-					return scalar !== "int32" && scalar !== "number";
-				})
-			)
-				continue;
-			const attributes = fn.instructionAttributes(instruction);
-			const hint = {
-				brand,
-				entryCapacity: insertions.length,
-				keyKind: "number",
-			} as const;
-			editor ??= CoreEditor.open(program, item.function);
-			editor.replaceInstruction(
-				instruction,
-				opcode,
-				materializeInstructionOperands(fn, instruction),
-				{
-					attributes: { ...attributes, collectionStorageHint: hint },
-					sourcePosition: fn.instructionSourcePosition(instruction),
-					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
 			);
 		}
@@ -1226,8 +1166,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		const { program, compilationContext, item } = context;
 		if (compilationContext.facts.world.primordialPolicy !== "locked") return undefined;
 		const fn = program.function(item.function);
-		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
-		const provenance = facts.provenance;
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		interface Candidate {
 			readonly call: CoreInstructionId;
 			readonly property?: CoreInstructionId;
@@ -1360,63 +1299,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			contained.has(candidate.allocation),
 		);
 		if (retained.length === 0) return undefined;
-		const inlineCapacities = new Map<CoreInstructionId, number>();
-		for (const allocation of contained) {
-			const block = fn.instructionBlock(allocation);
-			if (
-				facts.control.loops.some((loop) => loop.blocks.has(block)) ||
-				facts.control.irreducibleCycles.some((cycle) => cycle.blocks.has(block))
-			)
-				continue;
-			const operations = retained.filter(
-				(candidate) => candidate.allocation === allocation,
-			);
-			if (
-				operations.length === 0 ||
-				operations.some((candidate) => fn.instructionBlock(candidate.call) !== block)
-			)
-				continue;
-			const initialLength = fn.instructionAttributes(allocation).length;
-			if (
-				typeof initialLength !== "number" ||
-				!Number.isSafeInteger(initialLength) ||
-				initialLength < 0 ||
-				initialLength > 4
-			)
-				continue;
-			const byInstruction = new Map(
-				operations.map((candidate) => [candidate.call, candidate]),
-			);
-			let length = initialLength;
-			let capacity = initialLength;
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				const candidate = byInstruction.get(instruction);
-				if (candidate === undefined) continue;
-				if (candidate.operation === "Array.prototype.push") {
-					length += candidate.forwarded.length;
-					capacity = Math.max(capacity, length);
-				} else {
-					length = Math.max(0, length - 1);
-				}
-			}
-			if (capacity > 0 && capacity <= 4) inlineCapacities.set(allocation, capacity);
-		}
 		const editor = CoreEditor.open(program, item.function);
-		for (const [allocation, capacity] of inlineCapacities) {
-			editor.replaceInstruction(
-				allocation,
-				"createArray",
-				materializeInstructionOperands(fn, allocation),
-				{
-					attributes: {
-						...fn.instructionAttributes(allocation),
-						freshInlineStorageCapacity: capacity,
-					},
-					sourcePosition: fn.instructionSourcePosition(allocation),
-					effectRefinement: fn.instructionEffectRefinement(allocation),
-				},
-			);
-		}
 		for (const candidate of retained) {
 			if (fn.instructionAttributes(candidate.call).specialized === candidate.operation)
 				continue;

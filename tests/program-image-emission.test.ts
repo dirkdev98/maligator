@@ -1706,21 +1706,6 @@ describe("native update-expression representation", () => {
 		});
 	}
 
-	it("co-allocates statically bounded Array and numeric collection storage", () => {
-		const array = emitLocked("globalThis.value = [1, 2, 3];");
-		expect(array).toContain("mal_vm_op_create_array_inline(vm, 3, 3)");
-
-		const collection = emitLocked(`
-			function probe(value) {
-				const map = new Map();
-				map.set(1, value);
-				return Map.prototype.has.call(map, 1);
-			}
-			globalThis.probe = probe;
-		`);
-		expect(collection).toContain("mal_vm_construct_small_collection_hint");
-	});
-
 	it("uses available ordinary compiled entries after a function-family guard", () => {
 		const output = emit(`
 			function invoke(value) {

@@ -1271,13 +1271,12 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 0,
                 array->dense_deopted);
 #endif
-            if (array->elements != nullptr && !array->dense_inline) {
+            if (array->elements != nullptr) {
                 gc_free_raw(&g_gc_vm->heap, array->elements); // RAW-space dense vector
+                array->elements = nullptr;
+                array->capacity = 0;
+                array->dense_count = 0;
             }
-            array->elements = nullptr;
-            array->capacity = 0;
-            array->dense_count = 0;
-            array->dense_inline = false;
             break;
         }
         case MAL_HEAP_MAP_OBJECT:

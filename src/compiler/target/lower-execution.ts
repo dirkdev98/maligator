@@ -2070,26 +2070,8 @@ function lowerFunctionToTarget(
 				throw new Error(`Core dense-array plan lost allocation @${instruction}`);
 			}
 			let lowered: CompilerInstruction = rebuilt;
-			if (rebuilt.type === "createArray") {
-				const provenCapacity = rebuilt.freshInlineStorageCapacity ?? rebuilt.length;
-				if (provenCapacity > 0 && provenCapacity <= 4) {
-					lowered = {
-						...rebuilt,
-						freshInlineStorageCapacity: provenCapacity,
-					};
-				}
-			}
 			if (reserveLength !== undefined && rebuilt.type === "createArray") {
-				lowered =
-					reserveLength <= 4
-						? {
-								...rebuilt,
-								freshInlineStorageCapacity: Math.max(
-									rebuilt.freshInlineStorageCapacity ?? 0,
-									reserveLength,
-								),
-							}
-						: { ...rebuilt, freshDenseReserveLength: reserveLength };
+				lowered = { ...rebuilt, freshDenseReserveLength: reserveLength };
 			}
 			if (unsignedArithmetic.has(instruction)) {
 				if (lowered.type !== "binary")
