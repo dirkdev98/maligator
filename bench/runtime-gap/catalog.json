@@ -709,6 +709,32 @@
 			"controls": []
 		},
 		{
+			"id": "array-index-of-int32-hit-short",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Array.prototype.indexOf short int32 hit",
+			"category": "api-builtins",
+			"mechanisms": ["array-search"],
+			"inputShape": "8 int32 elements, rotating hits, selected receiver",
+			"unit": "search",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/array-index-of-int32-hit-short.mjs",
+			"controls": ["array-includes-int32-hit-short"]
+		},
+		{
+			"id": "array-last-index-of-int32-hit-short",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Array.prototype.lastIndexOf short int32 hit",
+			"category": "api-builtins",
+			"mechanisms": ["array-search"],
+			"inputShape": "8 int32 elements, rotating hits, selected receiver",
+			"unit": "search",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/array-last-index-of-int32-hit-short.mjs",
+			"controls": ["array-includes-int32-hit-short"]
+		},
+		{
 			"id": "array-includes-mixed-number-hit",
 			"group": "runtime",
 			"suite": "runtime",

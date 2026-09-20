@@ -152,6 +152,8 @@ describe("runtime-gap case catalog", () => {
 	it.each([
 		"array-includes-int32-miss-long",
 		"array-includes-int32-hit-short",
+		"array-index-of-int32-hit-short",
+		"array-last-index-of-int32-hit-short",
 		"array-includes-mixed-number-hit",
 		"array-includes-signed-zero",
 		"array-includes-nan",
