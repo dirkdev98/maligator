@@ -5,7 +5,7 @@
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "985899b7268aeb8e604ac0509c330db2e4eea76325175412dd0202bd9aef5196"
+		"sha256": "0c5764d8ed28c8fa8829df7cce7404448eb85576fa1c67878a6258b064cdafda"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -689,10 +689,10 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "21210c95a4967b7e4c1286160fbb7269045100e2c455a0c170e13540666d5421"
+		"sha256": "0b89f22d6a6c5d2468a55aa03597544d395d9063b9f6a4c6f73a57b724663c82"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "71daafbea411ccffb089246c073bc325e76ffd692bc3d7a7211339e9d8697e4f"
+		"sha256": "60778d29a4d38bb06eee618b429e1c1511eece68045c789ff7745c396baddd68"
 	}
 ]
