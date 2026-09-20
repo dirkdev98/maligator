@@ -201,7 +201,10 @@ function compilerSourceHash(
 	});
 }
 
-function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): string {
+function compilerNativeSourceKey(
+	sourceDirectory: string,
+	sourceIdentity: string,
+): string {
 	return hashDirectoryTrees({
 		root: sourceDirectory,
 		directories: [path.join(sourceDirectory, "compiler")],
@@ -210,17 +213,25 @@ function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): st
 			"compiler-native-overlay-v3\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
 			"\0",
-			sourceKey,
+			sourceIdentity,
 			"\0",
 		],
 		compareNames,
 	});
 }
 
-function compilerSourceArtifactKey(sourceKey: string, nativeOverlay: boolean): string {
+function compilerSourceArtifactKey(
+	sourceIdentity: string,
+	nativeKey: string | undefined,
+): string {
 	return hash(
 		"sha256",
-		`compiler-source-artifacts-v1\0${nativeOverlay ? "native-overlay" : "portable-wire"}\0${sourceKey}`,
+		[
+			"compiler-source-artifacts-v2",
+			nativeKey === undefined ? "portable-wire" : "native-overlay",
+			sourceIdentity,
+			nativeKey ?? "",
+		].join("\0"),
 		"hex",
 	);
 }
@@ -334,7 +345,7 @@ function ensureSourceArtifacts(
 	sourceKey: string,
 	bake: () => Uint8Array,
 	bakeProgram: (() => ProgramImage) | undefined,
-	nativeKey: string,
+	nativeKey: string | undefined,
 ): CompilerArtifacts {
 	const wirePath = cachedWire(root, sourceKey);
 	const directory = cacheDirectory(root, sourceKey);
@@ -342,7 +353,8 @@ function ensureSourceArtifacts(
 	if (
 		current !== undefined &&
 		(bakeProgram === undefined ||
-			(current.native !== undefined &&
+			(nativeKey !== undefined &&
+				current.native !== undefined &&
 				validNativeSources(directory, current.native, nativeKey)))
 	) {
 		return {
@@ -359,6 +371,9 @@ function ensureSourceArtifacts(
 	if (bakeProgram === undefined) {
 		bytes = bake();
 	} else {
+		if (nativeKey === undefined) {
+			throw new Error("native compiler bake requires a native cache identity");
+		}
 		const image = bakeProgram();
 		bytes = serializeRuntimeImage(image.runtime);
 		requireNonemptyWire(bytes);
@@ -442,15 +457,10 @@ export function ensureCompilerArtifacts(input: CompilerBakeInput): CompilerArtif
 		entrypoint,
 		input.sourceFiles,
 	);
-	const sourceKey = compilerSourceArtifactKey(
-		sourceIdentity,
-		input.bakeProgram !== undefined,
-	);
-	return ensureSourceArtifacts(
-		root,
-		sourceKey,
-		input.bake,
-		input.bakeProgram,
-		compilerNativeSourceKey(sourceDirectory, sourceKey),
-	);
+	const nativeKey =
+		input.bakeProgram === undefined
+			? undefined
+			: compilerNativeSourceKey(sourceDirectory, sourceIdentity);
+	const sourceKey = compilerSourceArtifactKey(sourceIdentity, nativeKey);
+	return ensureSourceArtifacts(root, sourceKey, input.bake, input.bakeProgram, nativeKey);
 }

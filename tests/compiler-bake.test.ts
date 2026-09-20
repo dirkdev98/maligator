@@ -260,7 +260,7 @@ describe("compiler wire provisioning", () => {
 		expect(programBakes).toBe(2);
 
 		writeFileSync(nativeHostSource, "export const nativeHost = 2;\n");
-		expect(ensureCompilerArtifacts(input()).wirePath).toBe(first.wirePath);
+		expect(ensureCompilerArtifacts(input()).wirePath).not.toBe(first.wirePath);
 		expect(programBakes).toBe(3);
 	});
 
