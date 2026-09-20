@@ -80,6 +80,50 @@ function inheritedHoleyLoop() {
 }
 check("inherited hole in indexed loop", inheritedHoleyLoop() === 15);
 
+function reverseShift(values, selected) {
+	values.pop();
+	for (let index = values.length; index > selected; index--) {
+		values[index] = values[index - 1];
+	}
+	return values.join(",");
+}
+check("reverse length induction", reverseShift([1, 2, 3, 4], 1) === "1,2,2,3");
+
+function reverseInheritedHole() {
+	Object.defineProperty(Array.prototype, "1", {
+		configurable: true,
+		value: 9,
+		writable: true,
+	});
+	const result = reverseShift([1, , 3, 4], 0);
+	delete Array.prototype[1];
+	return result;
+}
+check("reverse inherited hole", reverseInheritedHole() === "1,1,9,3");
+
+let proxyLengthReads = 0;
+const reverseProxy = new Proxy([1, 2, 3, 4], {
+	get(target, key, receiver) {
+		if (key === "length") proxyLengthReads++;
+		return Reflect.get(target, key, receiver);
+	},
+});
+check("reverse proxy fallback", reverseShift(reverseProxy, 1) === "1,2,2,3");
+check("reverse proxy length observation", proxyLengthReads === 3);
+
+let selectedCoercions = 0;
+const selectedObject = {
+	valueOf() {
+		selectedCoercions++;
+		return 1;
+	},
+};
+check(
+	"reverse comparison coercion",
+	reverseShift([1, 2, 3, 4], selectedObject) === "1,2,2,3",
+);
+check("reverse comparison count", selectedCoercions === 3);
+
 function preservesNegativeZero() {
 	for (let i = -0; i < 1; i++) return Object.is(i, -0);
 	return false;
@@ -164,5 +208,5 @@ String.prototype.charCodeAt = function (position) {
 check("bounded String method mutation fallback", stringChecksum("AB") === 5);
 String.prototype.charCodeAt = originalCharCodeAt;
 
-check("checks ran", passed === 20);
+check("checks ran", passed === 28);
 console.log("core-loop-optimizations PASS");

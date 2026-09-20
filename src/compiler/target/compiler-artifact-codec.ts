@@ -1044,11 +1044,17 @@ function writeCompilerArtifact(
 						w.i32(site.loadIp);
 						w.i32(site.comparisonIp);
 						w.u8(site.lengthPosition);
+						w.u8(site.reverseInduction === undefined ? 0 : 1);
+						if (site.reverseInduction !== undefined) {
+							w.i32(site.reverseInduction.coercionIp);
+							w.i32(site.reverseInduction.updateIp);
+						}
 						w.u32(site.elements.length);
 						for (const element of site.elements) {
 							w.i32(element.ip);
 							w.u8(element.kind === "load" ? 1 : 2);
 							w.u8(element.arrayIndexIsUint32 ? 1 : 0);
+							w.i32(element.indexIp ?? -1);
 						}
 					}
 					break;
@@ -1518,11 +1524,18 @@ function validateIndexedLengthLoopRegion(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>,
 ): void {
-	const payloadIps = region.sites.flatMap(({ loadIp, comparisonIp, elements }) => [
-		loadIp,
-		comparisonIp,
-		...elements.map(({ ip }) => ip),
-	]);
+	const payloadIps = region.sites.flatMap(
+		({ loadIp, comparisonIp, reverseInduction, elements }) => [
+			loadIp,
+			comparisonIp,
+			...(reverseInduction === undefined
+				? []
+				: [reverseInduction.coercionIp, reverseInduction.updateIp]),
+			...elements.flatMap(({ ip, indexIp }) =>
+				indexIp === undefined ? [ip] : [indexIp, ip],
+			),
+		],
+	);
 	const elementCount = region.sites.reduce(
 		(total, site) => total + site.elements.length,
 		0,
@@ -1544,10 +1557,15 @@ function validateIndexedLengthLoopRegion(
 		new Set(payloadIps).size !== payloadIps.length ||
 		payloadIps.length !== region.claimedIps.length ||
 		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.cost.score !== region.sites.length * 4 + elementCount * 3 ||
+		region.cost.score !==
+			region.sites.length * 4 +
+				region.sites.filter(({ reverseInduction }) => reverseInduction !== undefined)
+					.length *
+					4 +
+				elementCount * 3 ||
 		region.cost.metadataOperations !== payloadIps.length ||
 		region.sites.some((site) => {
-			const { loadIp, comparisonIp, lengthPosition, elements } = site;
+			const { loadIp, comparisonIp, lengthPosition, reverseInduction, elements } = site;
 			const load = fn.instructions[loadIp];
 			const comparison = fn.instructions[comparisonIp];
 			const other =
@@ -1562,19 +1580,36 @@ function validateIndexedLengthLoopRegion(
 						? comparison.left
 						: comparison.right
 					: -1;
+			const coercion =
+				reverseInduction === undefined
+					? undefined
+					: fn.instructions[reverseInduction.coercionIp];
+			const update =
+				reverseInduction === undefined
+					? undefined
+					: fn.instructions[reverseInduction.updateIp];
 			return (
 				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 				String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !== "length" ||
 				comparison?.opcode !== "BINARY" ||
 				!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
 				(lengthPosition !== 1 && lengthPosition !== 2) ||
-				length !== load.dst ||
+				(reverseInduction === undefined
+					? length !== load.dst ||
+						(registerRepresentations[other] !== "int32" &&
+							registerRepresentations[other] !== "number")
+					: comparison.operator !== ">" ||
+						coercion?.opcode !== "UNARY" ||
+						coercion.operator !== "tonumeric" ||
+						update?.opcode !== "UNARY" ||
+						update.operator !== "decrement" ||
+						coercion.dst !== update.src ||
+						update.dst !== length) ||
 				!bytecodeInstructionDominates(fn, loadIp, comparisonIp) ||
-				(registerRepresentations[other] !== "int32" &&
-					registerRepresentations[other] !== "number") ||
 				elements.length > 8 ||
-				elements.some(({ ip, kind, arrayIndexIsUint32 }) => {
+				elements.some(({ ip, kind, arrayIndexIsUint32, indexIp }) => {
 					const element = fn.instructions[ip];
+					const indexed = indexIp === undefined ? undefined : fn.instructions[indexIp];
 					return (
 						ip <= comparisonIp ||
 						typeof arrayIndexIsUint32 !== "boolean" ||
@@ -1587,7 +1622,15 @@ function validateIndexedLengthLoopRegion(
 							? element?.opcode !== "LOAD_PROPERTY"
 							: element?.opcode !== "STORE_PROPERTY") ||
 						(element?.opcode === "LOAD_PROPERTY" || element?.opcode === "STORE_PROPERTY"
-							? element.object !== load.object || element.key !== other
+							? element.object !== load.object ||
+								(reverseInduction === undefined
+									? element.key !== other
+									: indexIp === undefined
+										? element.key !== length
+										: indexed?.opcode !== "BINARY" ||
+											indexed.operator !== "-" ||
+											indexed.left !== length ||
+											element.key !== indexed.dst)
 							: true)
 					);
 				})
@@ -4010,16 +4053,26 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						const loadIp = r.i32();
 						const comparisonIp = r.i32();
 						const lengthPosition = r.u8();
+						const reverseTag = r.u8();
+						if (reverseTag > 1) {
+							throw new RangeError(
+								"program-image-codec: invalid array-length induction kind",
+							);
+						}
+						const reverseInduction =
+							reverseTag === 0 ? undefined : { coercionIp: r.i32(), updateIp: r.i32() };
 						const elementCount = r.count(2);
 						const elements: Array<{
 							ip: number;
 							kind: "load" | "store";
 							arrayIndexIsUint32: boolean;
+							indexIp?: number;
 						}> = [];
 						for (let element = 0; element < elementCount; element++) {
 							const ip = r.i32();
 							const kindTag = r.u8();
 							const arrayIndexTag = r.u8();
+							const indexIp = r.i32();
 							if ((kindTag !== 1 && kindTag !== 2) || arrayIndexTag > 1) {
 								throw new RangeError(
 									"program-image-codec: invalid array-length element kind",
@@ -4029,6 +4082,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 								ip,
 								kind: kindTag === 1 ? "load" : "store",
 								arrayIndexIsUint32: arrayIndexTag === 1,
+								...(indexIp < 0 ? {} : { indexIp }),
 							});
 						}
 						if (lengthPosition !== 1 && lengthPosition !== 2) {
@@ -4040,6 +4094,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 							loadIp,
 							comparisonIp,
 							lengthPosition,
+							...(reverseInduction === undefined ? {} : { reverseInduction }),
 							elements,
 						});
 					}

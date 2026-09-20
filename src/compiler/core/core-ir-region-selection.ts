@@ -695,6 +695,9 @@ function pendingLocalCandidate(
 							load: candidate.load,
 							comparison: candidate.comparison,
 							lengthPosition: candidate.lengthPosition,
+							...(candidate.reverseInduction === undefined
+								? {}
+								: { reverseInduction: candidate.reverseInduction }),
 							elements: candidate.elements,
 						}),
 					}

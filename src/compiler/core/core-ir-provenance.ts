@@ -925,10 +925,15 @@ export interface CoreIndexedLengthLoopCandidate extends CoreLocalSpecializationC
 	readonly load: CoreInstructionId;
 	readonly comparison: CoreInstructionId;
 	readonly lengthPosition: 1 | 2;
+	readonly reverseInduction?: {
+		readonly coercion: CoreInstructionId;
+		readonly update: CoreInstructionId;
+	};
 	readonly elements: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
 		readonly kind: "load" | "store";
 		readonly arrayIndexIsUint32: boolean;
+		readonly index?: CoreInstructionId;
 	}>;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
 }
@@ -2563,6 +2568,149 @@ function indexedLengthLoopCandidates(
 	return candidates;
 }
 
+function reverseIndexedLengthLoopCandidates(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalFactIndex,
+): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
+	if (fn.isGenerator || fn.isAsync) return [];
+	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
+		if (
+			fn.instructionKind(load) !== "operation" ||
+			!staticPropertyNamed(program, fn, load, "length") ||
+			instructionOperandCount(fn, load) !== 1 ||
+			instructionResultCount(fn, load) !== 1 ||
+			!control.reachable.has(fn.instructionBlock(load))
+		)
+			continue;
+		const output = instructionResult(fn, load, 0)!;
+		const reverseLoops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
+			root(value) === root(output) ? "number" : undefined,
+		);
+		for (const induction of reverseLoops.inductions) {
+			const comparison = induction.comparison;
+			if (
+				root(induction.initial) !== root(output) ||
+				induction.step !== -1 ||
+				induction.representation !== "f64" ||
+				comparison?.operator !== ">" ||
+				!comparison.boundLoopInvariant ||
+				fn.valueRepresentation(induction.value) !== "boxed"
+			)
+				continue;
+			const update = induction.updateInstruction;
+			if (
+				fn.instructionOpcodeName(update) !== "unary" ||
+				fn.instructionAttributes(update).operator !== "decrement"
+			)
+				continue;
+			const updateInput = instructionOperand(fn, update, 0);
+			const coercion =
+				updateInput === undefined ? undefined : definingInstruction(fn, updateInput);
+			if (
+				coercion === undefined ||
+				fn.instructionOpcodeName(coercion) !== "unary" ||
+				fn.instructionAttributes(coercion).operator !== "tonumeric" ||
+				root(instructionOperand(fn, coercion, 0)!) !== root(induction.value)
+			)
+				continue;
+			const comparisonInstruction = comparison.instruction;
+			const lengthPosition =
+				root(instructionOperand(fn, comparisonInstruction, 0)!) === root(induction.value)
+					? 1
+					: root(instructionOperand(fn, comparisonInstruction, 1)!) ===
+						  root(induction.value)
+						? 2
+						: undefined;
+			if (lengthPosition === undefined) continue;
+			const receiver = instructionOperand(fn, load, 0)!;
+			const elements: Array<{
+				readonly instruction: CoreInstructionId;
+				readonly kind: "load" | "store";
+				readonly arrayIndexIsUint32: boolean;
+				readonly index?: CoreInstructionId;
+			}> = [];
+			for (const instruction of [
+				...indexedOpcodeInstructions(fn, index, "loadProperty"),
+				...indexedOpcodeInstructions(fn, index, "storeProperty"),
+			]) {
+				const block = fn.instructionBlock(instruction);
+				if (
+					!induction.loop.blocks.has(block) ||
+					!control.dominates(comparison.body, block) ||
+					instructionOperand(fn, instruction, 0) !== receiver
+				)
+					continue;
+				const key = instructionOperand(fn, instruction, 1)!;
+				let indexInstruction: CoreInstructionId | undefined;
+				if (root(key) !== root(induction.value)) {
+					const definition = definingInstruction(fn, root(key));
+					if (
+						definition === undefined ||
+						fn.instructionOpcodeName(definition) !== "binary" ||
+						fn.instructionAttributes(definition).operator !== "-" ||
+						root(instructionOperand(fn, definition, 0)!) !== root(induction.value) ||
+						literalArrayIndex(fn, root(instructionOperand(fn, definition, 1)!)) !== 1
+					)
+						continue;
+					indexInstruction = definition;
+				}
+				elements.push({
+					instruction,
+					kind:
+						fn.instructionOpcodeName(instruction) === "loadProperty" ? "load" : "store",
+					arrayIndexIsUint32: false,
+					...(indexInstruction === undefined ? {} : { index: indexInstruction }),
+				});
+				if (elements.length >= 8) break;
+			}
+			if (elements.length === 0) continue;
+			const instructions = Object.freeze([
+				...new Set([
+					load,
+					comparisonInstruction,
+					coercion,
+					update,
+					...elements.flatMap(({ instruction, index }) =>
+						index === undefined ? [instruction] : [index, instruction],
+					),
+				]),
+			]);
+			const exceptionalBlocks = Object.freeze([
+				...new Set(
+					instructions.flatMap((instruction) => {
+						const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+						return handler === undefined ? [] : [handler];
+					}),
+				),
+			]);
+			if (exceptionalBlocks.length !== 0) continue;
+			candidates.push(
+				Object.freeze({
+					key: `indexed-length-loop:${fn.id}:${load}:${comparisonInstruction}:reverse`,
+					kind: "indexed-length-loop",
+					function: fn.id,
+					root: load,
+					load,
+					comparison: comparisonInstruction,
+					lengthPosition,
+					reverseInduction: Object.freeze({ coercion, update }),
+					elements: Object.freeze(elements),
+					exceptionalBlocks,
+					instructions,
+					fanOut: 3 + elements.length,
+				}),
+			);
+			if (candidates.length >= 32) return candidates;
+		}
+	}
+	return candidates;
+}
+
 const NUMERIC_TYPED_ARRAY_INTRINSICS: ReadonlySet<string> = new Set([
 	"Int8Array",
 	"Uint8Array",
@@ -3901,6 +4049,7 @@ function discoverCandidates(
 	for (const candidate of [
 		...freshArrayLengthCandidates(program, fn, provenanceAnalysis, control, roots, index),
 		...indexedLengthLoopCandidates(program, fn, control, loops, roots, index),
+		...reverseIndexedLengthLoopCandidates(program, fn, control, roots, index),
 		...iteratorCursorCandidates(fn, control, roots, index),
 		...iteratorResultVirtualizationCandidates(fn, control, index),
 		...iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index),

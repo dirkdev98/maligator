@@ -917,12 +917,15 @@ function verifySpecialization(
 			indexed.load !== candidate.load ||
 			indexed.comparison !== candidate.comparison ||
 			indexed.lengthPosition !== candidate.lengthPosition ||
+			indexed.reverseInduction?.coercion !== candidate.reverseInduction?.coercion ||
+			indexed.reverseInduction?.update !== candidate.reverseInduction?.update ||
 			indexed.elements.length !== candidate.elements.length ||
 			indexed.elements.some(
 				(element, index) =>
 					element.instruction !== candidate.elements[index]?.instruction ||
 					element.kind !== candidate.elements[index]?.kind ||
-					element.arrayIndexIsUint32 !== candidate.elements[index]?.arrayIndexIsUint32,
+					element.arrayIndexIsUint32 !== candidate.elements[index]?.arrayIndexIsUint32 ||
+					element.index !== candidate.elements[index]?.index,
 			) ||
 			!loadDominatesComparison ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||

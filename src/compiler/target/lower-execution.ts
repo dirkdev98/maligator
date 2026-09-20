@@ -592,9 +592,12 @@ function lowerCoreSpecializations(
 			}
 			const elements = indexed.elements.map((element) => {
 				const instruction = requireInstruction(element.instruction);
+				const index =
+					element.index === undefined ? undefined : requireInstruction(element.index);
 				if (
 					(element.kind === "load" && instruction.type !== "loadProperty") ||
-					(element.kind === "store" && instruction.type !== "storeProperty")
+					(element.kind === "store" && instruction.type !== "storeProperty") ||
+					(index !== undefined && index.type !== "binary")
 				) {
 					throw new Error(`Core indexed-length plan ${id} lost an element`);
 				}
@@ -605,8 +608,27 @@ function lowerCoreSpecializations(
 					>,
 					kind: element.kind,
 					arrayIndexIsUint32: element.arrayIndexIsUint32,
+					...(index === undefined
+						? {}
+						: {
+								index,
+							}),
 				};
 			});
+			const reverseInduction =
+				indexed.reverseInduction === undefined
+					? undefined
+					: {
+							coercion: requireInstruction(indexed.reverseInduction.coercion),
+							update: requireInstruction(indexed.reverseInduction.update),
+						};
+			if (
+				reverseInduction !== undefined &&
+				(reverseInduction.coercion.type !== "unary" ||
+					reverseInduction.update.type !== "unary")
+			) {
+				throw new Error(`Core indexed-length plan ${id} lost its reverse induction`);
+			}
 			regions.push({
 				...envelope(row),
 				anchors: [load, comparison],
@@ -619,8 +641,12 @@ function lowerCoreSpecializations(
 				},
 				representation: "live-indexed-length-loops",
 				cost: {
-					score: 4 + elements.length * 3,
-					metadataOperations: 2 + elements.length,
+					score: 4 + elements.length * 3 + (reverseInduction === undefined ? 0 : 4),
+					metadataOperations:
+						2 +
+						elements.length +
+						elements.filter(({ index }) => index !== undefined).length +
+						(reverseInduction === undefined ? 0 : 2),
 				},
 				runtimeGuard: "array-or-numeric-typed-array",
 				sites: [
@@ -628,6 +654,20 @@ function lowerCoreSpecializations(
 						load,
 						comparison,
 						lengthPosition: indexed.lengthPosition,
+						...(reverseInduction === undefined
+							? {}
+							: {
+									reverseInduction: {
+										coercion: reverseInduction.coercion as Extract<
+											CompilerInstruction,
+											{ type: "unary" }
+										>,
+										update: reverseInduction.update as Extract<
+											CompilerInstruction,
+											{ type: "unary" }
+										>,
+									},
+								}),
 						elements,
 					},
 				],

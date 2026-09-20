@@ -303,10 +303,15 @@ export interface CorePlanIndexedLengthLoopSpecialization extends CorePlanSpecial
 		readonly load: CoreInstructionId;
 		readonly comparison: CoreInstructionId;
 		readonly lengthPosition: 1 | 2;
+		readonly reverseInduction?: {
+			readonly coercion: CoreInstructionId;
+			readonly update: CoreInstructionId;
+		};
 		readonly elements: ReadonlyArray<{
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
 			readonly arrayIndexIsUint32: boolean;
+			readonly index?: CoreInstructionId;
 		}>;
 	};
 }
@@ -865,6 +870,10 @@ export interface CoreAllocatedIndexedLengthLoopRegion extends CoreAllocatedRegio
 		readonly load: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly lengthPosition: 1 | 2;
+		readonly reverseInduction?: {
+			readonly coercion: Extract<CompilerInstruction, { type: "unary" }>;
+			readonly update: Extract<CompilerInstruction, { type: "unary" }>;
+		};
 		readonly elements: ReadonlyArray<{
 			readonly instruction: Extract<
 				CompilerInstruction,
@@ -872,6 +881,7 @@ export interface CoreAllocatedIndexedLengthLoopRegion extends CoreAllocatedRegio
 			>;
 			readonly kind: "load" | "store";
 			readonly arrayIndexIsUint32: boolean;
+			readonly index?: Extract<CompilerInstruction, { type: "binary" }>;
 		}>;
 	}>;
 }

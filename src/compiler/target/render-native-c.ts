@@ -2001,7 +2001,7 @@ interface NativeNumericFusionAction {
 
 interface IndexedLengthLoopAction {
 	readonly loadIp: number;
-	readonly role: "load" | "compare" | "element";
+	readonly role: "load" | "compare" | "coerce" | "update" | "element";
 	readonly site: Extract<VmRegion, { kind: "indexed-length-loop" }>["sites"][number];
 	readonly element?: Extract<
 		VmRegion,
@@ -2223,7 +2223,11 @@ function emitBody(
 		const site = region.sites[action.primaryIndex ?? -1];
 		if (
 			site === undefined ||
-			(action.role !== "load" && action.role !== "compare" && action.role !== "element")
+			(action.role !== "load" &&
+				action.role !== "compare" &&
+				action.role !== "coerce" &&
+				action.role !== "update" &&
+				action.role !== "element")
 		) {
 			throw new Error("Invalid indexed-length-loop action");
 		}
@@ -2245,11 +2249,25 @@ function emitBody(
 				: -1;
 		const elementInstruction =
 			element === undefined ? undefined : fn.instructions[element.ip];
+		const indexedInstruction =
+			element?.indexIp === undefined ? undefined : fn.instructions[element.indexIp];
+		const reverse = site.reverseInduction;
+		const coercion =
+			reverse === undefined ? undefined : fn.instructions[reverse.coercionIp];
+		const update = reverse === undefined ? undefined : fn.instructions[reverse.updateIp];
 		if (
 			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 			comparison?.opcode !== "BINARY" ||
 			!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
-			length !== load.dst ||
+			(reverse === undefined
+				? length !== load.dst
+				: comparison.operator !== ">" ||
+					coercion?.opcode !== "UNARY" ||
+					coercion.operator !== "tonumeric" ||
+					update?.opcode !== "UNARY" ||
+					update.operator !== "decrement" ||
+					coercion.dst !== update.src ||
+					update.dst !== length) ||
 			(action.role === "element"
 				? element === undefined ||
 					typeof element.arrayIndexIsUint32 !== "boolean" ||
@@ -2259,20 +2277,33 @@ function emitBody(
 					(elementInstruction?.opcode === "LOAD_PROPERTY" ||
 					elementInstruction?.opcode === "STORE_PROPERTY"
 						? elementInstruction.object !== load.object ||
-							elementInstruction.key !== other
+							(reverse === undefined
+								? elementInstruction.key !== other
+								: element.indexIp === undefined
+									? elementInstruction.key !== length
+									: indexedInstruction?.opcode !== "BINARY" ||
+										indexedInstruction.operator !== "-" ||
+										indexedInstruction.left !== length ||
+										elementInstruction.key !== indexedInstruction.dst)
 						: true)
 				: element !== undefined) ||
+			((action.role === "coerce" || action.role === "update") && reverse === undefined) ||
 			(element?.arrayIndexIsUint32 === true &&
 				!(
-					(site.lengthPosition === 1 && comparison.operator === ">") ||
-					(site.lengthPosition === 2 && comparison.operator === "<")
+					reverse === undefined &&
+					((site.lengthPosition === 1 && comparison.operator === ">") ||
+						(site.lengthPosition === 2 && comparison.operator === "<"))
 				)) ||
 			action.ip !==
 				(action.role === "load"
 					? site.loadIp
 					: action.role === "compare"
 						? site.comparisonIp
-						: element!.ip) ||
+						: action.role === "coerce"
+							? reverse!.coercionIp
+							: action.role === "update"
+								? reverse!.updateIp
+								: element!.ip) ||
 			indexedLengthLoopActionByIp.has(action.ip)
 		) {
 			throw new Error("Invalid indexed-length-loop region");
@@ -2754,6 +2785,7 @@ function emitBody(
 			`MalArrayObject *__indexed_length_${action.loadIp}_array = nullptr;`,
 			`MalTypedArrayObject *__indexed_length_${action.loadIp}_typed_array = nullptr;`,
 			`u32 __indexed_length_${action.loadIp}_value = 0;`,
+			`f64 __indexed_length_${action.loadIp}_induction = 0;`,
 		);
 	}
 	if (
@@ -4574,15 +4606,24 @@ function emitInstruction(
 					indexedLengthLoopAction.element?.kind === "load"
 				) {
 					const id = indexedLengthLoopAction.loadIp;
+					const numericKeyGuard =
+						indexedLengthLoopAction.site.reverseInduction !== undefined &&
+						!isNumericRep(reps[instruction.key]!)
+							? `mal_ops_is_number(${boxed(instruction.key)}) && `
+							: "";
+					const numericKey =
+						indexedLengthLoopAction.site.reverseInduction !== undefined
+							? `mal_ops_number_as_f64(${boxed(instruction.key)})`
+							: num(instruction.key);
 					const arrayLoad = indexedLengthLoopAction.element.arrayIndexIsUint32
-						? `mal_vm_array_try_get_proven_index(__indexed_length_${id}_array, (u32) ${num(instruction.key)}, &__indexed_element_${ip})`
-						: `mal_vm_array_try_get_index(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})`;
+						? `mal_vm_array_try_get_proven_index(__indexed_length_${id}_array, (u32) ${numericKey}, &__indexed_element_${ip})`
+						: `mal_vm_array_try_get_index(__indexed_length_${id}_array, ${numericKey}, &__indexed_element_${ip})`;
 					return [
 						`MalValue __indexed_element_${ip};`,
-						`if (__indexed_length_${id}_kind == 1 && ${arrayLoad}) {`,
+						`if (__indexed_length_${id}_kind == 1 && ${numericKeyGuard}${arrayLoad}) {`,
 						`  r${instruction.dst} = __indexed_element_${ip};`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
-						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${num(instruction.key)}));`,
+						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${numericKey}));`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
 						`}`,
@@ -4649,15 +4690,19 @@ function emitInstruction(
 			];
 			if (indexedLengthLoopAction?.role === "load") {
 				const id = indexedLengthLoopAction.loadIp;
+				const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
 				return [
 					`__indexed_length_${id}_kind = 0;`,
 					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
 					`if (__indexed_length_${id}_array != nullptr) {`,
 					`  __indexed_length_${id}_kind = 1;`,
 					`  __indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
+					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
+					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 					`  mal_perf_ic_load_array_length_hit();`,
-					`} else if (mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)) {`,
+					`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
 					`  __indexed_length_${id}_kind = 2;`,
+					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 					`} else {`,
 					...ordinary().map((line) => `  ${line}`),
@@ -4774,10 +4819,19 @@ function emitInstruction(
 					indexedLengthLoopAction.element?.kind === "store"
 				) {
 					const id = indexedLengthLoopAction.loadIp;
+					const numericKeyGuard =
+						indexedLengthLoopAction.site.reverseInduction !== undefined &&
+						!isNumericRep(reps[instruction.key]!)
+							? `mal_ops_is_number(${boxed(instruction.key)}) && `
+							: "";
+					const numericKey =
+						indexedLengthLoopAction.site.reverseInduction !== undefined
+							? `mal_ops_number_as_f64(${boxed(instruction.key)})`
+							: num(instruction.key);
 					return [
-						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_store(__indexed_length_${id}_array, ${num(instruction.key)}, ${boxed(instruction.value)})) {`,
+						`if (__indexed_length_${id}_kind == 1 && ${numericKeyGuard}mal_vm_array_try_store(__indexed_length_${id}_array, ${numericKey}, ${boxed(instruction.value)})) {`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
-						`  mal_vm_numeric_typed_array_store_known_receiver(vm, __indexed_length_${id}_typed_array, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
+						`  mal_vm_numeric_typed_array_store_known_receiver(vm, __indexed_length_${id}_typed_array, ${numericKey}, ${boxed(instruction.value)}, ${strict});`,
 						`  ${throwCheck()}`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
@@ -5011,13 +5065,20 @@ function emitInstruction(
 				if (fallback === null) return null;
 				const compareOperator = NATIVE_COMPARE[operator];
 				if (compareOperator === undefined) return null;
-				const length = `(f64) __indexed_length_${indexedLengthLoopAction.loadIp}_value`;
+				const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
+				const length = reverse
+					? `__indexed_length_${indexedLengthLoopAction.loadIp}_induction`
+					: `(f64) __indexed_length_${indexedLengthLoopAction.loadIp}_value`;
+				const other = indexedLengthLoopAction.site.lengthPosition === 1 ? right : left;
+				const otherNumber = reverse
+					? `mal_ops_number_as_f64(${boxed(other)})`
+					: num(other);
 				const fast =
 					indexedLengthLoopAction.site.lengthPosition === 1
-						? `${length} ${compareOperator} ${num(right)}`
-						: `${num(left)} ${compareOperator} ${length}`;
+						? `${length} ${compareOperator} ${otherNumber}`
+						: `${otherNumber} ${compareOperator} ${length}`;
 				return [
-					`if (__indexed_length_${indexedLengthLoopAction.loadIp}_kind != 0) {`,
+					`if (__indexed_length_${indexedLengthLoopAction.loadIp}_kind != 0${reverse ? ` && mal_ops_is_number(${boxed(other)})` : ""}) {`,
 					dstIsBool
 						? `  r${dst} = ${fast};`
 						: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fast})`)};`,
@@ -5421,6 +5482,23 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (
+				indexedLengthLoopAction?.role === "coerce" ||
+				indexedLengthLoopAction?.role === "update"
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const id = indexedLengthLoopAction.loadIp;
+				const update = indexedLengthLoopAction.role === "update";
+				return [
+					`if (__indexed_length_${id}_kind == 1) {`,
+					...(update ? [`  __indexed_length_${id}_induction -= 1.0;`] : []),
+					`  ${storeNumber(dst, `__indexed_length_${id}_induction`)}`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (
 				operator === "tostring" &&
 				(reps[src] === "boolean" ||

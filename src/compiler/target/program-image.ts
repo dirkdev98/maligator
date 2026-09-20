@@ -605,10 +605,15 @@ export type VmIndexedLengthLoopRegion = VmRegionEnvelope<
 		readonly loadIp: number;
 		readonly comparisonIp: number;
 		readonly lengthPosition: 1 | 2;
+		readonly reverseInduction?: {
+			readonly coercionIp: number;
+			readonly updateIp: number;
+		};
 		readonly elements: ReadonlyArray<{
 			readonly ip: number;
 			readonly kind: "load" | "store";
 			readonly arrayIndexIsUint32: boolean;
+			readonly indexIp?: number;
 		}>;
 	}>;
 };
@@ -696,6 +701,7 @@ export type VmRegionActionRole =
 	| "caseUpperCall"
 	| "caseUpperProperty"
 	| "compare"
+	| "coerce"
 	| "element"
 	| "finish"
 	| "inherited"
@@ -713,7 +719,8 @@ export type VmRegionActionRole =
 	| "start"
 	| "step"
 	| "trimCall"
-	| "trimProperty";
+	| "trimProperty"
+	| "update";
 
 export interface VmRegionAction {
 	readonly ip: number;
@@ -748,6 +755,10 @@ export function vmRegionActions(
 				for (const [siteIndex, site] of region.sites.entries()) {
 					add(regionIndex, site.loadIp, "load", siteIndex);
 					add(regionIndex, site.comparisonIp, "compare", siteIndex);
+					if (site.reverseInduction !== undefined) {
+						add(regionIndex, site.reverseInduction.coercionIp, "coerce", siteIndex);
+						add(regionIndex, site.reverseInduction.updateIp, "update", siteIndex);
+					}
 					for (const [elementIndex, element] of site.elements.entries()) {
 						add(regionIndex, element.ip, "element", siteIndex, elementIndex);
 					}
@@ -1808,14 +1819,29 @@ function lowerExecutionFunctionToNativePlan(
 				blockStartIps.get(blockIndex),
 			);
 			const sites = region.sites.map(
-				({ load, comparison, lengthPosition, elements }) => ({
+				({ load, comparison, lengthPosition, reverseInduction, elements }) => ({
 					loadIp: instructionIndexByTargetInstruction.get(load),
 					comparisonIp: instructionIndexByTargetInstruction.get(comparison),
 					lengthPosition,
-					elements: elements.map(({ instruction, kind, arrayIndexIsUint32 }) => ({
+					...(reverseInduction === undefined
+						? {}
+						: {
+								reverseInduction: {
+									coercionIp: instructionIndexByTargetInstruction.get(
+										reverseInduction.coercion,
+									),
+									updateIp: instructionIndexByTargetInstruction.get(
+										reverseInduction.update,
+									),
+								},
+							}),
+					elements: elements.map(({ instruction, kind, arrayIndexIsUint32, index }) => ({
 						ip: instructionIndexByTargetInstruction.get(instruction),
 						kind,
 						arrayIndexIsUint32,
+						...(index === undefined
+							? {}
+							: { indexIp: instructionIndexByTargetInstruction.get(index) }),
 					})),
 				}),
 			);
@@ -1836,11 +1862,15 @@ function lowerExecutionFunctionToNativePlan(
 					(site) =>
 						site.loadIp === undefined ||
 						site.comparisonIp === undefined ||
+						(site.reverseInduction !== undefined &&
+							(site.reverseInduction.coercionIp === undefined ||
+								site.reverseInduction.updateIp === undefined)) ||
 						(site.lengthPosition !== 1 && site.lengthPosition !== 2) ||
 						site.elements.length > 8 ||
 						site.elements.some(
 							(element) =>
 								element.ip === undefined ||
+								(element.indexIp !== undefined && element.indexIp < 0) ||
 								(element.kind !== "load" && element.kind !== "store") ||
 								typeof element.arrayIndexIsUint32 !== "boolean",
 						),
@@ -1854,17 +1884,29 @@ function lowerExecutionFunctionToNativePlan(
 				readonly loadIp: number;
 				readonly comparisonIp: number;
 				readonly lengthPosition: 1 | 2;
+				readonly reverseInduction?: {
+					readonly coercionIp: number;
+					readonly updateIp: number;
+				};
 				readonly elements: Array<{
 					readonly ip: number;
 					readonly kind: "load" | "store";
 					readonly arrayIndexIsUint32: boolean;
+					readonly indexIp?: number;
 				}>;
 			}>;
-			const payloadIps = resolvedSites.flatMap(({ loadIp, comparisonIp, elements }) => [
-				loadIp,
-				comparisonIp,
-				...elements.map(({ ip }) => ip),
-			]);
+			const payloadIps = resolvedSites.flatMap(
+				({ loadIp, comparisonIp, reverseInduction, elements }) => [
+					loadIp,
+					comparisonIp,
+					...(reverseInduction === undefined
+						? []
+						: [reverseInduction.coercionIp, reverseInduction.updateIp]),
+					...elements.flatMap(({ ip, indexIp }) =>
+						indexIp === undefined ? [ip] : [indexIp, ip],
+					),
+				],
+			);
 			const elementCount = resolvedSites.reduce(
 				(total, site) => total + site.elements.length,
 				0,
@@ -1877,7 +1919,12 @@ function lowerExecutionFunctionToNativePlan(
 				payloadIps.length === resolvedClaimedIps.length &&
 				payloadIps.every((ip) => resolvedClaimedIps.includes(ip)) &&
 				!payloadIps.some((ip) => claimedRegionInstructions.has(ip)) &&
-				region.cost.score === resolvedSites.length * 4 + elementCount * 3 &&
+				region.cost.score ===
+					resolvedSites.length * 4 +
+						resolvedSites.filter(({ reverseInduction }) => reverseInduction !== undefined)
+							.length *
+							4 +
+						elementCount * 3 &&
 				region.cost.metadataOperations === payloadIps.length;
 			for (const site of resolvedSites) {
 				const load = instructions[site.loadIp];
@@ -1894,6 +1941,10 @@ function lowerExecutionFunctionToNativePlan(
 							? comparison.left
 							: comparison.right
 						: -1;
+				const reverse = site.reverseInduction;
+				const coercion =
+					reverse === undefined ? undefined : instructions[reverse.coercionIp];
+				const update = reverse === undefined ? undefined : instructions[reverse.updateIp];
 				if (
 					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 					String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !==
@@ -1902,12 +1953,21 @@ function lowerExecutionFunctionToNativePlan(
 					!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(
 						comparison.operator,
 					) ||
-					length !== load.dst ||
+					(reverse === undefined
+						? length !== load.dst ||
+							(fn.registerRepresentations[other] !== "int32" &&
+								fn.registerRepresentations[other] !== "number")
+						: comparison.operator !== ">" ||
+							coercion?.opcode !== "UNARY" ||
+							coercion.operator !== "tonumeric" ||
+							update?.opcode !== "UNARY" ||
+							update.operator !== "decrement" ||
+							coercion.dst !== update.src ||
+							update.dst !== length) ||
 					site.loadIp >= site.comparisonIp ||
-					(fn.registerRepresentations[other] !== "int32" &&
-						fn.registerRepresentations[other] !== "number") ||
-					site.elements.some(({ ip, kind, arrayIndexIsUint32 }) => {
+					site.elements.some(({ ip, kind, arrayIndexIsUint32, indexIp }) => {
 						const element = instructions[ip];
+						const indexed = indexIp === undefined ? undefined : instructions[indexIp];
 						return (
 							ip <= site.comparisonIp ||
 							(arrayIndexIsUint32 &&
@@ -1919,7 +1979,15 @@ function lowerExecutionFunctionToNativePlan(
 								? element?.opcode !== "LOAD_PROPERTY"
 								: element?.opcode !== "STORE_PROPERTY") ||
 							(element?.opcode === "LOAD_PROPERTY" || element?.opcode === "STORE_PROPERTY"
-								? element.object !== load.object || element.key !== other
+								? element.object !== load.object ||
+									(reverse === undefined
+										? element.key !== other
+										: indexIp === undefined
+											? element.key !== length
+											: indexed?.opcode !== "BINARY" ||
+												indexed.operator !== "-" ||
+												indexed.left !== length ||
+												element.key !== indexed.dst)
 								: true)
 						);
 					})

@@ -532,6 +532,53 @@ describe("late plan migration gates", () => {
 		).toBe(false);
 	});
 
+	it("carries an Array length initializer into a guarded reverse induction", () => {
+		const compilation = optimize(
+			`globalThis.shift = function shift(values, selected) {
+				values.pop();
+				for (let index = values.length; index > selected; index--) {
+					values[index] = values[index - 1];
+				}
+				return values[selected];
+			};`,
+			"core-reverse-array-length.js",
+		);
+		const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
+			(candidate) =>
+				candidate.kind === "indexed-length-loop" &&
+				candidate.indexedLengthLoop.reverseInduction !== undefined,
+		);
+		if (selection?.kind !== "indexed-length-loop") {
+			throw new Error("missing reverse indexed-length plan");
+		}
+		expect(selection.indexedLengthLoop.elements).toMatchObject([
+			{ kind: "load", arrayIndexIsUint32: false },
+			{ kind: "store", arrayIndexIsUint32: false },
+		]);
+		const definition = lower(compilation);
+		const region = vmRegions(definition).find(
+			(candidate) =>
+				candidate.kind === "indexed-length-loop" &&
+				candidate.sites[0]?.reverseInduction !== undefined,
+		);
+		if (region?.kind !== "indexed-length-loop") {
+			throw new Error("missing lowered reverse indexed-length region");
+		}
+		expect(vmRegionActions([region]).map(({ role }) => role)).toEqual([
+			"load",
+			"compare",
+			"element",
+			"element",
+			"coerce",
+			"update",
+		]);
+		expect(() =>
+			deserializeCompilerArtifact(
+				serializeCompilerArtifact(definition, { debugInfo: false }),
+			),
+		).not.toThrow();
+	});
+
 	it("preserves a dense-fill reserve when its exit is the next loop header", () => {
 		const compilation = optimize(
 			`globalThis.fillAndRead = function fillAndRead() {
