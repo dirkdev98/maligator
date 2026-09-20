@@ -2362,16 +2362,6 @@ void mal_vm_op_init_private_fields(
 /** PrivateGet; an unbranded receiver throws (sets vm->completion). */
 MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value);
 
-/** Native fast path for a branded object; the caller preserves the throwing miss path. */
-static inline bool mal_vm_try_load_private(
-    MalValue object_value, MalValue key_value, MalValue *value_out
-) {
-    return mal_value_is_object(object_value) &&
-        mal_table_get_private_value(
-            mal_value_to_object(object_value)->overflow,
-            mal_value_to_symbol(key_value), value_out);
-}
-
 /** PrivateSet; the name must already be installed on the receiver, else throws. */
 void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
 

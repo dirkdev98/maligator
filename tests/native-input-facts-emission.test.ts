@@ -94,20 +94,6 @@ describe("local native input admission", () => {
 		expect(coercive).not.toContain("mal_value_is_nil(");
 	});
 
-	it("uses the validated private-entry hint before the throwing lookup", () => {
-		const source = emitInputContract(
-			[
-				{ opcode: "LOAD_PRIVATE", dst: 2, object: 0, key: 1 },
-				{ opcode: "RETURN", value: 2 },
-			],
-			["boxed", "boxed", "boxed"],
-		);
-		expect(source).toContain("mal_vm_try_load_private(r0, r1");
-		expect(source).toMatch(
-			/else \{[\s\S]*mal_vm_op_load_private\(vm, r0, r1\);[\s\S]*MAL_COMPLETION_THROW/,
-		);
-	});
-
 	it("folds primitive guards and reads string length without borrowing boxed facts", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			{ opcode: "CREATE_STRING", dst: 0, stringIndex: 0 },
