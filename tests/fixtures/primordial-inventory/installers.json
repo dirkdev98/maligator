@@ -689,10 +689,10 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "1009f857c010b61dbf043519646861ebac2c4f8d4f825b37642edc2ca52fb7b2"
+		"sha256": "4d757cf12eaf8a58d0dec653235a8706246540f335d3336ecc6b0c3388d63e04"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "e64c904408d5c19ceaaff690855d4cb234dd2813da8b32bea0d8791e00839b9a"
+		"sha256": "71daafbea411ccffb089246c073bc325e76ffd692bc3d7a7211339e9d8697e4f"
 	}
 ]
