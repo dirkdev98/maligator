@@ -407,7 +407,8 @@ function ensureSourceArtifacts(
 	const published = sourceManifest(root, sourceKey);
 	if (
 		published === undefined ||
-		(native !== undefined && !validNativeSources(directory, native, nativeKey))
+		(native !== undefined &&
+			(nativeKey === undefined || !validNativeSources(directory, native, nativeKey)))
 	) {
 		throw new Error(`failed to publish compiler wire: ${wirePath}`);
 	}
