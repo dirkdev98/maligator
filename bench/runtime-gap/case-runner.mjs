@@ -24,11 +24,11 @@ export function runRuntimeGapCase(id, run, verify) {
 	const startedAt = performance.now();
 	const measured = run(scale);
 	const finishedAt = performance.now();
-	verify?.(measured);
 	const afterAllocated =
 		typeof allocatedReader === "function" ? allocatedReader() : undefined;
 	const afterCollections =
 		typeof collectionsReader === "function" ? collectionsReader() : undefined;
+	verify?.(measured);
 	console.log(
 		JSON.stringify({
 			schema: 2,

@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PerformanceProcessInterruptedError } from "../scripts/performance-process.ts";
 import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
@@ -124,11 +125,11 @@ describe("runtime-gap case catalog", () => {
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
 		expect(new Set(kernels.map(({ id }) => id)).size).toBe(kernels.length);
 		const operationMicrocases = kernels.filter(({ id }) =>
-			/^(?:(?:private|public)-(?:field-read|method-call)-|(?:weakmap|map)-get-(?:hit|miss)-|map-get-set-|pair-|array-includes-|(?:typed-array|array)-(?:at-negative|last-index-control)-)/.test(
+			/^(?:(?:private|public)-(?:field-read|method-call)-|(?:weakmap|map)-get-(?:hit|miss)-|map-get-set-|pair-|array-includes-|(?:typed-array|array)-(?:at-negative|last-index-control)-|method-name-|private-field-construction-|fresh-captured-callback-|shared-mutable-capture-|try-finally-call-no-throw-|short-every-|conditional-empty-spread-|spread-computed-update-|frozen-array-copy-|object-entries-small-|object-from-entries-small-|indirect-typed-array-construction-|tiny-splice-extract-|short-flatmap-)/.test(
 				id,
 			),
 		);
-		expect(operationMicrocases).toHaveLength(71);
+		expect(operationMicrocases).toHaveLength(253);
 		expect(
 			operationMicrocases.every(
 				({ id }) =>
@@ -178,7 +179,68 @@ describe("runtime-gap case catalog", () => {
 		expect(output.warmupMs).toHaveLength(5);
 	});
 
+	it("excludes verification work from native allocation snapshots", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-runtime-gap-runner-"));
+		const fixture = path.join(directory, "allocation-snapshot.mjs");
+		const runner = pathToFileURL(path.resolve("bench/runtime-gap/case-runner.mjs")).href;
+		try {
+			writeFileSync(
+				fixture,
+				`import { runRuntimeGapCase } from ${JSON.stringify(runner)};
+let allocated = 0;
+globalThis.__mal_gc_allocated_bytes = () => allocated;
+function run(scale) {
+	allocated += 10 * scale;
+	return { checksum: scale, operations: scale };
+}
+function verify() {
+	allocated += 1_000;
+}
+runRuntimeGapCase("allocation-snapshot", run, verify);
+`,
+			);
+			const output = JSON.parse(
+				execFileSync(process.execPath, [fixture, "1", "1"], { encoding: "utf8" }),
+			) as { readonly allocatedBytes: number };
+			expect(output.allocatedBytes).toBe(10);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
+		["method-name-collision", "method-name-unrelated-control"],
+		[
+			"private-field-construction-numeric-private-initializer-32",
+			"private-field-construction-numeric-public-initializer-32",
+		],
+		[
+			"fresh-captured-callback-reporting-fresh",
+			"fresh-captured-callback-reporting-reused",
+		],
+		["shared-mutable-capture-lexical-64", "shared-mutable-capture-object-64"],
+		[
+			"try-finally-call-no-throw-disabled-finally",
+			"try-finally-call-no-throw-disabled-control",
+		],
+		["short-every-captured-16-last-mismatch", "short-every-indexed-16-last-mismatch"],
+		["conditional-empty-spread-spread-mixed", "conditional-empty-spread-control-mixed"],
+		[
+			"spread-computed-update-construct-16-new-frozen-spread",
+			"spread-computed-update-construct-16-new-frozen-clone-assign",
+		],
+		["frozen-array-copy-spread-frozen-32", "frozen-array-copy-spread-mutable-32"],
+		["object-entries-small-entries-32", "object-entries-small-keys-32"],
+		[
+			"object-from-entries-small-builtin-repeated-32",
+			"object-from-entries-small-indexed-repeated-32",
+		],
+		[
+			"indirect-typed-array-construction-indirect-multiple-64",
+			"indirect-typed-array-construction-direct-64",
+		],
+		["tiny-splice-extract-splice-8-last", "tiny-splice-extract-indexed-8-last"],
+		["short-flatmap-flatmap-16-mixed", "short-flatmap-indexed-16-mixed"],
 		["private-field-read-32-last-known", "public-field-read-32-last-known"],
 		["private-field-read-32-last-selected", "public-field-read-32-last-selected"],
 		["private-method-call-known", "public-method-call-known"],
