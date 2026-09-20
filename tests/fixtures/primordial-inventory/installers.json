@@ -681,15 +681,15 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "0fac4c062aafb5f506d90f74e66130958d8ee9d329163db8060c99b5070b3d70"
+		"sha256": "15d16ce88d4feae5bf12cf020d8e230b7b83f2ab592e0ff4c878d928bcbf4702"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "7b0c1f75cdeddc5d358d66ad5e7b6245713d3deab288e28432683038d35609e5"
+		"sha256": "69b59898e65d257cba66d9daace973d07b2f82509a7b02afe089ded75112248d"
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "4d757cf12eaf8a58d0dec653235a8706246540f335d3336ecc6b0c3388d63e04"
+		"sha256": "21210c95a4967b7e4c1286160fbb7269045100e2c455a0c170e13540666d5421"
 	},
 	{
 		"file": "vm_ops.h",
