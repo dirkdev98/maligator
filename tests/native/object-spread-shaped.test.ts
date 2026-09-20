@@ -86,5 +86,11 @@ describe("shaped object-spread merge", () => {
 		expect(perfField(stderr, "merge_shaped_hits")).toBeGreaterThan(0);
 		expect(perfField(stderr, "merge_shaped_slots")).toBeGreaterThan(0);
 		expect(perfField(stderr, "merge_fallbacks")).toBeGreaterThan(0);
+		expect(perfField(stderr, "merge_shape_cache_hits")).toBeGreaterThan(0);
+		expect(perfField(stderr, "merge_shape_cache_builds")).toBeGreaterThan(0);
+		expect(perfField(stderr, "merge_shape_cache_probes")).toBe(
+			perfField(stderr, "merge_shape_cache_hits") +
+				perfField(stderr, "merge_shape_cache_misses"),
+		);
 	});
 });

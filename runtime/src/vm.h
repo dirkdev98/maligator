@@ -16,10 +16,14 @@
 #define MAL_SMALL_UINT_STRING_CACHE_CAPACITY 1024
 #define MAL_SMALL_BIGINT_CACHE_MIN (-128)
 #define MAL_SMALL_BIGINT_CACHE_CAPACITY 384
+#define MAL_SHAPE_COPY_CACHE_CAPACITY 64
 
 static_assert((MAL_TINY_STRING_CACHE_CAPACITY
                & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == 0,
               "tiny string cache capacity must be a power of two");
+static_assert((MAL_SHAPE_COPY_CACHE_CAPACITY
+               & (MAL_SHAPE_COPY_CACHE_CAPACITY - 1)) == 0,
+              "shape copy cache capacity must be a power of two");
 
 typedef enum MalOpcode {
 #define BYTECODE_OPERATION(name) MAL_OP_##name,
@@ -1319,6 +1323,14 @@ typedef struct {
 #endif
 } MalLiteralCacheEntry;
 
+typedef struct MalShapeCopyCacheEntry {
+    MalShape *source_shape;
+    MalShapeAppendPlan append_plan;
+    u8 source_slots[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    u8 count;
+    bool identity_projection;
+} MalShapeCopyCacheEntry;
+
 typedef struct MalVm {
 #if !MAL_REALMS
     MalValue known_primordial_values[MAL_KNOWN_PRIMORDIAL_COUNT];
@@ -1410,6 +1422,9 @@ typedef struct MalVm {
     struct MalShape *regexp_result_shape;
     struct MalShape *regexp_result_indices_shape;
     struct MalShape *regexp_indices_shape;
+
+    /** Non-owning normalized object-spread plans keyed by immutable shapes. */
+    MalShapeCopyCacheEntry shape_copy_cache[MAL_SHAPE_COPY_CACHE_CAPACITY];
 
     /** Shared EventEmitter plus `{ encrypted, readable, writable }` socket layout. */
     MalShapeAppendPlan node_http_socket_append_plan;

@@ -7068,6 +7068,33 @@ static bool mal_vm_try_merge_shaped_data_properties(
     if (source_count == 0 || source_count > MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
         return false;
     }
+    MalShape *target_shape = target->shape;
+    MalShape *source_shape = source_object->shape;
+    uptr cache_hash = ((uptr) target_shape >> 4) ^ ((uptr) source_shape >> 4);
+    MalShapeCopyCacheEntry *cached =
+        &vm->shape_copy_cache[cache_hash & (MAL_SHAPE_COPY_CACHE_CAPACITY - 1)];
+    MAL_PERF_COUNT(merge_shape_cache_probes);
+    if (cached->source_shape == source_shape
+        && cached->append_plan.source == target_shape
+        && cached->append_plan.final != nullptr) {
+        MAL_PERF_COUNT(merge_shape_cache_hits);
+        const MalValue *values = source_object->slots;
+        MalValue projected[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+        if (!cached->identity_projection) {
+            for (u32 i = 0; i < cached->count; ++i) {
+                projected[i] = source_object->slots[cached->source_slots[i]];
+            }
+            values = projected;
+        }
+        if (!mal_object_try_append_shaped_values(
+                target, &cached->append_plan, values, cached->count)) {
+            return false;
+        }
+        MAL_PERF_COUNT(merge_data_shaped_hits);
+        MAL_PERF_ADD(merge_data_shaped_slots, cached->count);
+        return true;
+    }
+    MAL_PERF_COUNT(merge_shape_cache_misses);
     const u8 default_attrs = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
         MAL_PROPERTY_CONFIGURABLE;
     bool needs_normalization = false;
@@ -7079,17 +7106,25 @@ static bool mal_vm_try_merge_shaped_data_properties(
     if (!needs_normalization) {
         MalShapeAppendPlan plan;
         if (!mal_object_append_plan_init(
-                &plan, target->shape, source_object->shape, source_count)
+                &plan, target_shape, source_shape, source_count)
             || !mal_object_try_append_shaped_values(
                 target, &plan, source_object->slots, source_count)) {
             return false;
         }
+        *cached = (MalShapeCopyCacheEntry) {
+            .source_shape = source_shape,
+            .append_plan = plan,
+            .count = source_count,
+            .identity_projection = true,
+        };
+        MAL_PERF_COUNT(merge_shape_cache_builds);
         MAL_PERF_COUNT(merge_data_shaped_hits);
         MAL_PERF_ADD(merge_data_shaped_slots, source_count);
         return true;
     }
-    MalShape *result_shape = target->shape;
+    MalShape *result_shape = target_shape;
     MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    u8 source_slots[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
     u32 count = 0;
     for (u32 i = 0; i < source_count; ++i) {
         const MalShapeProp *prop = &source_object->shape->props[i];
@@ -7099,16 +7134,25 @@ static bool mal_vm_try_merge_shaped_data_properties(
         }
         if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
         result_shape = mal_shape_add_property(result_shape, key, default_attrs);
-        values[count++] = source_object->slots[prop->slot];
+        values[count] = source_object->slots[prop->slot];
+        source_slots[count++] = (u8) prop->slot;
     }
     if (count == 0) return true;
     MalShapeAppendPlan plan;
     if (!mal_object_append_plan_init(
-            &plan, target->shape, result_shape, count)
+            &plan, target_shape, result_shape, count)
         || !mal_object_try_append_shaped_values(
             target, &plan, values, count)) {
         return false;
     }
+    *cached = (MalShapeCopyCacheEntry) {
+        .source_shape = source_shape,
+        .append_plan = plan,
+        .count = count,
+        .identity_projection = false,
+    };
+    memcpy(cached->source_slots, source_slots, count);
+    MAL_PERF_COUNT(merge_shape_cache_builds);
     MAL_PERF_COUNT(merge_data_shaped_hits);
     MAL_PERF_ADD(merge_data_shaped_slots, count);
     return true;

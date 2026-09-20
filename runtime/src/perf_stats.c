@@ -612,7 +612,9 @@ static void mal_perf_stats_print(void) {
         "constant_atom_hits=%llu "
         "copy_linear_checks=%llu copy_shaped_hits=%llu copy_shaped_slots=%llu "
         "copy_fallbacks=%llu merge_shaped_hits=%llu merge_shaped_slots=%llu "
-        "merge_fallbacks=%llu\n",
+        "merge_fallbacks=%llu merge_shape_cache_probes=%llu "
+        "merge_shape_cache_hits=%llu merge_shape_cache_misses=%llu "
+        "merge_shape_cache_builds=%llu\n",
         (unsigned long long) mal_perf_stats.property_ensure_calls,
         (unsigned long long) mal_perf_stats.property_ensure_inserts,
         (unsigned long long) mal_perf_stats.property_ensure_hits,
@@ -623,7 +625,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.copy_data_fallbacks,
         (unsigned long long) mal_perf_stats.merge_data_shaped_hits,
         (unsigned long long) mal_perf_stats.merge_data_shaped_slots,
-        (unsigned long long) mal_perf_stats.merge_data_fallbacks
+        (unsigned long long) mal_perf_stats.merge_data_fallbacks,
+        (unsigned long long) mal_perf_stats.merge_shape_cache_probes,
+        (unsigned long long) mal_perf_stats.merge_shape_cache_hits,
+        (unsigned long long) mal_perf_stats.merge_shape_cache_misses,
+        (unsigned long long) mal_perf_stats.merge_shape_cache_builds
     );
     fprintf(
         stderr,

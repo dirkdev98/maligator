@@ -635,6 +635,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->regexp_result_shape = nullptr;
     vm->regexp_result_indices_shape = nullptr;
     vm->regexp_indices_shape = nullptr;
+    memset(vm->shape_copy_cache, 0, sizeof(vm->shape_copy_cache));
     vm->node_http_socket_append_plan = (MalShapeAppendPlan) {0};
     vm->node_http_readable_state_append_plan = (MalShapeAppendPlan) {0};
     vm->node_http_incoming_message_source_append_plan = (MalShapeAppendPlan) {0};
