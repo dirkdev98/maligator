@@ -2214,6 +2214,12 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
                                MalValue value, bool enumerable, bool writable,
                                bool configurable);
 
+/** Define with an already-interned runtime-image string key. */
+void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
+                                      i32 string_index, MalValue value,
+                                      bool enumerable, bool writable,
+                                      bool configurable);
+
 /**
  * Throw "<name> is not defined" (ReferenceError), shared by MAL_OP_LOAD_UNDECLARED
  * and the compiled backend; sets vm->completion to THROW.

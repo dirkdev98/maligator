@@ -2458,6 +2458,19 @@ function emitBody(
 	for (const handler of fn.handlers) {
 		jumpTargets.add(handler.handlerIp);
 	}
+	const staticDefineStringIndexByIp = new Map<number, number>();
+	for (let ip = 1; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		const prior = fn.instructions[ip - 1]!;
+		if (
+			instruction.opcode === "DEFINE_PROPERTY" &&
+			prior.opcode === "CREATE_STRING" &&
+			prior.dst === instruction.key &&
+			!jumpTargets.has(ip)
+		) {
+			staticDefineStringIndexByIp.set(ip, prior.stringIndex);
+		}
+	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const mathUnaryCalls = new Set<number>();
 	const mathBinaryCalls = new Set<number>();
@@ -2949,6 +2962,7 @@ function emitBody(
 			{
 				nativePlan: nativeInstructions[ip],
 				stringConstants,
+				staticDefineStringIndexByIp,
 				resources,
 				directEntryCalls,
 				profileSiteId: fn.profileSiteIds?.[ip],
@@ -3330,6 +3344,7 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
+	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
 }
 
 type NativeTypedArrayElementKind = Extract<
@@ -3429,6 +3444,7 @@ function emitInstruction(
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const genericContext: NativeInstructionContext = {
 		stringConstants: context.stringConstants,
+		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
 		directEntryCalls: context.directEntryCalls,
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
@@ -4097,12 +4113,15 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
-		case "DEFINE_PROPERTY":
-			// Object-literal define semantics; cannot run user code, so no
-			// completion check (matching the interpreter's mal_op_define_property).
+		case "DEFINE_PROPERTY": {
+			const stringIndex = context.staticDefineStringIndexByIp.get(ip);
 			return [
-				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
+				stringIndex === undefined
+					? `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`
+					: `mal_vm_op_define_property_static(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
+				throwCheck(),
 			];
+		}
 		case "DEFINE_ACCESSOR":
 			// Object-literal / class getter or setter; no user code run.
 			return [

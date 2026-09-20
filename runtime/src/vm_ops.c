@@ -7227,14 +7227,9 @@ void mal_op_define_accessor(MalCallable *callable, const MalInstruction *instruc
     );
 }
 
-void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value,
-                               MalValue value, bool enumerable, bool writable,
-                               bool configurable) {
-    MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(vm, key_value, &key)) {
-        return;
-    }
-
+static void mal_vm_define_property_key(MalVm *vm, MalValue object_value, MalKey key,
+                                       MalValue value, bool enumerable, bool writable,
+                                       bool configurable) {
     MalPropertyFlags flags = MAL_PROPERTY_NONE;
     if (writable) {
         flags |= MAL_PROPERTY_WRITABLE;
@@ -7293,6 +7288,31 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
             mal_array_object_set_length(array, index + 1);
         }
     }
+}
+
+void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value,
+                               MalValue value, bool enumerable, bool writable,
+                               bool configurable) {
+    MalKey key;
+    if (!mal_value_is_object(object_value) ||
+        !mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+    mal_vm_define_property_key(
+        vm, object_value, key, value, enumerable, writable, configurable);
+}
+
+void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
+                                      i32 string_index, MalValue value,
+                                      bool enumerable, bool writable,
+                                      bool configurable) {
+    if (!mal_value_is_object(object_value)) return;
+    MalKey key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(vm->string_constant_atoms[string_index]),
+    };
+    mal_vm_define_property_key(
+        vm, object_value, key, value, enumerable, writable, configurable);
 }
 
 void mal_op_define_property(MalCallable *callable, const MalInstruction *instruction) {
