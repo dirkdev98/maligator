@@ -2750,6 +2750,30 @@ bool mal_op_call_guarded_builtin(
         callable->registers[instruction->as.call.dst] = result;
         return true;
     }
+    if (operation >= MAL_GUARDED_BUILTIN_ARRAY_INCLUDES &&
+        operation <= MAL_GUARDED_BUILTIN_ARRAY_LAST_INDEX_OF) {
+        MalValue arguments[2] = {
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+        };
+        for (i32 i = 0; i < argument_count && i < 2; i++) {
+            arguments[i] = mal_op_value_operand(callable, argument_operands[i]);
+        }
+        MalValue result;
+        if (!mal_builtin_array_search_try_direct(
+                vm,
+                (MalBuiltinArraySearchOp) (
+                    operation - MAL_GUARDED_BUILTIN_ARRAY_INCLUDES),
+                mal_op_value_operand(callable, instruction->as.call.callee),
+                receiver,
+                arguments,
+                argument_count,
+                &result)) {
+            return false;
+        }
+        callable->registers[instruction->as.call.dst] = result;
+        return true;
+    }
     MalIntrinsic expected;
     bool receiver_matches;
     switch ((MalGuardedBuiltinCallOp) operation) {

@@ -7014,6 +7014,23 @@ function emitInstruction(
 					poll,
 				];
 			}
+			const arraySearchOperation =
+				guardedBuiltinOperation === "Array.prototype.includes"
+					? "MAL_BUILTIN_ARRAY_SEARCH_INCLUDES"
+					: guardedBuiltinOperation === "Array.prototype.indexOf"
+						? "MAL_BUILTIN_ARRAY_SEARCH_INDEX_OF"
+						: guardedBuiltinOperation === "Array.prototype.lastIndexOf"
+							? "MAL_BUILTIN_ARRAY_SEARCH_LAST_INDEX_OF"
+							: undefined;
+			if (arraySearchOperation !== undefined) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_array_search_direct(vm, &__cc_${ip}, ${arraySearchOperation}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
 				const boundedArgument =
 					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;

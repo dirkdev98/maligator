@@ -1861,6 +1861,67 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     return mal_value_new_boolean(false);
 }
 
+bool mal_builtin_array_search_try_direct(
+    MalVm *vm,
+    MalBuiltinArraySearchOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+) {
+    if (arg_count < 0 || mal_builtin_array_clean_dense(vm, this_value) == nullptr ||
+        (arg_count >= 2 && !mal_ops_is_number(args[1])) ||
+        !mal_value_is_native_function_object(callee)) {
+        return false;
+    }
+
+    MalNativeFunctionCallback expected;
+    switch (operation) {
+        case MAL_BUILTIN_ARRAY_SEARCH_INCLUDES:
+            expected = mal_builtin_array_includes;
+            break;
+        case MAL_BUILTIN_ARRAY_SEARCH_INDEX_OF:
+            expected = mal_builtin_array_index_of;
+            break;
+        case MAL_BUILTIN_ARRAY_SEARCH_LAST_INDEX_OF:
+            expected = mal_builtin_array_last_index_of;
+            break;
+        default:
+            return false;
+    }
+    if (mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) != expected) {
+        return false;
+    }
+
+    *result_out = expected(
+        vm, this_value, args, arg_count,
+        mal_value_new_undefined(), callee);
+    return true;
+}
+
+MalCompletion mal_builtin_array_search_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalBuiltinArraySearchOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalValue result;
+    if (mal_builtin_array_search_try_direct(
+            vm, operation, callee, this_value, args, arg_count, &result)) {
+        return (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = result,
+        };
+    }
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
 static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // Intentionally generic: Set each new index then Set("length", new length) —
     // a non-writable length (e.g. on a TypedArray) makes the final Set throw.

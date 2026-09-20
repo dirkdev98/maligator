@@ -2614,6 +2614,9 @@ describe("native update-expression representation", () => {
 				set.add(key);
 				values.push(value);
 				values.push(1, 2, 3, 4, value);
+				values.includes(value);
+				values.indexOf(value);
+				values.lastIndexOf(value);
 				return [previous, map, set, values];
 			}
 			globalThis.update = update;
@@ -2631,6 +2634,9 @@ describe("native update-expression representation", () => {
 				"Map.prototype.set",
 				"Set.prototype.add",
 				"Array.prototype.push",
+				"Array.prototype.includes",
+				"Array.prototype.indexOf",
+				"Array.prototype.lastIndexOf",
 			]),
 		);
 		expect(
