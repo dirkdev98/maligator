@@ -7307,10 +7307,12 @@ void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
                                       bool enumerable, bool writable,
                                       bool configurable) {
     if (!mal_value_is_object(object_value)) return;
-    MalKey key = {
-        .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(vm->string_constant_atoms[string_index]),
-    };
+    MalKey key;
+    if (!mal_vm_string_to_property_key(
+            vm, mal_value_from_string(vm->string_constant_atoms[string_index]),
+            &key)) {
+        return;
+    }
     mal_vm_define_property_key(
         vm, object_value, key, value, enumerable, writable, configurable);
 }
