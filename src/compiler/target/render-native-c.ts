@@ -7913,10 +7913,15 @@ function emitInstruction(
 				throwCheck(),
 			];
 		case "LOAD_PRIVATE":
-			// PrivateGet; an unbranded receiver throws.
+			const privateValue = `private_value_${ip}`;
 			return [
-				`r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				throwCheck(),
+				`MalValue ${privateValue};`,
+				`if (mal_vm_try_load_private(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${privateValue})) {`,
+				`  r${instruction.dst} = ${privateValue};`,
+				`} else {`,
+				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				`  ${throwCheck()}`,
+				`}`,
 			];
 		case "STORE_PRIVATE":
 			// PrivateSet; the name must already be installed, else throws.
