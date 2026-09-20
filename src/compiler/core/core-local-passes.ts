@@ -2663,8 +2663,8 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 	},
 };
 
-const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
-	name: "scalarize-bounded-terminal-rest-read",
+const scalarizeBoundedRestReads: CoreFunctionPass = {
+	name: "scalarize-bounded-rest-reads",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["createRestArguments"],
 	requiredAnalyses: [
@@ -2702,32 +2702,37 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			if (
 				typeof startIndex !== "number" ||
 				!Number.isInteger(startIndex) ||
-				startIndex < 0 ||
-				startIndex + 1 > 0x7fff_ffff
+				startIndex < 0
 			) {
 				continue;
 			}
 			const rest = instructionResult(fn, producer, 0);
 			if (
 				rest === undefined ||
-				fn.valueUseCount(rest) !== 1 ||
+				fn.valueUseCount(rest) === 0 ||
 				fn.kernel.valueHandlerUseCount(rest) !== 0
 			) {
 				continue;
 			}
 			let restUse = fn.kernel.valueFirstUse(rest);
-			while (restUse >= 0 && fn.kernel.useLive(restUse) === 0) {
-				restUse = fn.kernel.useNext(restUse);
+			let liveRestUses = 0;
+			let onlyElementReads = true;
+			for (let use = restUse; use >= 0; use = fn.kernel.useNext(use)) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const user = fn.kernel.useInstruction(use);
+				if (
+					fn.instructionKind(user) !== "operation" ||
+					fn.instructionOpcodeName(user) !== "loadProperty" ||
+					instructionOperand(fn, user, 0) !== rest
+				) {
+					onlyElementReads = false;
+					break;
+				}
+				liveRestUses++;
+				if (restUse < 0 || fn.kernel.useLive(restUse) === 0) restUse = use;
 			}
-			if (restUse < 0) continue;
+			if (!onlyElementReads || restUse < 0) continue;
 			const load = fn.kernel.useInstruction(restUse);
-			if (
-				fn.instructionKind(load) !== "operation" ||
-				fn.instructionOpcodeName(load) !== "loadProperty" ||
-				instructionOperand(fn, load, 0) !== rest
-			) {
-				continue;
-			}
 			const key = instructionOperand(fn, load, 1);
 			const loadResult = instructionResult(fn, load, 0);
 			const block = fn.instructionBlock(load);
@@ -2735,11 +2740,8 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			if (
 				key === undefined ||
 				loadResult === undefined ||
-				fn.valueUseCount(loadResult) !== 1 ||
-				fn.kernel.valueHandlerUseCount(loadResult) !== 0 ||
-				fn.instructionNext(load) !== terminator ||
-				fn.instructionKind(terminator) !== "return" ||
-				instructionOperand(fn, terminator, 0) !== loadResult
+				fn.valueUseCount(loadResult) === 0 ||
+				fn.kernel.valueHandlerUseCount(loadResult) !== 0
 			) {
 				continue;
 			}
@@ -2753,7 +2755,14 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 			const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 			if (kinds.kindMask(key) !== COMPILER_VALUE_KIND_NUMBER) continue;
 			const range = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).range(key, block);
-			if (range?.minimum !== 0 || range.maximum !== 1) continue;
+			if (
+				range?.minimum !== 0 ||
+				range.maximum < 1 ||
+				range.maximum > 7 ||
+				startIndex + range.maximum > 0x7fff_ffff
+			) {
+				continue;
+			}
 
 			let before = fn.blockTerminator(fn.entry);
 			const snapshots = new Map<number, CoreValueId>();
@@ -2772,7 +2781,11 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 				}
 			}
 			const editor = CoreEditor.open(program, item.function);
-			for (const argumentIndex of [startIndex, startIndex + 1]) {
+			for (
+				let argumentIndex = startIndex;
+				argumentIndex <= startIndex + range.maximum;
+				argumentIndex++
+			) {
 				if (snapshots.has(argumentIndex)) continue;
 				const snapshot = editor.insertInstruction(fn.entry, before, "loadArgument", [], {
 					attributes: { index: argumentIndex },
@@ -2780,27 +2793,62 @@ const scalarizeBoundedTerminalRestRead: CoreFunctionPass = {
 				}).outputs[0]!;
 				snapshots.set(argumentIndex, snapshot);
 			}
-			const alternate = editor.createBlock();
-			const consequent = editor.createBlock();
+			const tail: Array<CoreInstructionId> = [];
+			for (
+				let instruction = fn.instructionNext(load);
+				instruction !== undefined && instruction !== terminator;
+				instruction = fn.instructionNext(instruction)
+			) {
+				tail.push(instruction);
+			}
 			const sourcePosition = fn.instructionSourcePosition(terminator);
-			editor.setTerminator(alternate, {
-				kind: "return",
-				value: snapshots.get(startIndex)!,
-				sourcePosition,
+			const continuation = editor.createBlock([
+				{ representation: fn.valueRepresentation(loadResult) },
+			]);
+			const selected = fn.kernel.blockParameterValue(
+				fn.kernel.blockParameterStart(continuation),
+			);
+			for (const instruction of tail) editor.moveInstruction(instruction, continuation);
+			editor.replaceValueUses(loadResult, selected);
+			editor.setTerminator(continuation, {
+				...terminatorInputForEdit(fn, terminator),
+				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
-			editor.setTerminator(consequent, {
-				kind: "return",
-				value: snapshots.get(startIndex + 1)!,
-				sourcePosition,
-			});
-			editor.replaceTerminator(block, {
-				kind: "branch",
-				condition: key,
-				consequent: { block: consequent, arguments: [] },
-				alternate: { block: alternate, arguments: [] },
-			});
+			if (range.maximum === 1) {
+				editor.replaceTerminator(block, {
+					kind: "branch",
+					condition: key,
+					consequent: {
+						block: continuation,
+						arguments: [snapshots.get(startIndex + 1)!],
+					},
+					alternate: {
+						block: continuation,
+						arguments: [snapshots.get(startIndex)!],
+					},
+				});
+			} else {
+				editor.replaceTerminator(block, {
+					kind: "switch",
+					discriminant: key,
+					cases: Array.from({ length: range.maximum }, (_, value) => ({
+						value: { kind: "number", value },
+						edge: {
+							block: continuation,
+							arguments: [snapshots.get(startIndex + value)!],
+						},
+					})),
+					default: {
+						block: continuation,
+						arguments: [snapshots.get(startIndex + range.maximum)!],
+					},
+				});
+			}
+			const removeProducer = liveRestUses === 1 && fn.valueUseCount(rest) === 1;
 			editor.removeInstruction(load);
-			editor.removeInstruction(producer);
+			if (removeProducer) {
+				editor.removeInstruction(producer);
+			}
 			return editor.commit();
 		}
 		return undefined;
@@ -2811,7 +2859,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	annotateTerminalYieldSites,
 	forwardRestArguments,
 	scalarizeRestArgumentReads,
-	scalarizeBoundedTerminalRestRead,
+	scalarizeBoundedRestReads,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,

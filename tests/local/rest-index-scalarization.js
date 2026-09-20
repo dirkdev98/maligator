@@ -61,6 +61,17 @@ function chooseBounded(selector, ...rest) {
 	return rest[+selector & 1];
 }
 
+function chooseBoundedFour(selector, ...rest) {
+	return rest[+selector & 3];
+}
+
+function sumBoundedFour(selector, ...rest) {
+	const start = +selector & 3;
+	return (
+		rest[start] + rest[(start + 1) & 3] + rest[(start + 2) & 3] + rest[(start + 3) & 3]
+	);
+}
+
 check(read(1, 2, 3, 4) === 11, "constant reads preserve rest indexing");
 check(missing(1, 2) === undefined, "missing argument reads as undefined");
 check(
@@ -129,5 +140,14 @@ try {
 	caught = error;
 }
 check(caught === thrown, "bounded read preserves coercion throws");
+check(chooseBoundedFour(3, 127, 131, 137, 139) === 139, "four-way read selects three");
+check(
+	chooseBoundedFour(3, 149) === undefined,
+	"four-way read preserves missing arguments",
+);
+check(
+	sumBoundedFour(2, 2, 3, 5, 7) === 17,
+	"multiple bounded reads feed downstream arithmetic",
+);
 
 console.log(`rest-index-scalarization PASS ${passed}`);
