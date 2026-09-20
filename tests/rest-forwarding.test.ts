@@ -177,6 +177,22 @@ describe("rest forwarding allocation contract", () => {
 		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
 	});
 
+	it("scalarizes a prefixed rest length with a zero floor", () => {
+		const image = compile(
+			"function read(first, ...rest) { return rest.length + (rest[0] ?? 0); }",
+			"locked",
+		);
+		const instructions = image.runtime.functions.flatMap((fn) => fn.instructions);
+		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT_COUNT")).toBe(true);
+		expect(
+			instructions.some(
+				(i) => i.opcode === "MATH_BINARY_NUMBER" && i.operation === "Math.max",
+			),
+		).toBe(true);
+		expect(instructions.some((i) => i.opcode === "LOAD_ARGUMENT")).toBe(true);
+		expect(instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
+	});
+
 	it("scalarizes a bounded terminal rest read into argument snapshots", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
@@ -227,7 +243,6 @@ describe("rest forwarding allocation contract", () => {
 
 	for (const source of [
 		"function read(index, ...rest) { return rest[index]; }",
-		"function read(first, ...rest) { return rest.length; }",
 		"function read(...rest) { rest[0] = 1; return rest[0]; }",
 		"function read(...rest) { globalThis.saved = rest; return rest[0]; }",
 		"function read(...rest) { return () => rest[0]; }",

@@ -2537,7 +2537,7 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 					const stringIndex = attributes.stringIndex;
 					if (typeof stringIndex === "number") {
 						const key = decodeString(program, stringIndex);
-						if (key === "length" && startIndex === 0 && result !== undefined) {
+						if (key === "length" && result !== undefined) {
 							lengthReads.push({ instruction, result });
 							continue;
 						}
@@ -2596,6 +2596,48 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 					{ sourcePosition: fn.instructionSourcePosition(producer) },
 				).outputs[0]!;
 			}
+			let restLength = argumentCount;
+			if (lengthReads.length > 0 && startIndex > 0) {
+				const prefixLength = editor.insertInstruction(
+					fn.entry,
+					before,
+					"createNumber",
+					[],
+					{
+						attributes: { value: startIndex },
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+				const difference = editor.insertInstruction(
+					fn.entry,
+					before,
+					"binary",
+					[argumentCount!, prefixLength],
+					{
+						attributes: { operator: "-" },
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+				const zero = editor.insertInstruction(fn.entry, before, "createNumber", [], {
+					attributes: { value: 0 },
+					sourcePosition: fn.instructionSourcePosition(producer),
+				}).outputs[0]!;
+				restLength = editor.insertInstruction(
+					fn.entry,
+					before,
+					"mathBinaryNumber",
+					[difference, zero],
+					{
+						attributes: {
+							operation: "Math.max",
+							worldAssumptions: {
+								...builtinWorldAssumptions("Math.max", "primitive"),
+							},
+						},
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+			}
 			for (const argumentIndex of [
 				...new Set(reads.map((read) => read.argumentIndex)),
 			].sort((left, right) => left - right)) {
@@ -2611,7 +2653,7 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				editor.removeInstruction(read.instruction);
 			}
 			for (const read of lengthReads) {
-				editor.replaceValueUses(read.result, argumentCount!);
+				editor.replaceValueUses(read.result, restLength!);
 				editor.removeInstruction(read.instruction);
 			}
 			editor.removeInstruction(producer);

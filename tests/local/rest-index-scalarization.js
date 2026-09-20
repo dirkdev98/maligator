@@ -53,6 +53,10 @@ function count(...rest) {
 	return rest.length + (rest[0] ?? 0);
 }
 
+function prefixedCount(first, ...rest) {
+	return (first ?? 0) + rest.length;
+}
+
 function chooseBounded(selector, ...rest) {
 	return rest[+selector & 1];
 }
@@ -75,6 +79,9 @@ check(
 check(exactMissingInline(31) === undefined, "exact inlining preserves missing snapshots");
 check(count() === 0, "empty rest length uses the argument count");
 check(count(41, 43) === 43, "rest length and element share argument snapshots");
+check(prefixedCount() === 0, "prefixed empty rest length floors at zero");
+check(prefixedCount(41) === 41, "prefixed rest excludes the named parameter");
+check(prefixedCount(41, 43, 47) === 43, "prefixed rest counts trailing arguments");
 check(chooseBounded(0, 47, 53, 59, 61) === 47, "bounded read selects zero");
 check(chooseBounded(1, 47, 53, 59, 61) === 53, "bounded read selects one");
 check(chooseBounded(1, 67) === undefined, "bounded read preserves missing arguments");
