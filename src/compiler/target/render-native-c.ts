@@ -4994,10 +4994,14 @@ function emitInstruction(
 				];
 			}
 			if (operator === "in") {
-				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
+				const membership = `__array_has_${ip}`;
+				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
 				return [
-					`if (${numberGuard}mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})) {`,
-					dstIsBool ? `  r${dst} = true;` : `  r${dst} = MAL_VALUE_TRUE;`,
+					`i32 ${membership} = ${leftIsNum ? fastMembership : `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : -1`};`,
+					`if (${membership} >= 0) {`,
+					dstIsBool
+						? `  r${dst} = ${membership} != 0;`
+						: `  r${dst} = mal_value_new_boolean(${membership} != 0);`,
 					`} else {`,
 					dstIsBool
 						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)});`

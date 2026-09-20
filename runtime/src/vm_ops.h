@@ -1965,14 +1965,25 @@ static inline bool mal_vm_private_array_try_get_index(
            mal_vm_private_array_try_get_proven_index(arr, integer, out);
 }
 
-/** A successful dense own-element lookup proves `index in array`; every miss must
- * use the general path because a hole can still be supplied by the prototype. */
-static inline bool mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
-    if (arr && index >= 0 && index < (f64) UINT32_MAX) {
-        u32 i = (u32) index;
-        return (f64) i == index && mal_array_object_dense_has(arr, i);
+/** Return 0/1 when dense storage and the indexed-prototype protector prove the
+ * membership result; return -1 when the caller must preserve generic `in` semantics. */
+static inline i32 mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
+    if (arr == nullptr || !(index >= 0 && index < (f64) UINT32_MAX)) {
+        return -1;
     }
-    return false;
+    u32 i = (u32) index;
+    if ((f64) i != index) {
+        return -1;
+    }
+    if (mal_array_object_dense_has(arr, i)) {
+        return 1;
+    }
+    if (!arr->dense_deopted && mal_array_elements_protector &&
+        mal_array_prototype_object != nullptr &&
+        arr->object.prototype == mal_array_prototype_object) {
+        return 0;
+    }
+    return -1;
 }
 
 /**

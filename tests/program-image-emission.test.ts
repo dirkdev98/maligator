@@ -2429,7 +2429,9 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function has(array, index) { return index in array; } globalThis.has = has;`,
 		);
+		expect(output).toMatch(/i32 __array_has_\d+ =/);
 		expect(output).toContain("mal_vm_array_try_has");
+		expect(output).toMatch(/if \(__array_has_\d+ >= 0\)/);
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 

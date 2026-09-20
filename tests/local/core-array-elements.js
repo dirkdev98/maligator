@@ -172,6 +172,51 @@ function nonIndexKeys(seed) {
 	return values[0] + values["00"] + values["1e0"] + values[-1] + values[4294967295];
 }
 
+function denseMembership(seed) {
+	const values = [seed, , seed + 1];
+	return (0 in values ? 1 : 0) + (1 in values ? 10 : 0) + (2 in values ? 100 : 0);
+}
+
+let membershipPrototypeReads = 0;
+function inheritedMembership(seed) {
+	Object.defineProperty(Array.prototype, "23", {
+		configurable: true,
+		get() {
+			membershipPrototypeReads += 1;
+			return seed;
+		},
+	});
+	const values = [];
+	values.length = 24;
+	const result = 23 in values;
+	delete Array.prototype[23];
+	return result;
+}
+
+function proxyMembership(seed) {
+	let traps = 0;
+	const values = [seed, ,];
+	const proxy = new Proxy(values, {
+		has(target, key) {
+			traps += 1;
+			return key === "1" || key in target;
+		},
+	});
+	return (0 in proxy ? 1 : 0) + (1 in proxy ? 10 : 0) + traps * 100;
+}
+
+function nonIndexMembership(seed) {
+	const values = [seed];
+	values[-1] = seed + 1;
+	values["1.5"] = seed + 2;
+	values[4294967295] = seed + 3;
+	return (
+		((-1) in values ? 1 : 0) +
+		("1.5" in values ? 10 : 0) +
+		(4294967295 in values ? 100 : 0)
+	);
+}
+
 let watched;
 function heldThroughUnreadElement() {
 	const target = { tag: 1 };
@@ -212,6 +257,13 @@ assert(reparented(11) === 20, "reparented hole sees getter");
 assert(proxied(12) === 26, "proxy traps only proxy reads");
 assert(escaped(13) === 13, "escaped array remains observable");
 assert(nonIndexKeys(2) === 20, "non-index property names stay distinct");
+assert(denseMembership(3) === 101, "dense membership distinguishes holes");
+assert(
+	inheritedMembership(4) && membershipPrototypeReads === 0,
+	"membership observes inherited indices without invoking getters",
+);
+assert(proxyMembership(5) === 211, "membership preserves proxy has traps");
+assert(nonIndexMembership(6) === 111, "membership preserves non-index keys");
 assert(
 	heldThroughUnreadElement() === 1 && watched.deref() !== undefined,
 	"WeakRef value",
