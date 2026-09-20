@@ -115,9 +115,8 @@ function directFunctionPrototypeOwner(
 
 export function coreInstanceMethodHints(
 	program: CoreProgram,
-): ReadonlyMap<number, CoreFunctionId> {
-	const hints = new Map<number, CoreFunctionId>();
-	const ambiguous = new Set<number>();
+): ReadonlyMap<number, ReadonlyArray<CoreFunctionId>> {
+	const hints = new Map<number, Array<CoreFunctionId>>();
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
@@ -136,31 +135,21 @@ export function coreInstanceMethodHints(
 			}
 			const stringIndex = directStringIndex(fn, key);
 			const target = coreDirectCreatedFunction(fn, value);
-			if (
-				stringIndex === undefined ||
-				target === undefined ||
-				ambiguous.has(stringIndex)
-			) {
-				continue;
-			}
-			const existing = hints.get(stringIndex);
-			if (existing === undefined || existing === target) {
-				hints.set(stringIndex, target);
-			} else {
-				hints.delete(stringIndex);
-				ambiguous.add(stringIndex);
-			}
+			if (stringIndex === undefined || target === undefined) continue;
+			const targets = hints.get(stringIndex) ?? [];
+			if (!targets.includes(target)) targets.push(target);
+			hints.set(stringIndex, targets);
 		}
 	}
 	return hints;
 }
 
-export function coreInstanceMethodHint(
+export function coreInstanceMethodTargets(
 	fn: CoreFunctionStore,
 	callee: CoreValueId,
 	receiver: CoreValueId | undefined,
-	hints: ReadonlyMap<number, CoreFunctionId>,
-): CoreFunctionId | undefined {
+	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+): ReadonlyArray<CoreFunctionId> | undefined {
 	const load = staticPropertyLoad(fn, callee);
 	if (
 		load === undefined ||
@@ -169,5 +158,16 @@ export function coreInstanceMethodHint(
 	) {
 		return undefined;
 	}
-	return hints.get(load.stringIndex);
+	const targets = hints.get(load.stringIndex);
+	return targets !== undefined && targets.length <= 4 ? targets : undefined;
+}
+
+export function coreInstanceMethodHint(
+	fn: CoreFunctionStore,
+	callee: CoreValueId,
+	receiver: CoreValueId | undefined,
+	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+): CoreFunctionId | undefined {
+	const targets = coreInstanceMethodTargets(fn, callee, receiver, hints);
+	return targets?.length === 1 ? targets[0] : undefined;
 }

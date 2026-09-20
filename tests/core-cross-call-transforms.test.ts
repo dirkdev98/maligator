@@ -759,6 +759,46 @@ describe("bounded Core cross-call transforms", () => {
 		);
 	});
 
+	it("plans finite guarded dispatch for unrelated same-name instance methods", () => {
+		let optimized: CoreProgram | undefined;
+		let plan: CoreOptimizationPlan | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Counter {
+					run(value) { return value + 10; }
+				}
+				class Other {
+					run(value) { return value * 3; }
+				}
+				const other = new Other();
+				function caller(counter, value) {
+					let total = 0;
+					for (let index = 0; index < 4; index++) total += counter.run(value + index);
+					return total + other.run(1);
+				}
+				caller(new Counter(), 1);`,
+				"core-guarded-instance-collision.js",
+			),
+			{
+				afterCoreOptimization(program, _context, _report, optimizationPlan) {
+					optimized = program;
+					plan = optimizationPlan;
+				},
+			},
+		);
+
+		const caller = coreFunctionNamed(optimized!, "caller")!;
+		const call = coreOperations(caller).find(({ opcode }) => opcode === "call");
+		expect(call).toBeDefined();
+		const recipe = projectCoreSpecializationRecipes(plan!.recipes).find(
+			(candidate) =>
+				candidate.kind === "guarded-direct-call" &&
+				candidate.function === caller.id &&
+				candidate.targetFunctions.length === 2,
+		);
+		expect(recipe?.targetFunctions).toHaveLength(2);
+	});
+
 	it("finite-dispatches a private dense array of lexical-this callees", () => {
 		let optimized: CoreProgram | undefined;
 		let report: CoreOptimizationReport | undefined;

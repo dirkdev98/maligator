@@ -17,8 +17,8 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import {
-	coreInstanceMethodHint,
 	coreInstanceMethodHints,
+	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
@@ -1133,14 +1133,14 @@ function guardedCallCandidates(
 			globalTargetUses.set(target, (globalTargetUses.get(target) ?? 0) + 1);
 		}
 		for (const site of outgoing) {
-			const hintedTarget =
+			const hintedTargets =
 				site.targets.functions.length === 0 &&
 				site.open &&
 				loopBlocks.has(fn.instructionBlock(site.instruction))
-					? coreInstanceMethodHint(fn, site.callee, site.receiver, instanceMethodHints)
+					? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
 					: undefined;
 			const targetFunctions = Object.freeze(
-				hintedTarget === undefined ? [...site.targets.functions] : [hintedTarget],
+				hintedTargets === undefined ? [...site.targets.functions] : [...hintedTargets],
 			);
 			if (
 				targetFunctions.length === 0 ||

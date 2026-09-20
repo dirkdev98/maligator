@@ -385,7 +385,7 @@ function offerFunctionCandidates(
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
 	functionId: CoreFunctionId,
-	instanceMethodHints: ReadonlyMap<number, CoreFunctionId>,
+	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
