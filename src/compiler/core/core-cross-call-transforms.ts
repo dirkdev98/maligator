@@ -7,6 +7,7 @@ import {
 } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
+	coreDirectCreatedFunction,
 	coreCalleeTargetsAreOpen,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
@@ -29,6 +30,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
@@ -156,15 +158,106 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"callRestArguments",
 	"loadArgumentCount",
 	"loadCallee",
-	"loadCaptured",
 	"loadNewTarget",
 	"loadStaticArgument",
 	"storeCaptured",
 ]);
 
+interface InlineCaptureContext {
+	readonly caller: CoreFunctionStore;
+	readonly callee: CoreValueId;
+	readonly site: CoreInstructionId;
+}
+
+const CAPTURE_ENVIRONMENT_REBINDS = new Set(["envPush", "envCopy", "envPop"]);
+
+function captureEnvironmentIsStable(
+	fn: CoreFunctionStore,
+	creation: CoreInstructionId,
+	site: CoreInstructionId,
+): boolean {
+	const creationBlock = fn.instructionBlock(creation);
+	const siteBlock = fn.instructionBlock(site);
+	let reachedEnd = false;
+	for (
+		let instruction = fn.instructionNext(creation);
+		instruction !== undefined;
+		instruction = fn.instructionNext(instruction)
+	) {
+		if (instruction === site) return true;
+		if (instruction === fn.blockTerminator(creationBlock)) {
+			reachedEnd = true;
+			break;
+		}
+		if (CAPTURE_ENVIRONMENT_REBINDS.has(fn.instructionOpcodeName(instruction)))
+			return false;
+	}
+	if (!reachedEnd || creationBlock === siteBlock) return false;
+	const terminator = fn.blockTerminator(creationBlock);
+	const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+	for (let edge = 0; edge < fn.kernel.terminatorEdgeCount(terminator); edge++) {
+		let block = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
+		const visited = new Set<CoreBlockId>();
+		while (visited.size < 8 && !visited.has(block)) {
+			visited.add(block);
+			let rebound = false;
+			for (const instruction of fn.bodyInstructionIds(block)) {
+				if (block === siteBlock && instruction === site) return true;
+				if (CAPTURE_ENVIRONMENT_REBINDS.has(fn.instructionOpcodeName(instruction))) {
+					rebound = true;
+					break;
+				}
+			}
+			if (rebound || block === siteBlock) break;
+			const nextTerminator = fn.blockTerminator(block);
+			if (
+				fn.instructionKind(nextTerminator) !== "jump" ||
+				fn.kernel.terminatorEdgeCount(nextTerminator) !== 1
+			)
+				break;
+			block = fn.kernel.terminatorEdgeBlock(
+				fn.kernel.terminatorEdgeStart(nextTerminator),
+			);
+		}
+	}
+	return false;
+}
+
+function directCaptureContext(
+	caller: CoreFunctionStore,
+	callee: CoreValueId,
+	site: CoreInstructionId,
+	target: CoreFunctionId,
+): InlineCaptureContext | undefined {
+	if (
+		caller.kernel.valueDefinitionKind(callee) !== 1 ||
+		caller.kernel.valueHandlerUseCount(callee) !== 0
+	)
+		return undefined;
+	const creation = coreInstructionId(caller.kernel.valueDefinitionOwner(callee));
+	if (
+		caller.instructionOpcodeName(creation) !== "createFunction" ||
+		caller.instructionAttributes(creation).functionIndex !== target ||
+		!captureEnvironmentIsStable(caller, creation, site)
+	)
+		return undefined;
+	let uses = 0;
+	for (
+		let use = caller.kernel.valueFirstUse(callee);
+		use >= 0;
+		use = caller.kernel.useNext(use)
+	) {
+		if (caller.kernel.useLive(use) === 0) continue;
+		if (caller.kernel.useInstruction(use) !== site || ++uses > 1) return undefined;
+	}
+	if (uses !== 1) return undefined;
+	return { caller, callee, site };
+}
+
 function inlineTarget(
 	program: CoreProgram,
 	target: CoreFunctionId,
+	captureContext?: InlineCaptureContext,
 ): InlineTarget | undefined {
 	const fn = program.function(target);
 	if (
@@ -208,6 +301,7 @@ function inlineTarget(
 			if (
 				++instructionCount > 48 ||
 				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(opcode === "loadCaptured" && captureContext === undefined) ||
 				(opcode === "loadThis" && !fn.metadata.strict)
 			)
 				return false;
@@ -271,6 +365,18 @@ function inlineTarget(
 		blocks,
 		instructions: blocks.flatMap((block) => block.instructions),
 	};
+}
+
+function callCarriesDirectCreatedFunction(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+	if (descriptor.callTransfer?.arguments.kind !== "positional") return false;
+	const operands = materializeInstructionOperands(fn, instruction);
+	return operands
+		.slice(descriptor.callTransfer.arguments.firstOperand)
+		.some((value) => coreDirectCreatedFunction(fn, value) !== undefined);
 }
 
 function offerFunctionCandidates(
@@ -379,11 +485,20 @@ function offerFunctionCandidates(
 				: undefined;
 		const target = exactTarget ?? hintedTarget;
 		if (target === undefined) continue;
-		const inline = inlineTarget(program, target);
+		const captureContext =
+			exactTarget === undefined
+				? undefined
+				: directCaptureContext(fn, site.callee, site.instruction, exactTarget);
+		const inline = inlineTarget(program, target, captureContext);
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
 			(globalTargetUses.get(target) ?? 0) < 2;
-		if (singleUseGlobal && (!inline?.argumentSnapshots || !inLoop)) {
+		if (
+			singleUseGlobal &&
+			(!inLoop ||
+				(!inline?.argumentSnapshots &&
+					!callCarriesDirectCreatedFunction(fn, site.instruction)))
+		) {
 			continue;
 		}
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
@@ -464,12 +579,8 @@ function applyLinearInline(
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
-	const inline = inlineTarget(program, target);
-	if (inline !== undefined && !inline.linear)
-		return applyGuardedInline(program, candidate, editor, false);
 	const caller = program.function(candidate.caller);
 	if (
-		inline === undefined ||
 		!caller.isInstructionLive(candidate.site) ||
 		caller.instructionKind(candidate.site) !== "operation"
 	)
@@ -481,6 +592,15 @@ function applyLinearInline(
 	)
 		return undefined;
 	const operands = materializeInstructionOperands(caller, candidate.site);
+	const callee = operands[descriptor.callTransfer.calleeOperand];
+	if (callee === undefined) return undefined;
+	const inline = inlineTarget(
+		program,
+		target,
+		directCaptureContext(caller, callee, candidate.site, target),
+	);
+	if (inline === undefined) return undefined;
+	if (!inline.linear) return applyGuardedInline(program, candidate, editor, false);
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
@@ -686,10 +806,8 @@ function applyGuardedInline(
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
-	const inline = inlineTarget(program, target);
 	const caller = program.function(candidate.caller);
 	if (
-		inline === undefined ||
 		!caller.isInstructionLive(candidate.site) ||
 		caller.instructionKind(candidate.site) !== "operation"
 	)
@@ -701,6 +819,14 @@ function applyGuardedInline(
 	)
 		return undefined;
 	const operands = materializeInstructionOperands(caller, candidate.site);
+	const callee = operands[descriptor.callTransfer.calleeOperand];
+	if (callee === undefined) return undefined;
+	const inline = inlineTarget(
+		program,
+		target,
+		directCaptureContext(caller, callee, candidate.site, target),
+	);
+	if (inline === undefined) return undefined;
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
@@ -722,8 +848,6 @@ function applyGuardedInline(
 			: undefined;
 	if (firstArgument === undefined) return undefined;
 	const arguments_ = operands.slice(firstArgument);
-	const callee = operands[descriptor.callTransfer.calleeOperand];
-	if (callee === undefined) return undefined;
 	const block = caller.instructionBlock(candidate.site);
 	const originalTerminator = caller.blockTerminator(block);
 	if (caller.instructionKind(originalTerminator) === "guard") return undefined;
@@ -768,12 +892,41 @@ function applyGuardedInline(
 	};
 	editor.setTerminator(join, joinedTerminator);
 
+	let sunkFunctionCount = 0;
 	if (fallback !== undefined) {
+		const fallbackOperands = [...operands];
+		const sinkableArguments: Array<number> = [];
+		for (let index = firstArgument; index < fallbackOperands.length; index++) {
+			const argument = fallbackOperands[index]!;
+			const functionIndex = coreDirectCreatedFunction(caller, argument);
+			if (
+				functionIndex !== undefined &&
+				directCaptureContext(caller, argument, candidate.site, functionIndex) !==
+					undefined
+			)
+				sinkableArguments.push(index);
+		}
 		editor.moveInstruction(candidate.site, fallback);
+		for (const index of sinkableArguments) {
+			const argument = fallbackOperands[index]!;
+			const creation = coreInstructionId(caller.kernel.valueDefinitionOwner(argument));
+			const sunk = editor.insertInstruction(
+				fallback,
+				candidate.site,
+				"createFunction",
+				[],
+				{
+					attributes: caller.instructionAttributes(creation),
+					sourcePosition: caller.instructionSourcePosition(creation),
+				},
+			);
+			fallbackOperands[index] = sunk.outputs[0]!;
+			sunkFunctionCount++;
+		}
 		editor.replaceInstruction(
 			candidate.site,
 			caller.instructionOpcodeName(candidate.site),
-			operands,
+			fallbackOperands,
 			{
 				attributes: {
 					...callAttributes,
@@ -791,7 +944,7 @@ function applyGuardedInline(
 	} else editor.removeInstruction(candidate.site);
 
 	const values = new Map<CoreValueId, CoreValueId>();
-	let introduced = guarded ? 1 : 0;
+	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
 	const bridgeValue = (
 		destination: CoreBlockId,
 		value: CoreValueId,

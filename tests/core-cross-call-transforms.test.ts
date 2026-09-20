@@ -296,6 +296,55 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(false);
 	});
 
+	it("sinks one-shot captured callbacks into guarded fallbacks", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`let enabled = false;
+				function invoke(callback) {
+					const value = callback();
+					return enabled ? value + 1 : value;
+				}
+				function outer(input) {
+					let result = 0;
+					for (let index = 0; index < 10; index++) {
+						const value = input + index;
+						result += invoke(() => value + 1);
+					}
+					return result;
+				}
+				outer(3);`,
+				"core-inline-captured-callback.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		const operations = coreOperations(outer);
+		expect(operations.filter(({ opcode }) => opcode === "createFunction")).toHaveLength(
+			1,
+		);
+		expect(
+			operations.filter(
+				({ opcode, attributes }) =>
+					opcode === "call" &&
+					attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] !== true,
+			),
+		).toHaveLength(0);
+		expect(
+			operations.some(
+				({ opcode, attributes }) =>
+					opcode === "call" &&
+					attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+			),
+		).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadCaptured")).toBe(true);
+	});
+
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
