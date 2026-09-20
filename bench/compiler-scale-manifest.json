@@ -155,6 +155,7 @@
 				"src/compiler/core/core-materialization-demands.ts",
 				"src/compiler/core/core-literal-graph.ts",
 				"src/compiler/core/core-static-data-query.ts",
+				"src/compiler/core/core-virtual-captures.ts",
 				"src/compiler/core/core-virtual-state.ts",
 				"src/compiler/core/core-memory-passes.ts",
 				"src/compiler/core/core-native-body-reachability.ts",
