@@ -65,6 +65,10 @@ function chooseBoundedFour(selector, ...rest) {
 	return rest[+selector & 3];
 }
 
+function chooseDynamicBoundedFour(selector, ...rest) {
+	return rest[selector & 3];
+}
+
 function sumBoundedFour(selector, ...rest) {
 	const start = +selector & 3;
 	return (
@@ -144,6 +148,10 @@ check(chooseBoundedFour(3, 127, 131, 137, 139) === 139, "four-way read selects t
 check(
 	chooseBoundedFour(3, 149) === undefined,
 	"four-way read preserves missing arguments",
+);
+check(
+	chooseDynamicBoundedFour(2, 151, 157, 163, 167) === 163,
+	"four-way read accepts a normal-result numeric selector",
 );
 check(
 	sumBoundedFour(2, 2, 3, 5, 7) === 17,

@@ -264,13 +264,14 @@ describe("Core local proofs and representations", () => {
 						program.function(finished.function),
 						buildCoreControlFlow(program, finished.function),
 					);
-					for (const value of [seed!, joined, updated!, scaled!]) {
+					for (const value of [seed!, joined, updated!]) {
 						expect(kinds.latticeMask(value)).toBe(
 							unknown && operator !== "+"
 								? COMPILER_VALUE_KIND_TOP
 								: COMPILER_VALUE_KIND_NUMBER,
 						);
 					}
+					expect(kinds.latticeMask(scaled!)).toBe(COMPILER_VALUE_KIND_NUMBER);
 				}
 			}
 		},
@@ -403,6 +404,31 @@ describe("Core local proofs and representations", () => {
 		expect(kinds.exactScalar(masked!)).toBe("int32");
 		expect(kinds.exactScalar(unsigned!)).toBe("number");
 		expect(kinds.exactScalar(complement!)).toBe("int32");
+	});
+
+	it("tracks the normal numeric result when one binary operand requires Number", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const unknown = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [mask] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 3 },
+		});
+		const [masked] = builder.appendInstruction(entry, "binary", [unknown, mask!], {
+			attributes: { operator: "&" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: masked! });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const kinds = analyzeCoreValueKinds(
+			fn,
+			buildCoreControlFlow(program, finished.function),
+		);
+		expect(kinds.kindMask(masked!)).toBe(COMPILER_VALUE_KIND_NUMBER);
+		expect(kinds.exactScalar(masked!)).toBe("int32");
+		const definition = inspectCoreValueDefinition(fn, masked!);
+		if (definition.kind !== "instruction") throw new Error("Expected instruction result");
+		expect(fn.instructionEffectRefinement(definition.instruction)).toBeUndefined();
 	});
 
 	it("materializes primitive effects with stable proof references and scalar representations", () => {

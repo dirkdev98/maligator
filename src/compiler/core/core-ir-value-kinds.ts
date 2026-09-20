@@ -765,10 +765,15 @@ export function analyzeCoreValueKinds(
 			const left = mask(transferInputs[inputStart]! as CoreValueId);
 			const right = mask(transferInputs[inputStart + 1]! as CoreValueId);
 			if (left === 0 || right === 0) incoming = 0;
-			else if (
-				kind === KIND_TRANSFER_ADD &&
-				(compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
-					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING))
+			else if (kind === KIND_TRANSFER_BINARY) {
+				incoming =
+					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) ||
+					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
+						? COMPILER_VALUE_KIND_NUMBER
+						: COMPILER_VALUE_KIND_TOP;
+			} else if (
+				compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
+				compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
 			) {
 				incoming = COMPILER_VALUE_KIND_STRING;
 			} else {

@@ -62,13 +62,7 @@ describe("rest forwarding allocation contract", () => {
 	it("certifies packed storage for read-only dynamic rest element loads", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
-				compile(
-					`function read(index, ...rest) {
-						const start = index & 3;
-						return rest[start] + rest[(start + 1) & 3] + rest[(start + 2) & 3] + rest[(start + 3) & 3];
-					}`,
-					"locked",
-				),
+				compile("function read(index, ...rest) { return rest[+index]; }", "locked"),
 			),
 		);
 		const functionIndex = image.runtime.functions.findIndex((fn) =>
@@ -85,7 +79,7 @@ describe("rest forwarding allocation contract", () => {
 				? [{ instruction, index }]
 				: [],
 		);
-		expect(packedLoads).toHaveLength(4);
+		expect(packedLoads).toHaveLength(1);
 		for (const load of packedLoads) {
 			expect(native.registerRepresentations[load.instruction.dst]).toBe("boxed");
 		}
@@ -216,6 +210,21 @@ describe("rest forwarding allocation contract", () => {
 			false,
 		);
 		expect(owner!.instructions.some((i) => i.opcode === "LOAD_PROPERTY")).toBe(false);
+		expect(owner!.instructions.filter((i) => i.opcode === "RETURN")).toHaveLength(2);
+	});
+
+	it("uses normal-result number kinds for bounded rest selection", () => {
+		const image = compile(
+			"function choose(which, ...rest) { return rest[which & 3]; }",
+			"locked",
+		);
+		const owner = image.runtime.functions.find((fn) => fn.argumentSnapshotCount === 4);
+		expect(owner).toBeDefined();
+		expect(owner!.instructions.some((i) => i.opcode === "CREATE_REST_ARGUMENTS")).toBe(
+			false,
+		);
+		expect(owner!.instructions.some((i) => i.opcode === "LOAD_PROPERTY")).toBe(false);
+		expect(owner!.instructions.filter((i) => i.opcode === "RETURN")).toHaveLength(4);
 	});
 
 	it("scalarizes small bounded rest reads through downstream arithmetic", () => {

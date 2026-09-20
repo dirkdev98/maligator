@@ -2793,39 +2793,57 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 				}).outputs[0]!;
 				snapshots.set(argumentIndex, snapshot);
 			}
-			const tail: Array<CoreInstructionId> = [];
-			for (
-				let instruction = fn.instructionNext(load);
-				instruction !== undefined && instruction !== terminator;
-				instruction = fn.instructionNext(instruction)
-			) {
-				tail.push(instruction);
-			}
 			const sourcePosition = fn.instructionSourcePosition(terminator);
-			const continuation = editor.createBlock([
-				{ representation: fn.valueRepresentation(loadResult) },
-			]);
-			const selected = fn.kernel.blockParameterValue(
-				fn.kernel.blockParameterStart(continuation),
-			);
-			for (const instruction of tail) editor.moveInstruction(instruction, continuation);
-			editor.replaceValueUses(loadResult, selected);
-			editor.setTerminator(continuation, {
-				...terminatorInputForEdit(fn, terminator),
-				...(sourcePosition === undefined ? {} : { sourcePosition }),
-			});
+			const selectedEdges: Array<CoreEdge> = [];
+			const terminalReturn =
+				fn.valueUseCount(loadResult) === 1 &&
+				fn.instructionNext(load) === terminator &&
+				fn.instructionKind(terminator) === "return" &&
+				instructionOperand(fn, terminator, 0) === loadResult;
+			if (terminalReturn) {
+				for (let offset = 0; offset <= range.maximum; offset++) {
+					const selected = editor.createBlock();
+					editor.setTerminator(selected, {
+						kind: "return",
+						value: snapshots.get(startIndex + offset)!,
+						...(sourcePosition === undefined ? {} : { sourcePosition }),
+					});
+					selectedEdges.push({ block: selected, arguments: [] });
+				}
+			} else {
+				const tail: Array<CoreInstructionId> = [];
+				for (
+					let instruction = fn.instructionNext(load);
+					instruction !== undefined && instruction !== terminator;
+					instruction = fn.instructionNext(instruction)
+				) {
+					tail.push(instruction);
+				}
+				const continuation = editor.createBlock([
+					{ representation: fn.valueRepresentation(loadResult) },
+				]);
+				const selected = fn.kernel.blockParameterValue(
+					fn.kernel.blockParameterStart(continuation),
+				);
+				for (const instruction of tail) editor.moveInstruction(instruction, continuation);
+				editor.replaceValueUses(loadResult, selected);
+				editor.setTerminator(continuation, {
+					...terminatorInputForEdit(fn, terminator),
+					...(sourcePosition === undefined ? {} : { sourcePosition }),
+				});
+				for (let offset = 0; offset <= range.maximum; offset++) {
+					selectedEdges.push({
+						block: continuation,
+						arguments: [snapshots.get(startIndex + offset)!],
+					});
+				}
+			}
 			if (range.maximum === 1) {
 				editor.replaceTerminator(block, {
 					kind: "branch",
 					condition: key,
-					consequent: {
-						block: continuation,
-						arguments: [snapshots.get(startIndex + 1)!],
-					},
-					alternate: {
-						block: continuation,
-						arguments: [snapshots.get(startIndex)!],
-					},
+					consequent: selectedEdges[1]!,
+					alternate: selectedEdges[0]!,
 				});
 			} else {
 				editor.replaceTerminator(block, {
@@ -2833,15 +2851,9 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 					discriminant: key,
 					cases: Array.from({ length: range.maximum }, (_, value) => ({
 						value: { kind: "number", value },
-						edge: {
-							block: continuation,
-							arguments: [snapshots.get(startIndex + value)!],
-						},
+						edge: selectedEdges[value]!,
 					})),
-					default: {
-						block: continuation,
-						arguments: [snapshots.get(startIndex + range.maximum)!],
-					},
+					default: selectedEdges[range.maximum]!,
 				});
 			}
 			const removeProducer = liveRestUses === 1 && fn.valueUseCount(rest) === 1;
