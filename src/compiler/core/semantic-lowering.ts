@@ -12553,6 +12553,16 @@ function compileCall(
 
 		return compileExpression(program, fn, cursor, arg);
 	});
+	const arrayPredicate = tryCompileArrayPredicateCall(
+		program,
+		fn,
+		cursor,
+		calleeNode,
+		callee,
+		thisRegister,
+		args,
+	);
+	if (arrayPredicate !== undefined) return arrayPredicate;
 	const destination = nextCoreVariable(fn);
 
 	cursor.block.emitter.emit({
@@ -12560,6 +12570,213 @@ function compileCall(
 		registers: [destination, callee, thisRegister, ...args],
 	});
 
+	return destination;
+}
+
+function tryCompileArrayPredicateCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	calleeNode: ESTree.Node,
+	callee: number,
+	receiver: number,
+	args: Array<number>,
+): number | undefined {
+	if (
+		calleeNode.type !== "MemberExpression" ||
+		calleeNode.property.type === "PrivateIdentifier" ||
+		args.length < 1 ||
+		args.length > 2
+	) {
+		return undefined;
+	}
+	const name =
+		!calleeNode.computed && calleeNode.property.type === "Identifier"
+			? calleeNode.property.name
+			: undefined;
+	if (name !== "every" && name !== "some") return undefined;
+
+	const destination = nextCoreVariable(fn);
+	const guard = nextCoreVariable(fn);
+	const eligible = nextCoreVariable(fn);
+	const undefinedValue = compileUndefined(fn, cursor);
+	const methodId = compileNumberLiteral(fn, cursor, name === "some" ? 1 : 2);
+	cursor.block.emitter.emit(
+		{
+			type: "loadIntrinsic",
+			registers: [guard],
+			intrinsic: "__arrayIterationEligible",
+		},
+		{
+			type: "call",
+			registers: [eligible, guard, undefinedValue, callee, receiver, methodId, args[0]!],
+		},
+	);
+
+	const fastJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [eligible],
+		blocks: [-1],
+	};
+	const fallbackJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(fastJump, fallbackJump);
+
+	const fallbackIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	const fallback = fn.blocks[fallbackIdx]!;
+	fallback.emitter.emit({
+		type: "call",
+		registers: [destination, callee, receiver, ...args],
+	});
+	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	fallback.emitter.emit(fallbackJoin);
+
+	const fastIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	fastJump.blocks[0] = fastIdx;
+	fallbackJump.blocks[0] = fallbackIdx;
+	const fast = fn.blocks[fastIdx]!;
+	const fastCursor = { block: fast };
+	const lengthKey = compileStaticString(program, fn, fastCursor, "length");
+	const length = nextCoreVariable(fn);
+	const index = compileNumberLiteral(fn, fastCursor, 0);
+	const one = compileNumberLiteral(fn, fastCursor, 1);
+	fast.emitter.emit({
+		type: "loadProperty",
+		registers: [length, receiver, lengthKey],
+	});
+	const enterLoop: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	fast.emitter.emit(enterLoop);
+
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	enterLoop.blocks[0] = headerIdx;
+	const header = fn.blocks[headerIdx]!;
+	const withinLength = nextCoreVariable(fn);
+	header.emitter.emit({
+		type: "binary",
+		registers: [withinLength, index, length],
+		operator: "<",
+	});
+	const bodyJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [withinLength],
+		blocks: [-1],
+	};
+	const normalExitJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	header.emitter.emit(bodyJump, normalExitJump);
+
+	const bodyIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	bodyJump.blocks[0] = bodyIdx;
+	const body = fn.blocks[bodyIdx]!;
+	const present = nextCoreVariable(fn);
+	body.emitter.emit({
+		type: "binary",
+		registers: [present, index, receiver],
+		operator: "in",
+	});
+	const invokeJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [present],
+		blocks: [-1],
+	};
+	const skipJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	body.emitter.emit(invokeJump, skipJump);
+
+	const invokeIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	invokeJump.blocks[0] = invokeIdx;
+	const invoke = fn.blocks[invokeIdx]!;
+	const element = nextCoreVariable(fn);
+	const callbackResult = nextCoreVariable(fn);
+	invoke.emitter.emit(
+		{ type: "loadProperty", registers: [element, receiver, index] },
+		{
+			type: "call",
+			registers: [
+				callbackResult,
+				args[0]!,
+				args[1] ?? undefinedValue,
+				element,
+				index,
+				receiver,
+			],
+		},
+	);
+	const stop = nextCoreVariable(fn);
+	if (name === "every") {
+		invoke.emitter.emit({
+			type: "unary",
+			registers: [stop, callbackResult],
+			operator: "!",
+		});
+	} else {
+		invoke.emitter.emit({ type: "move", registers: [stop, callbackResult] });
+	}
+	const earlyExitJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [stop],
+		blocks: [-1],
+	};
+	const continueJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	invoke.emitter.emit(earlyExitJump, continueJump);
+
+	const incrementIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	skipJump.blocks[0] = incrementIdx;
+	continueJump.blocks[0] = incrementIdx;
+	const increment = fn.blocks[incrementIdx]!;
+	increment.emitter.emit(
+		{ type: "binary", registers: [index, index, one], operator: "+" },
+		{ type: "jump", blocks: [headerIdx] },
+	);
+
+	const normalExitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	normalExitJump.blocks[0] = normalExitIdx;
+	const normalExit = fn.blocks[normalExitIdx]!;
+	normalExit.emitter.emit({
+		type: "createBoolean",
+		registers: [destination],
+		value: name === "every",
+	});
+	const normalJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	normalExit.emitter.emit(normalJoin);
+
+	const earlyExitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	earlyExitJump.blocks[0] = earlyExitIdx;
+	const earlyExit = fn.blocks[earlyExitIdx]!;
+	earlyExit.emitter.emit({
+		type: "createBoolean",
+		registers: [destination],
+		value: name === "some",
+	});
+	const earlyJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	earlyExit.emitter.emit(earlyJoin);
+
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	fallbackJoin.blocks[0] = joinIdx;
+	normalJoin.blocks[0] = joinIdx;
+	earlyJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
 	return destination;
 }
 

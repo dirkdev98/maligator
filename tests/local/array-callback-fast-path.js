@@ -193,6 +193,58 @@ check(
 	[0, 1, 2].every(() => true),
 );
 
+check(
+	"every snapshots length and observes deletion",
+	(() => {
+		const values = [1, 2, 3];
+		const visits = [];
+		const result = values.every((value, index, receiver) => {
+			visits.push(value);
+			if (index === 0) {
+				delete receiver[1];
+				receiver.push(4);
+			}
+			return true;
+		});
+		return result && visits.join(",") === "1,3";
+	})(),
+);
+
+check(
+	"some observes inherited holes and thisArg",
+	(() => {
+		Array.prototype[1] = 7;
+		const context = { expected: 7 };
+		const values = [, , 3];
+		const result = values.some(function (value, index, receiver) {
+			return this === context && receiver === values && index === 1 && value === 7;
+		}, context);
+		delete Array.prototype[1];
+		return result;
+	})(),
+);
+
+check(
+	"empty every rejects a non-callable callback",
+	(() => {
+		try {
+			[].every(0);
+			return false;
+		} catch (error) {
+			return error instanceof TypeError;
+		}
+	})(),
+);
+
+check(
+	"every override remains authoritative",
+	(() => {
+		const values = [1];
+		values.every = (callback) => callback(9);
+		return values.every((value) => value === 9);
+	})(),
+);
+
 function captureCallbackStack() {
 	return new Error("callback").stack;
 }

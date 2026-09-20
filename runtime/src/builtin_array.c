@@ -4942,8 +4942,9 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
     (void) this_value;
     (void) new_target;
     (void) callee;
-    if (arg_count < 3 || !mal_value_is_array_object(args[1]) ||
-        !mal_value_is_native_function_object(args[0])) {
+    if (arg_count < 4 || !mal_value_is_array_object(args[1]) ||
+		!mal_value_is_native_function_object(args[0]) ||
+		!mal_value_is_callable(args[3])) {
         return mal_value_new_boolean(false);
     }
     MalValue loaded_method = args[0];
