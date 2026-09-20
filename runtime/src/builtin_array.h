@@ -67,32 +67,6 @@ MalCompletion mal_builtin_array_at_direct(
     i32 arg_count
 );
 
-typedef enum MalBuiltinArraySearchOp {
-    MAL_BUILTIN_ARRAY_SEARCH_INCLUDES,
-    MAL_BUILTIN_ARRAY_SEARCH_INDEX_OF,
-    MAL_BUILTIN_ARRAY_SEARCH_LAST_INDEX_OF,
-} MalBuiltinArraySearchOp;
-
-bool mal_builtin_array_search_try_direct(
-    MalVm *vm,
-    MalBuiltinArraySearchOp operation,
-    MalValue callee,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue *result_out
-);
-
-MalCompletion mal_builtin_array_search_direct(
-    MalVm *vm,
-    MalCallCache *fallback_cache,
-    MalBuiltinArraySearchOp operation,
-    MalValue callee,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count
-);
-
 /** Array callback methods admitted by the compiler's known-builtin analysis. */
 typedef enum MalBuiltinArrayIterationOp {
     MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH,

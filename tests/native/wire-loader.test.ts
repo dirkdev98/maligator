@@ -898,7 +898,6 @@ describe("wire loader side-data validation", () => {
 			`function guardedOperations(map, array, value) {
 				array.push(value);
 				globalThis.last = array.at(-1);
-				globalThis.searches = [array.includes(value), array.indexOf(value), array.lastIndexOf(value)];
 				globalThis.formatted = [value.toFixed(), value.toExponential(2), value.toPrecision(2, 0, 0, 0, 0)];
 				globalThis.predicates = [Number.isNaN(value), Number.isFinite(value, 0, 0, 0, 0), Number.isInteger(), Number.isSafeInteger(value)];
 				return Math.round(value) + Math.max(value, 3) + map.get("answer");
@@ -947,19 +946,11 @@ describe("wire loader side-data validation", () => {
 		const arrayAt = guardedSites.find(
 			(site) => site.instruction.guardedBuiltinCall?.operation === "Array.prototype.at",
 		);
-		const arraySearches = ["includes", "indexOf", "lastIndexOf"].map((method) =>
-			guardedSites.find(
-				(site) =>
-					site.instruction.guardedBuiltinCall?.operation ===
-					`Array.prototype.${method}`,
-			),
-		);
 		expect(unary).toBeDefined();
 		expect(binary).toBeDefined();
 		expect(collection).toBeDefined();
 		expect(arrayPush).toBeDefined();
 		expect(arrayAt).toBeDefined();
-		expect(arraySearches.every((site) => site !== undefined)).toBe(true);
 		for (const method of ["toFixed", "toExponential", "toPrecision"])
 			expect(
 				guardedSites.some(

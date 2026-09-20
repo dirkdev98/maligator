@@ -38,9 +38,6 @@ import type {
 export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.push",
 	"Array.prototype.at",
-	"Array.prototype.includes",
-	"Array.prototype.indexOf",
-	"Array.prototype.lastIndexOf",
 	"String.prototype.charCodeAt",
 	"String.prototype.slice",
 	"String.prototype.split",
