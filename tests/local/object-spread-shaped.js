@@ -78,15 +78,19 @@ check(
 		protoCopy.__proto__ === protoValue,
 );
 
-const frozenCopy = { ...Object.freeze({ frozen: 47 }) };
-const frozenDescriptor = Object.getOwnPropertyDescriptor(frozenCopy, "frozen");
-check(
-	"frozen source fallback",
-	frozenCopy.frozen === 47 &&
-		frozenDescriptor.writable === true &&
-		frozenDescriptor.enumerable === true &&
-		frozenDescriptor.configurable === true,
-);
+const frozenSource = Object.freeze({ frozen: 47, retained: shared });
+for (let index = 0; index < 32; index++) {
+	const frozenCopy = { ...frozenSource };
+	const frozenDescriptor = Object.getOwnPropertyDescriptor(frozenCopy, "frozen");
+	check(
+		"frozen source normalization " + index,
+		frozenCopy.frozen === 47 &&
+			frozenCopy.retained === shared &&
+			frozenDescriptor.writable === true &&
+			frozenDescriptor.enumerable === true &&
+			frozenDescriptor.configurable === true,
+	);
+}
 
 const symbol = Symbol("spread");
 let getterCalls = 0;
