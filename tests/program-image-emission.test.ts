@@ -382,10 +382,14 @@ describe("emit-program-image instruction packing", () => {
 			);
 		};
 
-		expect(emitDefine("field")).toContain("mal_vm_op_define_property_static(");
-		expect(emitDefine("0")).not.toContain("mal_vm_op_define_property_static(");
-		expect(emitDefine("4294967294")).not.toContain("mal_vm_op_define_property_static(");
-		expect(emitDefine("4294967295")).toContain("mal_vm_op_define_property_static(");
+		expect(emitDefine("field")).toContain("mal_vm_op_define_property_static_cached(");
+		expect(emitDefine("0")).not.toContain("mal_vm_op_define_property_static_cached(");
+		expect(emitDefine("4294967294")).not.toContain(
+			"mal_vm_op_define_property_static_cached(",
+		);
+		expect(emitDefine("4294967295")).toContain(
+			"mal_vm_op_define_property_static_cached(",
+		);
 	});
 
 	it("emits every registered direct builtin operation into interpreted C", () => {

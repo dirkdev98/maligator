@@ -148,6 +148,16 @@ if (typeof globalThis.__mal_reset_perf_stats === "function") {
 	globalThis.__mal_reset_perf_stats();
 }
 
+class PublicFields {
+	first = 1;
+	second = 2;
+}
+
+for (let i = 0; i < 16; i++) {
+	const instance = new PublicFields();
+	assert(instance.first + instance.second === 3, "cached public fields");
+}
+
 // One fill followed by fifteen old-shape -> child-shape hits.
 for (let i = 0; i < 16; i++) {
 	const object = {};

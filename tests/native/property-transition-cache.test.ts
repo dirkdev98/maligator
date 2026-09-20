@@ -58,6 +58,8 @@ describe("ordinary property transition inline cache", () => {
 		const stats = line ?? "";
 		expect(field(stats, "store_transition_fills")).toBe(3);
 		expect(field(stats, "store_transition_hits")).toBe(30);
+		expect(field(stats, "define_transition_fills")).toBe(_name === "compiled" ? 2 : 0);
+		expect(field(stats, "define_transition_hits")).toBe(_name === "compiled" ? 30 : 0);
 		expect(field(stats, "prototype_epoch_invalidations")).toBeGreaterThan(0);
 	});
 

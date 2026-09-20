@@ -7359,6 +7359,45 @@ void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
         vm, object_value, key, value, enumerable, writable, configurable);
 }
 
+void mal_vm_op_define_property_static_cached(
+    MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
+    i32 string_index, MalValue value, bool enumerable, bool writable,
+    bool configurable
+) {
+    if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) ||
+        !enumerable || !writable || !configurable) {
+        mal_vm_op_define_property_static(
+            vm, object_value, string_index, value,
+            enumerable, writable, configurable);
+        return;
+    }
+
+    MalObject *object = mal_value_to_object(object_value);
+    if (cache->heap_identity == vm->heap.identity &&
+        cache->heap_epoch == vm->heap.epoch &&
+        mal_object_try_append_shaped_values(object, &cache->append, &value, 1)) {
+        MAL_PERF_COUNT(define_property_transition_hits);
+        return;
+    }
+
+    MalShape *source = object->shape;
+    MalKey key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(vm->string_constant_atoms[string_index]),
+    };
+    mal_vm_define_property_key(
+        vm, object_value, key, value, enumerable, writable, configurable);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || object->shape == source ||
+        object->shape->inline_count == 0 ||
+        object->shape->props[object->shape->inline_count - 1].key != key.value ||
+        !mal_object_append_plan_init(&cache->append, source, object->shape, 1)) {
+        return;
+    }
+    cache->heap_identity = vm->heap.identity;
+    cache->heap_epoch = vm->heap.epoch;
+    MAL_PERF_COUNT(define_property_transition_fills);
+}
+
 void mal_op_define_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_define_property(
         callable->vm,

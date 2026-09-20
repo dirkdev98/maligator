@@ -2220,6 +2220,18 @@ void mal_vm_op_define_property_static(MalVm *vm, MalValue object_value,
                                       bool enumerable, bool writable,
                                       bool configurable);
 
+typedef struct MalDefinePropertyCache {
+    MalShapeAppendPlan append;
+    u64 heap_identity;
+    u32 heap_epoch;
+} MalDefinePropertyCache;
+
+/** Define a static-name property through a VM-lifetime guarded shape transition. */
+void mal_vm_op_define_property_static_cached(
+    MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
+    i32 string_index, MalValue value, bool enumerable, bool writable,
+    bool configurable);
+
 /**
  * Throw "<name> is not defined" (ReferenceError), shared by MAL_OP_LOAD_UNDECLARED
  * and the compiled backend; sets vm->completion to THROW.
