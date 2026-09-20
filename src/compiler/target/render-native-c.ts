@@ -4216,8 +4216,9 @@ function emitInstruction(
 		case "LOAD_CAPTURED":
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
+			const loadOwner = relocation.ownerFunctionIndex(instruction.ownerFunctionIndex);
 			return [
-				`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
+				`r${instruction.dst} = env != nullptr && env->function_index == ${loadOwner} ? env->slots[${instruction.index}] : mal_vm_load_captured(env, ${loadOwner}, ${instruction.index});`,
 			];
 		case "STORE_CAPTURED":
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
@@ -4226,8 +4227,15 @@ function emitInstruction(
 					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					`mal_gc_card(&env->header, env->slots[${instruction.index}]);`,
 				];
+			const storeOwner = relocation.ownerFunctionIndex(instruction.ownerFunctionIndex);
 			return [
-				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
+				`if (env != nullptr && env->function_index == ${storeOwner}) {`,
+				`  mal_gc_write_barrier(env->slots[${instruction.index}]);`,
+				`  env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+				`  mal_gc_card(&env->header, env->slots[${instruction.index}]);`,
+				`} else {`,
+				`  mal_vm_store_captured(env, ${storeOwner}, ${instruction.index}, ${boxed(instruction.src)});`,
+				`}`,
 			];
 		case "ENV_PUSH":
 		case "ENV_COPY":

@@ -70,6 +70,9 @@ describe("local native input admission", () => {
 			});
 			expect(fallback, rebinding.opcode).toContain("mal_vm_load_captured(");
 			expect(fallback, rebinding.opcode).toContain("mal_vm_store_captured(");
+			expect(fallback, rebinding.opcode).toContain(
+				"env != nullptr && env->function_index == 0",
+			);
 		}
 	});
 
