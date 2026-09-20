@@ -2131,6 +2131,19 @@ function emitStringSwitch(
 	return { lines, strategy };
 }
 
+function stringConstantIsArrayIndex(units: ReadonlyArray<number>): boolean {
+	if (units.length === 0) return false;
+	if (units[0] === 0x30) return units.length === 1;
+	if (units[0]! < 0x31 || units[0]! > 0x39) return false;
+	let index = 0;
+	for (const unit of units) {
+		if (unit < 0x30 || unit > 0x39) return false;
+		index = index * 10 + unit - 0x30;
+		if (index > 0xffff_fffe) return false;
+	}
+	return true;
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -2466,7 +2479,8 @@ function emitBody(
 			instruction.opcode === "DEFINE_PROPERTY" &&
 			prior.opcode === "CREATE_STRING" &&
 			prior.dst === instruction.key &&
-			!jumpTargets.has(ip)
+			!jumpTargets.has(ip) &&
+			!stringConstantIsArrayIndex(stringConstants[prior.stringIndex] ?? [])
 		) {
 			staticDefineStringIndexByIp.set(ip, prior.stringIndex);
 		}

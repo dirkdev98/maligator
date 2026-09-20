@@ -337,6 +337,59 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("uses static define helpers only for non-index string keys", () => {
+		const emitDefine = (key: string): string => {
+			const defineInstructions: Array<BytecodeInstruction> = [
+				{ opcode: "CREATE_OBJECT", dst: 0 },
+				{ opcode: "CREATE_UNDEFINED", dst: 2 },
+				{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
+				{
+					opcode: "DEFINE_PROPERTY",
+					object: 0,
+					key: 1,
+					value: 2,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				},
+				{ opcode: "RETURN", value: 0 },
+			];
+			const defineFunction: BytecodeFunction = {
+				...fn,
+				capturedCount: 0,
+				registerCount: 3,
+				literalShapeCount: 0,
+				instructions: defineInstructions,
+				positions: defineInstructions.map(() => 0),
+			};
+			const image = testProgramImage({
+				entrypointPath: "/fixture/static-define.mjs",
+				functionCount: 1,
+				functions: [defineFunction],
+				stringConstants: [[...key].map((unit) => unit.charCodeAt(0))],
+				bigintConstants: [],
+				literalTemplateData: [],
+				precompiledLiteralShapes: [],
+				globalCount: 0,
+				files: [],
+				sourcePositions: [],
+				cjsModuleFunctionIndices: [],
+				hostInstalls: [],
+			});
+			return emitProgramImage(
+				{ ...image, native: createConservativeNativePlan([defineFunction]) },
+				{ compiled: true },
+			);
+		};
+
+		expect(emitDefine("field")).toContain("mal_vm_op_define_property_static(");
+		expect(emitDefine("0")).not.toContain("mal_vm_op_define_property_static(");
+		expect(emitDefine("4294967294")).not.toContain(
+			"mal_vm_op_define_property_static(",
+		);
+		expect(emitDefine("4294967295")).toContain("mal_vm_op_define_property_static(");
+	});
+
 	it("emits every registered direct builtin operation into interpreted C", () => {
 		for (const operation of directBuiltinOperationIds) {
 			const emitted = emitProgramImage(
