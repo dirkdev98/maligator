@@ -322,6 +322,20 @@ async function main() {
 			denseSearch.includes(NaN) &&
 			denseSearch.includes(undefined),
 	);
+	let emptySearchCoercions = 0;
+	const emptySearchFromIndex = {
+		valueOf() {
+			emptySearchCoercions++;
+			throw new Error("empty search coerced fromIndex");
+		},
+	};
+	check(
+		"empty searches do not coerce fromIndex",
+		[].includes(1, emptySearchFromIndex) === false &&
+			[].indexOf(1, emptySearchFromIndex) === -1 &&
+			[].lastIndexOf(1, emptySearchFromIndex) === -1 &&
+			emptySearchCoercions === 0,
+	);
 	const mixedNumericSearch = [0, -0, 1.5, NaN, Infinity, 1n, "1", { value: 1 }];
 	check(
 		"dense numeric searches preserve Number identity and type boundaries",
@@ -331,7 +345,10 @@ async function main() {
 			mixedNumericSearch.indexOf(NaN) === -1 &&
 			mixedNumericSearch.includes(NaN) &&
 			mixedNumericSearch.includes(Infinity) &&
-			mixedNumericSearch.indexOf(1) === -1,
+			mixedNumericSearch.indexOf(1) === -1 &&
+			[1, 2, 1].lastIndexOf(1, undefined) === 0 &&
+			[1, 2, 1].lastIndexOf(1, Infinity) === 2 &&
+			[1, 2, 1].lastIndexOf(1, -Infinity) === -1,
 	);
 	const searchMutation = [1, 2, 3];
 	const mutatingFromIndex = {

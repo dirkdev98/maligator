@@ -572,6 +572,72 @@ static bool mal_builtin_array_int32_search_matches(
     return mal_value_is_f64(element) && mal_value_to_f64(element) == search_number;
 }
 
+static MalValue mal_builtin_array_dense_numeric_index_of(
+    const MalArrayObject *array, MalValue search, u32 start
+) {
+    bool int32_search = mal_value_is_int32(search);
+    f64 search_number = mal_ops_number_as_f64(search);
+    u32 end = array->dense_count < array->length
+        ? array->dense_count
+        : array->length;
+    for (u32 index = start; index < end; index++) {
+        MalValue element = array->elements[index];
+        bool matches = int32_search
+            ? mal_builtin_array_int32_search_matches(
+                element, search, search_number)
+            : mal_builtin_array_numeric_search_matches(
+                element, search, search_number, false);
+        if (matches) return mal_value_from_u32(index);
+    }
+    return mal_value_from_i32(-1);
+}
+
+static MalValue mal_builtin_array_dense_numeric_last_index_of(
+    const MalArrayObject *array, MalValue search, u32 start
+) {
+    u32 end = array->dense_count < array->length
+        ? array->dense_count
+        : array->length;
+    if (end == 0) return mal_value_from_i32(-1);
+
+    bool int32_search = mal_value_is_int32(search);
+    f64 search_number = mal_ops_number_as_f64(search);
+    u32 index = start < end ? start : end - 1;
+    for (;;) {
+        MalValue element = array->elements[index];
+        bool matches = int32_search
+            ? mal_builtin_array_int32_search_matches(
+                element, search, search_number)
+            : mal_builtin_array_numeric_search_matches(
+                element, search, search_number, false);
+        if (matches) return mal_value_from_u32(index);
+        if (index == 0) break;
+        index--;
+    }
+    return mal_value_from_i32(-1);
+}
+
+static bool mal_builtin_array_dense_numeric_includes(
+    const MalArrayObject *array, MalValue search, u32 start
+) {
+    bool int32_search = mal_value_is_int32(search);
+    f64 search_number = mal_ops_number_as_f64(search);
+    u32 end = array->dense_count < array->length
+        ? array->dense_count
+        : array->length;
+    for (u32 index = start; index < end; index++) {
+        MalValue element = array->elements[index];
+        if (int32_search
+                ? mal_builtin_array_int32_search_matches(
+                    element, search, search_number)
+                : mal_builtin_array_numeric_search_matches(
+                    element, search, search_number, true)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool mal_builtin_array_dense_range_present(
     const MalArrayObject *array, u32 start, u32 end
 ) {
@@ -1643,6 +1709,23 @@ done:
 }
 
 static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_ops_is_number(search)) {
+        MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
+        if (dense != nullptr) {
+            u32 length = dense->length;
+            if (length == 0) return mal_value_from_i32(-1);
+            if (arg_count < 2 || mal_value_is_undefined(args[1]) ||
+                mal_ops_is_number(args[1])) {
+                u32 start = arg_count >= 2
+                    ? mal_builtin_array_clamp_relative(vm, args[1], 0, length)
+                    : 0;
+                return mal_builtin_array_dense_numeric_index_of(
+                    dense, search, start);
+            }
+        }
+    }
+
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
@@ -1655,7 +1738,6 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
     if (length == 0) {
         return mal_value_from_i32(-1);
     }
-    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     f64 start = arg_count >= 2 ? mal_builtin_array_clamp_relative_wide(vm, args[1], 0, length) : 0;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1663,29 +1745,14 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
-        if (mal_value_is_int32(search)) {
-            f64 search_number = (f64) mal_value_to_i32(search);
-            for (u32 index = (u32) start; index < dense->length; index++) {
-                MalValue element;
-                if (mal_array_object_dense_get(dense, index, &element) &&
-                    mal_builtin_array_int32_search_matches(
-                        element, search, search_number)) {
-                    return mal_value_from_u32(index);
-                }
-            }
-            return mal_value_from_i32(-1);
+        if (mal_ops_is_number(search)) {
+            return mal_builtin_array_dense_numeric_index_of(
+                dense, search, (u32) start);
         }
-        bool numeric_search = mal_ops_is_number(search);
-        f64 search_number = numeric_search
-            ? mal_ops_number_as_f64(search)
-            : 0.0;
         for (u32 index = (u32) start; index < dense->length; index++) {
             MalValue element;
             if (mal_array_object_dense_get(dense, index, &element) &&
-                (numeric_search
-                    ? mal_builtin_array_numeric_search_matches(
-                        element, search, search_number, false)
-                    : mal_ops_strict_equal_bool(element, search))) {
+                mal_ops_strict_equal_bool(element, search)) {
                 return mal_value_from_u32(index);
             }
         }
@@ -1710,6 +1777,30 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
 }
 
 static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_ops_is_number(search)) {
+        MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
+        if (dense != nullptr) {
+            u32 length = dense->length;
+            if (length == 0) return mal_value_from_i32(-1);
+            if (arg_count < 2 || mal_value_is_undefined(args[1]) ||
+                mal_ops_is_number(args[1])) {
+                f64 relative = length - 1;
+                if (arg_count >= 2) {
+                    f64 number = mal_value_is_undefined(args[1])
+                        ? NAN
+                        : mal_ops_number_as_f64(args[1]);
+                    relative = mal_ops_number_to_integer_or_infinity(number);
+                    if (relative < 0) relative += (f64) length;
+                    if (relative < 0) return mal_value_from_i32(-1);
+                    if (relative >= (f64) length) relative = length - 1;
+                }
+                return mal_builtin_array_dense_numeric_last_index_of(
+                    dense, search, (u32) relative);
+            }
+        }
+    }
+
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
@@ -1721,7 +1812,6 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
         return mal_value_from_i32(-1);
     }
 
-    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     f64 start = length - 1;
     if (arg_count >= 2) {
         // fromIndex present (even as undefined) goes through ToIntegerOrInfinity;
@@ -1744,30 +1834,14 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && length == (f64) dense->length) {
-        if (mal_value_is_int32(search)) {
-            f64 search_number = (f64) mal_value_to_i32(search);
-            for (u32 index = (u32) start;; index--) {
-                MalValue element;
-                if (mal_array_object_dense_get(dense, index, &element) &&
-                    mal_builtin_array_int32_search_matches(
-                        element, search, search_number)) {
-                    return mal_value_from_u32(index);
-                }
-                if (index == 0) break;
-            }
-            return mal_value_from_i32(-1);
+        if (mal_ops_is_number(search)) {
+            return mal_builtin_array_dense_numeric_last_index_of(
+                dense, search, (u32) start);
         }
-        bool numeric_search = mal_ops_is_number(search);
-        f64 search_number = numeric_search
-            ? mal_ops_number_as_f64(search)
-            : 0.0;
         for (u32 index = (u32) start;; index--) {
             MalValue element;
             if (mal_array_object_dense_get(dense, index, &element) &&
-                (numeric_search
-                    ? mal_builtin_array_numeric_search_matches(
-                        element, search, search_number, false)
-                    : mal_ops_strict_equal_bool(element, search))) {
+                mal_ops_strict_equal_bool(element, search)) {
                 return mal_value_from_u32(index);
             }
             if (index == 0) break;
@@ -1794,6 +1868,24 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
 }
 
 static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_ops_is_number(search)) {
+        MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
+        if (dense != nullptr) {
+            u32 length = dense->length;
+            if (length == 0) return mal_value_new_boolean(false);
+            if (arg_count < 2 || mal_value_is_undefined(args[1]) ||
+                mal_ops_is_number(args[1])) {
+                u32 start = arg_count >= 2
+                    ? mal_builtin_array_clamp_relative(vm, args[1], 0, length)
+                    : 0;
+                return mal_value_new_boolean(
+                    mal_builtin_array_dense_numeric_includes(
+                        dense, search, start));
+            }
+        }
+    }
+
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
@@ -1806,7 +1898,6 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     if (length == 0) {
         return mal_value_new_boolean(false);
     }
-    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1814,30 +1905,10 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
     if (dense != nullptr && dense->length == length) {
-        if (mal_value_is_int32(search)) {
-            f64 search_number = (f64) mal_value_to_i32(search);
-            u32 end = dense->dense_count < length ? dense->dense_count : length;
-            for (u32 index = start; index < end; index++) {
-                if (mal_builtin_array_int32_search_matches(
-                        dense->elements[index], search, search_number)) {
-                    return mal_value_new_boolean(true);
-                }
-            }
-            return mal_value_new_boolean(false);
-        }
-        bool numeric_search = mal_ops_is_number(search);
-        f64 search_number = numeric_search
-            ? mal_ops_number_as_f64(search)
-            : 0.0;
-        if (numeric_search) {
-            u32 end = dense->dense_count < length ? dense->dense_count : length;
-            for (u32 index = start; index < end; index++) {
-                if (mal_builtin_array_numeric_search_matches(
-                        dense->elements[index], search, search_number, true)) {
-                    return mal_value_new_boolean(true);
-                }
-            }
-            return mal_value_new_boolean(false);
+        if (mal_ops_is_number(search)) {
+            return mal_value_new_boolean(
+                mal_builtin_array_dense_numeric_includes(
+                    dense, search, start));
         }
         for (u32 index = start; index < length; index++) {
             MalValue element;
