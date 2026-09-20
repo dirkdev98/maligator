@@ -2578,23 +2578,38 @@ function reverseIndexedLengthLoopCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
-		if (
-			fn.instructionKind(load) !== "operation" ||
-			!staticPropertyNamed(program, fn, load, "length") ||
-			instructionOperandCount(fn, load) !== 1 ||
-			instructionResultCount(fn, load) !== 1 ||
-			!control.reachable.has(fn.instructionBlock(load))
-		)
-			continue;
+	const loads = indexedOpcodeInstructions(fn, index, "loadPropertyStatic").filter(
+		(load) =>
+			fn.instructionKind(load) === "operation" &&
+			staticPropertyNamed(program, fn, load, "length") &&
+			instructionOperandCount(fn, load) === 1 &&
+			instructionResultCount(fn, load) === 1 &&
+			control.reachable.has(fn.instructionBlock(load)),
+	);
+	if (loads.length === 0 || control.loops.length === 0) return candidates;
+	const lengthRoots = new Set(loads.map((load) => root(instructionResult(fn, load, 0)!)));
+	const reverseLoops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
+		lengthRoots.has(root(value)) ? "number" : undefined,
+	);
+	const inductionsByInitialRoot = new Map<
+		CoreValueId,
+		Array<(typeof reverseLoops.inductions)[number]>
+	>();
+	for (const induction of reverseLoops.inductions) {
+		const initialRoot = root(induction.initial);
+		const matches = inductionsByInitialRoot.get(initialRoot);
+		if (matches === undefined) inductionsByInitialRoot.set(initialRoot, [induction]);
+		else matches.push(induction);
+	}
+	const indexedAccesses = [
+		...indexedOpcodeInstructions(fn, index, "loadProperty"),
+		...indexedOpcodeInstructions(fn, index, "storeProperty"),
+	];
+	for (const load of loads) {
 		const output = instructionResult(fn, load, 0)!;
-		const reverseLoops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
-			root(value) === root(output) ? "number" : undefined,
-		);
-		for (const induction of reverseLoops.inductions) {
+		for (const induction of inductionsByInitialRoot.get(root(output)) ?? []) {
 			const comparison = induction.comparison;
 			if (
-				root(induction.initial) !== root(output) ||
 				induction.step !== -1 ||
 				induction.representation !== "f64" ||
 				comparison?.operator !== ">" ||
@@ -2633,10 +2648,7 @@ function reverseIndexedLengthLoopCandidates(
 				readonly arrayIndexIsUint32: boolean;
 				readonly index?: CoreInstructionId;
 			}> = [];
-			for (const instruction of [
-				...indexedOpcodeInstructions(fn, index, "loadProperty"),
-				...indexedOpcodeInstructions(fn, index, "storeProperty"),
-			]) {
+			for (const instruction of indexedAccesses) {
 				const block = fn.instructionBlock(instruction);
 				if (
 					!induction.loop.blocks.has(block) ||

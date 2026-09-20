@@ -579,6 +579,44 @@ describe("late plan migration gates", () => {
 		).not.toThrow();
 	});
 
+	it("keeps independent reverse inductions attached to their length initializers", () => {
+		const compilation = optimize(
+			`globalThis.shiftBoth = function shiftBoth(left, right, selected) {
+				left.pop();
+				right.pop();
+				for (let leftIndex = left.length; leftIndex > selected; leftIndex--) {
+					left[leftIndex] = left[leftIndex - 1];
+				}
+				for (let rightIndex = right.length; rightIndex > selected; rightIndex--) {
+					right[rightIndex] = right[rightIndex - 1];
+				}
+				return left[selected] + right[selected];
+			};`,
+			"core-independent-reverse-array-lengths.js",
+		);
+		const selections = projectCoreSpecializationRecipes(compilation.plan.recipes).filter(
+			(
+				candidate,
+			): candidate is Extract<CorePlanSpecialization, { kind: "indexed-length-loop" }> =>
+				candidate.kind === "indexed-length-loop" &&
+				candidate.indexedLengthLoop.reverseInduction !== undefined,
+		);
+		expect(selections).toHaveLength(2);
+		expect(
+			new Set(selections.map(({ indexedLengthLoop }) => indexedLengthLoop.load)).size,
+		).toBe(2);
+		expect(
+			new Set(
+				selections.map(
+					({ indexedLengthLoop }) => indexedLengthLoop.reverseInduction!.update,
+				),
+			).size,
+		).toBe(2);
+		expect(
+			selections.map(({ indexedLengthLoop }) => indexedLengthLoop.elements.length),
+		).toEqual([2, 2]);
+	});
+
 	it("preserves a dense-fill reserve when its exit is the next loop header", () => {
 		const compilation = optimize(
 			`globalThis.fillAndRead = function fillAndRead() {
