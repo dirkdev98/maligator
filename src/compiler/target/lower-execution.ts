@@ -26,6 +26,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "../core/core-ir.ts";
+import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
 import {
 	coreSpecializationRecipeAdmissionAt,
@@ -1807,7 +1808,7 @@ function lowerFunctionToTarget(
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
-	privatePackedRestArrayElements: ReadonlySet<CoreInstructionId>,
+	privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>,
 	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
 	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
 	recipeTable: CoreSpecializationRecipeTable,
@@ -1817,6 +1818,17 @@ function lowerFunctionToTarget(
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters: boolean,
 ): ExecutionFunction {
+	const privatePackedRestElements = new Map(
+		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
+	);
+	const privatePackedRestAllocations = new Map(
+		privatePackedRestArrayElements.map((plan) => [plan.allocation, plan]),
+	);
+	const privatePackedRestLengths = new Map(
+		privatePackedRestArrayElements.flatMap((plan) =>
+			plan.lengthLoads.map((instruction) => [instruction, plan] as const),
+		),
+	);
 	const protectedInstructions = new Set(
 		recipeRows.flatMap((row) => coreSpecializationRecipeClaimsAt(recipeTable, row)),
 	);
@@ -2169,10 +2181,29 @@ function lowerFunctionToTarget(
 					throw new Error("Private numeric array proof lost its load");
 				lowered = { ...lowered, exactContainedArrayElement: true };
 			}
-			if (privatePackedRestArrayElements.has(instruction)) {
+			const privatePackedRestElement = privatePackedRestElements.get(instruction);
+			if (privatePackedRestElement !== undefined) {
 				if (lowered.type !== "loadProperty")
 					throw new Error("Private packed rest array proof lost its load");
-				lowered = { ...lowered, exactPackedRestArrayElement: true };
+				lowered = {
+					...lowered,
+					exactPackedRestArrayElement: true,
+					packedRestStartIndex: privatePackedRestElement.startIndex,
+				};
+			}
+			const privatePackedRestLength = privatePackedRestLengths.get(instruction);
+			if (privatePackedRestLength !== undefined) {
+				if (lowered.type !== "loadPropertyStatic")
+					throw new Error("Private packed rest array proof lost its length");
+				lowered = {
+					...lowered,
+					packedRestStartIndex: privatePackedRestLength.startIndex,
+				};
+			}
+			if (privatePackedRestAllocations.has(instruction)) {
+				if (lowered.type !== "createRestArguments")
+					throw new Error("Private packed rest array proof lost its allocation");
+				lowered = { ...lowered, virtualPackedRest: true };
 			}
 			const builtinMasks = builtinInputs.get(instruction);
 			if (builtinMasks !== undefined) {
@@ -2744,15 +2775,15 @@ export function lowerCoreCompilationToExecutionProgram(
 	}
 	const privatePackedRestArrayElements = new Map<
 		CoreFunctionId,
-		Set<CoreInstructionId>
+		Array<CorePrivatePackedRestArrayElementPlan>
 	>();
 	for (const operation of compilation.plan.privatePackedRestArrayElements ?? []) {
 		let instructions = privatePackedRestArrayElements.get(operation.function);
 		if (instructions === undefined) {
-			instructions = new Set();
+			instructions = [];
 			privatePackedRestArrayElements.set(operation.function, instructions);
 		}
-		instructions.add(operation.instruction);
+		instructions.push(operation);
 	}
 	const operatorInputs = new Map<
 		CoreFunctionId,
@@ -2793,7 +2824,7 @@ export function lowerCoreCompilationToExecutionProgram(
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
-			privatePackedRestArrayElements.get(core) ?? new Set(),
+			privatePackedRestArrayElements.get(core) ?? [],
 			operatorInputs.get(core) ?? new Map(),
 			builtinInputs.get(core) ?? new Map(),
 			compilation.plan.recipes,

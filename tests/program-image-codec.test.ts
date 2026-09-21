@@ -1588,7 +1588,7 @@ describe("program-image-codec", () => {
 				key: 2,
 				icIndex: 0,
 			},
-			{ kind: "exact-packed-rest-array-element" },
+			{ kind: "exact-packed-rest-array-element", startIndex: 2 },
 		);
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(packedRestArrayLoad)),

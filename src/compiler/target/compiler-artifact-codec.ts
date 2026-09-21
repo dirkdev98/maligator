@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 82;
+export const COMPILER_ARTIFACT_VERSION = 83;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -868,6 +868,26 @@ function writeCompilerArtifact(
 				instruction.opcode === "LOAD_PROPERTY"
 			) {
 				w.u8(19);
+				w.u32(plan.startIndex);
+			} else if (
+				plan.kind === "exact-packed-rest-array-length" &&
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+			) {
+				if (
+					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("program-image-codec: invalid packed rest length hint");
+				}
+				w.u8(20);
+				w.u32(plan.startIndex);
+			} else if (
+				plan.kind === "virtual-packed-rest-array" &&
+				instruction.opcode === "CREATE_REST_ARGUMENTS" &&
+				plan.startIndex === instruction.startIndex
+			) {
+				w.u8(21);
+				w.u32(plan.startIndex);
 			} else if (
 				plan.kind === "exact-typed-array-element" &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -3275,6 +3295,26 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			} else if (tag === 19 && instruction.opcode === "LOAD_PROPERTY") {
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-packed-rest-array-element",
+					startIndex: r.u32(),
+				};
+			} else if (tag === 20 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
+				if (
+					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("program-image-codec: invalid packed rest length hint");
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-packed-rest-array-length",
+					startIndex: r.u32(),
+				};
+			} else if (tag === 21 && instruction.opcode === "CREATE_REST_ARGUMENTS") {
+				const startIndex = r.u32();
+				if (startIndex !== instruction.startIndex)
+					throw new RangeError("program-image-codec: invalid virtual packed rest hint");
+				nativeInstructions[instructionIndex] = {
+					kind: "virtual-packed-rest-array",
+					startIndex,
 				};
 			} else if (
 				tag === 16 &&

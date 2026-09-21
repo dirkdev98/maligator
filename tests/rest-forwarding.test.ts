@@ -84,7 +84,8 @@ describe("rest forwarding allocation contract", () => {
 			expect(native.registerRepresentations[load.instruction.dst]).toBe("boxed");
 		}
 		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false);
-		expect(emitted?.source).toContain("mal_array_object_contained_dense_get");
+		expect(emitted?.source).toContain("args[1 + (u32) __rest_index_");
+		expect(emitted?.source).not.toContain("mal_create_rest_arguments");
 		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
 	});
 
@@ -114,7 +115,8 @@ describe("rest forwarding allocation contract", () => {
 			"",
 			false,
 		);
-		expect(emitted?.source).toMatch(/->elements\[\(u32\) r\d+\]/);
+		expect(emitted?.source).toMatch(/args\[0 \+ \(u32\) __rest_index_\d+\]/);
+		expect(emitted?.source).not.toContain("mal_create_rest_arguments");
 	});
 
 	it.each([

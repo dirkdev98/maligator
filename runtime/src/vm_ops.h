@@ -1617,6 +1617,34 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return true;
 }
 
+/** Share one monomorphic shape guard and keep numeric slot values unboxed. */
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_number_pair(
+    MalValue receiver,
+    const MalInlineCache *first,
+    const MalInlineCache *second,
+    f64 *first_out,
+    f64 *second_out
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr ||
+        first->mode != MAL_IC_MODE_SHAPE ||
+        second->mode != MAL_IC_MODE_SHAPE ||
+        first->slot == MAL_IC_VALUE_SLOT ||
+        second->slot == MAL_IC_VALUE_SLOT ||
+        object->shape != first->shape ||
+        first->shape != second->shape) {
+        return false;
+    }
+    MalValue first_value = object->slots[first->slot];
+    MalValue second_value = object->slots[second->slot];
+    if (!mal_ops_is_number(first_value) || !mal_ops_is_number(second_value)) return false;
+    *first_out = mal_ops_number_as_f64(first_value);
+    *second_out = mal_ops_number_as_f64(second_value);
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
 /**
  * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
  * Returns true when applied; false leaves the store to the general [[Set]].
@@ -2003,6 +2031,20 @@ static inline i32 mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
     if (mal_array_object_dense_has(arr, i)) {
         return 1;
     }
+    if (!arr->dense_deopted && mal_array_elements_protector &&
+        mal_array_prototype_object != nullptr &&
+        arr->object.prototype == mal_array_prototype_object) {
+        return 0;
+    }
+    return -1;
+}
+
+/** Return presence and the dense value under the same indexed-prototype proof. */
+static inline i32 mal_vm_array_try_get_present_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
+) {
+    if (arr == nullptr) return -1;
+    if (mal_array_object_dense_get(arr, index, out)) return 1;
     if (!arr->dense_deopted && mal_array_elements_protector &&
         mal_array_prototype_object != nullptr &&
         arr->object.prototype == mal_array_prototype_object) {

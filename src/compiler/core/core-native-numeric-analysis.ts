@@ -12,7 +12,7 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreNumericRange } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
-	corePrivatePackedRestArrayLoads,
+	corePrivatePackedRestArrays,
 	corePrivateNumericArrayLoads,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
@@ -39,6 +39,9 @@ export interface CorePrivateNumericArrayElementPlan {
 export interface CorePrivatePackedRestArrayElementPlan {
 	readonly function: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
+	readonly allocation: CoreInstructionId;
+	readonly lengthLoads: ReadonlyArray<CoreInstructionId>;
+	readonly startIndex: number;
 }
 
 const privateNumericArrayProofs = new WeakMap<
@@ -156,16 +159,26 @@ export function corePrivatePackedRestArrayElementPlans(
 			scope: "function",
 			function: functionId,
 		});
-		for (const instruction of corePrivatePackedRestArrayLoads(
-			program,
-			fn,
-			cfg,
-			context,
-			(value) => packedRestKeyIsNumber(fn, kinds, value),
+		for (const array of corePrivatePackedRestArrays(program, fn, cfg, context, (value) =>
+			packedRestKeyIsNumber(fn, kinds, value),
 		)) {
-			const plan = Object.freeze({ function: functionId, instruction });
-			privatePackedRestArrayProofs.set(plan, { fn, versions: fn.versions, context });
-			plans.push(plan);
+			const startIndex = fn.instructionAttributes(array.allocation).startIndex;
+			if (typeof startIndex !== "number") continue;
+			for (const instruction of array.elementLoads) {
+				const plan = Object.freeze({
+					function: functionId,
+					instruction,
+					allocation: array.allocation,
+					lengthLoads: array.lengthLoads,
+					startIndex,
+				});
+				privatePackedRestArrayProofs.set(plan, {
+					fn,
+					versions: fn.versions,
+					context,
+				});
+				plans.push(plan);
+			}
 		}
 	}
 	return Object.freeze(plans);

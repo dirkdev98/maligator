@@ -2,6 +2,8 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
+import { expect } from "vitest";
+import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
 import {
 	assertResultPass,
 	buildBackendPairFromOneProgramImage,
@@ -14,15 +16,19 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-array-callback-fast-path-
 describe("guarded Array callback fast paths", () => {
 	let compiled: string;
 	let interpreted: string;
+	let source: string;
 	beforeAll(() => {
-		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
+		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/array-callback-fast-path.js",
 			name: "array-callback-fast-path",
 			outDir,
-		}));
+		});
+		({ compiled, interpreted } = pair);
+		source = emitProgramImage(pair.programImage, { compiled: true });
 	});
 
 	it("preserves compiled fast and fallback semantics", () => {
+		expect(source).toContain("mal_vm_array_try_get_present_proven_index(");
 		assertResultPass(runToStdout(compiled));
 	});
 

@@ -530,6 +530,9 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: the receiver is an unescaped, read-only rest Array whose
 			 * dense storage contains every index below length. */
 			exactPackedRestArrayElement?: true;
+			/** COMPILE-ONLY: index in the original call argument vector where the
+			 * virtual packed rest view begins. */
+			packedRestStartIndex?: number;
 			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
 			 * code may skip receiver branding, the property cache, prototype lookup,
 			 * and the generic element-kind dispatch. */
@@ -559,6 +562,8 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;
+			/** COMPILE-ONLY: this private rest length can be read from arg_count. */
+			packedRestStartIndex?: number;
 	  }
 	| {
 			// A preceding selectShapeCase licenses slots[case] on the exact live
@@ -1001,6 +1006,8 @@ export type CompilerInstruction =
 			registers: [number];
 
 			startIndex: number;
+			/** COMPILE-ONLY: all uses consume a private packed virtual rest view. */
+			virtualPackedRest?: true;
 	  }
 	| {
 			// Collect the elements of an array-like source from startIndex

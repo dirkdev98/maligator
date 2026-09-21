@@ -56,6 +56,8 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
+	vmInstructionUsesRegister,
+	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -2009,6 +2011,12 @@ interface IndexedLengthLoopAction {
 	>["sites"][number]["elements"][number];
 }
 
+interface NativeArrayPresenceProjectionAction {
+	readonly role: "membership" | "load";
+	readonly membershipIp: number;
+	readonly indexed: IndexedLengthLoopAction;
+}
+
 type NativeBodyResource = "propertyCache" | "literalShapes" | "newTarget" | "throwExit";
 
 interface EmittedBody extends NativeCallCoverage {
@@ -2313,6 +2321,52 @@ function emitBody(
 			role: action.role,
 			site,
 			...(element === undefined ? {} : { element }),
+		});
+	}
+	const nativeArrayPresenceProjectionActionByIp = new Map<
+		number,
+		NativeArrayPresenceProjectionAction
+	>();
+	for (const indexed of indexedLengthLoopActionByIp.values()) {
+		if (
+			indexed.role !== "element" ||
+			indexed.element?.kind !== "load" ||
+			indexed.element.arrayIndexIsUint32 !== true
+		)
+			continue;
+		const loadIp = indexed.element.ip;
+		const membershipIp = loadIp - 3;
+		const membership = fn.instructions[membershipIp];
+		const branch = fn.instructions[membershipIp + 1];
+		const skip = fn.instructions[membershipIp + 2];
+		const load = fn.instructions[loadIp];
+		if (
+			membership?.opcode !== "BINARY" ||
+			membership.operator !== "in" ||
+			branch?.opcode !== "JUMP_IF" ||
+			branch.cond !== membership.dst ||
+			branch.targetIp !== loadIp ||
+			skip?.opcode !== "JUMP" ||
+			load?.opcode !== "LOAD_PROPERTY" ||
+			membership.left !== load.key ||
+			membership.right !== load.object ||
+			fn.instructions.some(
+				(candidate) =>
+					(candidate.opcode === "JUMP" || candidate.opcode === "JUMP_IF") &&
+					(candidate.targetIp === membershipIp + 1 ||
+						candidate.targetIp === membershipIp + 2),
+			)
+		)
+			continue;
+		nativeArrayPresenceProjectionActionByIp.set(membershipIp, {
+			role: "membership",
+			membershipIp,
+			indexed,
+		});
+		nativeArrayPresenceProjectionActionByIp.set(loadIp, {
+			role: "load",
+			membershipIp,
+			indexed,
 		});
 	}
 	const nativeStringCharCodeAtChainActionByIp = new Map<
@@ -2788,6 +2842,13 @@ function emitBody(
 			`f64 __indexed_length_${action.loadIp}_induction = 0;`,
 		);
 	}
+	for (const action of nativeArrayPresenceProjectionActionByIp.values()) {
+		if (action.role !== "membership") continue;
+		lines.push(
+			`i32 __array_presence_${action.membershipIp}_state = -1;`,
+			`MalValue __array_presence_${action.membershipIp}_value = MAL_VALUE_UNDEFINED;`,
+		);
+	}
 	if (
 		[...stringSplitCursorSites.values()].some((site) => !site.lockedIdentity) ||
 		[...nativeStringCharCodeAtChainActionByIp.values()].some(
@@ -2853,6 +2914,10 @@ function emitBody(
 		number,
 		NativeStaticPropertyProjectionAction
 	>();
+	const staticPropertyNumericActionByIp = new Map<
+		number,
+		NativeStaticPropertyNumericAction
+	>();
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
 		nativeInstructions[ip] !== undefined ||
 		fieldLoads.has(ip) ||
@@ -2866,6 +2931,81 @@ function emitBody(
 		nativeStringSliceNumberFusionActionByIp.has(ip) ||
 		nativeStringCharCodeAtChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
+	const numericProjection = (
+		firstIp: number,
+		first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>,
+		second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>,
+	): NativeStaticPropertyProjection["numeric"] => {
+		const aliases = new Map<number, "first" | "second">([
+			[first.dst, "first"],
+			[second.dst, "second"],
+		]);
+		const skippedIps = new Set<number>();
+		for (
+			let scanIp = firstIp + 2;
+			scanIp < Math.min(fn.instructions.length, firstIp + 8);
+			scanIp++
+		) {
+			if (jumpTargets.has(scanIp)) return undefined;
+			const instruction = fn.instructions[scanIp]!;
+			const fusion = numericFusionActionByIp.get(scanIp);
+			if (instruction.opcode === "BINARY" && fusion?.role === "start") {
+				if (reps[instruction.dst] !== "boxed") return undefined;
+				const left = aliases.get(instruction.left);
+				const right = aliases.get(instruction.right);
+				if (
+					(left !== "first" || right !== "second") &&
+					(left !== "second" || right !== "first")
+				)
+					return undefined;
+				for (const register of aliases.keys()) {
+					if (register === instruction.dst) continue;
+					for (let tailIp = scanIp + 1; tailIp < fn.instructions.length; tailIp++) {
+						const tail = fn.instructions[tailIp]!;
+						if (vmInstructionUsesRegister(tail, register)) return undefined;
+						if (vmInstructionWriteRegisters(tail).includes(register)) break;
+					}
+				}
+				return {
+					fusionIp: scanIp,
+					firstOnLeft: left === "first",
+					skippedIps,
+				};
+			}
+			if (instruction.opcode === "THROW_IF_TDZ" && aliases.has(instruction.src)) {
+				skippedIps.add(scanIp);
+				continue;
+			}
+			if (instruction.opcode === "MOVE" && aliases.has(instruction.src)) {
+				if (reps[instruction.dst] !== "boxed") return undefined;
+				aliases.set(instruction.dst, aliases.get(instruction.src)!);
+				skippedIps.add(scanIp);
+				continue;
+			}
+			const touchesProjection = [...aliases.keys()].some(
+				(register) =>
+					vmInstructionUsesRegister(instruction, register) ||
+					vmInstructionWriteRegisters(instruction).includes(register),
+			);
+			const harmlessScalar =
+				!touchesProjection &&
+				(instruction.opcode === "CREATE_NUMBER" ||
+					instruction.opcode === "CREATE_F64" ||
+					instruction.opcode === "CREATE_BOOLEAN" ||
+					(instruction.opcode === "MOVE" &&
+						reps[instruction.src] !== "boxed" &&
+						reps[instruction.dst] !== "boxed") ||
+					(instruction.opcode === "BINARY" &&
+						reps[instruction.left] !== "boxed" &&
+						reps[instruction.right] !== "boxed" &&
+						reps[instruction.dst] !== "boxed") ||
+					(instruction.opcode === "UNARY" &&
+						reps[instruction.src] !== "boxed" &&
+						reps[instruction.dst] !== "boxed"));
+			if (!harmlessScalar) return undefined;
+		}
+		return undefined;
+	};
 	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
 		const first = fn.instructions[ip]!;
 		const second = fn.instructions[ip + 1]!;
@@ -2885,15 +3025,33 @@ function emitBody(
 		const projection: NativeStaticPropertyProjection = {
 			firstIp: ip,
 			first,
+			secondIp: ip + 1,
 			second,
+			numeric: numericProjection(ip, first, second),
 		};
 		staticPropertyProjectionActionByIp.set(ip, { projection, role: "first" });
 		staticPropertyProjectionActionByIp.set(ip + 1, { projection, role: "second" });
-		lines.push(
-			`bool __property_projection_${ip}_fast = false;`,
-			`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
-			`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
-		);
+		lines.push(`bool __property_projection_${ip}_fast = false;`);
+		if (projection.numeric === undefined) {
+			lines.push(
+				`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
+				`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
+			);
+		} else {
+			lines.push(
+				`f64 __property_projection_${ip}_first = 0.0;`,
+				`f64 __property_projection_${ip}_second = 0.0;`,
+			);
+			for (const skippedIp of projection.numeric.skippedIps)
+				staticPropertyNumericActionByIp.set(skippedIp, {
+					projection,
+					role: "skip",
+				});
+			staticPropertyNumericActionByIp.set(projection.numeric.fusionIp, {
+				projection,
+				role: "fusion",
+			});
+		}
 		ip++;
 	}
 	const switches = new Map(
@@ -3086,6 +3244,8 @@ function emitBody(
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
 				indexedLengthLoopAction: indexedLengthLoopActionByIp.get(ip),
+				nativeArrayPresenceProjectionAction:
+					nativeArrayPresenceProjectionActionByIp.get(ip),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
@@ -3104,6 +3264,7 @@ function emitBody(
 					nativeIteratorEntryPairVirtualizationActionByIp.get(ip),
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
+				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
 				relocation,
 			},
 		);
@@ -3394,12 +3555,23 @@ interface NativeFieldCall {
 interface NativeStaticPropertyProjection {
 	readonly firstIp: number;
 	readonly first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	readonly secondIp: number;
 	readonly second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	readonly numeric?: {
+		readonly fusionIp: number;
+		readonly firstOnLeft: boolean;
+		readonly skippedIps: ReadonlySet<number>;
+	};
 }
 
 interface NativeStaticPropertyProjectionAction {
 	readonly projection: NativeStaticPropertyProjection;
 	readonly role: "first" | "second";
+}
+
+interface NativeStaticPropertyNumericAction {
+	readonly projection: NativeStaticPropertyProjection;
+	readonly role: "skip" | "fusion";
 }
 
 interface NativeInstructionContext {
@@ -3435,6 +3607,7 @@ interface NativeInstructionContext {
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
 	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
+	readonly nativeArrayPresenceProjectionAction?: NativeArrayPresenceProjectionAction;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -3448,6 +3621,7 @@ interface NativeInstructionContext {
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
+	readonly staticPropertyNumericAction?: NativeStaticPropertyNumericAction;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3527,6 +3701,7 @@ function emitInstruction(
 		mappedArgumentSlots,
 		hasPrototype,
 		indexedLengthLoopAction,
+		nativeArrayPresenceProjectionAction,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -3540,6 +3715,7 @@ function emitInstruction(
 		nativeIteratorEntryPairVirtualizationAction,
 		numericFusionAction,
 		staticPropertyProjectionAction,
+		staticPropertyNumericAction,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -3818,6 +3994,13 @@ function emitInstruction(
 		}
 	}
 	if (
+		nativePlan?.kind === "exact-packed-rest-array-length" &&
+		instruction.opcode === "LOAD_PROPERTY_STATIC"
+	) {
+		const length = `(arg_count > ${nativePlan.startIndex} ? arg_count - ${nativePlan.startIndex} : 0)`;
+		return [storeNumber(instruction.dst, `(f64) ${length}`)];
+	}
+	if (
 		nativePlan?.kind === "exact-array-length" &&
 		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
 			instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
@@ -3843,15 +4026,17 @@ function emitInstruction(
 		nativePlan?.kind === "exact-packed-rest-array-element" &&
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
-		const array = `mal_value_to_array_object(${boxed(instruction.object)})`;
-		const value =
-			indexedLengthLoopAction?.role === "element" &&
-			indexedLengthLoopAction.element?.kind === "load" &&
-			indexedLengthLoopAction.element.arrayIndexIsUint32
-				? `${array}->elements[(u32) ${num(instruction.key)}]`
-				: `mal_array_object_contained_dense_get(${array}, ${typedNumber(instruction.key)})`;
+		const index = `__rest_index_${ip}`;
+		const length = `__rest_length_${ip}`;
+		const value = `__rest_value_${ip}`;
 		return [
 			"MAL_PERF_COUNT(array_contained_element_reads);",
+			`f64 ${index} = ${typedNumber(instruction.key)};`,
+			`u32 ${length} = arg_count > ${nativePlan.startIndex} ? (u32) (arg_count - ${nativePlan.startIndex}) : 0;`,
+			`MalValue ${value} = MAL_VALUE_UNDEFINED;`,
+			`if (${index} >= 0.0 && ${index} < (f64) ${length} && ${index} == trunc(${index})) {`,
+			`  ${value} = args[${nativePlan.startIndex} + (u32) ${index}];`,
+			`}`,
 			`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 		];
 	}
@@ -4028,6 +4213,15 @@ function emitInstruction(
 	}
 	switch (instruction.opcode) {
 		case "MOVE": {
+			if (staticPropertyNumericAction?.role === "skip") {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				return [
+					`if (!__property_projection_${staticPropertyNumericAction.projection.firstIp}_fast) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			// A move is also the explicit representation-conversion seam.
 			const dst = instruction.dst;
 			const read =
@@ -4058,7 +4252,16 @@ function emitInstruction(
 			// The TDZ hole sentinel. Target lowering always gives the destination a
 			// boxed representation, so a number/boolean register never holds it.
 			return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
-		case "THROW_IF_TDZ":
+		case "THROW_IF_TDZ": {
+			if (staticPropertyNumericAction?.role === "skip") {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				return [
+					`if (!__property_projection_${staticPropertyNumericAction.projection.firstIp}_fast) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			// Read-before-initialization check on a let/const/class binding. The
 			// helper throws (setting the completion) only on the empty sentinel; a
 			// throw propagates out, exactly like the interpreter op.
@@ -4071,6 +4274,7 @@ function emitInstruction(
 				`  ${throwCheck()}`,
 				`}`,
 			];
+		}
 		case "IS_EMPTY":
 			if (reps[instruction.src] !== "boxed")
 				return [storeBoolean(instruction.dst, "false")];
@@ -4414,6 +4618,21 @@ function emitInstruction(
 				const { projection, role } = staticPropertyProjectionAction;
 				const id = projection.firstIp;
 				const value = `__property_projection_${id}_${role}`;
+				if (projection.numeric !== undefined) {
+					if (role === "second") {
+						return [
+							`if (!__property_projection_${id}_fast) {`,
+							...fallback.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+					return [
+						`__property_projection_${id}_fast = mal_vm_property_try_load_static_number_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${projection.first.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${projection.second.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
+						`if (!__property_projection_${id}_fast) {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (role === "second") {
 					return [
 						`if (__property_projection_${id}_fast) {`,
@@ -4694,6 +4913,19 @@ function emitInstruction(
 								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
 								throwCheck(),
 							];
+				if (nativeArrayPresenceProjectionAction?.role === "load") {
+					const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
+					const state = `__array_presence_${membershipIp}_state`;
+					const fallback = emitGenericInstruction();
+					if (fallback === null) return null;
+					return [
+						`if (${state} == 1) {`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, `__array_presence_${membershipIp}_value`)};`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "load"
@@ -5064,6 +5296,7 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_REST_ARGUMENTS":
+			if (nativePlan?.kind === "virtual-packed-rest-array") return [];
 			// A rest parameter `function f(...rest)`: the call arguments from
 			// startIndex onward. Reads the raw args, never throws.
 			return [
@@ -5094,6 +5327,57 @@ function emitInstruction(
 				`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,
 			];
 		case "BINARY": {
+			if (nativeArrayPresenceProjectionAction?.role === "membership") {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
+				const loadIp = nativeArrayPresenceProjectionAction.indexed.loadIp;
+				const state = `__array_presence_${membershipIp}_state`;
+				return [
+					`${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`,
+					`if (${state} >= 0) {`,
+					reps[instruction.dst] === "boolean"
+						? `  r${instruction.dst} = ${state} != 0;`
+						: `  r${instruction.dst} = mal_value_new_boolean(${state} != 0);`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
+			if (staticPropertyNumericAction?.role === "fusion") {
+				const projection = staticPropertyNumericAction.projection;
+				const numeric = projection.numeric;
+				if (numeric === undefined || numeric.fusionIp !== ip) return null;
+				const first = `__property_projection_${projection.firstIp}_first`;
+				const second = `__property_projection_${projection.firstIp}_second`;
+				const expression = nativeNumberExpr(
+					instruction.operator,
+					numeric.firstOnLeft ? first : second,
+					numeric.firstOnLeft ? second : first,
+				);
+				if (expression === null) return null;
+				const fallback = emitInstruction(
+					instruction,
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					{ ...genericContext, numericFusionAction },
+				);
+				if (fallback === null) return null;
+				return [
+					`if (__property_projection_${projection.firstIp}_fast) {`,
+					`  __nf_${numeric.fusionIp}_ok = true;`,
+					`  __nf_${numeric.fusionIp}_value = ${expression};`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (context.constantBoolean !== undefined)
 				return [
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),

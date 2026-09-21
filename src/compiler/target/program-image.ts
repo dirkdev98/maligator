@@ -1275,7 +1275,18 @@ export type NativeInstructionPlan =
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
 	| { readonly kind: "exact-contained-array-element" }
-	| { readonly kind: "exact-packed-rest-array-element" }
+	| {
+			readonly kind: "exact-packed-rest-array-element";
+			readonly startIndex: number;
+	  }
+	| {
+			readonly kind: "exact-packed-rest-array-length";
+			readonly startIndex: number;
+	  }
+	| {
+			readonly kind: "virtual-packed-rest-array";
+			readonly startIndex: number;
+	  }
 	| {
 			readonly kind: "contained-fixed-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
@@ -1658,20 +1669,28 @@ function nativeInstructionPlanFromExecution(
 						length: instruction.freshDenseReserveLength,
 					};
 		case "loadPropertyStatic":
-			return instruction.exactOwnSlot !== undefined
-				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
-				: instruction.exactArrayLength === true
-					? { kind: "exact-array-length" }
-					: instruction.containedFixedTypedArrayLength === true
-						? { kind: "contained-fixed-typed-array-length" }
-						: instruction.primitiveStringLength === true
-							? { kind: "primitive-string-length" }
-							: undefined;
+			return instruction.packedRestStartIndex !== undefined
+				? {
+						kind: "exact-packed-rest-array-length",
+						startIndex: instruction.packedRestStartIndex,
+					}
+				: instruction.exactOwnSlot !== undefined
+					? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
+					: instruction.exactArrayLength === true
+						? { kind: "exact-array-length" }
+						: instruction.containedFixedTypedArrayLength === true
+							? { kind: "contained-fixed-typed-array-length" }
+							: instruction.primitiveStringLength === true
+								? { kind: "primitive-string-length" }
+								: undefined;
 		case "loadProperty":
 			return instruction.exactContainedArrayElement === true
 				? { kind: "exact-contained-array-element" }
 				: instruction.exactPackedRestArrayElement === true
-					? { kind: "exact-packed-rest-array-element" }
+					? {
+							kind: "exact-packed-rest-array-element",
+							startIndex: instruction.packedRestStartIndex!,
+						}
 					: instruction.containedFixedTypedArrayKind !== undefined
 						? {
 								kind: "contained-fixed-typed-array-element",
@@ -1720,6 +1739,10 @@ function nativeInstructionPlanFromExecution(
 						kind: "exact-operator-input-kinds",
 						inputKindMasks: instruction.exactInputKindMasks,
 					};
+		case "createRestArguments":
+			return instruction.virtualPackedRest === true
+				? { kind: "virtual-packed-rest-array", startIndex: instruction.startIndex }
+				: undefined;
 		default:
 			return undefined;
 	}

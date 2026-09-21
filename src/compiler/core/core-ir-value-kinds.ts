@@ -475,12 +475,28 @@ export function corePrivatePackedRestArrayLoads(
 	context: CoreCompilationContext,
 	numberValue: (value: CoreValueId) => boolean,
 ): ReadonlySet<CoreInstructionId> {
-	if (!privateArrayPolicyIsLocked(context)) return new Set();
 	return new Set(
-		privateArrayUses(program, fn, cfg, privatePackedRestArraySeeds(fn), numberValue)
-			.filter((array) => array.elementStores.length === 0)
-			.flatMap((array) => array.elementLoads),
+		corePrivatePackedRestArrays(program, fn, cfg, context, numberValue).flatMap(
+			(array) => array.elementLoads,
+		),
 	);
+}
+
+export function corePrivatePackedRestArrays(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+	numberValue: (value: CoreValueId) => boolean,
+): ReadonlyArray<CorePrivateArrayUseSummary> {
+	if (!privateArrayPolicyIsLocked(context)) return [];
+	return privateArrayUses(
+		program,
+		fn,
+		cfg,
+		privatePackedRestArraySeeds(fn),
+		numberValue,
+	).filter((array) => array.elementStores.length === 0);
 }
 
 interface KindTransferBuffer {

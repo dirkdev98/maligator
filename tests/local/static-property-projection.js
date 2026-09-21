@@ -1,7 +1,7 @@
 function project(receiver) {
 	const left = receiver.left;
 	const right = receiver.right;
-	return left * 31 + right;
+	return left ^ right ^ 7;
 }
 
 let checksum = 0;
@@ -35,7 +35,7 @@ const proxy = new Proxy(
 );
 checksum += project(proxy);
 
-if (checksum !== 20_093) throw new Error(`checksum ${checksum}`);
+if (checksum !== 241) throw new Error(`checksum ${checksum}`);
 if (accessOrder.join(",") !== "left,right") {
 	throw new Error(`accessor order ${accessOrder.join(",")}`);
 }
