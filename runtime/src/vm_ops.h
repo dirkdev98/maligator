@@ -1645,6 +1645,93 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return true;
 }
 
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_number_triple(
+    MalValue receiver,
+    const MalInlineCache *first,
+    const MalInlineCache *second,
+    const MalInlineCache *third,
+    f64 *first_out,
+    f64 *second_out,
+    f64 *third_out
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr ||
+        first->mode != MAL_IC_MODE_SHAPE ||
+        second->mode != MAL_IC_MODE_SHAPE ||
+        third->mode != MAL_IC_MODE_SHAPE ||
+        first->slot == MAL_IC_VALUE_SLOT ||
+        second->slot == MAL_IC_VALUE_SLOT ||
+        third->slot == MAL_IC_VALUE_SLOT ||
+        object->shape != first->shape ||
+        first->shape != second->shape ||
+        first->shape != third->shape) {
+        return false;
+    }
+    MalValue first_value = object->slots[first->slot];
+    MalValue second_value = object->slots[second->slot];
+    MalValue third_value = object->slots[third->slot];
+    if (!mal_ops_is_number(first_value) ||
+        !mal_ops_is_number(second_value) ||
+        !mal_ops_is_number(third_value)) {
+        return false;
+    }
+    *first_out = mal_ops_number_as_f64(first_value);
+    *second_out = mal_ops_number_as_f64(second_value);
+    *third_out = mal_ops_number_as_f64(third_value);
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_number_quad(
+    MalValue receiver,
+    const MalInlineCache *first,
+    const MalInlineCache *second,
+    const MalInlineCache *third,
+    const MalInlineCache *fourth,
+    f64 *first_out,
+    f64 *second_out,
+    f64 *third_out,
+    f64 *fourth_out
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr ||
+        first->mode != MAL_IC_MODE_SHAPE ||
+        second->mode != MAL_IC_MODE_SHAPE ||
+        third->mode != MAL_IC_MODE_SHAPE ||
+        fourth->mode != MAL_IC_MODE_SHAPE ||
+        first->slot == MAL_IC_VALUE_SLOT ||
+        second->slot == MAL_IC_VALUE_SLOT ||
+        third->slot == MAL_IC_VALUE_SLOT ||
+        fourth->slot == MAL_IC_VALUE_SLOT ||
+        object->shape != first->shape ||
+        first->shape != second->shape ||
+        first->shape != third->shape ||
+        first->shape != fourth->shape) {
+        return false;
+    }
+    MalValue first_value = object->slots[first->slot];
+    MalValue second_value = object->slots[second->slot];
+    MalValue third_value = object->slots[third->slot];
+    MalValue fourth_value = object->slots[fourth->slot];
+    if (!mal_ops_is_number(first_value) ||
+        !mal_ops_is_number(second_value) ||
+        !mal_ops_is_number(third_value) ||
+        !mal_ops_is_number(fourth_value)) {
+        return false;
+    }
+    *first_out = mal_ops_number_as_f64(first_value);
+    *second_out = mal_ops_number_as_f64(second_value);
+    *third_out = mal_ops_number_as_f64(third_value);
+    *fourth_out = mal_ops_number_as_f64(fourth_value);
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
 /**
  * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
  * Returns true when applied; false leaves the store to the general [[Set]].

@@ -25,6 +25,8 @@ describe("native static-property projections", () => {
 
 	it("shares the warmed shape guard for adjacent own-slot reads", () => {
 		expect(source).toContain("mal_vm_property_try_load_static_number_pair(");
+		expect(source).toContain("mal_vm_property_try_load_static_number_triple(");
+		expect(source).toContain("mal_vm_property_try_load_static_number_quad(");
 		expect(source).toContain("f64 __property_projection_");
 		assertExactLines(runToStdout(binary), ["static-property-projection PASS"]);
 	});

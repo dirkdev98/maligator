@@ -29,6 +29,11 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-program-image.ts";
+import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
+import type {
+	NativePropertyProjectionAction,
+	NativePropertyProjectionOperand,
+} from "./lower-native-fast-paths.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
@@ -56,8 +61,6 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
-	vmInstructionUsesRegister,
-	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -2914,10 +2917,6 @@ function emitBody(
 		number,
 		NativeStaticPropertyProjectionAction
 	>();
-	const staticPropertyNumericActionByIp = new Map<
-		number,
-		NativeStaticPropertyNumericAction
-	>();
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
 		nativeInstructions[ip] !== undefined ||
 		fieldLoads.has(ip) ||
@@ -2931,85 +2930,26 @@ function emitBody(
 		nativeStringSliceNumberFusionActionByIp.has(ip) ||
 		nativeStringCharCodeAtChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
-	const numericProjection = (
-		firstIp: number,
-		first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>,
-		second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>,
-	): NativeStaticPropertyProjection["numeric"] => {
-		const aliases = new Map<number, "first" | "second">([
-			[first.dst, "first"],
-			[second.dst, "second"],
-		]);
-		const skippedIps = new Set<number>();
-		for (
-			let scanIp = firstIp + 2;
-			scanIp < Math.min(fn.instructions.length, firstIp + 8);
-			scanIp++
-		) {
-			if (jumpTargets.has(scanIp)) return undefined;
-			const instruction = fn.instructions[scanIp]!;
-			const fusion = numericFusionActionByIp.get(scanIp);
-			if (instruction.opcode === "BINARY" && fusion?.role === "start") {
-				if (reps[instruction.dst] !== "boxed") return undefined;
-				const left = aliases.get(instruction.left);
-				const right = aliases.get(instruction.right);
-				if (
-					(left !== "first" || right !== "second") &&
-					(left !== "second" || right !== "first")
-				)
-					return undefined;
-				for (const register of aliases.keys()) {
-					if (register === instruction.dst) continue;
-					for (let tailIp = scanIp + 1; tailIp < fn.instructions.length; tailIp++) {
-						const tail = fn.instructions[tailIp]!;
-						if (vmInstructionUsesRegister(tail, register)) return undefined;
-						if (vmInstructionWriteRegisters(tail).includes(register)) break;
-					}
-				}
-				return {
-					fusionIp: scanIp,
-					firstOnLeft: left === "first",
-					skippedIps,
-				};
-			}
-			if (instruction.opcode === "THROW_IF_TDZ" && aliases.has(instruction.src)) {
-				skippedIps.add(scanIp);
-				continue;
-			}
-			if (instruction.opcode === "MOVE" && aliases.has(instruction.src)) {
-				if (reps[instruction.dst] !== "boxed") return undefined;
-				aliases.set(instruction.dst, aliases.get(instruction.src)!);
-				skippedIps.add(scanIp);
-				continue;
-			}
-			const touchesProjection = [...aliases.keys()].some(
-				(register) =>
-					vmInstructionUsesRegister(instruction, register) ||
-					vmInstructionWriteRegisters(instruction).includes(register),
-			);
-			const harmlessScalar =
-				!touchesProjection &&
-				(instruction.opcode === "CREATE_NUMBER" ||
-					instruction.opcode === "CREATE_F64" ||
-					instruction.opcode === "CREATE_BOOLEAN" ||
-					(instruction.opcode === "MOVE" &&
-						reps[instruction.src] !== "boxed" &&
-						reps[instruction.dst] !== "boxed") ||
-					(instruction.opcode === "BINARY" &&
-						reps[instruction.left] !== "boxed" &&
-						reps[instruction.right] !== "boxed" &&
-						reps[instruction.dst] !== "boxed") ||
-					(instruction.opcode === "UNARY" &&
-						reps[instruction.src] !== "boxed" &&
-						reps[instruction.dst] !== "boxed"));
-			if (!harmlessScalar) return undefined;
-		}
-		return undefined;
-	};
+	const nativeFastPaths = lowerNativeFastPaths(
+		fn,
+		reps,
+		jumpTargets,
+		staticPropertyProjectionConflicts,
+	);
+	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
+	for (const projection of nativeFastPaths.propertyProjections) {
+		lines.push(`bool __property_projection_${projection.id}_fast = false;`);
+		for (const [index] of projection.loads.entries())
+			lines.push(`f64 __property_projection_${projection.id}_value_${index} = 0.0;`);
+		for (const [index] of projection.steps.entries())
+			lines.push(`f64 __property_projection_${projection.id}_step_${index} = 0.0;`);
+	}
 	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
 		const first = fn.instructions[ip]!;
 		const second = fn.instructions[ip + 1]!;
 		if (
+			staticPropertyNumericActionByIp.has(ip) ||
+			staticPropertyNumericActionByIp.has(ip + 1) ||
 			first.opcode !== "LOAD_PROPERTY_STATIC" ||
 			second.opcode !== "LOAD_PROPERTY_STATIC" ||
 			first.object !== second.object ||
@@ -3027,31 +2967,14 @@ function emitBody(
 			first,
 			secondIp: ip + 1,
 			second,
-			numeric: numericProjection(ip, first, second),
 		};
 		staticPropertyProjectionActionByIp.set(ip, { projection, role: "first" });
 		staticPropertyProjectionActionByIp.set(ip + 1, { projection, role: "second" });
 		lines.push(`bool __property_projection_${ip}_fast = false;`);
-		if (projection.numeric === undefined) {
-			lines.push(
-				`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
-				`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
-			);
-		} else {
-			lines.push(
-				`f64 __property_projection_${ip}_first = 0.0;`,
-				`f64 __property_projection_${ip}_second = 0.0;`,
-			);
-			for (const skippedIp of projection.numeric.skippedIps)
-				staticPropertyNumericActionByIp.set(skippedIp, {
-					projection,
-					role: "skip",
-				});
-			staticPropertyNumericActionByIp.set(projection.numeric.fusionIp, {
-				projection,
-				role: "fusion",
-			});
-		}
+		lines.push(
+			`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
+			`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
+		);
 		ip++;
 	}
 	const switches = new Map(
@@ -3557,21 +3480,11 @@ interface NativeStaticPropertyProjection {
 	readonly first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 	readonly secondIp: number;
 	readonly second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-	readonly numeric?: {
-		readonly fusionIp: number;
-		readonly firstOnLeft: boolean;
-		readonly skippedIps: ReadonlySet<number>;
-	};
 }
 
 interface NativeStaticPropertyProjectionAction {
 	readonly projection: NativeStaticPropertyProjection;
 	readonly role: "first" | "second";
-}
-
-interface NativeStaticPropertyNumericAction {
-	readonly projection: NativeStaticPropertyProjection;
-	readonly role: "skip" | "fusion";
 }
 
 interface NativeInstructionContext {
@@ -3621,7 +3534,7 @@ interface NativeInstructionContext {
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
-	readonly staticPropertyNumericAction?: NativeStaticPropertyNumericAction;
+	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -4230,7 +4143,7 @@ function emitInstruction(
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
-					`if (!__property_projection_${staticPropertyNumericAction.projection.firstIp}_fast) {`,
+					`if (!__property_projection_${staticPropertyNumericAction.plan.id}_fast) {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
 				];
@@ -4270,7 +4183,7 @@ function emitInstruction(
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
-					`if (!__property_projection_${staticPropertyNumericAction.projection.firstIp}_fast) {`,
+					`if (!__property_projection_${staticPropertyNumericAction.plan.id}_fast) {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
 				];
@@ -4624,6 +4537,40 @@ function emitInstruction(
 		case "LOAD_PROPERTY_STATIC": {
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				staticPropertyNumericAction?.role === "load"
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const { plan, index } = staticPropertyNumericAction;
+				if (index !== 0) {
+					return [
+						`if (!__property_projection_${plan.id}_fast) {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				const helper =
+					plan.loads.length === 2
+						? "mal_vm_property_try_load_static_number_pair"
+						: plan.loads.length === 3
+							? "mal_vm_property_try_load_static_number_triple"
+							: "mal_vm_property_try_load_static_number_quad";
+				const cacheArguments = plan.loads.map(
+					(load) =>
+						`&${nativeBodyReference(resources, "propertyCache")}[${load.instruction.icIndex}]`,
+				);
+				const valueArguments = plan.loads.map(
+					(_load, valueIndex) => `&__property_projection_${plan.id}_value_${valueIndex}`,
+				);
+				return [
+					`__property_projection_${plan.id}_fast = ${helper}(${boxed(instruction.object)}, ${[...cacheArguments, ...valueArguments].join(", ")});`,
+					`if (!__property_projection_${plan.id}_fast) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				staticPropertyProjectionAction !== undefined
 			) {
 				const fallback = emitGenericInstruction();
@@ -4631,21 +4578,6 @@ function emitInstruction(
 				const { projection, role } = staticPropertyProjectionAction;
 				const id = projection.firstIp;
 				const value = `__property_projection_${id}_${role}`;
-				if (projection.numeric !== undefined) {
-					if (role === "second") {
-						return [
-							`if (!__property_projection_${id}_fast) {`,
-							...fallback.map((line) => `  ${line}`),
-							`}`,
-						];
-					}
-					return [
-						`__property_projection_${id}_fast = mal_vm_property_try_load_static_number_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${projection.first.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${projection.second.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
-						`if (!__property_projection_${id}_fast) {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
 				if (role === "second") {
 					return [
 						`if (__property_projection_${id}_fast) {`,
@@ -5357,35 +5289,39 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (staticPropertyNumericAction?.role === "fusion") {
-				const projection = staticPropertyNumericAction.projection;
-				const numeric = projection.numeric;
-				if (numeric === undefined || numeric.fusionIp !== ip) return null;
-				const first = `__property_projection_${projection.firstIp}_first`;
-				const second = `__property_projection_${projection.firstIp}_second`;
+			if (staticPropertyNumericAction?.role === "step") {
+				const { plan, index } = staticPropertyNumericAction;
+				const operand = (value: NativePropertyProjectionOperand): string => {
+					switch (value.kind) {
+						case "load":
+							return `__property_projection_${plan.id}_value_${value.index}`;
+						case "step":
+							return `__property_projection_${plan.id}_step_${value.index}`;
+						case "register":
+							return num(value.register);
+					}
+				};
+				const step = plan.steps[index]!;
 				const expression = nativeNumberExpr(
 					instruction.operator,
-					numeric.firstOnLeft ? first : second,
-					numeric.firstOnLeft ? second : first,
+					operand(step.left),
+					operand(step.right),
 				);
 				if (expression === null) return null;
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					{ ...genericContext, numericFusionAction },
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
+				const result = `__property_projection_${plan.id}_step_${index}`;
+				const last = index === plan.steps.length - 1;
+				const store =
+					reps[instruction.dst] === "number"
+						? `r${instruction.dst} = ${result};`
+						: reps[instruction.dst] === "int32"
+							? `r${instruction.dst} = mal_ops_number_to_i32(${result});`
+							: `r${instruction.dst} = ${profileCall("boxing", `mal_ops_number_value(${result})`)};`;
 				return [
-					`if (__property_projection_${projection.firstIp}_fast) {`,
-					`  __nf_${numeric.fusionIp}_ok = true;`,
-					`  __nf_${numeric.fusionIp}_value = ${expression};`,
+					`if (__property_projection_${plan.id}_fast) {`,
+					`  ${result} = ${expression};`,
+					...(last ? [`  ${store}`] : []),
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
