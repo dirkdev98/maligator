@@ -585,6 +585,414 @@ function verify() {
 	}
 }
 
+addRuntimeBenchmark(
+	"constructor-base-empty-retained",
+	{
+		owner: "base class construction",
+		category: "allocation-gc",
+		mechanisms: ["constructor-call", "object-allocation"],
+		inputShape: "exact empty base constructor, retained receiver",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Empty {}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 100_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		retained[index & 255] = new Empty();
+		checksum = (checksum + ((index + seed) & 1)) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (const value of retained) {
+		if (!(value instanceof Empty)) throw new Error("empty receiver was not retained");
+	}
+}`,
+);
+
+addRuntimeBenchmark(
+	"constructor-base-selected-retained",
+	{
+		owner: "base class construction",
+		category: "allocation-gc",
+		mechanisms: ["constructor-call", "finite-dispatch"],
+		inputShape: "two runtime-selected base constructors, same public layout",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+		controls: ["constructor-base-empty-retained"],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Left {
+	constructor(value) {
+		this.value = value;
+		this.kind = 1;
+	}
+}
+
+class Right {
+	constructor(value) {
+		this.value = value;
+		this.kind = 2;
+	}
+}
+
+const constructors = [Left, Right];
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const value = (seed + index) & 255;
+		const Constructor = constructors[index & 1];
+		const record = new Constructor(value);
+		retained[index & 255] = record;
+		checksum = (checksum + record.kind) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (let index = 0; index < retained.length; index++) {
+		const record = retained[index];
+		if (!(record instanceof constructors[index & 1]) || record.kind !== (index & 1) + 1) {
+			throw new Error("selected constructor result differs");
+		}
+	}
+}`,
+);
+
+for (const layout of ["straight", "conditional-same", "conditional-divergent"] as const) {
+	const id = `constructor-layout-${layout}-retained`;
+	const stores =
+		layout === "straight"
+			? `this.left = value;
+		this.right = (value + 1) & 255;`
+			: layout === "conditional-same"
+				? `if (value & 1) {
+			this.left = value;
+			this.right = (value + 1) & 255;
+		} else {
+			this.left = (value + 2) & 255;
+			this.right = (value + 3) & 255;
+		}`
+				: `this.left = value;
+		if (value & 1) this.right = (value + 1) & 255;`;
+	addRuntimeBenchmark(
+		id,
+		{
+			owner: "constructor layout planning",
+			category: "allocation-gc",
+			mechanisms: ["constructor-layout", "shape-transition"],
+			inputShape: `${layout} public field stores, retained receiver`,
+			unit: "constructed instance",
+			sourceSeam: "src/compiler/core/core-memory-passes.ts",
+			controls: layout === "straight" ? [] : ["constructor-layout-straight-retained"],
+		},
+		`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Record {
+	constructor(value) {
+		${stores}
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const record = new Record((seed + index) & 255);
+		retained[index & 255] = record;
+		checksum = (checksum + record.left + (record.right ?? 0)) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (let index = 0; index < retained.length; index++) {
+		const record = retained[index];
+		if (!(record instanceof Record) || record.left === undefined) {
+			throw new Error("constructor layout result differs");
+		}
+	}
+}`,
+	);
+}
+
+addRuntimeBenchmark(
+	"constructor-layout-inherited-setter-retained",
+	{
+		owner: "constructor layout planning",
+		category: "language-features",
+		mechanisms: ["constructor-layout", "inherited-setter"],
+		inputShape: "derived assignment intercepted by inherited setter",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-memory-passes.ts",
+		controls: ["constructor-layout-straight-retained"],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Base {
+	set value(value) {
+		this.seen = (value + 1) & 255;
+	}
+}
+
+class Record extends Base {
+	constructor(value) {
+		super();
+		this.value = value;
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const record = new Record((seed + index) & 255);
+		retained[index & 255] = record;
+		checksum = (checksum + record.seen) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (const record of retained) {
+		if (!(record instanceof Record) || Object.hasOwn(record, "value") || record.seen === undefined) {
+			throw new Error("inherited setter semantics differ");
+		}
+	}
+}`,
+);
+
+for (const variant of [
+	"direct",
+	"nonescaping",
+	"retained",
+	"immediate-method",
+] as const) {
+	const id = `constructor-scalar-fields-${variant}`;
+	const expression =
+		variant === "direct"
+			? "left + right"
+			: variant === "immediate-method"
+				? "new Pair(left, right).sum()"
+				: "pair.left + pair.right";
+	const construction =
+		variant === "direct" || variant === "immediate-method"
+			? ""
+			: "const pair = new Pair(left, right);";
+	const retention = variant === "retained" ? "retained[index & 255] = pair;" : "";
+	addRuntimeBenchmark(
+		id,
+		{
+			owner: "constructor scalar replacement",
+			category: "allocation-gc",
+			mechanisms: ["constructor-call", "escape-analysis", "scalar-replacement"],
+			inputShape: `${variant} two-field base instance`,
+			unit: variant === "direct" ? "field-equivalent sum" : "constructed field sum",
+			sourceSeam: "src/compiler/core/core-memory-passes.ts",
+			controls:
+				variant === "direct"
+					? []
+					: [
+							variant === "retained"
+								? "constructor-scalar-fields-nonescaping"
+								: "constructor-scalar-fields-direct",
+						],
+		},
+		`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Pair {
+	constructor(left, right) {
+		this.left = left;
+		this.right = right;
+	}
+	sum() {
+		return this.left + this.right;
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 100_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const left = (seed + index) & 255;
+		const right = (left + 1) & 255;
+		${construction}
+		checksum = (checksum + ${expression}) | 0;
+		${retention}
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	${variant === "retained" ? 'for (const pair of retained) {\n\t\tif (!(pair instanceof Pair) || pair.sum() !== pair.left + pair.right) {\n\t\t\tthrow new Error("retained pair differs");\n\t\t}\n\t}' : ""}
+}`,
+	);
+}
+
+addRuntimeBenchmark(
+	"constructor-derived-super-retained",
+	{
+		owner: "derived class construction",
+		category: "language-features",
+		mechanisms: ["constructor-call", "super-construction", "constructor-layout"],
+		inputShape: "exact derived constructor with base and derived public stores",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+		controls: ["constructor-layout-straight-retained"],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Base {
+	constructor(left) {
+		this.left = left;
+	}
+}
+
+class Pair extends Base {
+	constructor(left, right) {
+		super(left);
+		this.right = right;
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const left = (seed + index) & 255;
+		const pair = new Pair(left, (left + 1) & 255);
+		retained[index & 255] = pair;
+		checksum = (checksum + pair.left + pair.right) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (const pair of retained) {
+		if (!(pair instanceof Pair) || !(pair instanceof Base)) {
+			throw new Error("derived receiver differs");
+		}
+	}
+}`,
+);
+
+for (const resultKind of ["primitive", "object"] as const) {
+	const id = `constructor-return-${resultKind}-retained`;
+	const returned =
+		resultKind === "primitive"
+			? "return value + 1;"
+			: "return { value: (value + 1) & 255 };";
+	addRuntimeBenchmark(
+		id,
+		{
+			owner: "base constructor result selection",
+			category: "language-features",
+			mechanisms: ["constructor-call", "constructor-result"],
+			inputShape: `base constructor with explicit ${resultKind} return`,
+			unit: "constructed result",
+			sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+			controls: ["constructor-layout-straight-retained"],
+		},
+		`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Record {
+	constructor(value) {
+		this.value = value;
+		${returned}
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const value = (seed + index) & 255;
+		const record = new Record(value);
+		retained[index & 255] = record;
+		checksum = (checksum + record.value) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (const record of retained) {
+		if (${resultKind === "primitive" ? "!(record instanceof Record)" : "record instanceof Record"}) {
+			throw new Error("constructor return selection differs");
+		}
+	}
+}`,
+	);
+}
+
+addRuntimeBenchmark(
+	"constructor-new-target-selected-retained",
+	{
+		owner: "new.target class construction",
+		category: "language-features",
+		mechanisms: ["constructor-call", "new-target", "super-construction"],
+		inputShape: "runtime-selected base or derived constructor observing new.target",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+		controls: ["constructor-base-selected-retained"],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Base {
+	constructor(value) {
+		this.value = value;
+		this.kind = new.target === Base ? 1 : 2;
+	}
+}
+
+class Derived extends Base {}
+
+const constructors = [Base, Derived];
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const Constructor = constructors[index & 1];
+		const record = new Constructor((seed + index) & 255);
+		retained[index & 255] = record;
+		checksum = (checksum + record.kind) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (let index = 0; index < retained.length; index++) {
+		const record = retained[index];
+		if (!(record instanceof constructors[index & 1]) || record.kind !== (index & 1) + 1) {
+			throw new Error("new.target observation differs");
+		}
+	}
+}`,
+);
+
 for (const variant of [
 	"direct",
 	"fresh",
