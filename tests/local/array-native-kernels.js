@@ -399,6 +399,48 @@ async function main() {
 			!(1 in shrunkSlice) &&
 			!(2 in shrunkSlice),
 	);
+	let objectSpeciesLength = -1;
+	const objectSpeciesSource = [4, , 6];
+	objectSpeciesSource.constructor = {
+		[Symbol.species]: function (length) {
+			objectSpeciesLength = length;
+			return {};
+		},
+	};
+	const objectSpeciesSlice = objectSpeciesSource.slice();
+	check(
+		"slice sets the final length on object species results",
+		objectSpeciesLength === 3 &&
+			objectSpeciesSlice.length === 3 &&
+			objectSpeciesSlice[0] === 4 &&
+			!(1 in objectSpeciesSlice) &&
+			objectSpeciesSlice[2] === 6,
+	);
+	let occupiedGetterCalls = 0;
+	const occupiedSpeciesSource = [7, 8];
+	occupiedSpeciesSource.constructor = {
+		[Symbol.species]: function (length) {
+			const result = new Array(length);
+			Object.defineProperty(result, 0, {
+				configurable: true,
+				get() {
+					occupiedGetterCalls++;
+					return 99;
+				},
+			});
+			return result;
+		},
+	};
+	const occupiedSpeciesSlice = occupiedSpeciesSource.slice();
+	const occupiedDescriptor = Object.getOwnPropertyDescriptor(occupiedSpeciesSlice, 0);
+	check(
+		"slice does not bulk-copy into occupied species results",
+		occupiedGetterCalls === 0 &&
+			occupiedSpeciesSlice[0] === 7 &&
+			occupiedSpeciesSlice[1] === 8 &&
+			occupiedDescriptor.value === 7 &&
+			occupiedDescriptor.get === undefined,
+	);
 	check("join", [1, null, undefined, 4].join(":") === "1:::4");
 	check(
 		"join dense strings, nullish values, and holes",

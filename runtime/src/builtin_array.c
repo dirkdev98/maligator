@@ -86,6 +86,23 @@ static MalArrayObject *mal_builtin_array_dense_builder(
     return array;
 }
 
+static MalArrayObject *mal_builtin_array_presized_dense_builder(
+    MalValue value, u32 length
+) {
+    if (!mal_value_is_array_object(value)) {
+        return nullptr;
+    }
+    MalArrayObject *array = mal_value_to_array_object(value);
+    if (array->dense_deopted || !array->object.extensible ||
+        !array->length_writable || array->length != length ||
+        array->dense_count != 0 || array->capacity != 0 ||
+        array->elements != nullptr || array->object.fast_elements_proto ||
+        array->object.is_prototype || array->object.watched_method_proto) {
+        return nullptr;
+    }
+    return array;
+}
+
 static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 index, MalValue *out) {
     if (mal_value_is_string(this_value)) {
         MalString *string = mal_value_to_string(this_value);
@@ -2453,10 +2470,10 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     if (result_length <= (f64) UINT32_MAX && start <= (f64) UINT32_MAX) {
         MalArrayObject *source_array =
             mal_builtin_array_clean_dense(vm, this_value);
-        MalArrayObject *result_array =
-            mal_builtin_array_dense_builder(result, 0);
         u32 source_start = (u32) start;
         u32 copy_count = (u32) result_length;
+        MalArrayObject *result_array =
+            mal_builtin_array_presized_dense_builder(result, copy_count);
         if (source_array != nullptr && result_array != nullptr &&
             (f64) source_start == start &&
             (f64) copy_count == result_length &&
@@ -2476,6 +2493,12 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
         } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
+    }
+
+    if (!mal_builtin_array_set_or_throw(
+            vm, result, mal_intrinsic_string_key(vm, "length"),
+            mal_ops_number_value(result_length))) {
+        return mal_value_new_undefined();
     }
 
     return result;
