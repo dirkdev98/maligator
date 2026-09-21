@@ -28,7 +28,7 @@ describe("finite construction regions", () => {
 			compiled: true,
 		});
 		const output = runToStdout(binary, { env: STRESS_ENV });
-		expect(output).toContain("RESULT 8/8");
+		expect(output).toContain("RESULT 15/15");
 	});
 
 	it("keeps cached shapes rooted under concurrent verified GC", () => {
@@ -45,6 +45,6 @@ describe("finite construction regions", () => {
 			environment,
 		});
 		const output = runToStdout(binary, { env: environment });
-		expect(output).toContain("RESULT 8/8");
+		expect(output).toContain("RESULT 15/15");
 	});
 });

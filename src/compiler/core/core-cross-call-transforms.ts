@@ -484,6 +484,7 @@ interface ScalarConstructorLayout {
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly initialValues: ReadonlyArray<CoreValueId>;
 	readonly primitiveParameterIndices: ReadonlyArray<number>;
+	readonly returnsReceiver: boolean;
 	readonly stores: ReadonlySet<CoreInstructionId>;
 }
 
@@ -648,17 +649,164 @@ function scalarConstructorLayout(
 		keyStringIndices: Object.freeze(keys),
 		initialValues: Object.freeze(values),
 		primitiveParameterIndices: Object.freeze([...primitiveParameterIndices]),
+		returnsReceiver: returnMode === "receiver",
 		stores,
 	};
+}
+
+interface ConstructorMethodConsumer {
+	readonly lookup: CoreInstructionId;
+	readonly call: CoreInstructionId;
+	readonly keyStringIndex: number;
+	readonly target: CoreFunctionId;
+	readonly inline: InlineTarget;
 }
 
 interface ConstructorConsumerPlan {
 	readonly prefix: ReadonlyArray<CoreInstructionId>;
 	readonly suffix: ReadonlyArray<CoreInstructionId>;
 	readonly liveOut: ReadonlyArray<CoreValueId>;
+	readonly method?: ConstructorMethodConsumer;
 }
 
-function constructorConsumerPlan(
+function valueUsesAreExactly(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	expected: ReadonlyArray<readonly [CoreInstructionId, number]>,
+): boolean {
+	if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
+	const actual: Array<readonly [CoreInstructionId, number]> = [];
+	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		actual.push([
+			coreInstructionId(fn.kernel.useInstruction(use)),
+			fn.kernel.useOperand(use),
+		]);
+	}
+	return (
+		actual.length === expected.length &&
+		expected.every(([instruction, operand]) =>
+			actual.some(
+				([actualInstruction, actualOperand]) =>
+					actualInstruction === instruction && actualOperand === operand,
+			),
+		)
+	);
+}
+
+function scalarConstructorMethod(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	tail: ReadonlyArray<CoreInstructionId>,
+	callResult: CoreValueId,
+	originalTerminator: CoreInstructionId,
+	layout: ScalarConstructorLayout,
+	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+): ConstructorConsumerPlan | undefined {
+	if (!layout.returnsReceiver || tail.length < 2) return undefined;
+	const [lookup, call] = tail;
+	if (
+		lookup === undefined ||
+		call === undefined ||
+		fn.instructionOpcodeName(lookup) !== "loadPropertyStatic" ||
+		fn.instructionOpcodeName(call) !== "call"
+	)
+		return undefined;
+	const lookupInputs = materializeInstructionOperands(fn, lookup);
+	const lookupOutputs = materializeInstructionResults(fn, lookup);
+	const keyStringIndex = fn.instructionAttributes(lookup).stringIndex;
+	if (
+		lookupInputs.length !== 1 ||
+		lookupInputs[0] !== callResult ||
+		lookupOutputs.length !== 1 ||
+		typeof keyStringIndex !== "number" ||
+		layout.keyStringIndices.includes(keyStringIndex)
+	)
+		return undefined;
+	const methodValue = lookupOutputs[0]!;
+	const descriptor = fn.registry.byId(fn.instructionOpcode(call));
+	const callInputs = materializeInstructionOperands(fn, call);
+	if (
+		descriptor.callTransfer?.invocation !== "call" ||
+		descriptor.callTransfer.result !== "call-completion" ||
+		descriptor.callTransfer.arguments.kind !== "positional" ||
+		callInputs[descriptor.callTransfer.calleeOperand] !== methodValue ||
+		descriptor.callTransfer.receiverOperand === undefined ||
+		callInputs[descriptor.callTransfer.receiverOperand] !== callResult ||
+		descriptor.callTransfer.arguments.firstOperand !== callInputs.length
+	)
+		return undefined;
+	const callOutputs = materializeInstructionResults(fn, call);
+	if (callOutputs.length !== 1) return undefined;
+	const targets = coreInstanceMethodTargets(
+		fn,
+		methodValue,
+		callResult,
+		instanceMethodHints,
+	);
+	if (targets?.length !== 1) return undefined;
+	const target = targets[0]!;
+	const inline = inlineTarget(program, target, "call");
+	if (
+		inline === undefined ||
+		!inline.linear ||
+		inline.function.parameterCount !== 0 ||
+		!canBridgeInlineResult(
+			inline.function.valueRepresentation(inline.returnValue),
+			fn.valueRepresentation(callOutputs[0]!),
+		)
+	)
+		return undefined;
+	const receiverValues = new Set<CoreValueId>();
+	const availableValues = new Set<CoreValueId>();
+	for (const instruction of inline.instructions) {
+		const opcode = inline.function.instructionOpcodeName(instruction);
+		const inputs = materializeInstructionOperands(inline.function, instruction);
+		const outputs = materializeInstructionResults(inline.function, instruction);
+		if (opcode === "loadThis") {
+			if (inputs.length !== 0 || outputs.length !== 1) return undefined;
+			receiverValues.add(outputs[0]!);
+			continue;
+		}
+		if (opcode === "loadPropertyStatic") {
+			const fieldStringIndex =
+				inline.function.instructionAttributes(instruction).stringIndex;
+			if (
+				inputs.length !== 1 ||
+				!receiverValues.has(inputs[0]!) ||
+				outputs.length !== 1 ||
+				typeof fieldStringIndex !== "number" ||
+				!layout.keyStringIndices.includes(fieldStringIndex)
+			)
+				return undefined;
+			availableValues.add(outputs[0]!);
+			continue;
+		}
+		if (!scalarConstructorValueProducer(inline.function, instruction, availableValues))
+			return undefined;
+		for (const output of outputs) availableValues.add(output);
+	}
+	if (!availableValues.has(inline.returnValue)) return undefined;
+	if (
+		!valueUsesAreExactly(fn, callResult, [
+			[lookup, 0],
+			[call, descriptor.callTransfer.receiverOperand],
+		]) ||
+		!valueUsesAreExactly(fn, methodValue, [
+			[call, descriptor.callTransfer.calleeOperand],
+		]) ||
+		materializeInstructionOperands(fn, originalTerminator).includes(callOutputs[0]!)
+	)
+		return undefined;
+	return {
+		prefix: Object.freeze([lookup, call]),
+		suffix: Object.freeze(tail.slice(2)),
+		liveOut: Object.freeze([callOutputs[0]!]),
+		method: { lookup, call, keyStringIndex, target, inline },
+	};
+}
+
+function constructorFieldConsumerPlan(
 	fn: CoreFunctionStore,
 	tail: ReadonlyArray<CoreInstructionId>,
 	callResult: CoreValueId,
@@ -738,6 +886,28 @@ function constructorConsumerPlan(
 	};
 }
 
+function constructorConsumerPlan(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	tail: ReadonlyArray<CoreInstructionId>,
+	callResult: CoreValueId,
+	originalTerminator: CoreInstructionId,
+	layout: ScalarConstructorLayout,
+	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+): ConstructorConsumerPlan | undefined {
+	return (
+		scalarConstructorMethod(
+			program,
+			fn,
+			tail,
+			callResult,
+			originalTerminator,
+			layout,
+			instanceMethodHints,
+		) ?? constructorFieldConsumerPlan(fn, tail, callResult, originalTerminator, layout)
+	);
+}
+
 function appendConstructReceiver(
 	editor: CoreEditor,
 	block: CoreBlockId,
@@ -758,9 +928,23 @@ function cloneConstructorConsumerPrefix(
 	plan: ConstructorConsumerPlan,
 	callResult: CoreValueId,
 	receiver: CoreValueId,
-): ReadonlyArray<CoreValueId> {
+	methodValue?: CoreValueId,
+): {
+	readonly liveOut: ReadonlyArray<CoreValueId>;
+	readonly methodCall?: CoreInstructionId;
+	readonly instructionsIntroduced: number;
+} {
 	const values = new Map<CoreValueId, CoreValueId>([[callResult, receiver]]);
+	let methodCall: CoreInstructionId | undefined;
+	let instructionsIntroduced = 0;
 	for (const instruction of plan.prefix) {
+		if (instruction === plan.method?.lookup) {
+			const output = materializeInstructionResults(fn, instruction)[0];
+			if (output === undefined || methodValue === undefined)
+				throw new Error("Validated constructor method lookup has no guarded value");
+			values.set(output, methodValue);
+			continue;
+		}
 		const inputs = materializeInstructionOperands(fn, instruction).map(
 			(value) => values.get(value) ?? value,
 		);
@@ -776,10 +960,16 @@ function cloneConstructorConsumerPrefix(
 				sourcePosition: fn.instructionSourcePosition(instruction),
 			},
 		);
+		instructionsIntroduced++;
+		if (instruction === plan.method?.call) methodCall = inserted.instruction;
 		for (const [index, output] of outputs.entries())
 			values.set(output, inserted.outputs[index]!);
 	}
-	return plan.liveOut.map((value) => values.get(value)!);
+	return {
+		liveOut: plan.liveOut.map((value) => values.get(value)!),
+		...(methodCall === undefined ? {} : { methodCall }),
+		instructionsIntroduced,
+	};
 }
 
 function callCarriesDirectCreatedFunction(
@@ -800,6 +990,7 @@ function guardedConstructorConsumerDuplication(
 	inline: InlineTarget | undefined,
 	site: CoreInstructionId,
 	result: CoreValueId | undefined,
+	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 ): number {
 	if (inline === undefined || result === undefined) return 0;
 	const layout = scalarConstructorLayout(program, inline);
@@ -814,9 +1005,20 @@ function guardedConstructorConsumerDuplication(
 		instruction = fn.instructionNext(instruction)
 	)
 		tail.push(instruction);
-	return (
-		constructorConsumerPlan(fn, tail, result, terminator, layout)?.prefix.length ?? 0
+	const plan = constructorConsumerPlan(
+		program,
+		fn,
+		tail,
+		result,
+		terminator,
+		layout,
+		instanceMethodHints,
 	);
+	return plan === undefined
+		? 0
+		: plan.prefix.length +
+				(plan.method?.inline.instructions.length ?? 0) +
+				(plan.method === undefined ? 0 : 3);
 }
 
 function offerFunctionCandidates(
@@ -969,6 +1171,7 @@ function offerFunctionCandidates(
 					inline,
 					site.instruction,
 					result,
+					instanceMethodHints,
 				)
 			: 0;
 		const bridgesResult =
@@ -1373,12 +1576,23 @@ function applyGuardedInline(
 		scalarLayout === undefined
 			? undefined
 			: constructorConsumerPlan(
+					program,
 					caller,
 					tail,
 					callResult,
 					originalTerminator,
 					scalarLayout,
+					coreInstanceMethodHints(program),
 				);
+	const prototypeStringIndex =
+		consumerPlan?.method === undefined
+			? undefined
+			: program.stringConstants.findIndex(
+					(units) =>
+						units.length === 9 &&
+						units.every((unit, index) => unit === "prototype".charCodeAt(index)),
+				);
+	if (consumerPlan?.method !== undefined && prototypeStringIndex === -1) return undefined;
 	const scalarizedReceiver = scalarLayout !== undefined && consumerPlan !== undefined;
 	const handlerBlock = caller.kernel.blockHandlerBlock(block);
 	const handlerArguments: Array<CoreValueId> = [];
@@ -1390,6 +1604,8 @@ function applyGuardedInline(
 	const callRefinement = caller.instructionEffectRefinement(candidate.site);
 	const fast = editor.createBlock();
 	const fallback = guarded ? editor.createBlock() : undefined;
+	const methodCheck =
+		consumerPlan?.method === undefined ? undefined : editor.createBlock();
 	const joinValues = consumerPlan?.liveOut ?? [callResult];
 	const join = editor.createBlock(
 		joinValues.map((value) => ({
@@ -1466,6 +1682,51 @@ function applyGuardedInline(
 
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
+	let guardedMethodValue: CoreValueId | undefined;
+	if (
+		methodCheck !== undefined &&
+		fallback !== undefined &&
+		consumerPlan?.method !== undefined &&
+		prototypeStringIndex !== undefined
+	) {
+		const prototype = editor.appendInstruction(
+			methodCheck,
+			"loadPropertyStatic",
+			[callee],
+			{
+				attributes: { stringIndex: prototypeStringIndex },
+				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.lookup),
+			},
+		);
+		const method = editor.appendInstruction(
+			methodCheck,
+			"loadPropertyStatic",
+			[prototype.outputs[0]!],
+			{
+				attributes: { stringIndex: consumerPlan.method.keyStringIndex },
+				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.lookup),
+			},
+		);
+		guardedMethodValue = method.outputs[0]!;
+		const methodGuard = editor.appendInstruction(
+			methodCheck,
+			"guardFunctionIndex",
+			[guardedMethodValue],
+			{
+				outputRepresentations: ["boolean"],
+				attributes: { functionIndex: consumerPlan.method.target },
+				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.call),
+			},
+		);
+		editor.setTerminator(methodCheck, {
+			kind: "branch",
+			condition: methodGuard.outputs[0]!,
+			consequent: { block: fast, arguments: [] },
+			alternate: { block: fallback, arguments: [] },
+			sourcePosition: callerPosition,
+		});
+		introduced += 3;
+	}
 	const bridgeValue = (
 		destination: CoreBlockId,
 		value: CoreValueId,
@@ -1574,9 +1835,9 @@ function applyGuardedInline(
 			}).outputs[0]!;
 			introduced++;
 		}
-		const arguments_ =
+		const clonedConsumer =
 			consumerPlan === undefined
-				? [result]
+				? undefined
 				: cloneConstructorConsumerPrefix(
 						editor,
 						caller,
@@ -1584,13 +1845,36 @@ function applyGuardedInline(
 						consumerPlan,
 						callResult,
 						result,
+						guardedMethodValue,
 					);
-		if (consumerPlan !== undefined) introduced += consumerPlan.prefix.length;
+		const arguments_ = clonedConsumer?.liveOut ?? [result];
+		introduced += clonedConsumer?.instructionsIntroduced ?? 0;
 		editor.setTerminator(destination, {
 			kind: "jump",
 			edge: { block: join, arguments: arguments_ },
 			sourcePosition: callerPosition,
 		});
+		if (clonedConsumer?.methodCall !== undefined && consumerPlan?.method !== undefined) {
+			const applied = applyLinearInline(
+				program,
+				{
+					kind: "inline",
+					caller: candidate.caller,
+					site: clonedConsumer.methodCall,
+					revision: 0,
+					priorityClass: 0,
+					priorityScore: 0,
+					targets: [consumerPlan.method.target],
+					generatedCodeCost: consumerPlan.method.inline.instructions.length,
+					compilerWorkCost: consumerPlan.method.inline.instructions.length,
+					expansive: false,
+				},
+				editor,
+			);
+			if (applied === undefined)
+				throw new Error("Validated constructor method inline became inapplicable");
+			introduced += applied.instructionsIntroduced;
+		}
 	};
 	for (const inlineBlock of inline.blocks) {
 		const destination = inline.linear ? fast : clonedBlocks.get(inlineBlock.id)!;
@@ -1737,6 +2021,10 @@ function applyGuardedInline(
 	}
 
 	if (fallback !== undefined) {
+		const keyStringIndices =
+			consumerPlan?.method === undefined
+				? scalarLayout?.keyStringIndices
+				: [...scalarLayout!.keyStringIndices, consumerPlan.method.keyStringIndex];
 		const guard = editor.appendInstruction(
 			block,
 			scalarLayout !== undefined && (scalarizedReceiver || receiverStoresElided)
@@ -1749,7 +2037,7 @@ function applyGuardedInline(
 					functionIndex: target,
 					...(scalarLayout === undefined || (!scalarizedReceiver && !receiverStoresElided)
 						? {}
-						: { keyStringIndices: scalarLayout.keyStringIndices }),
+						: { keyStringIndices }),
 				},
 				sourcePosition: callerPosition,
 			},
@@ -1757,7 +2045,7 @@ function applyGuardedInline(
 		editor.replaceTerminator(block, {
 			kind: "branch",
 			condition: guard.outputs[0]!,
-			consequent: { block: fast, arguments: [] },
+			consequent: { block: methodCheck ?? fast, arguments: [] },
 			alternate: { block: fallback, arguments: [] },
 			sourcePosition: callerPosition,
 		});
@@ -1773,12 +2061,14 @@ function applyGuardedInline(
 			...clonedBlocks.values(),
 			join,
 			...(fallback === undefined ? [] : [fallback]),
+			...(methodCheck === undefined ? [] : [methodCheck]),
 		])
 			editor.setHandler(guardedBlock, handlerBlock, handlerArguments);
 	}
 	return {
 		instructionsIntroduced: introduced,
-		blocksIntroduced: clonedBlocks.size + 1 + (guarded ? 1 : 0),
+		blocksIntroduced:
+			clonedBlocks.size + 1 + (guarded ? 1 : 0) + (methodCheck === undefined ? 0 : 1),
 	};
 }
 

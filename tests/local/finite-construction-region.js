@@ -100,4 +100,80 @@ checks.push(
 );
 delete Object.prototype.p0;
 
+class ScalarPair {
+	constructor(left, right) {
+		this.left = left;
+		this.right = right;
+	}
+
+	total() {
+		return this.left + this.right;
+	}
+}
+
+function consumePair(left, right) {
+	return new ScalarPair(left, right).total();
+}
+
+const originalTotal = ScalarPair.prototype.total;
+checks.push(consumePair(2, 3) === 5);
+ScalarPair.prototype.total = function () {
+	return this.left * this.right;
+};
+checks.push(consumePair(3, 4) === 12);
+
+let methodGets = 0;
+Object.defineProperty(ScalarPair.prototype, "total", {
+	configurable: true,
+	get() {
+		methodGets++;
+		return originalTotal;
+	},
+});
+checks.push(consumePair(5, 6) === 11 && methodGets === 1);
+Object.defineProperty(ScalarPair.prototype, "total", {
+	configurable: true,
+	writable: true,
+	value: originalTotal,
+});
+checks.push(consumePair(7, 8) === 15);
+
+let pairSetterReceiver;
+Object.defineProperty(ScalarPair.prototype, "left", {
+	configurable: true,
+	set() {
+		pairSetterReceiver = this;
+	},
+});
+const interceptedPair = new ScalarPair(9, 10);
+checks.push(
+	Number.isNaN(interceptedPair.total()) && pairSetterReceiver === interceptedPair,
+);
+delete ScalarPair.prototype.left;
+
+function consumePairAfterArgumentMutation(left, right) {
+	return new ScalarPair(left(), right).total();
+}
+checks.push(
+	consumePairAfterArgumentMutation(() => {
+		ScalarPair.prototype.total = function () {
+			return 91;
+		};
+		return 1;
+	}, 2) === 91,
+);
+ScalarPair.prototype.total = originalTotal;
+
+class FrozenPair {
+	constructor(value) {
+		this.value = value;
+	}
+
+	frozenTotal() {
+		return this.value + 1;
+	}
+}
+Object.defineProperty(FrozenPair.prototype, "frozenTotal", { writable: false });
+checks.push(new FrozenPair(9).frozenTotal() === 10);
+
 console.log("RESULT " + checks.filter(Boolean).length + "/" + checks.length);

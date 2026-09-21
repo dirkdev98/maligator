@@ -418,6 +418,77 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it("scalarizes an immediate read-only method behind constructor and method guards", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Pair {
+					constructor(left, right) { this.left = left; this.right = right; }
+					sum() { return this.left + this.right; }
+				}
+				function hot(limit) {
+					let sum = 0;
+					for (let index = 0; index < limit; index++) {
+						sum += new Pair(index, index + 1).sum();
+					}
+					return sum;
+				}
+				hot(10);`,
+				"core-immediate-constructor-method.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		const layoutGuard = operations.find(
+			({ opcode }) => opcode === "guardBaseConstructorLayout",
+		);
+		expect(layoutGuard?.attributes.keyStringIndices).toHaveLength(3);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(
+			operations.some(
+				({ opcode }) =>
+					opcode === "createBaseConstructReceiver" || opcode === "createObjectShaped",
+			),
+		).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "call")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
+	it("retains allocation when an immediate method observes receiver identity", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Record {
+					constructor(value) { this.value = value; }
+					self() { return this; }
+				}
+				function hot(value) { return new Record(value).self().value; }
+				hot(10);`,
+				"core-immediate-constructor-method-identity.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardBaseConstructorLayout")).toBe(
+			false,
+		);
+		expect(
+			operations.some(({ opcode }) => opcode === "createBaseConstructReceiver"),
+		).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("retains receiver stores when a computed field can run user coercion", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
