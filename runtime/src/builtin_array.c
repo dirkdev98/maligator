@@ -589,14 +589,54 @@ static bool mal_builtin_array_int32_search_matches(
     return mal_value_is_f64(element) && mal_value_to_f64(element) == search_number;
 }
 
+static bool mal_builtin_array_numeric_search_words(
+    MalValue search,
+    MalValue *first,
+    MalValue *second
+) {
+    f64 number;
+    if (mal_value_is_int32(search)) {
+        i32 integer = mal_value_to_i32(search);
+        if (integer == 0) return false;
+        number = (f64) integer;
+    } else if (mal_value_is_f64(search)) {
+        number = mal_value_to_f64(search);
+        if (number == 0.0) return false;
+    } else {
+        return false;
+    }
+
+    *first = mal_value_from_f64(number);
+    *second = *first;
+    if (number >= INT32_MIN && number <= INT32_MAX) {
+        i32 integer = (i32) number;
+        if ((f64) integer == number) {
+            *second = mal_value_from_i32(integer);
+        }
+    }
+    return true;
+}
+
 static MalValue mal_builtin_array_dense_numeric_index_of(
     const MalArrayObject *array, MalValue search, u32 start
 ) {
-    bool int32_search = mal_value_is_int32(search);
-    f64 search_number = mal_ops_number_as_f64(search);
     u32 end = array->dense_count < array->length
         ? array->dense_count
         : array->length;
+    MalValue first;
+    MalValue second;
+    if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
+        for (u32 index = start; index < end; index++) {
+            MalValue element = array->elements[index];
+            if (element == first || element == second) {
+                return mal_value_from_u32(index);
+            }
+        }
+        return mal_value_from_i32(-1);
+    }
+
+    bool int32_search = mal_value_is_int32(search);
+    f64 search_number = mal_ops_number_as_f64(search);
     for (u32 index = start; index < end; index++) {
         MalValue element = array->elements[index];
         bool matches = int32_search
@@ -617,9 +657,23 @@ static MalValue mal_builtin_array_dense_numeric_last_index_of(
         : array->length;
     if (end == 0) return mal_value_from_i32(-1);
 
+    u32 index = start < end ? start : end - 1;
+    MalValue first;
+    MalValue second;
+    if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
+        for (;;) {
+            MalValue element = array->elements[index];
+            if (element == first || element == second) {
+                return mal_value_from_u32(index);
+            }
+            if (index == 0) break;
+            index--;
+        }
+        return mal_value_from_i32(-1);
+    }
+
     bool int32_search = mal_value_is_int32(search);
     f64 search_number = mal_ops_number_as_f64(search);
-    u32 index = start < end ? start : end - 1;
     for (;;) {
         MalValue element = array->elements[index];
         bool matches = int32_search
@@ -637,11 +691,21 @@ static MalValue mal_builtin_array_dense_numeric_last_index_of(
 static bool mal_builtin_array_dense_numeric_includes(
     const MalArrayObject *array, MalValue search, u32 start
 ) {
-    bool int32_search = mal_value_is_int32(search);
-    f64 search_number = mal_ops_number_as_f64(search);
     u32 end = array->dense_count < array->length
         ? array->dense_count
         : array->length;
+    MalValue first;
+    MalValue second;
+    if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
+        for (u32 index = start; index < end; index++) {
+            MalValue element = array->elements[index];
+            if (element == first || element == second) return true;
+        }
+        return false;
+    }
+
+    bool int32_search = mal_value_is_int32(search);
+    f64 search_number = mal_ops_number_as_f64(search);
     for (u32 index = start; index < end; index++) {
         MalValue element = array->elements[index];
         if (int32_search

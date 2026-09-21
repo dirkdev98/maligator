@@ -35,6 +35,39 @@ check(mixed.includes(1n), "BigInt behavior unchanged");
 check(mixed.includes("1"), "string behavior unchanged");
 check(mixed.includes(mixed[3]), "object identity unchanged");
 
+function checkNumericSearches(array, needle, expected, label) {
+	check(array.includes(needle) === expected >= 0, `${label} includes`);
+	check(array.indexOf(needle) === expected, `${label} indexOf`);
+	check(array.lastIndexOf(needle) === expected, `${label} lastIndexOf`);
+}
+
+for (const value of [-2147483648, -17, 17, 2147483647]) {
+	const floatNeedle = new Float64Array([value])[0];
+	const integerNeedle = new Int32Array([value])[0];
+	checkNumericSearches(
+		[...new Int32Array([value])],
+		floatNeedle,
+		0,
+		`int32 element and f64 needle ${value}`,
+	);
+	checkNumericSearches(
+		[...new Float64Array([value])],
+		integerNeedle,
+		0,
+		`f64 element and int32 needle ${value}`,
+	);
+}
+
+for (const value of [-2147483649, 2147483648, 1.25, Number.MIN_VALUE]) {
+	const needle = new Float64Array([value])[0];
+	checkNumericSearches(
+		[...new Float64Array([value])],
+		needle,
+		0,
+		`f64-only encoding ${value}`,
+	);
+}
+
 const deleted = [4, 5, 6];
 check(
 	!deleted.includes(5, {
