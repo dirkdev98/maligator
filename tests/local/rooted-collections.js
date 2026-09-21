@@ -108,6 +108,18 @@ check(
 	"Object.entries rechecks snapshotted key enumerability",
 );
 
+const plainEntries = Object.entries({ alpha: 1, beta: 2 });
+const entryDescriptor = Object.getOwnPropertyDescriptor(plainEntries[0], 0);
+check(
+	plainEntries[0] !== plainEntries[1] &&
+		Object.getPrototypeOf(plainEntries[0]) === Array.prototype &&
+		entryDescriptor.value === "alpha" &&
+		entryDescriptor.writable &&
+		entryDescriptor.enumerable &&
+		entryDescriptor.configurable,
+	"Object.entries returns fresh ordinary entry pairs",
+);
+
 Object.defineProperty(visibilitySource, "later", { enumerable: false });
 check(
 	JSON.stringify(visibilitySource) === '{"first":1}',

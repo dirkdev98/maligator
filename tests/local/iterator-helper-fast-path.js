@@ -148,8 +148,10 @@ assert(
 const arrayEntries = [7, 8].entries().toArray();
 assert(
 	arrayEntries.length === 2 &&
+		arrayEntries[0] !== arrayEntries[1] &&
 		arrayEntries[0].join(":") === "0:7" &&
-		arrayEntries[1].join(":") === "1:8",
+		arrayEntries[1].join(":") === "1:8" &&
+		Object.getOwnPropertyDescriptor(arrayEntries[0], 0).writable,
 	"dense Array iterator entries",
 );
 

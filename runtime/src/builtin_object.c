@@ -964,11 +964,8 @@ static bool mal_builtin_object_collect_plain_data(
         if (desc.flags & MAL_PROPERTY_ACCESSOR) return false;
         MalValue value = desc.value;
         if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-            MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-            mal_array_object_store(
-                entry, mal_key_index(0),
-                mal_builtin_object_key_to_string(vm, key));
-            mal_array_object_store(entry, mal_key_index(1), value);
+            MalArrayObject *entry = mal_intrinsic_new_dense_pair(
+                vm, mal_builtin_object_key_to_string(vm, key), value);
             value = mal_value_from_array_object(entry);
         }
         mal_array_object_fresh_dense_append_reserved(result, value);
@@ -1037,10 +1034,9 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
             }
             live[2] = live[1];
             if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-                MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+                MalArrayObject *entry = mal_intrinsic_new_dense_pair(
+                    vm, live[0], live[1]);
                 live[2] = mal_value_from_array_object(entry);
-                mal_array_object_store(entry, mal_key_index(0), live[0]);
-                mal_array_object_store(entry, mal_key_index(1), live[1]);
             }
         }
         mal_array_object_store(result, mal_key_index(count++), live[2]);

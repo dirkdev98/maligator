@@ -624,6 +624,8 @@ MalObject *mal_intrinsic_new_object(MalVm *vm);
  */
 MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length);
 MalArrayObject *mal_intrinsic_new_dense_array(MalVm *vm, u32 length);
+MalArrayObject *mal_intrinsic_new_dense_pair(
+    MalVm *vm, MalValue first, MalValue second);
 
 /**
  * Allocate an error backed by the given error prototype slot with the message

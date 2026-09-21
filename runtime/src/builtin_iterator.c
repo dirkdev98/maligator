@@ -73,11 +73,8 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
 }
 
 static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue second) {
-    MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-    mal_array_object_store(pair, mal_key_index(0), first);
-    mal_array_object_store(pair, mal_key_index(1), second);
-
-    return mal_value_from_array_object(pair);
+    return mal_value_from_array_object(
+        mal_intrinsic_new_dense_pair(vm, first, second));
 }
 
 // The builtin iterator `next` functions are factored into an "advance" core that
