@@ -169,6 +169,14 @@ const STATIC_PROPERTY_KEY_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const EMPTY_OBJECT_MERGE_RULE: CoreLocalInstructionRule = {
+	name: "eliminate-empty-object-merge",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.eliminateEmptyObjectMerge(instruction);
+	},
+};
+
 const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
 	name: "local-control-folding",
 	run(optimizer, block) {
@@ -315,6 +323,14 @@ export class CoreLocalRuleRegistry {
 					return id === undefined ? [] : [id];
 				}),
 			},
+			...(program.registry.get("mergeDataProperties") === undefined
+				? []
+				: [
+						{
+							...EMPTY_OBJECT_MERGE_RULE,
+							opcodes: [program.registry.require("mergeDataProperties").id],
+						},
+					]),
 			...additionalRules,
 		];
 		this.rules =
@@ -634,6 +650,55 @@ export class CoreLocalOptimizer {
 		for (let index = 0; index < resultCount; index++) {
 			this.#wakeValueUsers(this.#fn.kernel.resultAt(resultStart + index));
 		}
+		return true;
+	}
+
+	eliminateEmptyObjectMerge(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.instructionOpcodeName(instruction) !== "mergeDataProperties" ||
+			(this.#editor?.pendingEdits ?? 0) + 2 > this.#maxEdits
+		) {
+			return false;
+		}
+		const destination = this.#instructionOperand(instruction, 0);
+		const source = this.#instructionOperand(instruction, 1);
+		if (
+			destination === undefined ||
+			source === undefined ||
+			this.#fn.kernel.valueDefinitionKind(source) !== 1 ||
+			this.#fn.kernel.valueUseCount(source) !== 1 ||
+			this.#fn.kernel.valueHandlerUseCount(source) !== 0
+		) {
+			return false;
+		}
+		const sourceDefinition = coreInstructionId(
+			this.#fn.kernel.valueDefinitionOwner(source),
+		);
+		if (
+			this.#fn.kernel.instructionLive(sourceDefinition) === 0 ||
+			this.#fn.kernel.instructionOperandCount(sourceDefinition) !== 0 ||
+			this.#fn.kernel.instructionResultCount(sourceDefinition) !== 1
+		) {
+			return false;
+		}
+		const sourceOpcode = this.#fn.instructionOpcodeName(sourceDefinition);
+		if (
+			sourceOpcode !== "createObject" &&
+			(sourceOpcode !== "createObjectShaped" ||
+				(
+					this.#fn.instructionAttributes(sourceDefinition).keyStringIndices as
+						| ReadonlyArray<number>
+						| undefined
+				)?.length !== 0)
+		) {
+			return false;
+		}
+
+		const editor = this.#edit();
+		editor.removeInstruction(instruction);
+		editor.removeInstruction(sourceDefinition);
+		this.#wakeValueDefinition(destination);
 		return true;
 	}
 

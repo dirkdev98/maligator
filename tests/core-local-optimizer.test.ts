@@ -10,6 +10,7 @@ import {
 	inspectCoreBlockParameters,
 	inspectCoreTerminatorPayload,
 } from "./helpers/core-inspection.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function moveChainProgram(): CoreProgram {
 	const program = new CoreProgram(coreOpcodeRegistry);
@@ -26,6 +27,72 @@ function moveChainProgram(): CoreProgram {
 }
 
 describe("CoreLocalOptimizer", () => {
+	it.each([true, false])(
+		"eliminates the conditional empty-spread source with locked=%s",
+		(locked) => {
+			const inspected = inspectStaticValueFunction(
+				`function probe(value, sink) {
+					const previous = undefined;
+					const record = {value, ...(previous === undefined ? {} : {previous})};
+					sink(record);
+					return record.value;
+				} globalThis.probe = probe;`,
+				"probe",
+				{ locked },
+			);
+			expect(
+				inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+			).toBe(false);
+			expect(inspected.structure.allocations).toBe(1);
+			expect(inspected.structure.genericCalls).toBe(1);
+		},
+	);
+
+	it.each(["createObject", "createObjectShaped"] as const)(
+		"eliminates a sole merge from an empty %s source",
+		(sourceOpcode) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [destination] = builder.appendInstruction(entry, "createObject", []);
+			const [source] = builder.appendInstruction(entry, sourceOpcode, [], {
+				attributes: sourceOpcode === "createObjectShaped" ? { keyStringIndices: [] } : {},
+			});
+			builder.appendInstruction(entry, "mergeDataProperties", [destination!, source!]);
+			builder.setTerminator(entry, { kind: "return", value: destination! });
+			const fn = program.function(builder.finish(entry).function);
+
+			new CoreLocalOptimizer(program, fn.id).run();
+
+			expect(
+				[...fn.bodyInstructionIds(entry)].map((instruction) =>
+					fn.instructionOpcodeName(instruction),
+				),
+			).toEqual(["createObject"]);
+		},
+	);
+
+	it("retains an empty source shared by multiple merges", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [left] = builder.appendInstruction(entry, "createObject", []);
+		const [right] = builder.appendInstruction(entry, "createObject", []);
+		const [source] = builder.appendInstruction(entry, "createObject", []);
+		builder.appendInstruction(entry, "mergeDataProperties", [left!, source!]);
+		builder.appendInstruction(entry, "mergeDataProperties", [right!, source!]);
+		builder.setTerminator(entry, { kind: "return", value: left! });
+		const fn = program.function(builder.finish(entry).function);
+
+		new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(
+			[...fn.bodyInstructionIds(entry)].filter(
+				(instruction) => fn.instructionOpcodeName(instruction) === "mergeDataProperties",
+			),
+		).toHaveLength(2);
+	});
+
 	it.each(["!", "typeof", "+", "-", "~"])(
 		"removes only noncoercing dead %s operators while retaining their producer",
 		(operator) => {
