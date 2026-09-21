@@ -6994,6 +6994,15 @@ void mal_op_array_rest(MalCallable *callable, const MalInstruction *instruction)
     );
 }
 
+void mal_op_create_array_from_iterable(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    callable->registers[instruction->as.create_array_from_iterable.dst] =
+        mal_builtin_array_from_iterable(
+            callable->vm,
+            callable->registers[instruction->as.create_array_from_iterable.src]);
+}
+
 // Shared by the interpreter op and the native backend: object rest/spread
 // destructuring (`const {a, ...rest} = source`) — copy source's own enumerable
 // properties (minus the excluded keys) onto a fresh object. A source getter or an

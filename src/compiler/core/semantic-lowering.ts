@@ -11224,6 +11224,24 @@ function compileArrayExpression(
 		return array;
 	}
 
+	if (
+		arrayExpression.elements.length === 1 &&
+		arrayExpression.elements[0]?.type === "SpreadElement"
+	) {
+		const source = compileExpression(
+			program,
+			fn,
+			cursor,
+			arrayExpression.elements[0].argument,
+		);
+		const array = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "createArrayFromIterable",
+			registers: [array, source],
+		});
+		return array;
+	}
+
 	// Spread makes the element indexes dynamic: append through a running
 	// index register, spreads drain their source iterator.
 	const array = nextCoreVariable(fn);

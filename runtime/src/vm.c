@@ -2964,6 +2964,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_ARRAY_REST:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_array_rest(frame, instruction));
                 break;
+            case MAL_OP_CREATE_ARRAY_FROM_ITERABLE:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_array_from_iterable(frame, instruction));
+                break;
             case MAL_OP_COPY_DATA_PROPERTIES:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_copy_data_properties(frame, instruction));
                 break;

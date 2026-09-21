@@ -139,6 +139,7 @@ function logicalId(value: string): string {
 const PROFILE_ALLOCATION_OPCODES = new Set<BytecodeInstruction["opcode"]>([
 	"CREATE_ARGUMENTS_OBJECT",
 	"CREATE_ARRAY",
+	"CREATE_ARRAY_FROM_ITERABLE",
 	"CREATE_FUNCTION",
 	"CREATE_MODULE_NAMESPACE",
 	"CREATE_OBJECT",

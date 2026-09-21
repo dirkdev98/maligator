@@ -44,6 +44,7 @@ export const CORE_OPCODES = [
 	"copyDataProperties",
 	"createArgumentsObject",
 	"createArray",
+	"createArrayFromIterable",
 	"createBigint",
 	"createBoolean",
 	"createEmpty",
@@ -247,6 +248,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"constructSuper",
 	"constructSuperExplicit",
 	"copyDataProperties",
+	"createArrayFromIterable",
 	"createBaseConstructReceiver",
 	"defineAccessor",
 	"definePrivate",
@@ -339,6 +341,7 @@ const write = (
  * whole-family partitioning.
  */
 const OPCODE_ACCESSES = {
+	createArrayFromIterable: [read("object-slot", { baseOperand: 0 })],
 	createBaseConstructReceiver: [read("object-slot", { baseOperand: 0 })],
 	guardBaseConstructorLayout: [
 		read("object-slot", { baseOperand: 0 }),
@@ -637,6 +640,7 @@ const INPUT_ARITIES = {
 	copyDataProperties: [1, 65_535],
 	createArgumentsObject: [0, 0],
 	createArray: [0, 0],
+	createArrayFromIterable: [1, 1],
 	createBigint: [0, 0],
 	createBoolean: [0, 0],
 	createEmpty: [0, 0],

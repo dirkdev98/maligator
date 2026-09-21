@@ -2724,6 +2724,9 @@ void mal_op_array_rest(MalCallable *callable, const MalInstruction *instruction)
 // vm->completion (caller checks).
 MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start);
 
+void mal_op_create_array_from_iterable(
+    MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *instruction);

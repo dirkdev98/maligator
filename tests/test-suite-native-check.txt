@@ -7,6 +7,7 @@ tests/native/function-call-direct.test.ts
 tests/native/noncallable-target-joins.test.ts
 tests/native/function-reflect-builtins.test.ts
 tests/native/array-at-direct.test.ts
+tests/native/array-spread-iterable.test.ts
 tests/native/array-push-direct.test.ts
 tests/native/collection-direct.test.ts
 tests/native/gc.test.ts

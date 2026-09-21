@@ -201,6 +201,12 @@ export type CompilerInstruction =
 			length: number;
 	  }
 	| {
+			type: "createArrayFromIterable";
+
+			// [destination, source]
+			registers: [number, number];
+	  }
+	| {
 			type: "instantiateLiteralTemplate";
 			/** Private GC-rooted slot, present only after Core proves identity cannot escape. */
 			cacheSlot?: number;

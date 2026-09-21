@@ -29,6 +29,9 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
  */
 bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out);
 
+/** Array literal spread semantics with a packed ordinary-Array fast path. */
+MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source);
+
 /** Side-effect-free exact Array.prototype.map + default species guard. */
 bool mal_builtin_array_exact_map_guard(
     MalVm *vm, MalValue callee, MalValue receiver);

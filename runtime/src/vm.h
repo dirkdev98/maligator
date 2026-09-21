@@ -639,6 +639,10 @@ typedef struct MalInstruction {
             i32 dst, src, start_index;
         } array_rest;
 
+		struct {
+			i32 dst, src;
+		} create_array_from_iterable;
+
         struct {
             // Side data: [count, excluded key registers...].
             i32 dst, src, data_offset;

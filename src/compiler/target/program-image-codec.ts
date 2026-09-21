@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 57;
+export const WIRE_VERSION = 58;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -870,6 +870,10 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "CREATE_ARRAY":
 			w.i32(i.dst);
 			w.i32(i.length);
+			return;
+		case "CREATE_ARRAY_FROM_ITERABLE":
+			w.i32(i.dst);
+			w.i32(i.src);
 			return;
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			w.i32(i.dst);
@@ -1709,6 +1713,8 @@ function readInstruction(r: Reader): BytecodeInstruction {
 		}
 		case "CREATE_ARRAY":
 			return { opcode, dst: r.i32(), length: r.i32() };
+		case "CREATE_ARRAY_FROM_ITERABLE":
+			return { opcode, dst: r.i32(), src: r.i32() };
 		case "INSTANTIATE_LITERAL_TEMPLATE": {
 			const dst = r.i32(),
 				templateOffset = r.i32(),

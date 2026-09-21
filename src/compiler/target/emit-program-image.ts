@@ -2022,6 +2022,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()}, .shape_cache_index = ${instruction.shapeCacheIndex} } }`;
 		case "CREATE_ARRAY":
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
+		case "CREATE_ARRAY_FROM_ITERABLE":
+			return `{ .opcode = MAL_OP_CREATE_ARRAY_FROM_ITERABLE, .as.create_array_from_iterable = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset}, .cache_slot = ${instruction.cacheSlot ?? -1} } }`;
 		case "QUERY_STATIC_DATA":

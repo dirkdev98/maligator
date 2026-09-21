@@ -4440,6 +4440,11 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = ${profileCall("allocation", `mal_vm_op_create_array(vm, ${instruction.length})`)};`,
 			];
+		case "CREATE_ARRAY_FROM_ITERABLE":
+			return [
+				`r${instruction.dst} = ${profileCall("allocation", `mal_builtin_array_from_iterable(vm, ${boxed(instruction.src)})`)};`,
+				throwCheck(),
+			];
 		case "INSTANTIATE_LITERAL_TEMPLATE": {
 			const instantiate = `r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${instruction.cacheSlot === undefined ? "-1" : relocation.globalIndex(instruction.cacheSlot)});`;
 			if (instruction.cacheSlot !== undefined)

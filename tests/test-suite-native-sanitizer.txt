@@ -9,6 +9,7 @@
 # Allocator, GC roots, suspended work, and re-entrant lifetime.
 tests/native/allocation-failure.test.ts
 tests/native/array-destructuring-close.test.ts
+tests/native/array-spread-iterable.test.ts
 tests/native/async-generator-direct-promise.test.ts
 tests/native/async-iterator-close.test.ts
 tests/native/coroutine-pool.test.ts

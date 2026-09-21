@@ -719,6 +719,11 @@ export type BytecodeInstruction =
 			length: number;
 	  }
 	| {
+			opcode: "CREATE_ARRAY_FROM_ITERABLE";
+			dst: number;
+			src: number;
+	  }
+	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
 			cacheSlot?: number;
 			dst: number;
@@ -3109,6 +3114,12 @@ function lowerInstructionToBytecodeInstruction(
 				length: instruction.length,
 			};
 		}
+		case "createArrayFromIterable":
+			return {
+				opcode: "CREATE_ARRAY_FROM_ITERABLE",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
+			};
 		case "instantiateLiteralTemplate":
 			return {
 				opcode: "INSTANTIATE_LITERAL_TEMPLATE",

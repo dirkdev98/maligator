@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 57u
+#define WIRE_VERSION 58u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -692,6 +692,11 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_CREATE_ARRAY;
             o->as.create_array.dst = rd_i32(r);
             o->as.create_array.length = rd_i32(r);
+            return;
+        case WIRE_CREATE_ARRAY_FROM_ITERABLE:
+            o->opcode = MAL_OP_CREATE_ARRAY_FROM_ITERABLE;
+            o->as.create_array_from_iterable.dst = rd_i32(r);
+            o->as.create_array_from_iterable.src = rd_i32(r);
             return;
         case WIRE_INSTANTIATE_LITERAL_TEMPLATE:
             o->opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE;
@@ -1476,6 +1481,7 @@ static bool mal_loaded_instruction_writes_register(
             create_base_construct_receiver);
         MAL_WRITES_DST(MAL_OP_CREATE_OBJECT_SHAPED, create_object_shaped);
         MAL_WRITES_DST(MAL_OP_CREATE_ARRAY, create_array);
+        MAL_WRITES_DST(MAL_OP_CREATE_ARRAY_FROM_ITERABLE, create_array_from_iterable);
         MAL_WRITES_DST(MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, instantiate_literal_template);
         MAL_WRITES_DST(MAL_OP_QUERY_STATIC_DATA, query_static_data);
         MAL_WRITES_DST(MAL_OP_CREATE_MODULE_NAMESPACE, create_module_namespace);

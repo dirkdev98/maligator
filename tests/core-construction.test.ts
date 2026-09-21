@@ -55,6 +55,22 @@ function targetBlocks(payload: CoreTerminatorPayload): Array<CoreBlockId> {
 }
 
 describe("Core construction", () => {
+	it("keeps bare array spread as one semantic Core operation", () => {
+		const bare = compile("function copy(source) { return [...source]; }");
+		const bareOperations = [...bare.program.functionIds()].flatMap((functionId) =>
+			operationNames(bare.program, functionId),
+		);
+		expect(bareOperations).toContain("createArrayFromIterable");
+		expect(bareOperations).not.toContain("iteratorStep");
+
+		const mixed = compile("function copy(source) { return [0, ...source]; }");
+		const mixedOperations = [...mixed.program.functionIds()].flatMap((functionId) =>
+			operationNames(mixed.program, functionId),
+		);
+		expect(mixedOperations).not.toContain("createArrayFromIterable");
+		expect(mixedOperations).toContain("iteratorStep");
+	});
+
 	it("constructs straight-line Core directly in one program-owned store", () => {
 		const compilation = compile("let value = 1 + 2; globalThis.answer = value;");
 		const [entry] = [...compilation.program.functionIds()];

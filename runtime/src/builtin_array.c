@@ -1115,6 +1115,85 @@ static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u
     return mal_builtin_array_create_data_property_wide(vm, target, (f64) index, value);
 }
 
+MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source) {
+    MalValue roots[4] = {
+        source,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, countof(roots));
+    roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+
+    if (!mal_vm_get_property(
+            vm, roots[0],
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR),
+            &roots[2])) {
+        mal_gc_unroot(&roots_span);
+        return mal_value_new_undefined();
+    }
+
+    MalArrayObject *source_array = mal_builtin_array_clean_dense(vm, roots[0]);
+    bool direct_copy = source_array != nullptr &&
+        mal_value_is_native_function_object(roots[2]) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(roots[2])) ==
+            mal_array_values_callback &&
+        mal_builtin_array_iterator_protocol_guard(vm);
+#if MAL_REALMS
+    direct_copy = direct_copy &&
+        mal_value_to_native_function_object(roots[2])->realm == vm->current_realm;
+#endif
+    if (direct_copy && mal_array_object_dense_build_range(
+            mal_value_to_array_object(roots[1]), 0, source_array, 0,
+            source_array->length, false, true)) {
+        MalValue result = roots[1];
+        mal_gc_unroot(&roots_span);
+        return result;
+    }
+
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, roots[0], roots[2], &record)) {
+        mal_gc_unroot(&roots_span);
+        return mal_value_new_undefined();
+    }
+    MalRootSpan record_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_native_rooted_begin(vm);
+
+    f64 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step_fast(vm, &record, &roots[3], &done)) {
+            break;
+        }
+        if (done) {
+            MalValue result = roots[1];
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&record_span);
+            mal_gc_unroot(&roots_span);
+            return result;
+        }
+
+        bool stored = false;
+        if (index < (f64) UINT32_MAX) {
+            stored = mal_array_object_fresh_dense_append(
+                mal_value_to_array_object(roots[1]), roots[3]);
+        }
+        if (!stored && !mal_builtin_array_create_data_property_wide(
+                vm, roots[1], index, roots[3])) {
+            break;
+        }
+        index += 1;
+    }
+
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&record_span);
+    mal_gc_unroot(&roots_span);
+    return mal_value_new_undefined();
+}
+
 /**
  * ArraySpeciesCreate(originalArray, length) (9.4.2.3): a non-Array original
  * returns a default array without reading `constructor`. Otherwise read

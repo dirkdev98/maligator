@@ -420,6 +420,7 @@ function cloneInstruction(
 		case "CREATE_OBJECT":
 		case "CREATE_BASE_CONSTRUCT_RECEIVER":
 		case "CREATE_ARRAY":
+		case "CREATE_ARRAY_FROM_ITERABLE":
 		case "CREATE_UNDEFINED":
 		case "CREATE_EMPTY":
 		case "CREATE_NULL":
