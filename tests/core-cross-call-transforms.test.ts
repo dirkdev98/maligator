@@ -376,6 +376,79 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it("scalarizes computed constructor values through the guarded SSA region", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Pair {
+					constructor(value) {
+						this.left = (value + 1) & 255;
+						this.right = (value * 3) & 255;
+					}
+				}
+				function hot(limit) {
+					let sum = 0;
+					for (let index = 0; index < limit; index++) {
+						const pair = new Pair(index & 255);
+						sum += pair.left + pair.right;
+					}
+					return sum;
+				}
+				hot(10);`,
+				"core-computed-base-construction.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardBaseConstructorLayout")).toBe(
+			true,
+		);
+		expect(
+			operations.some(
+				({ opcode }) =>
+					opcode === "createBaseConstructReceiver" || opcode === "createObjectShaped",
+			),
+		).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
+	it("retains receiver stores when a computed field can run user coercion", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Record {
+					constructor(value) { this.value = value + 1; }
+				}
+				function hot(value) {
+					const record = new Record(value);
+					return record.value;
+				}
+				hot({ valueOf() { return 2; } });`,
+				"core-computed-constructor-coercion.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardBaseConstructorLayout")).toBe(
+			false,
+		);
+		expect(
+			operations.some(({ opcode }) => opcode === "createBaseConstructReceiver"),
+		).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it.each([
 		["inherited data", "pair.extra", "Pair.prototype.extra = 7;"],
 		[

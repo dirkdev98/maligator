@@ -482,7 +482,77 @@ function constructorReturnMode(
 interface ScalarConstructorLayout {
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly initialValues: ReadonlyArray<CoreValueId>;
+	readonly primitiveParameterIndices: ReadonlyArray<number>;
 	readonly stores: ReadonlySet<CoreInstructionId>;
+}
+
+const SCALAR_CONSTRUCTOR_VALUE_OPCODES = new Set([
+	"move",
+	"createUndefined",
+	"createNull",
+	"createBoolean",
+	"createF64",
+	"createNumber",
+	"createString",
+	"createBigint",
+	"binary",
+	"unary",
+	"typeofCompare",
+	"isEmpty",
+]);
+
+function scalarConstructorValueProducer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	available: ReadonlySet<CoreValueId>,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (!SCALAR_CONSTRUCTOR_VALUE_OPCODES.has(opcode)) return false;
+	if (
+		materializeInstructionOperands(fn, instruction).some((value) => !available.has(value))
+	)
+		return false;
+	return true;
+}
+
+function locallyPrimitiveValue(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): boolean {
+	if (
+		["f64", "i32", "boolean", "string", "string-span"].includes(
+			fn.valueRepresentation(value),
+		)
+	)
+		return true;
+	if (seen.has(value) || fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	const opcode = fn.instructionOpcodeName(definition);
+	if (
+		[
+			"createUndefined",
+			"createNull",
+			"createBoolean",
+			"createF64",
+			"createNumber",
+			"createString",
+			"createBigint",
+			"binary",
+			"unary",
+			"typeofCompare",
+			"isEmpty",
+		].includes(opcode)
+	)
+		return true;
+	if (opcode !== "move" || fn.kernel.instructionOperandCount(definition) !== 1)
+		return false;
+	return locallyPrimitiveValue(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)),
+		seen,
+	);
 }
 
 function constructorKeyIsNamed(program: CoreProgram, stringIndex: number): boolean {
@@ -513,8 +583,14 @@ function scalarConstructorLayout(
 	)
 		return undefined;
 	const parameters = new Set<CoreValueId>();
-	for (let index = 0; index < inline.function.parameterCount; index++)
-		parameters.add(inline.function.kernel.functionParameter(index));
+	const valueParameters = new Map<CoreValueId, ReadonlySet<number>>();
+	for (let index = 0; index < inline.function.parameterCount; index++) {
+		const parameter = inline.function.kernel.functionParameter(index);
+		parameters.add(parameter);
+		valueParameters.set(parameter, new Set([index]));
+	}
+	const availableValues = new Set(parameters);
+	const primitiveParameterIndices = new Set<number>();
 	const receivers = new Set<CoreValueId>();
 	const keys: Array<number> = [];
 	const values: Array<CoreValueId> = [];
@@ -528,8 +604,23 @@ function scalarConstructorLayout(
 			receivers.add(outputs[0]!);
 			continue;
 		}
-		if (opcode === "createUndefined") continue;
 		const operands = materializeInstructionOperands(inline.function, instruction);
+		if (scalarConstructorValueProducer(inline.function, instruction, availableValues)) {
+			const dependencies = new Set<number>();
+			for (const operand of operands)
+				for (const parameter of valueParameters.get(operand) ?? [])
+					dependencies.add(parameter);
+			if (
+				(opcode === "binary" || opcode === "unary") &&
+				inline.function.instructionEffectRefinement(instruction) === undefined
+			)
+				for (const parameter of dependencies) primitiveParameterIndices.add(parameter);
+			for (const output of outputs) {
+				availableValues.add(output);
+				valueParameters.set(output, dependencies);
+			}
+			continue;
+		}
 		if (opcode !== "storePropertyStatic") {
 			if (returnMode !== "returned" || operands.some((value) => receivers.has(value)))
 				return undefined;
@@ -541,7 +632,7 @@ function scalarConstructorLayout(
 			receiverStoresComplete ||
 			operands.length !== 2 ||
 			!receivers.has(operands[0]!) ||
-			!parameters.has(operands[1]!) ||
+			!availableValues.has(operands[1]!) ||
 			typeof stringIndex !== "number" ||
 			!constructorKeyIsNamed(program, stringIndex) ||
 			keys.includes(stringIndex)
@@ -555,6 +646,7 @@ function scalarConstructorLayout(
 	return {
 		keyStringIndices: Object.freeze(keys),
 		initialValues: Object.freeze(values),
+		primitiveParameterIndices: Object.freeze([...primitiveParameterIndices]),
 		stores,
 	};
 }
@@ -1248,7 +1340,17 @@ function applyGuardedInline(
 		instruction = caller.instructionNext(instruction)
 	)
 		tail.push(instruction);
-	const scalarLayout = guarded ? scalarConstructorLayout(program, inline) : undefined;
+	const candidateScalarLayout = guarded
+		? scalarConstructorLayout(program, inline)
+		: undefined;
+	const scalarLayout =
+		candidateScalarLayout !== undefined &&
+		candidateScalarLayout.primitiveParameterIndices.every((index) => {
+			const argument = arguments_[index];
+			return argument === undefined || locallyPrimitiveValue(caller, argument);
+		})
+			? candidateScalarLayout
+			: undefined;
 	const receiverStoresElided =
 		scalarLayout !== undefined &&
 		constructorReturnMode(inline.function, inline.returnValue) === "returned";
@@ -1262,6 +1364,7 @@ function applyGuardedInline(
 					originalTerminator,
 					scalarLayout,
 				);
+	const scalarizedReceiver = scalarLayout !== undefined && consumerPlan !== undefined;
 	const handlerBlock = caller.kernel.blockHandlerBlock(block);
 	const handlerArguments: Array<CoreValueId> = [];
 	const handlerArgumentStart = caller.kernel.blockHandlerArgumentStart(block);
@@ -1412,22 +1515,14 @@ function applyGuardedInline(
 		values.set(parameter, created.outputs[0]!);
 		introduced++;
 	}
-	if (inline.construction && !receiverStoresElided) {
-		if (scalarLayout !== undefined && consumerPlan !== undefined) {
-			const initialValues = scalarLayout.initialValues.map((value) => values.get(value)!);
-			receiver = editor.appendInstruction(fast, "createObjectShaped", initialValues, {
-				attributes: { keyStringIndices: scalarLayout.keyStringIndices },
-				sourcePosition: callerPosition,
-			}).outputs[0]!;
-		} else {
-			receiver = appendConstructReceiver(
-				editor,
-				fast,
-				callee,
-				coreConstructorSlotReserve(inline.function),
-				callerPosition,
-			);
-		}
+	if (inline.construction && !receiverStoresElided && !scalarizedReceiver) {
+		receiver = appendConstructReceiver(
+			editor,
+			fast,
+			callee,
+			coreConstructorSlotReserve(inline.function),
+			callerPosition,
+		);
 		introduced++;
 	}
 	const emitReturn = (destination: CoreBlockId, value: CoreValueId): void => {
@@ -1494,11 +1589,11 @@ function applyGuardedInline(
 			const opcode = inline.function.instructionOpcodeName(instruction);
 			if (
 				scalarLayout !== undefined &&
-				(consumerPlan !== undefined || receiverStoresElided) &&
+				(scalarizedReceiver || receiverStoresElided) &&
 				scalarLayout.stores.has(instruction)
 			)
 				continue;
-			if (opcode === "loadThis" && receiverStoresElided) continue;
+			if (opcode === "loadThis" && (scalarizedReceiver || receiverStoresElided)) continue;
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
@@ -1614,12 +1709,22 @@ function applyGuardedInline(
 			else throw new Error("Validated inline graph has an unsupported terminator");
 		}
 	}
-	if (inline.linear) emitReturn(fast, inline.returnValue);
+	if (inline.linear) {
+		if (scalarizedReceiver) {
+			const initialValues = scalarLayout.initialValues.map((value) => values.get(value)!);
+			receiver = editor.appendInstruction(fast, "createObjectShaped", initialValues, {
+				attributes: { keyStringIndices: scalarLayout.keyStringIndices },
+				sourcePosition: callerPosition,
+			}).outputs[0]!;
+			introduced++;
+		}
+		emitReturn(fast, inline.returnValue);
+	}
 
 	if (fallback !== undefined) {
 		const guard = editor.appendInstruction(
 			block,
-			scalarLayout !== undefined && (consumerPlan !== undefined || receiverStoresElided)
+			scalarLayout !== undefined && (scalarizedReceiver || receiverStoresElided)
 				? "guardBaseConstructorLayout"
 				: "guardFunctionIndex",
 			[callee],
@@ -1627,8 +1732,7 @@ function applyGuardedInline(
 				outputRepresentations: ["boolean"],
 				attributes: {
 					functionIndex: target,
-					...(scalarLayout === undefined ||
-					(consumerPlan === undefined && !receiverStoresElided)
+					...(scalarLayout === undefined || (!scalarizedReceiver && !receiverStoresElided)
 						? {}
 						: { keyStringIndices: scalarLayout.keyStringIndices }),
 				},
