@@ -2478,11 +2478,10 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function sum(object) { return object.a + object.b + object.c; } globalThis.sum = sum;`,
 		);
-		expect(output).toContain("bool __nf_");
-		expect(output).toContain("f64 __nf_");
-		expect(output).toContain("mal_ops_number_as_f64");
+		expect(output).toContain("mal_vm_property_try_load_static_number_triple(");
+		expect(output).toMatch(/f64 __property_projection_\d+_step_0/);
 		expect(output).toMatch(
-			/mal_ops_number_value\(__nf_\d+_value \+ mal_ops_number_as_f64/,
+			/r\d+ = mal_ops_number_value\(__property_projection_\d+_step_1\)/,
 		);
 	});
 
