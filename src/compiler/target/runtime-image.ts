@@ -920,6 +920,8 @@ export type BytecodeInstruction =
 			callee: number;
 			functionIndex: number;
 			keyStringIndices: Array<number>;
+			methodStringIndex: number;
+			methodFunctionIndex: number;
 			icIndex: number;
 	  }
 	| {
@@ -1908,6 +1910,17 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 		)
 			throw new RangeError("invalid constructor slot reserve");
 		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "GUARD_BASE_CONSTRUCTOR_LAYOUT") {
+				if (
+					instruction.methodStringIndex < 0 !== instruction.methodFunctionIndex < 0 ||
+					instruction.methodStringIndex < -1 ||
+					instruction.methodStringIndex >= definition.stringConstants.length ||
+					instruction.methodFunctionIndex < -1 ||
+					instruction.methodFunctionIndex >= definition.functionCount
+				)
+					throw new RangeError("invalid constructor layout guard");
+				continue;
+			}
 			if (instruction.opcode === "PRECISE_NUMBER_SUM") {
 				if (
 					instruction.arguments.length > MAX_PRECISE_NUMBER_SUM_INPUTS ||
@@ -2009,6 +2022,7 @@ export interface RuntimeImageConstantCompactionResult {
 
 const RUNTIME_STRING_INDEX_KEYS: ReadonlySet<string> = new Set([
 	"keyStringIndex",
+	"methodStringIndex",
 	"nameStringIndex",
 	"separatorStringIndex",
 	"stringIndex",
@@ -2049,8 +2063,9 @@ function visitRuntimeConstantReferences(
 	key?: string,
 ): void {
 	if (typeof value === "number") {
-		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) noteString(value, path);
-		else if (key === "bigintIndex") noteBigint(value, path);
+		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) {
+			if (key !== "methodStringIndex" || value >= 0) noteString(value, path);
+		} else if (key === "bigintIndex") noteBigint(value, path);
 		else if (key === "templateOffset") noteTemplate(value, path);
 		return;
 	}
@@ -2110,6 +2125,7 @@ function remapRuntimeConstantReferences(
 ): unknown {
 	if (typeof value === "number") {
 		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) {
+			if (key === "methodStringIndex" && value < 0) return value;
 			return remapRuntimeConstantRequired(stringOldToNew, value, key!);
 		}
 		if (key === "bigintIndex") {
@@ -3203,6 +3219,8 @@ function lowerInstructionToBytecodeInstruction(
 				callee: instruction.registers[1],
 				functionIndex: instruction.functionIndex,
 				keyStringIndices: [...instruction.keyStringIndices],
+				methodStringIndex: instruction.methodStringIndex ?? -1,
+				methodFunctionIndex: instruction.methodFunctionIndex ?? -1,
 				icIndex: -1,
 			};
 		case "loadCallee":

@@ -1584,15 +1584,6 @@ function applyGuardedInline(
 					scalarLayout,
 					coreInstanceMethodHints(program),
 				);
-	const prototypeStringIndex =
-		consumerPlan?.method === undefined
-			? undefined
-			: program.stringConstants.findIndex(
-					(units) =>
-						units.length === 9 &&
-						units.every((unit, index) => unit === "prototype".charCodeAt(index)),
-				);
-	if (consumerPlan?.method !== undefined && prototypeStringIndex === -1) return undefined;
 	const scalarizedReceiver = scalarLayout !== undefined && consumerPlan !== undefined;
 	const handlerBlock = caller.kernel.blockHandlerBlock(block);
 	const handlerArguments: Array<CoreValueId> = [];
@@ -1604,8 +1595,6 @@ function applyGuardedInline(
 	const callRefinement = caller.instructionEffectRefinement(candidate.site);
 	const fast = editor.createBlock();
 	const fallback = guarded ? editor.createBlock() : undefined;
-	const methodCheck =
-		consumerPlan?.method === undefined ? undefined : editor.createBlock();
 	const joinValues = consumerPlan?.liveOut ?? [callResult];
 	const join = editor.createBlock(
 		joinValues.map((value) => ({
@@ -1683,49 +1672,12 @@ function applyGuardedInline(
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
 	let guardedMethodValue: CoreValueId | undefined;
-	if (
-		methodCheck !== undefined &&
-		fallback !== undefined &&
-		consumerPlan?.method !== undefined &&
-		prototypeStringIndex !== undefined
-	) {
-		const prototype = editor.appendInstruction(
-			methodCheck,
-			"loadPropertyStatic",
-			[callee],
-			{
-				attributes: { stringIndex: prototypeStringIndex },
-				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.lookup),
-			},
-		);
-		const method = editor.appendInstruction(
-			methodCheck,
-			"loadPropertyStatic",
-			[prototype.outputs[0]!],
-			{
-				attributes: { stringIndex: consumerPlan.method.keyStringIndex },
-				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.lookup),
-			},
-		);
-		guardedMethodValue = method.outputs[0]!;
-		const methodGuard = editor.appendInstruction(
-			methodCheck,
-			"guardFunctionIndex",
-			[guardedMethodValue],
-			{
-				outputRepresentations: ["boolean"],
-				attributes: { functionIndex: consumerPlan.method.target },
-				sourcePosition: caller.instructionSourcePosition(consumerPlan.method.call),
-			},
-		);
-		editor.setTerminator(methodCheck, {
-			kind: "branch",
-			condition: methodGuard.outputs[0]!,
-			consequent: { block: fast, arguments: [] },
-			alternate: { block: fallback, arguments: [] },
-			sourcePosition: callerPosition,
-		});
-		introduced += 3;
+	if (consumerPlan?.method !== undefined) {
+		guardedMethodValue = editor.appendInstruction(fast, "createFunction", [], {
+			attributes: { functionIndex: consumerPlan.method.target },
+			sourcePosition: caller.instructionSourcePosition(consumerPlan.method.lookup),
+		}).outputs[0]!;
+		introduced++;
 	}
 	const bridgeValue = (
 		destination: CoreBlockId,
@@ -2021,10 +1973,7 @@ function applyGuardedInline(
 	}
 
 	if (fallback !== undefined) {
-		const keyStringIndices =
-			consumerPlan?.method === undefined
-				? scalarLayout?.keyStringIndices
-				: [...scalarLayout!.keyStringIndices, consumerPlan.method.keyStringIndex];
+		const keyStringIndices = scalarLayout?.keyStringIndices;
 		const guard = editor.appendInstruction(
 			block,
 			scalarLayout !== undefined && (scalarizedReceiver || receiverStoresElided)
@@ -2035,6 +1984,12 @@ function applyGuardedInline(
 				outputRepresentations: ["boolean"],
 				attributes: {
 					functionIndex: target,
+					...(consumerPlan?.method === undefined
+						? {}
+						: {
+								methodStringIndex: consumerPlan.method.keyStringIndex,
+								methodFunctionIndex: consumerPlan.method.target,
+							}),
 					...(scalarLayout === undefined || (!scalarizedReceiver && !receiverStoresElided)
 						? {}
 						: { keyStringIndices }),
@@ -2045,7 +2000,7 @@ function applyGuardedInline(
 		editor.replaceTerminator(block, {
 			kind: "branch",
 			condition: guard.outputs[0]!,
-			consequent: { block: methodCheck ?? fast, arguments: [] },
+			consequent: { block: fast, arguments: [] },
 			alternate: { block: fallback, arguments: [] },
 			sourcePosition: callerPosition,
 		});
@@ -2061,14 +2016,12 @@ function applyGuardedInline(
 			...clonedBlocks.values(),
 			join,
 			...(fallback === undefined ? [] : [fallback]),
-			...(methodCheck === undefined ? [] : [methodCheck]),
 		])
 			editor.setHandler(guardedBlock, handlerBlock, handlerArguments);
 	}
 	return {
 		instructionsIntroduced: introduced,
-		blocksIntroduced:
-			clonedBlocks.size + 1 + (guarded ? 1 : 0) + (methodCheck === undefined ? 0 : 1),
+		blocksIntroduced: clonedBlocks.size + 1 + (guarded ? 1 : 0),
 	};
 }
 

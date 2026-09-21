@@ -1125,7 +1125,9 @@ static void mal_vm_rebase_instruction(
             in->as.guard_base_constructor_layout.function_index += fn_base;
             i32 *data = &instruction_data[
                 in->as.guard_base_constructor_layout.data_offset];
-            for (i32 index = 0; index < data[0]; index++) data[2 + index] += string_base;
+            if (data[2] >= 0) data[2] += string_base;
+            if (data[3] >= 0) data[3] += fn_base;
+            for (i32 index = 0; index < data[0]; index++) data[4 + index] += string_base;
             break;
         }
         // owner_function_index is either a real function index (>= 0, rebased
@@ -3003,7 +3005,8 @@ static void mal_vm_run_until_frame_count(
                     vm,
                     registers[instruction->as.guard_base_constructor_layout.callee],
                     instruction->as.guard_base_constructor_layout.function_index,
-                    data[0], &data[2], mal_vm_property_ic_at(frame, data[1]));
+                    data[0], &data[4], data[2], data[3],
+                    mal_vm_property_ic_at(frame, data[1]));
                 registers[instruction->as.guard_base_constructor_layout.dst] =
                     mal_value_new_boolean(matches);
                 if (instruction_pointer < frame->function->instruction_count) {

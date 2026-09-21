@@ -1222,6 +1222,7 @@ function verifyProgramTables(program: CoreProgram): void {
 
 const FUNCTION_INDEX_ATTRIBUTES = [
 	"functionIndex",
+	"methodFunctionIndex",
 	"directFunctionIndex",
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",

@@ -440,6 +440,7 @@ const REACHABILITY_REASON_BITS: ReadonlyArray<
 
 const FUNCTION_INDEX_ATTRIBUTES = [
 	"functionIndex",
+	"methodFunctionIndex",
 	"directFunctionIndex",
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",

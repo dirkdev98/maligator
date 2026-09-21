@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 56u
+#define WIRE_VERSION 57u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -457,14 +457,18 @@ static i32 rd_side_bounded(
 
 static i32 rd_side_constructor_layout(Rd *r, I32Builder *builder) {
     i32 offset = (i32) builder->count;
+    i32 method_string_index = rd_i32(r);
+    i32 method_function_index = rd_i32(r);
     u32 count = rd_count(r, 1);
     if (!r->ok || count > MAL_SHAPE_MAX_INLINE_SLOTS ||
-        !i32_builder_reserve(builder, r, (usize) count + 2)) {
+        !i32_builder_reserve(builder, r, (usize) count + 4)) {
         r->ok = false;
         return 0;
     }
     builder->data[builder->count++] = (i32) count;
     builder->data[builder->count++] = -1;
+    builder->data[builder->count++] = method_string_index;
+    builder->data[builder->count++] = method_function_index;
     for (u32 index = 0; index < count; index++) {
         builder->data[builder->count++] = rd_i32(r);
     }
@@ -1762,7 +1766,7 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
                 break;
             case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
                 i32 offset = instructions[i].as.guard_base_constructor_layout.data_offset;
-                if (offset < 0 || offset > (i32) side_data.count - 2) {
+                if (offset < 0 || offset > (i32) side_data.count - 4) {
                     r->ok = false;
                     break;
                 }
@@ -2511,18 +2515,26 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     instruction->as.guard_base_constructor_layout.function_index < 0 ||
                     instruction->as.guard_base_constructor_layout.function_index >=
                         (i32) function_count ||
-                    data[0] < 1 || data[0] > MAL_SHAPE_MAX_INLINE_SLOTS) {
+                    data[0] < 1 || data[0] > MAL_SHAPE_MAX_INLINE_SLOTS ||
+                    data[2] < -1 || data[3] < -1 ||
+                    (data[2] < 0) != (data[3] < 0) ||
+                    data[2] >= (i32) string_count ||
+                    data[3] >= (i32) function_count) {
+                    r.ok = false;
+                }
+                if (r.ok && data[2] >= 0 &&
+                    !mal_loaded_shape_key_is_named(&strings[data[2]])) {
                     r.ok = false;
                 }
                 for (i32 key = 0; r.ok && key < data[0]; key++) {
-                    i32 string_index = data[key + 2];
+                    i32 string_index = data[key + 4];
                     if (string_index < 0 || string_index >= (i32) string_count ||
                         !mal_loaded_shape_key_is_named(&strings[string_index])) {
                         r.ok = false;
                     }
                     for (i32 previous = 0; r.ok && previous < key; previous++) {
                         if (mal_loaded_strings_equal(
-                                &strings[data[previous + 2]], &strings[string_index])) {
+                                &strings[data[previous + 4]], &strings[string_index])) {
                             r.ok = false;
                         }
                     }

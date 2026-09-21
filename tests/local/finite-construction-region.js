@@ -112,7 +112,8 @@ class ScalarPair {
 }
 
 function consumePair(left, right) {
-	return new ScalarPair(left, right).total();
+	const result = new ScalarPair(left, right).total();
+	return result + 0;
 }
 
 const originalTotal = ScalarPair.prototype.total;

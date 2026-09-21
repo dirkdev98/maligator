@@ -127,6 +127,7 @@ export function coreSupportsDirectEntries(fn: CoreFunctionStore): boolean {
 
 const FUNCTION_INDEX_ATTRIBUTES: ReadonlySet<string> = new Set([
 	"functionIndex",
+	"methodFunctionIndex",
 	"directFunctionIndex",
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",

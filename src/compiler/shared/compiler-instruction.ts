@@ -317,6 +317,8 @@ export type CompilerInstruction =
 			registers: [number, number];
 			functionIndex: number;
 			keyStringIndices: ReadonlyArray<number>;
+			methodStringIndex?: number;
+			methodFunctionIndex?: number;
 	  }
 	| {
 			// Speculative-call-inlining guard (produced by the inliner, not the front end):

@@ -1751,7 +1751,8 @@ void mal_op_guard_base_constructor_layout(
             callable->vm,
             callable->registers[instruction->as.guard_base_constructor_layout.callee],
             instruction->as.guard_base_constructor_layout.function_index,
-            data[0], &data[2], mal_vm_property_ic_at(callable, data[1])));
+            data[0], &data[4], data[2], data[3],
+            mal_vm_property_ic_at(callable, data[1])));
 }
 
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction) {
@@ -5067,13 +5068,17 @@ static bool mal_prototype_chain_allows_transition_store(
 
 bool mal_vm_guard_base_constructor_layout(
     MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
-    const i32 *key_string_indices, MalInlineCache *ic
+    const i32 *key_string_indices, i32 method_string_index,
+    i32 method_function_index, MalInlineCache *ic
 ) {
     if (!mal_vm_callee_has_index(vm, callee, function_index) || key_count < 1 ||
         key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
         return false;
     }
     MalFunctionObject *function = mal_value_to_function_object(callee);
+#if MAL_REALMS
+    if (method_function_index >= 0 && function->realm != vm->current_realm) return false;
+#endif
     if (ic->mode == MAL_IC_MODE_CONSTRUCTOR_LAYOUT &&
         ic->obj == &function->object) {
         return true;
@@ -5087,6 +5092,24 @@ bool mal_vm_guard_base_constructor_layout(
         return false;
     }
     MalObject *prototype = mal_value_to_object(prototype_property.desc.value);
+    if ((method_string_index < 0) != (method_function_index < 0)) return false;
+    if (method_string_index >= 0) {
+        if (method_string_index >= vm->runtime_image->string_constant_count) return false;
+        MalKey method_key = {
+            .kind = MAL_KEY_STRING,
+            .value = mal_value_from_string(vm->string_constant_atoms[method_string_index]),
+        };
+        MalPropertyLookup method = mal_object_get_own(prototype, method_key);
+        if (!method.present || (method.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            !mal_vm_callee_has_index(vm, method.desc.value, method_function_index)) {
+            return false;
+        }
+#if MAL_REALMS
+        if (mal_value_to_function_object(method.desc.value)->realm != vm->current_realm) {
+            return false;
+        }
+#endif
+    }
     for (i32 index = 0; index < key_count; index++) {
         i32 string_index = key_string_indices[index];
         if (string_index < 0 || string_index >= vm->runtime_image->string_constant_count) {

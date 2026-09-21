@@ -242,6 +242,8 @@ const instructions: Array<BytecodeInstruction> = [
 		callee: 5,
 		functionIndex: 1,
 		keyStringIndices: [0, 1],
+		methodStringIndex: 0,
+		methodFunctionIndex: 0,
 		icIndex: 2,
 	},
 	{ opcode: "SET_THIS", value: 11 },

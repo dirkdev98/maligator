@@ -394,6 +394,8 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				data.push(
 					instruction.keyStringIndices.length,
 					instruction.icIndex,
+					instruction.methodStringIndex,
+					instruction.methodFunctionIndex,
 					...instruction.keyStringIndices,
 				);
 				break;

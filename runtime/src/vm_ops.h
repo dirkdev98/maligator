@@ -739,7 +739,8 @@ void mal_op_guard_base_constructor_layout(
 struct MalInlineCache;
 bool mal_vm_guard_base_constructor_layout(
 	MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
-	const i32 *key_string_indices, struct MalInlineCache *ic);
+	const i32 *key_string_indices, i32 method_string_index,
+	i32 method_function_index, struct MalInlineCache *ic);
 
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction);
 

@@ -418,7 +418,7 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
-	it("scalarizes an immediate read-only method behind constructor and method guards", () => {
+	it("scalarizes an immediate read-only method behind a combined constructor guard", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -447,8 +447,20 @@ describe("bounded Core cross-call transforms", () => {
 		const layoutGuard = operations.find(
 			({ opcode }) => opcode === "guardBaseConstructorLayout",
 		);
-		expect(layoutGuard?.attributes.keyStringIndices).toHaveLength(3);
-		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(layoutGuard?.attributes.keyStringIndices).toHaveLength(2);
+		expect(layoutGuard?.attributes.methodStringIndex).toEqual(expect.any(Number));
+		expect(layoutGuard?.attributes.methodFunctionIndex).toEqual(expect.any(Number));
+		expect(
+			operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(1);
+		expect(
+			operations.filter(
+				({ opcode, attributes }) =>
+					opcode === "loadPropertyStatic" &&
+					attributes.stringIndex === layoutGuard?.attributes.methodStringIndex,
+			),
+		).toHaveLength(1);
+		expect(operations.some(({ opcode }) => opcode === "createFunction")).toBe(false);
 		expect(
 			operations.some(
 				({ opcode }) =>

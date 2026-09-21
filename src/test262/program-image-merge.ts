@@ -257,6 +257,8 @@ function cloneInstruction(
 			return {
 				...instruction,
 				functionIndex: instruction.functionIndex + base.function,
+				methodStringIndex: shifted(instruction.methodStringIndex, base.string),
+				methodFunctionIndex: shifted(instruction.methodFunctionIndex, base.function),
 				keyStringIndices: instruction.keyStringIndices.map(
 					(index) => index + base.string,
 				),
