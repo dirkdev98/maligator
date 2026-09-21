@@ -471,6 +471,9 @@ export interface BytecodeFunction {
 	 */
 	isClassConstructor: boolean;
 
+	/** Hidden slot capacity reserved before a base constructor begins. */
+	constructorSlotReserve: number;
+
 	/**
 	 * Whether this function owns a `prototype` property. False for methods,
 	 * getters, setters and arrows (not constructors); true for normal functions,
@@ -1874,7 +1877,14 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmExactArrayLengthLoads(definition);
 	validateVmShapeCases(definition);
 	validateVmSourcePositions(definition);
-	for (const fn of definition.functions)
+	for (const fn of definition.functions) {
+		if (
+			!isNonnegativeSafeInteger(fn.constructorSlotReserve) ||
+			fn.constructorSlotReserve > 64 ||
+			(fn.constructorSlotReserve !== 0 &&
+				(!fn.isClassConstructor || fn.isDerivedConstructor))
+		)
+			throw new RangeError("invalid constructor slot reserve");
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "PRECISE_NUMBER_SUM") {
 				if (
@@ -1937,6 +1947,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 			)
 				throw new RangeError("invalid static query constant reference");
 		}
+	}
 }
 
 export interface RuntimeImageConstantRetentionEntry {
@@ -2940,6 +2951,7 @@ function lowerExecutionFunctionToBytecode(
 		argumentSnapshotPlan,
 		isDerivedConstructor: fn.isDerivedConstructor,
 		isClassConstructor: fn.isClassConstructor,
+		constructorSlotReserve: fn.constructorSlotReserve,
 		hasPrototype: fn.hasPrototype,
 		literalShapeCount,
 		instructions,

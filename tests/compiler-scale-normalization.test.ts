@@ -42,6 +42,7 @@ function partitionedImage(sourceRoot: string, changed = false): ProgramImage {
 		argumentSnapshotPlan: [],
 		isDerivedConstructor: false,
 		isClassConstructor: false,
+		constructorSlotReserve: 0,
 		hasPrototype: false,
 		literalShapeCount: 0,
 		instructions,

@@ -128,6 +128,7 @@ const fn: BytecodeFunction = {
 	argumentSnapshotPlan: [],
 	isDerivedConstructor: false,
 	isClassConstructor: false,
+	constructorSlotReserve: 0,
 	hasPrototype: false,
 	literalShapeCount: 2,
 	instructions,

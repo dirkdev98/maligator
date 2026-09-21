@@ -54,7 +54,7 @@ describe("shaped object slot coallocation", () => {
 		assertPassLine(result.stdout, "object-slot-coallocation");
 		const field = (name: string): number =>
 			Number(result.stderr.match(new RegExp(`${name}=([0-9]+)`))?.[1] ?? 0);
-		expect(field("object_slot_coallocations")).toBeGreaterThanOrEqual(2008);
+		expect(field("object_slot_coallocations")).toBeGreaterThanOrEqual(2010);
 		expect(field("object_slot_grow_migrations")).toBeGreaterThanOrEqual(1);
 		expect(field("object_slot_dictionary_migrations")).toBeGreaterThanOrEqual(5);
 	});

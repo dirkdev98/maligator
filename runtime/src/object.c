@@ -259,6 +259,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->primordial_locked = false;
     object->primordial_locking = false;
     object->overflow_private_only = false;
+    object->slot_capacity = 0;
     mal_object_mark_as_prototype(prototype);
 }
 
@@ -275,6 +276,17 @@ MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype) {
     return object;
 }
 
+MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capacity) {
+    if (capacity == 0) return mal_object_new(heap, prototype);
+    MalObject *object = mal_heap_alloc(
+        heap, sizeof(MalObject) + sizeof(MalValue) * capacity, MAL_HEAP_OBJECT);
+    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    object->slots = (MalValue *) (object + 1);
+    object->slot_capacity = capacity;
+    g_slot_coallocations++;
+    return object;
+}
+
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                  const MalValue *values, u32 count) {
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
@@ -284,6 +296,7 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
     mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
     object->shape = shape;
     object->slots = (MalValue *) (object + 1);
+    object->slot_capacity = (u8) count;
     memcpy(object->slots, values, sizeof(MalValue) * count);
     g_slot_coallocations++;
     return object;
@@ -301,6 +314,7 @@ MalObject *mal_object_try_new_shaped(
     mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
     object->shape = shape;
     object->slots = (MalValue *) (object + 1);
+    object->slot_capacity = (u8) count;
     memcpy(object->slots, values, sizeof(MalValue) * count);
     g_slot_coallocations++;
     return object;
@@ -322,14 +336,17 @@ void mal_object_set_shaped_values(
     }
     object->slots = malloc(sizeof(MalValue) * count);
     object->slots_owned = true;
+    object->slot_capacity = (u8) count;
     for (u32 i = 0; i < count; i++) {
         object->slots[i] = values[i];
     }
 }
 
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
+    if (new_count <= object->slot_capacity) return;
     if (object->slots_owned) {
         object->slots = realloc(object->slots, sizeof(MalValue) * new_count);
+        object->slot_capacity = (u8) new_count;
         return;
     }
 
@@ -342,6 +359,7 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     }
     object->slots = slots;
     object->slots_owned = true;
+    object->slot_capacity = (u8) new_count;
 }
 
 void mal_object_record_slot_dictionary_migration(MalObject *object) {
@@ -357,4 +375,5 @@ void mal_object_release_slots(MalObject *object) {
     }
     object->slots = nullptr;
     object->slots_owned = false;
+    object->slot_capacity = 0;
 }

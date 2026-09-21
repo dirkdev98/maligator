@@ -253,6 +253,7 @@ const mainFn: BytecodeFunction = {
 	argumentSnapshotPlan: [],
 	isDerivedConstructor: false,
 	isClassConstructor: false,
+	constructorSlotReserve: 0,
 	hasPrototype: true,
 	literalShapeCount: 1,
 	instructions,
@@ -278,6 +279,7 @@ const genFn: BytecodeFunction = {
 	argumentSnapshotPlan: [],
 	isDerivedConstructor: true,
 	isClassConstructor: true,
+	constructorSlotReserve: 0,
 	hasPrototype: false,
 	literalShapeCount: 0,
 	instructions: [
@@ -999,6 +1001,32 @@ describe("program-image-codec", () => {
 			serializeCompilerArtifact(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
+	});
+
+	it("round-trips and validates constructor slot reserves", () => {
+		const withReserve = (constructorSlotReserve: number, isDerivedConstructor = false) =>
+			withRuntime(definition, {
+				functions: definition.runtime.functions.map((fn, index) =>
+					index === 0
+						? {
+								...fn,
+								isClassConstructor: true,
+								isDerivedConstructor,
+								constructorSlotReserve,
+							}
+						: fn,
+				),
+			});
+		const valid = withReserve(64);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(valid)).runtime.functions[0]!
+				.constructorSlotReserve,
+		).toBe(64);
+		for (const invalid of [withReserve(65), withReserve(1, true)]) {
+			expect(() => serializeCompilerArtifact(invalid)).toThrow(
+				/invalid constructor slot reserve/,
+			);
+		}
 	});
 
 	it("round-trips portable exact and guarded script targets", () => {

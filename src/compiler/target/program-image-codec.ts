@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 52;
+export const WIRE_VERSION = 53;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -632,6 +632,7 @@ function writeFunction(w: Writer, fn: BytecodeFunction, debug: boolean): void {
 	w.u8(fn.needsArguments ? 1 : 0);
 	w.u8(fn.isDerivedConstructor ? 1 : 0);
 	w.u8(fn.isClassConstructor ? 1 : 0);
+	w.u8(fn.constructorSlotReserve);
 	w.u8(fn.hasPrototype ? 1 : 0);
 	w.u8(fn.mappedArguments ? 1 : 0);
 	w.u32(fn.argumentSnapshotCount);
@@ -1451,6 +1452,7 @@ function readFunction(r: Reader): BytecodeFunction {
 	const needsArguments = r.u8() !== 0;
 	const isDerivedConstructor = r.u8() !== 0;
 	const isClassConstructor = r.u8() !== 0;
+	const constructorSlotReserve = r.u8();
 	const hasPrototype = r.u8() !== 0;
 	const mappedArguments = r.u8() !== 0;
 	const argumentSnapshotCount = r.count(1);
@@ -1536,6 +1538,7 @@ function readFunction(r: Reader): BytecodeFunction {
 		mappedArgumentSlots,
 		isDerivedConstructor,
 		isClassConstructor,
+		constructorSlotReserve,
 		hasPrototype,
 		literalShapeCount,
 		instructions,

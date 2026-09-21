@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 52u
+#define WIRE_VERSION 53u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1605,6 +1605,7 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     fn->needs_arguments = rd_u8(r) != 0;
     fn->is_derived_constructor = rd_u8(r) != 0;
     fn->is_class_constructor = rd_u8(r) != 0;
+    fn->constructor_slot_reserve = rd_u8(r);
     fn->has_prototype = rd_u8(r) != 0;
     fn->mapped_arguments = rd_u8(r) != 0;
     fn->argument_snapshot_count = (i32) rd_count(r, 1);
@@ -1635,6 +1636,9 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
         fn->argument_snapshot_count > fn->register_count - fn->parameter_count ||
         fn->captured_count < 0 || fn->mapped_argument_count > fn->parameter_count ||
+        fn->constructor_slot_reserve > MAL_SHAPE_MAX_INLINE_SLOTS ||
+        (fn->constructor_slot_reserve != 0 &&
+         (!fn->is_class_constructor || fn->is_derived_constructor)) ||
         (!fn->mapped_arguments && fn->mapped_argument_count != 0) ||
         (fn->mapped_arguments && fn->strict)) {
         r->ok = false;

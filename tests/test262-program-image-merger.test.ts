@@ -32,6 +32,7 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 		argumentSnapshotPlan: [],
 		isDerivedConstructor: false,
 		isClassConstructor: false,
+		constructorSlotReserve: 0,
 		hasPrototype: false,
 		literalShapeCount: instructions.filter(
 			(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",

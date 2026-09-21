@@ -43,6 +43,7 @@ static void mal_function_init_metadata(
     }
     object->shape = shape;
     object->slots = coallocated_slots;
+    object->slot_capacity = (u8) count;
     for (u32 i = 0; i < count; i++) {
         object->slots[i] = values[i];
     }

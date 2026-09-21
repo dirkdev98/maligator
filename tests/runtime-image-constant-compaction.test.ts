@@ -37,6 +37,7 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 		argumentSnapshotPlan: [],
 		isDerivedConstructor: false,
 		isClassConstructor: false,
+		constructorSlotReserve: 0,
 		hasPrototype: false,
 		literalShapeCount: 1,
 		instructions,

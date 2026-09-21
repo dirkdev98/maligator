@@ -376,6 +376,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		argumentSnapshotPlan: [],
 		isDerivedConstructor: false,
 		isClassConstructor: false,
+		constructorSlotReserve: 0,
 		hasPrototype: false,
 		literalShapeCount: 0,
 		instructions,

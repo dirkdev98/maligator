@@ -54,7 +54,7 @@ typedef struct MalObject {
      */
     bool watched_method_proto : 1;
     /** `slots` points to a separately malloc-owned buffer. False for empty,
-     * one-slot coallocated, and compiler-emitted stack objects. */
+     * coallocated, and compiler-emitted stack objects. */
     bool slots_owned : 1;
     /** A private Error.captureStackTrace id must be released at finalization. */
     bool has_captured_stack : 1;
@@ -66,6 +66,8 @@ typedef struct MalObject {
     bool primordial_locking : 1;
     /** A non-null overflow table contains private names only. */
     bool overflow_private_only : 1;
+    /** Allocated entries in `slots`; visible entries remain shape->inline_count. */
+    u8 slot_capacity;
     MalShape *shape;
     struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
@@ -142,6 +144,9 @@ MalObject *mal_object_new(MalHeap *heap, MalObject *prototype);
 
 /** Fallible ordinary-object constructor used by VM operations with completion checks. */
 MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype);
+
+/** Allocate an empty object with hidden capacity for later shape transitions. */
+MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capacity);
 
 /** Allocate an ordinary object and its known inline slots in one managed cell. */
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,

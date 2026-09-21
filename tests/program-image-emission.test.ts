@@ -135,6 +135,7 @@ const fn: BytecodeFunction = {
 	argumentSnapshotPlan: [],
 	isDerivedConstructor: false,
 	isClassConstructor: false,
+	constructorSlotReserve: 0,
 	hasPrototype: false,
 	literalShapeCount: 1,
 	instructions,
@@ -221,6 +222,19 @@ function specializations(definition: ProgramImage) {
 	return definition.native.functions.flatMap((fn) => fn.specializations);
 }
 
+function classConstructorSlotReserve(source: string): number {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"constructor-slot-reserve.js",
+		parseScript(source, { strict: false }),
+	);
+	const constructors = compileSemanticProgramToProgramImage(
+		semantic,
+	).runtime.functions.filter((fn) => fn.isClassConstructor);
+	expect(constructors).toHaveLength(1);
+	return constructors[0]!.constructorSlotReserve;
+}
+
 function withSpecializations(
 	definition: ProgramImage,
 	functionIndex: number,
@@ -241,6 +255,41 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
+	it("reserves slots for base constructor own-property writes", () => {
+		expect(
+			classConstructorSlotReserve(`
+				class Record {
+					constructor(value) {
+						this.first = value;
+						this.second = value + 1;
+						this.first = value + 2;
+					}
+				}
+				globalThis.Record = Record;
+			`),
+		).toBe(2);
+		expect(
+			classConstructorSlotReserve(`
+				class Record {
+					first = 1;
+					second = 2;
+				}
+				globalThis.Record = Record;
+			`),
+		).toBe(2);
+		expect(
+			classConstructorSlotReserve(`
+				class Record extends Object {
+					constructor(value) {
+						super();
+						this.first = value;
+					}
+				}
+				globalThis.Record = Record;
+			`),
+		).toBe(0);
+	});
+
 	it("combines semantic dependencies with one retained region twin", () => {
 		const license = vmRegionLicense(
 			[

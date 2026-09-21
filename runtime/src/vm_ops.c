@@ -787,6 +787,7 @@ MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
     *object = *source;
     object->header = header;
     object->slots_owned = false;
+    object->slot_capacity = (u8) count;
     if (count == 0) {
         object->slots = nullptr;
     } else {
@@ -2036,7 +2037,8 @@ static bool mal_vm_try_interp_construct_exact(
 #endif
             return true;
         }
-        this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+        this_value = mal_value_from_object(mal_object_new_reserved(
+            &vm->heap, prototype, function->constructor_slot_reserve));
     }
 
     if (mal_vm_push_function_frame(

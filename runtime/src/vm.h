@@ -930,6 +930,9 @@ typedef struct MalFunction {
      */
     bool is_class_constructor;
 
+    /** Hidden ordinary-object slot capacity reserved before base constructor entry. */
+    u8 constructor_slot_reserve;
+
     /**
      * Whether the function owns a `prototype` property. False for methods,
      * getters, setters and arrows (not constructors); true for normal functions,

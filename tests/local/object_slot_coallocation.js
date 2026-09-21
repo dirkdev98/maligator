@@ -6,6 +6,40 @@ const retained = [];
 for (let i = 0; i < 2000; i++) retained.push({ value: "value:" + i });
 check("retained value", retained[1999].value === "value:1999");
 
+class AssignedRecord {
+	constructor(value) {
+		this.a = value;
+		this.b = value + 1;
+		this.c = value + 2;
+		this.d = value + 3;
+		this.e = value + 4;
+		this.f = value + 5;
+		this.g = value + 6;
+		this.h = value + 7;
+	}
+}
+const assignedRecord = new AssignedRecord(10);
+check(
+	"assigned constructor slots",
+	assignedRecord.a === 10 && assignedRecord.d === 13 && assignedRecord.h === 17,
+);
+
+class InitializedRecord {
+	a = 1;
+	b = 2;
+	c = 3;
+	d = 4;
+	e = 5;
+	f = 6;
+	g = 7;
+	h = 8;
+}
+const initializedRecord = new InitializedRecord();
+check(
+	"initialized constructor slots",
+	initializedRecord.a === 1 && initializedRecord.d === 4 && initializedRecord.h === 8,
+);
+
 const retainedFour = [];
 for (let i = 0; i < 2000; i++) {
 	retainedFour.push({ a: i, b: "four:" + i, c: i + 2, d: i + 3 });
@@ -120,4 +154,4 @@ const wide32 = {
 };
 check("thirty-two slots", wide32.k0 === 0 && wide32.k16 === 16 && wide32.k31 === 31);
 
-console.log("object-slot-coallocation PASS 15/15");
+console.log("object-slot-coallocation PASS 17/17");

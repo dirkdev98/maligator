@@ -4529,7 +4529,8 @@ MalCompletion mal_vm_construct_direct(
 #endif
             return vm->completion;
         }
-        this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+        this_value = mal_value_from_object(mal_object_new_reserved(
+            &vm->heap, prototype, function->constructor_slot_reserve));
     }
 
     MalEnv *env = function_object->creation_env;
@@ -4765,7 +4766,8 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
 #endif
                     return vm->completion;
                 }
-                this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+                this_value = mal_value_from_object(mal_object_new_reserved(
+                    &vm->heap, prototype, function->constructor_slot_reserve));
             }
 
             if (function->compiled != nullptr) {

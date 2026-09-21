@@ -171,6 +171,7 @@ export interface ExecutionFunction {
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;
 	readonly isDerivedConstructor: boolean;
+	readonly constructorSlotReserve: number;
 	readonly hasPrototype: boolean;
 	readonly gc: {
 		/** Every operation collection point and native loop-backedge poll. */
