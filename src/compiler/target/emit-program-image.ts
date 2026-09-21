@@ -389,6 +389,10 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				}
 				paired(index, instruction.keyStringIndices, instruction.valueRegisters);
 				break;
+			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+				offsets[index] = data.length;
+				data.push(instruction.keyStringIndices.length, ...instruction.keyStringIndices);
+				break;
 			case "CREATE_MODULE_NAMESPACE":
 				paired(index, instruction.nameIndices, instruction.slots);
 				break;
@@ -2098,6 +2102,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "GUARD_FUNCTION_INDEX":
 			return `{ .opcode = MAL_OP_GUARD_FUNCTION_INDEX, .as.guard_function_index = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex} } }`;
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+			return `{ .opcode = MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT, .as.guard_base_constructor_layout = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex}, .data_offset = ${sideDataOffset()} } }`;
 		case "SELECT_SHAPE_CASE":
 			return `{ .opcode = MAL_OP_SELECT_SHAPE_CASE, .as.select_shape_case = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .candidate_count = ${instruction.candidates.length} } }`;
 		case "LOAD_GLOBAL_INDEX":

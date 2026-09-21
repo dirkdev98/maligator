@@ -62,6 +62,7 @@ export function coreSpecializedOnlyFunctions(
 				opcode === "move" ||
 				opcode === "rootUse" ||
 				opcode === "guardFunctionIndex" ||
+				opcode === "guardBaseConstructorLayout" ||
 				opcode === "typeofCompare"
 			)
 				continue;

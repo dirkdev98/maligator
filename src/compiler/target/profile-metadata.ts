@@ -153,7 +153,12 @@ export function profileOperationForInstruction(instruction: BytecodeInstruction)
 	const opcode = instruction.opcode;
 	if (instruction.opcode === "QUERY_STATIC_DATA")
 		return instruction.queryKind === "has-own" ? "property" : "call";
-	if (opcode.startsWith("CALL") || opcode === "GUARD_FUNCTION_INDEX") return "call";
+	if (
+		opcode.startsWith("CALL") ||
+		opcode === "GUARD_FUNCTION_INDEX" ||
+		opcode === "GUARD_BASE_CONSTRUCTOR_LAYOUT"
+	)
+		return "call";
 	if (opcode.startsWith("CONSTRUCT")) return "call";
 	if (
 		opcode.includes("PROPERTY") ||
@@ -205,6 +210,7 @@ function remarkForInstruction(
 				outcome: "retained",
 			};
 		case "GUARD_FUNCTION_INDEX":
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return {
 				phase: "lowering",
 				operation,

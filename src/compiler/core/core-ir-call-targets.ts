@@ -878,7 +878,11 @@ function analyzeFunctionTargets(
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			if (resultCount === 0) continue;
 			let resultTargets = CORE_CALLEE_TARGETS_OPEN;
-			if (opcode === "createFunction" || opcode === "guardFunctionIndex") {
+			if (
+				opcode === "createFunction" ||
+				opcode === "guardFunctionIndex" ||
+				opcode === "guardBaseConstructorLayout"
+			) {
 				const target = fn.instructionAttributes(instruction).functionIndex;
 				resultTargets =
 					typeof target === "number" &&
@@ -1029,6 +1033,7 @@ function analyzeFunctionTargets(
 		const observesIdentity =
 			descriptor.observesOperands ||
 			opcode === "guardFunctionIndex" ||
+			opcode === "guardBaseConstructorLayout" ||
 			(opcode === "unary" && (operator === "typeof" || operator === "!")) ||
 			(opcode === "binary" && (operator === "===" || operator === "!=="));
 		const key = instructionCellId(fn, instruction, trackedCells, identities);

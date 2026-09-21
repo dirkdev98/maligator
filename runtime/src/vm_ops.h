@@ -730,6 +730,12 @@ void mal_op_load_intrinsic(MalCallable *callable, const MalInstruction *instruct
 
 void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_guard_base_constructor_layout(
+    MalCallable *callable, const MalInstruction *instruction);
+
+bool mal_vm_guard_base_constructor_layout(
+    MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
+    const i32 *key_string_indices);
 
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction);
 

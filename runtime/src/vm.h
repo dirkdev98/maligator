@@ -329,6 +329,10 @@ typedef struct MalInstruction {
         } guard_function_index;
 
         struct {
+            i32 dst, callee, function_index, data_offset;
+        } guard_base_constructor_layout;
+
+        struct {
             i32 dst, index;
         } load_global;
 

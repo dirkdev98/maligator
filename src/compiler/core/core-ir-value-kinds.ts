@@ -189,6 +189,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "createTemplateObject":
 		case "instantiateLiteralTemplate":
 			return COMPILER_VALUE_KIND_OBJECT;
+		case "guardBaseConstructorLayout":
 		case "isEmpty":
 		case "typeofCompare":
 			return COMPILER_VALUE_KIND_BOOLEAN;

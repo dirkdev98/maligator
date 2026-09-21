@@ -71,6 +71,7 @@ export const CORE_OPCODES = [
 	"generatorStart",
 	"getAsyncIterator",
 	"getIterator",
+	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
 	"hasPrivate",
 	"declareGlobalLexical",
@@ -185,6 +186,7 @@ const GC_FREE = new Set<CoreOpcode>([
 	"createNull",
 	"createNumber",
 	"createUndefined",
+	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
 	"selectShapeCase",
 	"isEmpty",
@@ -295,6 +297,7 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"createUndefined",
 	// Validated templates allocate private data; unused results cannot expose the cache slot.
 	"instantiateLiteralTemplate",
+	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
 	"selectShapeCase",
 	"isEmpty",
@@ -334,6 +337,11 @@ const write = (
  */
 const OPCODE_ACCESSES = {
 	createBaseConstructReceiver: [read("object-slot", { baseOperand: 0 })],
+	guardBaseConstructorLayout: [
+		read("object-slot", { baseOperand: 0 }),
+		read("prototype", { baseOperand: 0 }),
+		read("shape", { baseOperand: 0 }),
+	],
 	queryStaticData: [read("object-slot"), write("object-slot")],
 	// The callee is implicit in the activation rather than an SSA operand.
 	generatorStart: [read("prototype")],
@@ -577,6 +585,7 @@ const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
 	"createNumber",
 	"createString",
 	"createUndefined",
+	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
 	"isEmpty",
 	"loadArgumentCount",
@@ -651,6 +660,7 @@ const INPUT_ARITIES = {
 	generatorStart: [0, 0],
 	getAsyncIterator: [1, 1],
 	getIterator: [1, 1],
+	guardBaseConstructorLayout: [1, 1],
 	guardFunctionIndex: [1, 1],
 	selectShapeCase: [1, 1],
 	hasPrivate: [2, 2],

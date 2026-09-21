@@ -307,6 +307,13 @@ export type CompilerInstruction =
 			registers: [number];
 	  }
 	| {
+			type: "guardBaseConstructorLayout";
+			// [destination (boolean), callee]
+			registers: [number, number];
+			functionIndex: number;
+			keyStringIndices: ReadonlyArray<number>;
+	  }
+	| {
 			// Speculative-call-inlining guard (produced by the inliner, not the front end):
 			// dst := callee is a function object with `functionIndex`. Feeds a jumpIf that
 			// picks the inlined body vs the deopt call.

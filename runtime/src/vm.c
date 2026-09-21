@@ -1121,6 +1121,13 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_GUARD_FUNCTION_INDEX:
             in->as.guard_function_index.function_index += fn_base;
             break;
+        case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+            in->as.guard_base_constructor_layout.function_index += fn_base;
+            i32 *data = &instruction_data[
+                in->as.guard_base_constructor_layout.data_offset];
+            for (i32 index = 0; index < data[0]; index++) data[1 + index] += string_base;
+            break;
+        }
         // owner_function_index is either a real function index (>= 0, rebased
         // like every other) or a synthetic per-iteration loop-scope id (< 0,
         // assigned by nextLoopScopeId--). The negative ids are matched within a
@@ -2973,6 +2980,31 @@ static void mal_vm_run_until_frame_count(
                         if (matches) {
                             instruction_pointer = branch->as.jump_if.target_ip;
                         }
+                        MAL_PERF_COUNT(interpreter_guard_branch_fusions);
+                    }
+                }
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
+            case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+                const i32 *data = &frame->function->instruction_data[
+                    instruction->as.guard_base_constructor_layout.data_offset];
+                bool matches = mal_vm_guard_base_constructor_layout(
+                    vm,
+                    registers[instruction->as.guard_base_constructor_layout.callee],
+                    instruction->as.guard_base_constructor_layout.function_index,
+                    data[0], &data[1]);
+                registers[instruction->as.guard_base_constructor_layout.dst] =
+                    mal_value_new_boolean(matches);
+                if (instruction_pointer < frame->function->instruction_count) {
+                    const MalInstruction *branch = &instructions[instruction_pointer];
+                    if (branch->opcode == MAL_OP_JUMP_IF &&
+                        branch->as.jump_if.cond ==
+                            instruction->as.guard_base_constructor_layout.dst &&
+                        branch->as.jump_if.target_ip > instruction_pointer) {
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
+                        instruction_pointer++;
+                        if (matches) instruction_pointer = branch->as.jump_if.target_ip;
                         MAL_PERF_COUNT(interpreter_guard_branch_fusions);
                     }
                 }

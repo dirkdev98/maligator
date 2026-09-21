@@ -247,6 +247,46 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it("scalarizes contained base construction behind a prototype-layout guard", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Pair {
+					constructor(left, right) { this.left = left; this.right = right; }
+				}
+				function hot(limit) {
+					let sum = 0;
+					for (let index = 0; index < limit; index++) {
+						const pair = new Pair(index, index + 1);
+						sum += pair.left + pair.right;
+					}
+					return sum;
+				}
+				hot(10);`,
+				"core-contained-base-construction.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		const guard = operations.find(
+			({ opcode }) => opcode === "guardBaseConstructorLayout",
+		);
+		expect(guard?.attributes.keyStringIndices).toHaveLength(2);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		expect(
+			operations.some(
+				({ opcode }) =>
+					opcode === "createBaseConstructReceiver" || opcode === "createObjectShaped",
+			),
+		).toBe(false);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("retains the callee source chain when inlining", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

@@ -253,6 +253,14 @@ function cloneInstruction(
 			};
 		case "GUARD_FUNCTION_INDEX":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+			return {
+				...instruction,
+				functionIndex: instruction.functionIndex + base.function,
+				keyStringIndices: instruction.keyStringIndices.map(
+					(index) => index + base.string,
+				),
+			};
 		case "LOAD_GLOBAL_INDEX":
 		case "LOAD_GLOBAL":
 		case "STORE_GLOBAL":

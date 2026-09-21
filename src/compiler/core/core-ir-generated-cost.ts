@@ -175,7 +175,8 @@ function generatedCodeCost(
 		if (effects.callsUserCode || effects.mayGc || LOWERED_HELPER_OPCODES.has(opcode)) {
 			helperCalls++;
 		}
-		if (opcode === "guardFunctionIndex") guards++;
+		if (opcode === "guardFunctionIndex" || opcode === "guardBaseConstructorLayout")
+			guards++;
 		if (BOXING_OPCODES.has(opcode)) boxingOperations++;
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operandCount = fn.kernel.instructionOperandCount(instruction);

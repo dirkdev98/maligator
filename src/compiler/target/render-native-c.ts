@@ -4506,6 +4506,12 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = mal_vm_callee_has_index(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)});`,
 			];
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+			if (reps[instruction.callee] !== "boxed")
+				return [storeBoolean(instruction.dst, "false")];
+			return [
+				`r${instruction.dst} = mal_vm_guard_base_constructor_layout(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)}, ${instruction.keyStringIndices.length}, (const i32[]){ ${instruction.keyStringIndices.map((index) => relocation.stringIndex(index)).join(", ")} });`,
+			];
 		case "LOAD_CALLEE":
 			// The invoked closure — used to initialize a named function expression's
 			// own-name binding. Only emitted in the entry prologue, so `callee` is the

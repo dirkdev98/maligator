@@ -1732,6 +1732,19 @@ void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *in
     );
 }
 
+void mal_op_guard_base_constructor_layout(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.guard_base_constructor_layout.data_offset);
+    callable->registers[instruction->as.guard_base_constructor_layout.dst] =
+        mal_value_new_boolean(mal_vm_guard_base_constructor_layout(
+            callable->vm,
+            callable->registers[instruction->as.guard_base_constructor_layout.callee],
+            instruction->as.guard_base_constructor_layout.function_index,
+            data[0], &data[1]));
+}
+
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_store_captured(
         callable->env,
@@ -5024,9 +5037,10 @@ static bool mal_ic_record_transition(
  * [[Set]], accessors intercept, and non-writable inherited data rejects. A
  * writable inherited data property (or an absent property) permits creation.
  */
-static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey key) {
-    for (const MalObject *cursor = object->prototype;
-         cursor != nullptr; cursor = cursor->prototype) {
+static bool mal_prototype_chain_allows_transition_store(
+    const MalObject *prototype, MalKey key
+) {
+    for (const MalObject *cursor = prototype; cursor != nullptr; cursor = cursor->prototype) {
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
@@ -5039,6 +5053,42 @@ static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey ke
              (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_SHADOW_WRITABLE));
     }
     return true;
+}
+
+bool mal_vm_guard_base_constructor_layout(
+    MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
+    const i32 *key_string_indices
+) {
+    if (!mal_vm_callee_has_index(vm, callee, function_index) || key_count < 1 ||
+        key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
+        return false;
+    }
+    MalFunctionObject *function = mal_value_to_function_object(callee);
+    MalPropertyLookup prototype_property = mal_object_get_own(
+        &function->object,
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE));
+    if (!prototype_property.present ||
+        (prototype_property.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        !mal_value_is_heap_type(prototype_property.desc.value, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    MalObject *prototype = mal_value_to_object(prototype_property.desc.value);
+    for (i32 index = 0; index < key_count; index++) {
+        i32 string_index = key_string_indices[index];
+        if (string_index < 0 || string_index >= vm->runtime_image->string_constant_count) {
+            return false;
+        }
+        MalKey key = {
+            .kind = MAL_KEY_STRING,
+            .value = mal_value_from_string(vm->string_constant_atoms[string_index]),
+        };
+        if (!mal_prototype_chain_allows_transition_store(prototype, key)) return false;
+    }
+    return true;
+}
+
+static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey key) {
+	return mal_prototype_chain_allows_transition_store(object->prototype, key);
 }
 
 static bool mal_ic_try_record_inherited_slot(

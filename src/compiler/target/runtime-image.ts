@@ -909,6 +909,13 @@ export type BytecodeInstruction =
 			index: number;
 	  }
 	| {
+			opcode: "GUARD_BASE_CONSTRUCTOR_LAYOUT";
+			dst: number;
+			callee: number;
+			functionIndex: number;
+			keyStringIndices: Array<number>;
+	  }
+	| {
 			opcode: "GUARD_FUNCTION_INDEX";
 			dst: number;
 			callee: number;
@@ -3170,6 +3177,14 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
 				functionIndex: instruction.functionIndex,
+			};
+		case "guardBaseConstructorLayout":
+			return {
+				opcode: "GUARD_BASE_CONSTRUCTOR_LAYOUT",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				functionIndex: instruction.functionIndex,
+				keyStringIndices: [...instruction.keyStringIndices],
 			};
 		case "loadCallee":
 			return {

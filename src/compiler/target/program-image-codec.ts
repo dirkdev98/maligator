@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 54;
+export const WIRE_VERSION = 55;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -982,6 +982,15 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.callee);
 			w.i32(i.functionIndex);
 			return;
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+			if (i.keyStringIndices.length < 1 || i.keyStringIndices.length > 64) {
+				throw new RangeError("program-image-codec: invalid constructor layout guard");
+			}
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.functionIndex);
+			w.i32Array(i.keyStringIndices);
+			return;
 		case "SELECT_SHAPE_CASE":
 			w.i32(i.dst);
 			w.i32(i.object);
@@ -1880,6 +1889,22 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
 		case "GUARD_FUNCTION_INDEX":
 			return { opcode, dst: r.i32(), callee: r.i32(), functionIndex: r.i32() };
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT": {
+			const instruction = {
+				opcode,
+				dst: r.i32(),
+				callee: r.i32(),
+				functionIndex: r.i32(),
+				keyStringIndices: r.i32Array(),
+			} as const;
+			if (
+				instruction.keyStringIndices.length < 1 ||
+				instruction.keyStringIndices.length > 64
+			) {
+				throw new RangeError("program-image-codec: invalid constructor layout guard");
+			}
+			return { ...instruction, keyStringIndices: [...instruction.keyStringIndices] };
+		}
 		case "SELECT_SHAPE_CASE": {
 			const dst = r.i32();
 			const object = r.i32();

@@ -29,7 +29,8 @@ import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-imag
 // A definition exercising the tricky encodings: variable-length operand arrays
 // (CALL / CREATE_OBJECT_SHAPED / CREATE_MODULE_NAMESPACE / CREATE_TEMPLATE_OBJECT /
 // COPY_DATA_PROPERTIES / INIT_GLOBAL_VARS / CREATE_PRIVATE_NAMES /
-// INIT_PRIVATE_FIELDS), no-fallback numeric Math, the f64 / boolean / enum /
+// INIT_PRIVATE_FIELDS / GUARD_BASE_CONSTRUCTOR_LAYOUT), no-fallback numeric Math,
+// the f64 / boolean / enum /
 // u16-intrinsic operands,
 // strings (incl. astral code units), bigints (incl. > 64 bits), handlers, the
 // vestigial TRY_BEGIN (handlerIp dropped → 0), and debug tables.
@@ -232,6 +233,13 @@ const instructions: Array<BytecodeInstruction> = [
 		parent: 5,
 		argumentsArray: 12,
 		newTarget: 6,
+	},
+	{
+		opcode: "GUARD_BASE_CONSTRUCTOR_LAYOUT",
+		dst: 14,
+		callee: 5,
+		functionIndex: 1,
+		keyStringIndices: [0, 1],
 	},
 	{ opcode: "SET_THIS", value: 11 },
 	{ opcode: "RETURN", value: 11 },

@@ -128,5 +128,58 @@ try {
 }
 ok("recursion overflow", overflowed);
 
-ok("check count", checks === 14);
+class ScalarPair {
+	constructor(left, right) {
+		this.left = left;
+		this.right = right;
+	}
+}
+const sumScalarPairs = function (limit) {
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		const pair = new ScalarPair(index, index + 1);
+		total += pair.left + pair.right;
+	}
+	return total;
+};
+ok("contained construction", sumScalarPairs(4) === 16);
+
+let scalarSetterTotal = 0;
+Object.defineProperty(ScalarPair.prototype, "left", {
+	configurable: true,
+	set(value) {
+		scalarSetterTotal += value;
+	},
+});
+ok(
+	"prototype setter guard miss",
+	Number.isNaN(sumScalarPairs(4)) && scalarSetterTotal === 6,
+);
+
+class LockedField {
+	constructor(value) {
+		this.value = value;
+	}
+}
+const readLockedFields = function (limit) {
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		const field = new LockedField(index);
+		total += field.value;
+	}
+	return total;
+};
+Object.defineProperty(LockedField.prototype, "value", {
+	value: 1,
+	writable: false,
+});
+let sawLockedFieldError = false;
+try {
+	readLockedFields(2);
+} catch (error) {
+	sawLockedFieldError = error instanceof TypeError;
+}
+ok("non-writable prototype guard miss", sawLockedFieldError);
+
+ok("check count", checks === 17);
 console.log("direct-known-construct PASS");

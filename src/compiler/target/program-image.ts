@@ -1437,6 +1437,7 @@ export function vmNativeInstructionMayCaptureStack(
 		case "LOAD_THIS":
 		case "LOAD_CALLEE":
 		case "GUARD_FUNCTION_INDEX":
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 		case "SELECT_SHAPE_CASE":
 		case "LOAD_CAPTURED":
 		case "STORE_CAPTURED":

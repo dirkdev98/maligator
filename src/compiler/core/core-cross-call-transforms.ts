@@ -478,6 +478,157 @@ function constructorReturnMode(
 	return undefined;
 }
 
+interface ScalarConstructorLayout {
+	readonly keyStringIndices: ReadonlyArray<number>;
+	readonly initialValues: ReadonlyArray<CoreValueId>;
+	readonly stores: ReadonlySet<CoreInstructionId>;
+}
+
+function constructorKeyIsNamed(program: CoreProgram, stringIndex: number): boolean {
+	const units = program.stringConstants[stringIndex];
+	if (units === undefined || units.length === 0) return units !== undefined;
+	const name = String.fromCodePoint(...units);
+	if (name === "__proto__") return false;
+	if (name === "0") return false;
+	if (name.length > 1 && name.charCodeAt(0) === 0x30) return true;
+	let index = 0;
+	for (const unit of units) {
+		if (unit < 0x30 || unit > 0x39) return true;
+		index = index * 10 + unit - 0x30;
+		if (index > 0xffff_ffff) return true;
+	}
+	return index === 0xffff_ffff;
+}
+
+function scalarConstructorLayout(
+	program: CoreProgram,
+	inline: InlineTarget,
+): ScalarConstructorLayout | undefined {
+	if (
+		!inline.construction ||
+		!inline.linear ||
+		constructorReturnMode(inline.function, inline.returnValue) !== "receiver"
+	)
+		return undefined;
+	const parameters = new Set<CoreValueId>();
+	for (let index = 0; index < inline.function.parameterCount; index++)
+		parameters.add(inline.function.kernel.functionParameter(index));
+	const receivers = new Set<CoreValueId>();
+	const keys: Array<number> = [];
+	const values: Array<CoreValueId> = [];
+	const stores = new Set<CoreInstructionId>();
+	for (const instruction of inline.instructions) {
+		const opcode = inline.function.instructionOpcodeName(instruction);
+		const outputs = materializeInstructionResults(inline.function, instruction);
+		if (opcode === "loadThis") {
+			if (outputs.length !== 1) return undefined;
+			receivers.add(outputs[0]!);
+			continue;
+		}
+		if (opcode === "createUndefined") continue;
+		if (opcode !== "storePropertyStatic") return undefined;
+		const operands = materializeInstructionOperands(inline.function, instruction);
+		const stringIndex = inline.function.instructionAttributes(instruction).stringIndex;
+		if (
+			operands.length !== 2 ||
+			!receivers.has(operands[0]!) ||
+			!parameters.has(operands[1]!) ||
+			typeof stringIndex !== "number" ||
+			!constructorKeyIsNamed(program, stringIndex) ||
+			keys.includes(stringIndex)
+		)
+			return undefined;
+		keys.push(stringIndex);
+		values.push(operands[1]!);
+		stores.add(instruction);
+	}
+	if (keys.length === 0 || keys.length > 8) return undefined;
+	return {
+		keyStringIndices: Object.freeze(keys),
+		initialValues: Object.freeze(values),
+		stores,
+	};
+}
+
+interface ConstructorConsumerPlan {
+	readonly prefix: ReadonlyArray<CoreInstructionId>;
+	readonly suffix: ReadonlyArray<CoreInstructionId>;
+	readonly liveOut: ReadonlyArray<CoreValueId>;
+}
+
+function constructorConsumerPlan(
+	fn: CoreFunctionStore,
+	tail: ReadonlyArray<CoreInstructionId>,
+	callResult: CoreValueId,
+	originalTerminator: CoreInstructionId,
+): ConstructorConsumerPlan | undefined {
+	const aliases = new Set<CoreValueId>([callResult]);
+	let lastUse = -1;
+	for (const [index, instruction] of tail.entries()) {
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operands = materializeInstructionOperands(fn, instruction);
+		for (const [position, operand] of operands.entries()) {
+			if (!aliases.has(operand)) continue;
+			if (
+				!((opcode === "move" || opcode === "throwIfTdz") && position === 0) &&
+				!(opcode === "loadPropertyStatic" && position === 0)
+			)
+				return undefined;
+			lastUse = index;
+		}
+		if (
+			(opcode === "move" || opcode === "throwIfTdz") &&
+			operands.length > 0 &&
+			aliases.has(operands[0]!)
+		) {
+			for (const output of materializeInstructionResults(fn, instruction))
+				aliases.add(output);
+		}
+	}
+	if (lastUse < 0 || lastUse >= 12) return undefined;
+	const prefix = tail.slice(0, lastUse + 1);
+	const prefixSet = new Set(prefix);
+	const terminatorOperands = materializeInstructionOperands(fn, originalTerminator);
+	if (terminatorOperands.some((value) => aliases.has(value))) return undefined;
+	for (const alias of aliases) {
+		if (fn.kernel.valueHandlerUseCount(alias) !== 0) return undefined;
+		for (
+			let use = fn.kernel.valueFirstUse(alias);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (fn.kernel.useLive(use) === 0) continue;
+			const instruction = coreInstructionId(fn.kernel.useInstruction(use));
+			if (!prefixSet.has(instruction)) return undefined;
+		}
+	}
+	const liveOut: Array<CoreValueId> = [];
+	for (const instruction of prefix) {
+		for (const output of materializeInstructionResults(fn, instruction)) {
+			let internal = false;
+			let external = fn.kernel.valueHandlerUseCount(output) !== 0;
+			for (
+				let use = fn.kernel.valueFirstUse(output);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const user = coreInstructionId(fn.kernel.useInstruction(use));
+				if (prefixSet.has(user)) internal = true;
+				else external = true;
+			}
+			if (external && internal) return undefined;
+			if (external) liveOut.push(output);
+		}
+	}
+	if (liveOut.length === 0 || liveOut.length > 4) return undefined;
+	return {
+		prefix: Object.freeze(prefix),
+		suffix: Object.freeze(tail.slice(lastUse + 1)),
+		liveOut: Object.freeze(liveOut),
+	};
+}
+
 function appendConstructReceiver(
 	editor: CoreEditor,
 	block: CoreBlockId,
@@ -489,6 +640,37 @@ function appendConstructReceiver(
 		attributes: { constructorSlotReserve: slotReserve },
 		sourcePosition: position,
 	}).outputs[0]!;
+}
+
+function cloneConstructorConsumerPrefix(
+	editor: CoreEditor,
+	fn: CoreFunctionStore,
+	destination: CoreBlockId,
+	plan: ConstructorConsumerPlan,
+	callResult: CoreValueId,
+	receiver: CoreValueId,
+): ReadonlyArray<CoreValueId> {
+	const values = new Map<CoreValueId, CoreValueId>([[callResult, receiver]]);
+	for (const instruction of plan.prefix) {
+		const inputs = materializeInstructionOperands(fn, instruction).map(
+			(value) => values.get(value) ?? value,
+		);
+		const outputs = materializeInstructionResults(fn, instruction);
+		const inserted = editor.appendInstruction(
+			destination,
+			fn.instructionOpcodeName(instruction),
+			inputs,
+			{
+				outputCount: outputs.length,
+				outputRepresentations: outputs.map((value) => fn.valueRepresentation(value)),
+				attributes: fn.instructionAttributes(instruction),
+				sourcePosition: fn.instructionSourcePosition(instruction),
+			},
+		);
+		for (const [index, output] of outputs.entries())
+			values.set(output, inserted.outputs[index]!);
+	}
+	return plan.liveOut.map((value) => values.get(value)!);
 }
 
 function callCarriesDirectCreatedFunction(
@@ -1014,6 +1196,11 @@ function applyGuardedInline(
 		instruction = caller.instructionNext(instruction)
 	)
 		tail.push(instruction);
+	const scalarLayout = guarded ? scalarConstructorLayout(program, inline) : undefined;
+	const consumerPlan =
+		scalarLayout === undefined
+			? undefined
+			: constructorConsumerPlan(caller, tail, callResult, originalTerminator);
 	const handlerBlock = caller.kernel.blockHandlerBlock(block);
 	const handlerArguments: Array<CoreValueId> = [];
 	const handlerArgumentStart = caller.kernel.blockHandlerArgumentStart(block);
@@ -1024,14 +1211,18 @@ function applyGuardedInline(
 	const callRefinement = caller.instructionEffectRefinement(candidate.site);
 	const fast = editor.createBlock();
 	const fallback = guarded ? editor.createBlock() : undefined;
-	const join = editor.createBlock([
-		{ representation: caller.valueRepresentation(callResult) },
-	]);
-	const joinedResult = caller.kernel.blockParameterValue(
-		caller.kernel.blockParameterStart(join),
+	const joinValues = consumerPlan?.liveOut ?? [callResult];
+	const join = editor.createBlock(
+		joinValues.map((value) => ({ representation: caller.valueRepresentation(value) })),
 	);
-	for (const instruction of tail) editor.moveInstruction(instruction, join);
-	editor.replaceValueUses(callResult, joinedResult);
+	const joinParameterStart = caller.kernel.blockParameterStart(join);
+	for (const instruction of consumerPlan?.suffix ?? tail)
+		editor.moveInstruction(instruction, join);
+	for (const [index, value] of joinValues.entries())
+		editor.replaceValueUses(
+			value,
+			caller.kernel.blockParameterValue(joinParameterStart + index),
+		);
 	const joinedTerminator = {
 		...coreTerminatorInput(caller, originalTerminator),
 		...(terminatorPosition === undefined ? {} : { sourcePosition: terminatorPosition }),
@@ -1082,25 +1273,18 @@ function applyGuardedInline(
 				...(callRefinement === undefined ? {} : { effectRefinement: callRefinement }),
 			},
 		);
+		if (consumerPlan !== undefined)
+			for (const instruction of consumerPlan.prefix)
+				editor.moveInstruction(instruction, fallback);
 		editor.setTerminator(fallback, {
 			kind: "jump",
-			edge: { block: join, arguments: [callResult] },
+			edge: { block: join, arguments: [...joinValues] },
 			sourcePosition: callerPosition,
 		});
 	} else editor.removeInstruction(candidate.site);
 
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
-	if (inline.construction) {
-		receiver = appendConstructReceiver(
-			editor,
-			fast,
-			callee,
-			coreConstructorSlotReserve(inline.function),
-			callerPosition,
-		);
-		introduced++;
-	}
 	const bridgeValue = (
 		destination: CoreBlockId,
 		value: CoreValueId,
@@ -1165,6 +1349,24 @@ function applyGuardedInline(
 		values.set(parameter, created.outputs[0]!);
 		introduced++;
 	}
+	if (inline.construction) {
+		if (scalarLayout !== undefined && consumerPlan !== undefined) {
+			const initialValues = scalarLayout.initialValues.map((value) => values.get(value)!);
+			receiver = editor.appendInstruction(fast, "createObjectShaped", initialValues, {
+				attributes: { keyStringIndices: scalarLayout.keyStringIndices },
+				sourcePosition: callerPosition,
+			}).outputs[0]!;
+		} else {
+			receiver = appendConstructReceiver(
+				editor,
+				fast,
+				callee,
+				coreConstructorSlotReserve(inline.function),
+				callerPosition,
+			);
+		}
+		introduced++;
+	}
 	const emitReturn = (destination: CoreBlockId, value: CoreValueId): void => {
 		let result =
 			inline.construction && constructorReturnMode(inline.function, value) === "receiver"
@@ -1185,9 +1387,21 @@ function applyGuardedInline(
 			}).outputs[0]!;
 			introduced++;
 		}
+		const arguments_ =
+			consumerPlan === undefined
+				? [result]
+				: cloneConstructorConsumerPrefix(
+						editor,
+						caller,
+						destination,
+						consumerPlan,
+						callResult,
+						result,
+					);
+		if (consumerPlan !== undefined) introduced += consumerPlan.prefix.length;
 		editor.setTerminator(destination, {
 			kind: "jump",
-			edge: { block: join, arguments: [result] },
+			edge: { block: join, arguments: arguments_ },
 			sourcePosition: callerPosition,
 		});
 	};
@@ -1201,6 +1415,12 @@ function applyGuardedInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
+			if (
+				scalarLayout !== undefined &&
+				consumerPlan !== undefined &&
+				scalarLayout.stores.has(instruction)
+			)
+				continue;
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
@@ -1304,11 +1524,23 @@ function applyGuardedInline(
 	if (inline.linear) emitReturn(fast, inline.returnValue);
 
 	if (fallback !== undefined) {
-		const guard = editor.appendInstruction(block, "guardFunctionIndex", [callee], {
-			outputRepresentations: ["boolean"],
-			attributes: { functionIndex: target },
-			sourcePosition: callerPosition,
-		});
+		const guard = editor.appendInstruction(
+			block,
+			scalarLayout !== undefined && consumerPlan !== undefined
+				? "guardBaseConstructorLayout"
+				: "guardFunctionIndex",
+			[callee],
+			{
+				outputRepresentations: ["boolean"],
+				attributes: {
+					functionIndex: target,
+					...(scalarLayout === undefined || consumerPlan === undefined
+						? {}
+						: { keyStringIndices: scalarLayout.keyStringIndices }),
+				},
+				sourcePosition: callerPosition,
+			},
+		);
 		editor.replaceTerminator(block, {
 			kind: "branch",
 			condition: guard.outputs[0]!,

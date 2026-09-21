@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 54u
+#define WIRE_VERSION 55u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -433,6 +433,23 @@ static i32 rd_side_single(Rd *r, I32Builder *builder, i32 expected_count) {
     }
     builder->data[builder->count++] = (i32) count;
     for (u32 i = 0; i < count; i++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
+static i32 rd_side_bounded(
+    Rd *r, I32Builder *builder, u32 minimum_count, u32 maximum_count
+) {
+    i32 offset = (i32) builder->count;
+    u32 count = rd_count(r, minimum_count);
+    if (!r->ok || count > maximum_count ||
+        !i32_builder_reserve(builder, r, (usize) count + 1)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = (i32) count;
+    for (u32 index = 0; index < count; index++) {
         builder->data[builder->count++] = rd_i32(r);
     }
     return offset;
@@ -896,6 +913,14 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.guard_function_index.dst = rd_i32(r);
             o->as.guard_function_index.callee = rd_i32(r);
             o->as.guard_function_index.function_index = rd_i32(r);
+            return;
+        case WIRE_GUARD_BASE_CONSTRUCTOR_LAYOUT:
+            o->opcode = MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT;
+            o->as.guard_base_constructor_layout.dst = rd_i32(r);
+            o->as.guard_base_constructor_layout.callee = rd_i32(r);
+            o->as.guard_base_constructor_layout.function_index = rd_i32(r);
+            o->as.guard_base_constructor_layout.data_offset = rd_side_bounded(
+                r, side_data, 1, MAL_SHAPE_MAX_INLINE_SLOTS);
             return;
         case WIRE_STORE_CAPTURED:
             o->opcode = MAL_OP_STORE_CAPTURED;
@@ -1450,6 +1475,9 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_PRIMORDIAL, load_intrinsic);
         MAL_WRITES_DST(MAL_OP_LOAD_CAPTURED, load_captured);
         MAL_WRITES_DST(MAL_OP_GUARD_FUNCTION_INDEX, guard_function_index);
+        MAL_WRITES_DST(
+            MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT,
+            guard_base_constructor_layout);
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_INDEX, load_global_index);
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL, load_global);
         MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY, load_property);
@@ -2429,6 +2457,32 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 if (instruction->as.precise_number_sum.dst < 0 || instruction->as.precise_number_sum.dst >= fn->register_count) r.ok = false;
                 for (i32 index = 0; r.ok && index < data[0]; index++)
                     if (data[index + 1] < 0 || data[index + 1] >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT) {
+                const i32 *data = &fn->instruction_data[
+                    instruction->as.guard_base_constructor_layout.data_offset];
+                if (instruction->as.guard_base_constructor_layout.dst < 0 ||
+                    instruction->as.guard_base_constructor_layout.dst >= fn->register_count ||
+                    instruction->as.guard_base_constructor_layout.callee < 0 ||
+                    instruction->as.guard_base_constructor_layout.callee >= fn->register_count ||
+                    instruction->as.guard_base_constructor_layout.function_index < 0 ||
+                    instruction->as.guard_base_constructor_layout.function_index >=
+                        (i32) function_count ||
+                    data[0] < 1 || data[0] > MAL_SHAPE_MAX_INLINE_SLOTS) {
+                    r.ok = false;
+                }
+                for (i32 key = 0; r.ok && key < data[0]; key++) {
+                    i32 string_index = data[key + 1];
+                    if (string_index < 0 || string_index >= (i32) string_count ||
+                        !mal_loaded_shape_key_is_named(&strings[string_index])) {
+                        r.ok = false;
+                    }
+                    for (i32 previous = 0; r.ok && previous < key; previous++) {
+                        if (mal_loaded_strings_equal(
+                                &strings[data[previous + 1]], &strings[string_index])) {
+                            r.ok = false;
+                        }
+                    }
+                }
             } else if (instruction->opcode == MAL_OP_PREPARED_STRING_COMPARE) {
                 i32 registers[] = {instruction->as.prepared_string_compare.dst, instruction->as.prepared_string_compare.left, instruction->as.prepared_string_compare.right};
                 for (usize i = 0; i < countof(registers); i++)
