@@ -723,6 +723,7 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				if (instruction.icIndex !== expected) {
 					throw new RangeError(
 						`program-image-codec: property IC index ${instruction.icIndex}, expected ${expected}`,
@@ -1508,6 +1509,7 @@ function readFunction(r: Reader): BytecodeFunction {
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				instruction.icIndex = propertyIcCount++;
 				break;
 			case "CREATE_OBJECT_SHAPED":
@@ -1903,6 +1905,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				callee: r.i32(),
 				functionIndex: r.i32(),
 				keyStringIndices: r.i32Array(),
+				icIndex: -1,
 			} as const;
 			if (
 				instruction.keyStringIndices.length < 1 ||

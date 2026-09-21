@@ -4514,7 +4514,7 @@ function emitInstruction(
 			if (reps[instruction.callee] !== "boxed")
 				return [storeBoolean(instruction.dst, "false")];
 			return [
-				`r${instruction.dst} = mal_vm_guard_base_constructor_layout(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)}, ${instruction.keyStringIndices.length}, (const i32[]){ ${instruction.keyStringIndices.map((index) => relocation.stringIndex(index)).join(", ")} });`,
+				`r${instruction.dst} = mal_vm_guard_base_constructor_layout(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)}, ${instruction.keyStringIndices.length}, (const i32[]){ ${instruction.keyStringIndices.map((index) => relocation.stringIndex(index)).join(", ")} }, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
 			];
 		case "LOAD_CALLEE":
 			// The invoked closure — used to initialize a named function expression's

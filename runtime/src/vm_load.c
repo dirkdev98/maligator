@@ -455,6 +455,22 @@ static i32 rd_side_bounded(
     return offset;
 }
 
+static i32 rd_side_constructor_layout(Rd *r, I32Builder *builder) {
+    i32 offset = (i32) builder->count;
+    u32 count = rd_count(r, 1);
+    if (!r->ok || count > MAL_SHAPE_MAX_INLINE_SLOTS ||
+        !i32_builder_reserve(builder, r, (usize) count + 2)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = (i32) count;
+    builder->data[builder->count++] = -1;
+    for (u32 index = 0; index < count; index++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
 static i32 rd_side_guarded_call(
     Rd *r, I32Builder *builder, i32 exact_function_index, bool allow_guarded
 ) {
@@ -925,8 +941,8 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.guard_base_constructor_layout.dst = rd_i32(r);
             o->as.guard_base_constructor_layout.callee = rd_i32(r);
             o->as.guard_base_constructor_layout.function_index = rd_i32(r);
-            o->as.guard_base_constructor_layout.data_offset = rd_side_bounded(
-                r, side_data, 1, MAL_SHAPE_MAX_INLINE_SLOTS);
+            o->as.guard_base_constructor_layout.data_offset =
+                rd_side_constructor_layout(r, side_data);
             return;
         case WIRE_STORE_CAPTURED:
             o->opcode = MAL_OP_STORE_CAPTURED;
@@ -1744,6 +1760,15 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
                 instructions[i].as.store_property_static_known_own_slot.ic_index =
                     fn->property_ic_count++;
                 break;
+            case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+                i32 offset = instructions[i].as.guard_base_constructor_layout.data_offset;
+                if (offset < 0 || offset > (i32) side_data.count - 2) {
+                    r->ok = false;
+                    break;
+                }
+                side_data.data[offset + 1] = fn->property_ic_count++;
+                break;
+            }
             case MAL_OP_CREATE_OBJECT_SHAPED:
                 instructions[i].as.create_object_shaped.shape_cache_index =
                     physical_literal_shape_count++;
@@ -2490,14 +2515,14 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     r.ok = false;
                 }
                 for (i32 key = 0; r.ok && key < data[0]; key++) {
-                    i32 string_index = data[key + 1];
+                    i32 string_index = data[key + 2];
                     if (string_index < 0 || string_index >= (i32) string_count ||
                         !mal_loaded_shape_key_is_named(&strings[string_index])) {
                         r.ok = false;
                     }
                     for (i32 previous = 0; r.ok && previous < key; previous++) {
                         if (mal_loaded_strings_equal(
-                                &strings[data[previous + 1]], &strings[string_index])) {
+                                &strings[data[previous + 2]], &strings[string_index])) {
                             r.ok = false;
                         }
                     }

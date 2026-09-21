@@ -1751,7 +1751,7 @@ void mal_op_guard_base_constructor_layout(
             callable->vm,
             callable->registers[instruction->as.guard_base_constructor_layout.callee],
             instruction->as.guard_base_constructor_layout.function_index,
-            data[0], &data[1]));
+            data[0], &data[2], mal_vm_property_ic_at(callable, data[1])));
 }
 
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction) {
@@ -4836,6 +4836,7 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
 		ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
 		ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
 		(ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
+		ic->mode == MAL_IC_MODE_CONSTRUCTOR_LAYOUT ||
 		(ic->mode == MAL_IC_MODE_MISSING &&
          ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
          ic->poly_count > 0)) {
@@ -5066,13 +5067,17 @@ static bool mal_prototype_chain_allows_transition_store(
 
 bool mal_vm_guard_base_constructor_layout(
     MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
-    const i32 *key_string_indices
+    const i32 *key_string_indices, MalInlineCache *ic
 ) {
     if (!mal_vm_callee_has_index(vm, callee, function_index) || key_count < 1 ||
         key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
         return false;
     }
     MalFunctionObject *function = mal_value_to_function_object(callee);
+    if (ic->mode == MAL_IC_MODE_CONSTRUCTOR_LAYOUT &&
+        ic->obj == &function->object) {
+        return true;
+    }
     MalPropertyLookup prototype_property = mal_object_get_own(
         &function->object,
         mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE));
@@ -5093,6 +5098,12 @@ bool mal_vm_guard_base_constructor_layout(
         };
         if (!mal_prototype_chain_allows_transition_store(prototype, key)) return false;
     }
+    mal_object_register_constructor_layout_cache(&function->object, prototype, ic);
+    *ic = (MalInlineCache) {
+        .obj = &function->object,
+        .proto_object = {prototype},
+        .mode = MAL_IC_MODE_CONSTRUCTOR_LAYOUT,
+    };
     return true;
 }
 

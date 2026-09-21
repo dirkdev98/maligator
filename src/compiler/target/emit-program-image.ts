@@ -391,7 +391,11 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				break;
 			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				offsets[index] = data.length;
-				data.push(instruction.keyStringIndices.length, ...instruction.keyStringIndices);
+				data.push(
+					instruction.keyStringIndices.length,
+					instruction.icIndex,
+					...instruction.keyStringIndices,
+				);
 				break;
 			case "CREATE_MODULE_NAMESPACE":
 				paired(index, instruction.nameIndices, instruction.slots);

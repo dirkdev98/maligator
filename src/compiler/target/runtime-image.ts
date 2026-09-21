@@ -920,6 +920,7 @@ export type BytecodeInstruction =
 			callee: number;
 			functionIndex: number;
 			keyStringIndices: Array<number>;
+			icIndex: number;
 	  }
 	| {
 			opcode: "GUARD_FUNCTION_INDEX";
@@ -1429,6 +1430,7 @@ export function countPropertyIcSites(
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				count++;
 				break;
 		}
@@ -2759,7 +2761,8 @@ function lowerExecutionFunctionToBytecode(
 				instruction.type === "loadPropertyStatic" ||
 				instruction.type === "loadPropertyStaticShapeCase" ||
 				instruction.type === "storeProperty" ||
-				instruction.type === "storePropertyStatic"
+				instruction.type === "storePropertyStatic" ||
+				instruction.type === "guardBaseConstructorLayout"
 			) {
 				propertyIcIndexByInstruction.set(instruction, propertyIcCount++);
 			}
@@ -2870,6 +2873,7 @@ function lowerExecutionFunctionToBytecode(
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
 				case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+				case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
 				case "CREATE_OBJECT_SHAPED":
@@ -3199,6 +3203,7 @@ function lowerInstructionToBytecodeInstruction(
 				callee: instruction.registers[1],
 				functionIndex: instruction.functionIndex,
 				keyStringIndices: [...instruction.keyStringIndices],
+				icIndex: -1,
 			};
 		case "loadCallee":
 			return {

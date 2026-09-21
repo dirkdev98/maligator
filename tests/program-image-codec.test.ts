@@ -17,6 +17,7 @@ import type {
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import {
 	buildArgumentSnapshotPlan,
+	countPropertyIcSites,
 	encodeVmValueOperand,
 	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
@@ -241,6 +242,7 @@ const instructions: Array<BytecodeInstruction> = [
 		callee: 5,
 		functionIndex: 1,
 		keyStringIndices: [0, 1],
+		icIndex: 2,
 	},
 	{ opcode: "SET_THIS", value: 11 },
 	{ opcode: "RETURN", value: 11 },
@@ -1705,6 +1707,7 @@ describe("program-image-codec", () => {
 	});
 
 	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {
+		expect(countPropertyIcSites(instructions)).toBe(3);
 		const invalidInstructions = instructions.map((instruction) =>
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 				? { ...instruction, icIndex: 1 }

@@ -116,8 +116,11 @@ void mal_object_bump_prototype_chain_epoch(void);
 
 /** Register/remove VM-owned cache rows from chain-local mutation dependencies. */
 bool mal_object_register_prototype_cache(
-    MalObject *receiver, MalObject *holder, void *cache,
-    bool include_receiver);
+	MalObject *receiver, MalObject *holder, void *cache,
+	bool include_receiver);
+
+bool mal_object_register_constructor_layout_cache(
+	MalObject *constructor, MalObject *prototype, void *cache);
 void mal_object_unregister_prototype_cache(void *cache);
 void mal_object_invalidate_prototype_dependents(MalObject *object);
 /** Release pooled dependency storage when the current thread has no live rows. */

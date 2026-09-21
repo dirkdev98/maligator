@@ -208,6 +208,25 @@ bool mal_object_register_prototype_cache(
     return false;
 }
 
+bool mal_object_register_constructor_layout_cache(
+    MalObject *constructor, MalObject *prototype, void *cache
+) {
+    mal_object_unregister_prototype_cache(cache);
+    mal_object_mark_as_prototype(constructor);
+    mal_object_mark_as_prototype(prototype);
+
+    MalPrototypeCacheDependency *constructor_dependency =
+        mal_prototype_dependency_alloc();
+    MAL_PERF_COUNT(prototype_dependency_register_nodes);
+    mal_prototype_dependency_link(constructor_dependency, constructor, cache);
+    for (MalObject *cursor = prototype; cursor != nullptr; cursor = cursor->prototype) {
+        MalPrototypeCacheDependency *dependency = mal_prototype_dependency_alloc();
+        MAL_PERF_COUNT(prototype_dependency_register_nodes);
+        mal_prototype_dependency_link(dependency, cursor, cache);
+    }
+    return true;
+}
+
 void mal_object_release_idle_prototype_dependencies(void) {
     if (g_prototype_dependency_active != 0) {
         return;

@@ -736,9 +736,10 @@ void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *in
 void mal_op_guard_base_constructor_layout(
     MalCallable *callable, const MalInstruction *instruction);
 
+struct MalInlineCache;
 bool mal_vm_guard_base_constructor_layout(
-    MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
-    const i32 *key_string_indices);
+	MalVm *vm, MalValue callee, i32 function_index, i32 key_count,
+	const i32 *key_string_indices, struct MalInlineCache *ic);
 
 void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction);
 
@@ -914,6 +915,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_TRANSITION 8u
 #define MAL_IC_MODE_OWN_TABLE 9u
 #define MAL_IC_MODE_TYPED_ARRAY_LENGTH 10u
+#define MAL_IC_MODE_CONSTRUCTOR_LAYOUT 11u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
