@@ -211,6 +211,47 @@ check(
 );
 
 check(
+	"paired every preserves strict equality",
+	(() => {
+		const shared = {};
+		const expected = [0, "same", shared];
+		const values = [-0, "same", shared];
+		const nanExpected = [NaN];
+		const nanValues = [NaN];
+		return (
+			values.every((value, position) => value === expected[position]) &&
+			!nanValues.every((value, position) => value === nanExpected[position])
+		);
+	})(),
+);
+
+check(
+	"paired every falls back for inherited holes",
+	(() => {
+		const expected = [1, , 3];
+		Array.prototype[1] = 2;
+		const result = [1, 2, 3].every((value, position) => value === expected[position]);
+		delete Array.prototype[1];
+		return result;
+	})(),
+);
+
+check(
+	"paired every falls back for expected accessors",
+	(() => {
+		let reads = 0;
+		const expected = [1, 2];
+		Object.defineProperty(expected, 1, {
+			get() {
+				reads++;
+				return 2;
+			},
+		});
+		return [1, 2].every((value, position) => value === expected[position]) && reads === 1;
+	})(),
+);
+
+check(
 	"every fallback materializes distinct captured callbacks",
 	(() => {
 		const retained = [];

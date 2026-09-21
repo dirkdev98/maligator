@@ -725,7 +725,6 @@ function emitNativeFunctions(
 			options.relocatable === true,
 			strictCompiledTargets,
 			image.runtime.stringConstants,
-			image.runtime.functions,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		const entries = emitted.directEntries.filter((entry) => fits(entry.source));

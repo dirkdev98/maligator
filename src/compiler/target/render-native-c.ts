@@ -32,6 +32,8 @@ import {
 import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
+	NativePairedArrayLoopAction,
+	NativePairedArrayLoopPlan,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
@@ -561,85 +563,6 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 	return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
 }
 
-interface NativePairedEveryCallback {
-	readonly ownerFunctionIndex: number;
-	readonly captureIndex: number;
-}
-
-function nativePairedEveryCallback(
-	fn: BytecodeFunction | undefined,
-): NativePairedEveryCallback | undefined {
-	if (
-		fn === undefined ||
-		fn.isAsync ||
-		fn.isGenerator ||
-		fn.handlers.length > 0 ||
-		fn.parameterCount < 2
-	)
-		return undefined;
-	type Value = "value" | "position" | "expected" | "projected" | "comparison";
-	const values = new Map<number, Value>([
-		[0, "value"],
-		[1, "position"],
-	]);
-	let capture: NativePairedEveryCallback | undefined;
-	let returned = false;
-	for (const [ip, instruction] of fn.instructions.entries()) {
-		switch (instruction.opcode) {
-			case "LOAD_ARGUMENT":
-				if (instruction.index === 0) values.set(instruction.dst, "value");
-				else if (instruction.index === 1) values.set(instruction.dst, "position");
-				else return undefined;
-				break;
-			case "LOAD_CAPTURED":
-				if (capture !== undefined) return undefined;
-				capture = {
-					ownerFunctionIndex: instruction.ownerFunctionIndex,
-					captureIndex: instruction.index,
-				};
-				values.set(instruction.dst, "expected");
-				break;
-			case "MOVE": {
-				const value = values.get(instruction.src);
-				if (value === undefined) return undefined;
-				values.set(instruction.dst, value);
-				break;
-			}
-			case "THROW_IF_TDZ":
-				if (values.get(instruction.src) !== "expected") return undefined;
-				break;
-			case "LOAD_PROPERTY":
-				if (
-					values.get(instruction.object) !== "expected" ||
-					values.get(instruction.key) !== "position"
-				)
-					return undefined;
-				values.set(instruction.dst, "projected");
-				break;
-			case "BINARY": {
-				if (instruction.operator !== "===") return undefined;
-				const operands = new Set([
-					values.get(instruction.left),
-					values.get(instruction.right),
-				]);
-				if (!operands.has("value") || !operands.has("projected")) return undefined;
-				values.set(instruction.dst, "comparison");
-				break;
-			}
-			case "JUMP":
-				if (instruction.targetIp !== ip + 1) return undefined;
-				break;
-			case "RETURN":
-				if (values.get(instruction.value) !== "comparison" || returned) return undefined;
-				returned = true;
-				break;
-			default:
-				return undefined;
-		}
-	}
-	return returned ? capture : undefined;
-}
-
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
@@ -658,7 +581,6 @@ function emitCompiledVariant(
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -1075,7 +997,6 @@ function emitCompiledVariant(
 		fieldCalls,
 		nativeContract.literalSwitches,
 		stringConstants,
-		runtimeFunctions,
 	);
 	if (body === null) {
 		return null;
@@ -1393,7 +1314,6 @@ export function emitCompiledFunction(
 	relocatable = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -1409,7 +1329,6 @@ export function emitCompiledFunction(
 		undefined,
 		strictCompiledTargets,
 		stringConstants,
-		runtimeFunctions,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1432,7 +1351,6 @@ export function emitCompiledFunction(
 			entry,
 			strictCompiledTargets,
 			stringConstants,
-			runtimeFunctions,
 		);
 		if (emitted === null) return [];
 		const worker = debug ? null : numericLeafWorker(fn, entry);
@@ -2282,7 +2200,6 @@ function emitBody(
 	fieldCalls?: ReadonlyArray<NativeFieldCall>,
 	literalSwitches?: NativeFunctionPlan["literalSwitches"],
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3016,13 +2933,37 @@ function emitBody(
 		nativeStringSliceNumberFusionActionByIp.has(ip) ||
 		nativeStringCharCodeAtChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
+	const indexedLoopElements = [...indexedLengthLoopActionByIp.entries()].flatMap(
+		([ip, action]) => {
+			const instruction = fn.instructions[ip];
+			return action.role === "element" &&
+				action.element?.kind === "load" &&
+				action.element.arrayIndexIsUint32 &&
+				instruction?.opcode === "LOAD_PROPERTY"
+				? [
+						{
+							lengthLoadIp: action.loadIp,
+							elementLoadIp: ip,
+							object: instruction.object,
+							key: instruction.key,
+							result: instruction.dst,
+						},
+					]
+				: [];
+		},
+	);
 	const nativeFastPaths = lowerNativeFastPaths(
 		fn,
 		reps,
 		jumpTargets,
 		staticPropertyProjectionConflicts,
+		indexedLoopElements,
 	);
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
+	const pairedArrayLoopActionByIp = nativeFastPaths.pairedArrayLoopActions;
+	const pairedArrayLoopByLengthLoad = new Map(
+		nativeFastPaths.pairedArrayLoops.map((plan) => [plan.lengthLoadIp, plan]),
+	);
 	const constructorInitializationActionByIp =
 		nativeFastPaths.constructorInitializationActions;
 	if (nativeFastPaths.constructorInitialization !== undefined) {
@@ -3036,6 +2977,12 @@ function emitBody(
 			lines.push(`f64 __property_projection_${projection.id}_value_${index} = 0.0;`);
 		for (const [index] of projection.steps.entries())
 			lines.push(`f64 __property_projection_${projection.id}_step_${index} = 0.0;`);
+	}
+	for (const paired of nativeFastPaths.pairedArrayLoops) {
+		lines.push(
+			`bool __paired_array_${paired.id}_fast = false;`,
+			`MalArrayObject *__paired_array_${paired.id}_secondary = nullptr;`,
+		);
 	}
 	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
 		const first = fn.instructions[ip]!;
@@ -3079,7 +3026,6 @@ function emitBody(
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instructionPlan = nativeInstructions[ip];
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with different published frame metadata.
@@ -3216,6 +3162,7 @@ function emitBody(
 		}
 		const instructionProfile: NativeInstructionProfile | undefined =
 			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
+		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 		emittedInstructions.add(ip);
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
@@ -3261,8 +3208,12 @@ function emitBody(
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
 				indexedLengthLoopAction: indexedLengthLoopActionByIp.get(ip),
-				nativeArrayPresenceProjectionAction:
-					nativeArrayPresenceProjectionActionByIp.get(ip),
+				nativeArrayPresenceProjectionAction: arrayPresenceAction,
+				pairedArrayLoopAction: pairedArrayLoopActionByIp.get(ip),
+				pairedArrayLoopPresence:
+					arrayPresenceAction === undefined
+						? undefined
+						: pairedArrayLoopByLengthLoad.get(arrayPresenceAction.indexed.loadIp),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
@@ -3283,14 +3234,6 @@ function emitBody(
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
 				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
-				pairedEveryCallback:
-					instructionPlan?.kind === "call" &&
-					instructionPlan.guardedBuiltinCall?.operation === "Array.prototype.every" &&
-					instructionPlan.directCallbackFunctionIndex !== undefined
-						? nativePairedEveryCallback(
-								runtimeFunctions[instructionPlan.directCallbackFunctionIndex],
-							)
-						: undefined,
 				relocation,
 			},
 		);
@@ -3624,6 +3567,8 @@ interface NativeInstructionContext {
 	readonly hasPrototype: boolean;
 	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
 	readonly nativeArrayPresenceProjectionAction?: NativeArrayPresenceProjectionAction;
+	readonly pairedArrayLoopAction?: NativePairedArrayLoopAction;
+	readonly pairedArrayLoopPresence?: NativePairedArrayLoopPlan;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -3639,7 +3584,6 @@ interface NativeInstructionContext {
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
-	readonly pairedEveryCallback?: NativePairedEveryCallback;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3720,6 +3664,8 @@ function emitInstruction(
 		hasPrototype,
 		indexedLengthLoopAction,
 		nativeArrayPresenceProjectionAction,
+		pairedArrayLoopAction,
+		pairedArrayLoopPresence,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -3735,7 +3681,6 @@ function emitInstruction(
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
 		constructorInitializationAction,
-		pairedEveryCallback,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -5028,6 +4973,16 @@ function emitInstruction(
 						`}`,
 					];
 				}
+				if (pairedArrayLoopAction?.role === "load") {
+					const { plan } = pairedArrayLoopAction;
+					return [
+						`if (__paired_array_${plan.id}_fast) {`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, `__paired_array_${plan.id}_secondary->elements[(u32) ${num(instruction.key)}]`)};`,
+						`} else {`,
+						...ordinary().map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "load"
@@ -5118,7 +5073,17 @@ function emitInstruction(
 			if (indexedLengthLoopAction?.role === "load") {
 				const id = indexedLengthLoopAction.loadIp;
 				const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
+				const pairedAdmission =
+					pairedArrayLoopAction?.role === "admit"
+						? [
+								`  __paired_array_${pairedArrayLoopAction.plan.id}_secondary = mal_vm_as_array(${boxed(pairedArrayLoopAction.plan.secondaryObject)});`,
+								`  __paired_array_${pairedArrayLoopAction.plan.id}_fast = !__indexed_length_${id}_array->dense_deopted && !__indexed_length_${id}_array->dense_maybe_holey && __indexed_length_${id}_array->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary != nullptr && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_deopted && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_maybe_holey && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->length >= __indexed_length_${id}_value;`,
+							]
+						: [];
 				return [
+					...(pairedArrayLoopAction?.role === "admit"
+						? [`__paired_array_${pairedArrayLoopAction.plan.id}_fast = false;`]
+						: []),
 					`__indexed_length_${id}_kind = 0;`,
 					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
 					`if (__indexed_length_${id}_array != nullptr) {`,
@@ -5127,6 +5092,7 @@ function emitInstruction(
 					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 					`  mal_perf_ic_load_array_length_hit();`,
+					...pairedAdmission,
 					`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
 					`  __indexed_length_${id}_kind = 2;`,
 					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
@@ -5462,8 +5428,20 @@ function emitInstruction(
 				const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
 				const loadIp = nativeArrayPresenceProjectionAction.indexed.loadIp;
 				const state = `__array_presence_${membershipIp}_state`;
+				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
+				const pairedProbe =
+					pairedArrayLoopPresence === undefined
+						? [probe]
+						: [
+								`if (__paired_array_${pairedArrayLoopPresence.id}_fast) {`,
+								`  ${state} = 1;`,
+								`  __array_presence_${membershipIp}_value = __indexed_length_${loadIp}_array->elements[(u32) ${num(instruction.left)}];`,
+								`} else {`,
+								`  ${probe}`,
+								`}`,
+							];
 				return [
-					`${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`,
+					...pairedProbe,
 					`if (${state} >= 0) {`,
 					reps[instruction.dst] === "boolean"
 						? `  r${instruction.dst} = ${state} != 0;`
@@ -7600,24 +7578,6 @@ function emitInstruction(
 					callbackTarget !== undefined && directCompiledTargets.has(callbackTarget)
 						? `mal_compiled_${callbackTarget}${suffix}`
 						: "nullptr";
-				if (
-					arrayIterationOperation === "MAL_BUILTIN_ARRAY_ITERATION_EVERY" &&
-					pairedEveryCallback !== undefined &&
-					callbackTarget !== undefined &&
-					callbackSymbol !== "nullptr"
-				) {
-					const captureOwner =
-						pairedEveryCallback.ownerFunctionIndex < 0
-							? pairedEveryCallback.ownerFunctionIndex
-							: relocation.ownerFunctionIndex(pairedEveryCallback.ownerFunctionIndex);
-					return [
-						`static MalCallCache __cc_${ip};`,
-						`MalCompletion ${tmp} = mal_builtin_array_every_paired_direct(vm, &__cc_${ip}, ${relocation.functionIndex(callbackTarget)}, ${callbackSymbol}, ${captureOwner}, ${pairedEveryCallback.captureIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-						poll,
-					];
-				}
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

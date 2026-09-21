@@ -100,19 +100,6 @@ MalCompletion mal_builtin_array_iteration_direct(
     i32 arg_count
 );
 
-MalCompletion mal_builtin_array_every_paired_direct(
-    MalVm *vm,
-    MalCallCache *fallback_cache,
-    i32 callback_function_index,
-    MalCompiledFunction compiled_callback,
-    i32 capture_owner_function_index,
-    i32 capture_index,
-    MalValue callee,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count
-);
-
 /** Exact %Array.prototype.push% invocation after locked property resolution was
  * erased by the compiler. Dense ordinary Arrays append without callback/identity
  * guards; every representation or semantic miss executes the builtin algorithm. */

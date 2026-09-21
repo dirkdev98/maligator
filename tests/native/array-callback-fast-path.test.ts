@@ -29,7 +29,10 @@ describe("guarded Array callback fast paths", () => {
 
 	it("preserves compiled fast and fallback semantics", () => {
 		expect(source).toContain("mal_vm_array_try_get_present_proven_index(");
-		expect(source).toContain("mal_builtin_array_every_paired_direct(");
+		expect(source).toMatch(
+			/__array_presence_\d+_value = __indexed_length_\d+_array->elements/,
+		);
+		expect(source).toMatch(/__paired_array_\d+_secondary->elements/);
 		assertResultPass(runToStdout(compiled));
 	});
 

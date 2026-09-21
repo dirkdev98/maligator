@@ -49,12 +49,36 @@ export type NativePropertyProjectionAction =
 export interface NativeFastPathLowering {
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyProjectionActions: ReadonlyMap<number, NativePropertyProjectionAction>;
+	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
+	readonly pairedArrayLoopActions: ReadonlyMap<number, NativePairedArrayLoopAction>;
 	readonly constructorInitialization?: NativeConstructorInitializationPlan;
 	readonly constructorInitializationActions: ReadonlyMap<
 		number,
 		NativeConstructorInitializationAction
 	>;
 }
+
+export interface NativeIndexedLoopElement {
+	readonly lengthLoadIp: number;
+	readonly elementLoadIp: number;
+	readonly object: number;
+	readonly key: number;
+	readonly result: number;
+}
+
+export interface NativePairedArrayLoopPlan {
+	readonly id: number;
+	readonly lengthLoadIp: number;
+	readonly primaryLoadIp: number;
+	readonly primaryObject: number;
+	readonly secondaryLoadIp: number;
+	readonly secondaryObject: number;
+	readonly key: number;
+}
+
+export type NativePairedArrayLoopAction =
+	| { readonly role: "admit"; readonly plan: NativePairedArrayLoopPlan }
+	| { readonly role: "load"; readonly plan: NativePairedArrayLoopPlan };
 
 type StaticPropertyStore = Extract<
 	BytecodeInstruction,
@@ -309,12 +333,103 @@ function lowerConstructorInitialization(
 	});
 }
 
+function lowerPairedArrayLoops(
+	fn: BytecodeFunction,
+	indexedLoops: ReadonlyArray<NativeIndexedLoopElement>,
+	jumpTargets: ReadonlySet<number>,
+	conflicts: (ip: number) => boolean,
+): ReadonlyArray<NativePairedArrayLoopPlan> {
+	const plans: Array<NativePairedArrayLoopPlan> = [];
+	for (const indexed of indexedLoops) {
+		const primary = fn.instructions[indexed.elementLoadIp];
+		if (
+			primary?.opcode !== "LOAD_PROPERTY" ||
+			primary.object !== indexed.object ||
+			primary.key !== indexed.key ||
+			primary.dst !== indexed.result
+		)
+			continue;
+		const limit = Math.min(fn.instructions.length, indexed.elementLoadIp + 8);
+		let secondary:
+			| {
+					readonly ip: number;
+					readonly instruction: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY" }>;
+			  }
+			| undefined;
+		for (let ip = indexed.elementLoadIp + 1; ip < limit; ip++) {
+			if (jumpTargets.has(ip)) break;
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.key === indexed.key &&
+				instruction.object !== indexed.object &&
+				!conflicts(ip)
+			) {
+				secondary = { ip, instruction };
+				break;
+			}
+			if (instruction.opcode !== "THROW_IF_TDZ") break;
+		}
+		if (secondary === undefined) continue;
+		const comparison = fn.instructions[secondary.ip + 1];
+		if (
+			comparison?.opcode !== "BINARY" ||
+			comparison.operator !== "===" ||
+			!(
+				(comparison.left === indexed.result &&
+					comparison.right === secondary.instruction.dst) ||
+				(comparison.right === indexed.result &&
+					comparison.left === secondary.instruction.dst)
+			) ||
+			conflicts(secondary.ip + 1)
+		)
+			continue;
+		let secondaryStable = true;
+		// The receiver stays live across the backedge, so later register reuse begins after the loop.
+		for (let ip = indexed.lengthLoadIp + 1; ip < secondary.ip; ip++) {
+			if (
+				vmInstructionWriteRegisters(fn.instructions[ip]!).includes(
+					secondary.instruction.object,
+				)
+			) {
+				secondaryStable = false;
+				break;
+			}
+		}
+		if (!secondaryStable) continue;
+		plans.push(
+			Object.freeze({
+				id: indexed.lengthLoadIp,
+				lengthLoadIp: indexed.lengthLoadIp,
+				primaryLoadIp: indexed.elementLoadIp,
+				primaryObject: indexed.object,
+				secondaryLoadIp: secondary.ip,
+				secondaryObject: secondary.instruction.object,
+				key: indexed.key,
+			}),
+		);
+	}
+	return Object.freeze(plans);
+}
+
 export function lowerNativeFastPaths(
 	fn: BytecodeFunction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 ): NativeFastPathLowering {
+	const pairedArrayLoops = lowerPairedArrayLoops(
+		fn,
+		indexedLoops,
+		jumpTargets,
+		conflicts,
+	);
+	const pairedArrayLoopActions = new Map<number, NativePairedArrayLoopAction>();
+	for (const plan of pairedArrayLoops) {
+		pairedArrayLoopActions.set(plan.lengthLoadIp, { role: "admit", plan });
+		pairedArrayLoopActions.set(plan.secondaryLoadIp, { role: "load", plan });
+	}
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
 	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
@@ -324,7 +439,10 @@ export function lowerNativeFastPaths(
 			ip,
 			representations,
 			jumpTargets,
-			(candidate) => conflicts(candidate) || propertyProjectionActions.has(candidate),
+			(candidate) =>
+				conflicts(candidate) ||
+				pairedArrayLoopActions.has(candidate) ||
+				propertyProjectionActions.has(candidate),
 		);
 		if (plan === undefined) continue;
 		propertyProjections.push(plan);
@@ -341,7 +459,10 @@ export function lowerNativeFastPaths(
 	const constructorInitialization = lowerConstructorInitialization(
 		fn,
 		jumpTargets,
-		(candidate) => conflicts(candidate) || propertyProjectionActions.has(candidate),
+		(candidate) =>
+			conflicts(candidate) ||
+			pairedArrayLoopActions.has(candidate) ||
+			propertyProjectionActions.has(candidate),
 	);
 	const constructorInitializationActions = new Map<
 		number,
@@ -354,6 +475,8 @@ export function lowerNativeFastPaths(
 		});
 	}
 	return Object.freeze({
+		pairedArrayLoops,
+		pairedArrayLoopActions,
 		propertyProjections: Object.freeze(propertyProjections),
 		propertyProjectionActions,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
