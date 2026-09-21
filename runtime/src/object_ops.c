@@ -1,5 +1,6 @@
 #include "object_ops.h"
 
+#include <assert.h>
 #include <stdlib.h>
 
 #include "array_object.h"
@@ -143,6 +144,20 @@ static MalTable *mal_object_ensure_overflow(MalObject *object) {
         object->overflow = mal_table_new(MAL_TABLE_MODE_OBJECT, MAL_TABLE_ROLE_OBJECT);
     }
     return object->overflow;
+}
+
+bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
+    assert(key.kind == MAL_KEY_SYMBOL &&
+           mal_symbol_is_private(mal_value_to_symbol(key.value)));
+    bool private_only = !mal_object_has_public_overflow(object);
+    MalTable *table = mal_object_ensure_overflow(object);
+    MalPropertyDesc desc = mal_object_data_desc(value, MAL_PROPERTY_WRITABLE);
+    MalPropertyEnsure ensured = mal_property_ensure(table, key, &desc);
+    object->overflow_private_only = private_only;
+    if (!ensured.inserted) return false;
+    mal_gc_card_desc(&object->header, &desc);
+    mal_gc_card(&object->header, key.value);
+    return true;
 }
 
 /**

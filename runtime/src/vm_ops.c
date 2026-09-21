@@ -7551,20 +7551,14 @@ void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_val
     MalObject *object = mal_value_to_object(object_value);
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
 
-    if (mal_object_get_own(object, key).present) {
+    if (!mal_object_add_private(object, key, value)) {
         // AddPrivateName rejects installing the same private element twice on
         // one object (re-entrant construction of the same this).
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot initialize the same private member twice on an object"
         );
-        return;
     }
-
-    // Private fields are writable but never enumerable or configurable, and
-    // the backing symbol is hidden from reflection.
-    MalPropertyDesc desc = mal_intrinsic_data_desc(value, MAL_PROPERTY_WRITABLE);
-    mal_object_define_own(object, key, &desc);
 }
 
 void mal_op_define_private(MalCallable *callable, const MalInstruction *instruction) {

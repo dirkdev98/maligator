@@ -69,6 +69,9 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
  */
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc);
 
+/** Insert a fresh private data element without replacing an existing brand entry. */
+bool mal_object_add_private(MalObject *object, MalKey key, MalValue value);
+
 /**
  * Prove once that `final` is exactly `source` plus `count` unique default data
  * properties. Failure leaves `plan` invalid.
