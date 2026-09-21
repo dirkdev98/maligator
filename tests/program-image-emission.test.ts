@@ -4098,10 +4098,9 @@ describe("native static typeof facts", () => {
 			globalThis.keep = [numberResult, booleanResult];
 		`);
 
-		// The promoted numeric version folds both checks. Its boxed fallback still
-		// classifies the subtraction result, while the comparison result is a proven
-		// native boolean in every version.
-		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
+		// Both operators have fixed primitive result kinds on normal completion; their
+		// coercion and throwing effects remain in the preceding operations.
+		expect(output).not.toContain("mal_vm_typeof_compare");
 		expect(output).toContain("= true;");
 		expect(output).not.toContain("MAL_TYPEOF_BOOLEAN");
 	});

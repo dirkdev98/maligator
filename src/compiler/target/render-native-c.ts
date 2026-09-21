@@ -5306,6 +5306,17 @@ function emitInstruction(
 					}
 				}
 			}
+			if (
+				(reps[dst] === "number" || reps[dst] === "int32") &&
+				(!leftIsNum || !rightIsNum)
+			) {
+				const result = `__binary_result_${ip}`;
+				return [
+					`MalValue ${result} = ${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)};`,
+					throwCheck(),
+					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_to_i32(mal_ops_number_as_f64(${result}))` : `mal_ops_number_as_f64(${result})`};`,
+				];
+			}
 			if (reps[dst] === "int32") {
 				if (
 					!leftIsNum ||
