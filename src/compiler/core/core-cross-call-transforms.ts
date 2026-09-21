@@ -5,6 +5,7 @@ import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-op
 import {
 	coreInstanceMethodHint,
 	coreInstanceMethodHints,
+	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
@@ -856,14 +857,27 @@ function offerFunctionCandidates(
 			resultCount === 1
 				? fn.kernel.resultAt(fn.kernel.instructionResultStart(site.instruction))
 				: undefined;
-		const finiteTargets =
+		const closedFiniteTargets =
 			invocation === "call" &&
 			inLoop &&
 			!coreCalleeTargetsAreOpen(site.targets) &&
 			site.targets.functions.length > 1
 				? site.targets.functions
 				: undefined;
+		const openHintTargets =
+			invocation === "call" &&
+			inLoop &&
+			site.targets.functions.length === 0 &&
+			coreCalleeTargetsAreOpen(site.targets)
+				? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
+				: undefined;
+		const finiteTargets =
+			closedFiniteTargets ??
+			(openHintTargets !== undefined && openHintTargets.length > 1
+				? openHintTargets
+				: undefined);
 		if (finiteTargets !== undefined) {
+			const targetSetKind = closedFiniteTargets === undefined ? "open-hints" : "closed";
 			const inlines = finiteTargets.map((target) =>
 				inlineTarget(program, target, invocation),
 			);
@@ -888,9 +902,10 @@ function offerFunctionCandidates(
 						(revision, target) => revision * 31 + summaries.version(target),
 						0,
 					),
-					priorityClass: 2,
+					priorityClass: targetSetKind === "closed" ? 2 : 3,
 					priorityScore: 0,
 					targets: Object.freeze([...finiteTargets]),
+					targetSetKind,
 					generatedCodeCost: inlines.reduce(
 						(cost, inline) =>
 							cost +
@@ -1817,7 +1832,7 @@ function applyFiniteDispatch(
 			program,
 			{ ...candidate, targets: [target] },
 			editor,
-			index + 1 < candidate.targets.length,
+			candidate.targetSetKind === "open-hints" || index + 1 < candidate.targets.length,
 		);
 		if (applied === undefined) {
 			throw new Error("Validated finite dispatch became inapplicable during expansion");

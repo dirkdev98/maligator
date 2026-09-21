@@ -47,6 +47,7 @@ export interface CoreTransformCandidate {
 	readonly priorityClass: number;
 	readonly priorityScore: number;
 	readonly targets: ReadonlyArray<CoreFunctionId>;
+	readonly targetSetKind?: "closed" | "open-hints";
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
 	readonly expansive: boolean;
@@ -169,6 +170,7 @@ function sameCandidateIdentity(
 ): boolean {
 	return (
 		left.kind === right.kind &&
+		left.targetSetKind === right.targetSetKind &&
 		left.revision === right.revision &&
 		left.targets.length === right.targets.length &&
 		left.targets.every((target, index) => target === right.targets[index])

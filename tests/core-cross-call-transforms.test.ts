@@ -1095,7 +1095,7 @@ describe("bounded Core cross-call transforms", () => {
 
 	it("plans finite guarded dispatch for unrelated same-name instance methods", () => {
 		let optimized: CoreProgram | undefined;
-		let plan: CoreOptimizationPlan | undefined;
+		let report: CoreOptimizationReport | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`class Counter {
@@ -1114,23 +1114,28 @@ describe("bounded Core cross-call transforms", () => {
 				"core-guarded-instance-collision.js",
 			),
 			{
-				afterCoreOptimization(program, _context, _report, optimizationPlan) {
+				coreInstrumentation: "full",
+				afterCoreOptimization(program, _context, optimizationReport) {
 					optimized = program;
-					plan = optimizationPlan;
+					report = optimizationReport;
 				},
 			},
 		);
 
 		const caller = coreFunctionNamed(optimized!, "caller")!;
-		const call = coreOperations(caller).find(({ opcode }) => opcode === "call");
-		expect(call).toBeDefined();
-		const recipe = projectCoreSpecializationRecipes(plan!.recipes).find(
-			(candidate) =>
-				candidate.kind === "guarded-direct-call" &&
-				candidate.function === caller.id &&
-				candidate.targetFunctions.length === 2,
-		);
-		expect(recipe?.targetFunctions).toHaveLength(2);
+		const operations = coreOperations(caller);
+		expect(operations.some(({ opcode }) => opcode === "call")).toBe(true);
+		expect(
+			operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(2);
+		expect(report!.transforms.appliedByKind["finite-dispatch"]).toBe(1);
+		expect(
+			new Set(
+				operations
+					.filter(({ opcode }) => opcode === "guardFunctionIndex")
+					.map(({ attributes }) => attributes.functionIndex),
+			),
+		).toHaveProperty("size", 2);
 	});
 
 	it("finite-dispatches a private dense array of lexical-this callees", () => {
@@ -1216,7 +1221,7 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(false);
 	});
 
-	it("does not speculate on ambiguous or cold instance-method names", () => {
+	it("finite-dispatches bounded ambiguous names but leaves cold names generic", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -1241,13 +1246,14 @@ describe("bounded Core cross-call transforms", () => {
 			},
 		);
 		expect(optimized).toBeDefined();
-		for (const name of ["ambiguous", "cold"]) {
-			const operations = coreOperations(coreFunctionNamed(optimized!, name)!);
-			expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(
-				false,
-			);
-			expect(operations.some(({ opcode }) => opcode === "call")).toBe(true);
-		}
+		const ambiguous = coreOperations(coreFunctionNamed(optimized!, "ambiguous")!);
+		expect(
+			ambiguous.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(2);
+		expect(ambiguous.some(({ opcode }) => opcode === "call")).toBe(true);
+		const cold = coreOperations(coreFunctionNamed(optimized!, "cold")!);
+		expect(cold.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(false);
+		expect(cold.some(({ opcode }) => opcode === "call")).toBe(true);
 	});
 
 	it("plans every finite target installed through a nested closure", () => {
