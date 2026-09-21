@@ -1957,6 +1957,9 @@ export function verifyCoreOptimizationPlan(
 				observation.indices.some(
 					(index) => index >= entry.argumentRepresentations!.length,
 				) ||
+				observation.restStarts.some(
+					(index) => index > entry.argumentRepresentations!.length,
+				) ||
 				entry.parameterRepresentations.some(
 					(representation, index) =>
 						representation !== (entry.argumentRepresentations![index] ?? "boxed"),

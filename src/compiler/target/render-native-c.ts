@@ -4017,7 +4017,15 @@ function emitInstruction(
 		nativePlan?.kind === "exact-packed-rest-array-length" &&
 		instruction.opcode === "LOAD_PROPERTY_STATIC"
 	) {
-		const length = `(arg_count > ${nativePlan.startIndex} ? arg_count - ${nativePlan.startIndex} : 0)`;
+		const length =
+			context.directArgumentRepresentations === undefined
+				? `(arg_count > ${nativePlan.startIndex} ? arg_count - ${nativePlan.startIndex} : 0)`
+				: String(
+						Math.max(
+							0,
+							context.directArgumentRepresentations.length - nativePlan.startIndex,
+						),
+					);
 		return [storeNumber(instruction.dst, `(f64) ${length}`)];
 	}
 	if (
@@ -4046,6 +4054,48 @@ function emitInstruction(
 		nativePlan?.kind === "exact-packed-rest-array-element" &&
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
+		const directArguments = context.directArgumentRepresentations;
+		if (directArguments !== undefined) {
+			const values = directArguments.slice(nativePlan.startIndex);
+			if (values.length === 0)
+				return [`r${instruction.dst} = ${zeroOf(reps[instruction.dst]!)};`];
+			const numeric = isNumericRep(reps[instruction.dst]!) && values.every(isNumericRep);
+			const directValue = (representation: VmRegisterRepresentation, index: number) => {
+				const parameter = `p${nativePlan.startIndex + index}`;
+				if (numeric) return representation === "int32" ? `(f64) ${parameter}` : parameter;
+				return representation === "int32"
+					? `mal_value_from_i32(${parameter})`
+					: representation === "number"
+						? `mal_ops_number_value(${parameter})`
+						: representation === "boolean"
+							? `mal_value_new_boolean(${parameter})`
+							: parameter;
+			};
+			const index = `__rest_index_${ip}`;
+			const lines = [
+				"MAL_PERF_COUNT(array_contained_element_reads);",
+				`u32 ${index} = (u32) ${typedNumber(instruction.key)};`,
+				`switch (${index}) {`,
+				...values.flatMap((representation, offset) => [
+					`case ${offset}: r${instruction.dst} = ${directValue(representation, offset)}; break;`,
+				]),
+				`default: r${instruction.dst} = ${zeroOf(reps[instruction.dst]!)}; break;`,
+				"}",
+			];
+			if (
+				indexedLengthLoopAction?.role === "element" &&
+				indexedLengthLoopAction.element?.kind === "load" &&
+				indexedLengthLoopAction.element.arrayIndexIsUint32
+			)
+				return lines;
+			const rawIndex = `__rest_raw_index_${ip}`;
+			return [
+				`f64 ${rawIndex} = ${typedNumber(instruction.key)};`,
+				`if (${rawIndex} >= 0.0 && ${rawIndex} < ${values.length}.0 && ${rawIndex} == trunc(${rawIndex})) {`,
+				...lines.map((line) => `  ${line}`),
+				`} else { r${instruction.dst} = ${zeroOf(reps[instruction.dst]!)}; }`,
+			];
+		}
 		if (
 			indexedLengthLoopAction?.role === "element" &&
 			indexedLengthLoopAction.element?.kind === "load" &&
@@ -5375,6 +5425,7 @@ function emitInstruction(
 		}
 		case "CREATE_REST_ARGUMENTS":
 			if (nativePlan?.kind === "virtual-packed-rest-array") return [];
+			if (context.directArgumentRepresentations !== undefined) return null;
 			// A rest parameter `function f(...rest)`: the call arguments from
 			// startIndex onward. Reads the raw args, never throws.
 			return [

@@ -4,6 +4,7 @@ import {
 	compilerFactIsWorldInvariant,
 	compilerGuardPlan,
 } from "../shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import type { ReturnRepresentation } from "../shared/effect-summary.ts";
 import {
 	factDependencyEquals,
@@ -1212,7 +1213,42 @@ function directEntryCandidates(
 	summaries: CoreProgramSummaries,
 	live: ReadonlySet<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
+	localInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>,
 ): ReadonlyArray<PendingDirectEntry> {
+	const inBoundsRestElements = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	const exactRestLengths = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	for (const input of localInputs) {
+		for (const candidate of input.pending) {
+			if (candidate.selection.kind !== "indexed-length-loop") continue;
+			const fn = program.function(input.function);
+			const length = candidate.selection.indexedLengthLoop.load;
+			const lengthReceiver = fn.kernel.operandAt(
+				fn.kernel.instructionOperandStart(length),
+			);
+			if (fn.kernel.valueDefinitionKind(lengthReceiver) === 1) {
+				const allocation = coreInstructionId(
+					fn.kernel.valueDefinitionOwner(lengthReceiver),
+				);
+				if (fn.instructionOpcodeName(allocation) === "createRestArguments") {
+					const lengths = exactRestLengths.get(input.function) ?? new Set();
+					lengths.add(length);
+					exactRestLengths.set(input.function, lengths);
+				}
+			}
+			for (const element of candidate.selection.indexedLengthLoop.elements) {
+				if (element.kind !== "load" || !element.arrayIndexIsUint32) continue;
+				const receiver = fn.kernel.operandAt(
+					fn.kernel.instructionOperandStart(element.instruction),
+				);
+				if (fn.kernel.valueDefinitionKind(receiver) !== 1) continue;
+				const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
+				if (fn.instructionOpcodeName(allocation) !== "createRestArguments") continue;
+				const elements = inBoundsRestElements.get(input.function) ?? new Set();
+				elements.add(element.instruction);
+				inBoundsRestElements.set(input.function, elements);
+			}
+		}
+	}
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
 		const caller = program.function(site.caller);
@@ -1313,7 +1349,8 @@ function directEntryCandidates(
 							callback.metadata.capturedCount === 0 &&
 							observation.kind !== "general" &&
 							!observation.readsCount &&
-							observation.indices.length === 0
+							observation.indices.length === 0 &&
+							observation.restStarts.length === 0
 						) {
 							const calls = callsByTarget.get(target) ?? [];
 							// Property names nominate candidates; runtime admission proves both calls.
@@ -1380,7 +1417,10 @@ function directEntryCandidates(
 			observation.kind === "general"
 		)
 			continue;
-		const needsArity = observation.readsCount || observation.indices.length > 0;
+		const needsArity =
+			observation.readsCount ||
+			observation.indices.length > 0 ||
+			observation.restStarts.length > 0;
 		let parameterRepresentations: ReadonlyArray<CorePlanRepresentation> = Array.from(
 			{ length: fn.parameterCount },
 			() => "boxed",
@@ -1465,7 +1505,8 @@ function directEntryCandidates(
 					needsArity &&
 					(site?.arguments === undefined ||
 						site.arguments.length > 16 ||
-						observation.indices.some((index) => index >= site.arguments!.length))
+						observation.indices.some((index) => index >= site.arguments!.length) ||
+						observation.restStarts.some((index) => index > site.arguments!.length))
 				)
 					continue;
 				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
@@ -1515,12 +1556,33 @@ function directEntryCandidates(
 						function: target,
 					})
 					.exceptional();
+				const exactOperationResultMasks = new Map<CoreInstructionId, number>();
+				for (const instruction of exactRestLengths.get(target) ?? []) {
+					exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
+				}
+				for (const instruction of inBoundsRestElements.get(target) ?? []) {
+					const receiver = fn.kernel.operandAt(
+						fn.kernel.instructionOperandStart(instruction),
+					);
+					const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
+					const startIndex = fn.instructionAttributes(allocation).startIndex;
+					if (
+						typeof startIndex === "number" &&
+						startIndex < signature.representations.length &&
+						signature.representations
+							.slice(startIndex)
+							.every((representation) => representation === "f64")
+					)
+						exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
+				}
 				const variant = analyzeCoreNativeEntry(
 					fn,
 					cfg,
 					parameterRepresentations,
 					argumentRepresentations,
 					selectedCalls,
+					undefined,
+					exactOperationResultMasks,
 				);
 				valueRepresentations = variant.valueRepresentations;
 				operatorInputs = variant.operatorInputs;
@@ -1673,7 +1735,9 @@ export function buildCoreOptimizationPlan(
 	}
 	if (options.discoverCandidates !== false) {
 		pending.push(...guardedCallCandidates(program, summaries, liveFunctions, analyses));
-		pending.push(...directEntryCandidates(program, summaries, live, analyses));
+		pending.push(
+			...directEntryCandidates(program, summaries, live, analyses, resolvedLocalInputs),
+		);
 	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();

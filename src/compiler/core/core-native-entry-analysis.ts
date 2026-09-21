@@ -35,6 +35,7 @@ export function analyzeCoreNativeEntry(
 	arguments_: ReadonlyArray<CorePlanRepresentation> | undefined,
 	callSites: CoreDirectEntryPlan["callSites"],
 	fields?: CoreDirectEntryPlan["fieldParameters"],
+	exactOperationResultMasks: ReadonlyMap<CoreInstructionId, number> = new Map(),
 ): {
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
@@ -52,6 +53,8 @@ export function analyzeCoreNativeEntry(
 	const kinds = analyzeCoreValueKinds(fn, cfg, {
 		parameterMasks: parameters.map(mask),
 		operationResultMask(instruction, result) {
+			const exact = exactOperationResultMasks.get(instruction);
+			if (exact !== undefined) return exact;
 			if (
 				fields !== undefined &&
 				(fields.loads.some((load) => load.instruction === instruction) ||
@@ -269,6 +272,7 @@ export type CoreArgumentObservation =
 			readonly kind: "count-and-static-elements";
 			readonly readsCount: boolean;
 			readonly indices: ReadonlyArray<number>;
+			readonly restStarts: ReadonlyArray<number>;
 	  }
 	| { readonly kind: "general" };
 
@@ -286,15 +290,39 @@ export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObse
 	}
 	let readsCount = false;
 	const indices = new Set<number>();
+	const restStarts = new Set<number>();
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (
-			opcode === "createArgumentsObject" ||
-			opcode === "createRestArguments" ||
-			opcode === "callRestArguments"
-		)
+		if (opcode === "createArgumentsObject" || opcode === "callRestArguments")
 			return { kind: "general" };
+		if (opcode === "createRestArguments") {
+			const startIndex = fn.instructionAttributes(instruction).startIndex;
+			const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (
+				typeof startIndex !== "number" ||
+				!Number.isSafeInteger(startIndex) ||
+				startIndex < 0
+			)
+				return { kind: "general" };
+			for (
+				let use = fn.kernel.valueFirstUse(result);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const user = fn.kernel.useInstruction(use);
+				if (fn.instructionKind(user) !== "operation") return { kind: "general" };
+				const userOpcode = fn.instructionOpcodeName(user);
+				if (fn.kernel.operandAt(fn.kernel.instructionOperandStart(user)) !== result)
+					return { kind: "general" };
+				if (userOpcode === "loadProperty") continue;
+				if (userOpcode === "loadPropertyStatic") continue;
+				return { kind: "general" };
+			}
+			restStarts.add(startIndex);
+			continue;
+		}
 		if (opcode === "loadArgumentCount") readsCount = true;
 		if (opcode === "loadArgument" || opcode === "loadStaticArgument") {
 			const index = fn.instructionAttributes(instruction).index;
@@ -313,5 +341,6 @@ export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObse
 		kind: "count-and-static-elements",
 		readsCount,
 		indices: [...indices].sort((a, b) => a - b),
+		restStarts: [...restStarts].sort((a, b) => a - b),
 	};
 }

@@ -1075,8 +1075,13 @@ export function validateNativeDirectEntry(
 		)
 			throw new RangeError("Native direct entry loses an argument snapshot");
 		if (
+			instruction.opcode === "CREATE_REST_ARGUMENTS" &&
+			(entry.argumentRepresentations === undefined ||
+				instruction.startIndex > entry.argumentRepresentations.length)
+		)
+			throw new RangeError("Native direct entry has an incomplete rest view");
+		if (
 			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
-			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
 			instruction.opcode === "CALL_REST_ARGUMENTS"
 		)
 			throw new RangeError("Native direct entry observes the general argument slice");

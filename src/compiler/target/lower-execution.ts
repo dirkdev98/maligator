@@ -2511,6 +2511,25 @@ function lowerFunctionToTarget(
 				instructionOrder.get(left.instruction)! -
 				instructionOrder.get(right.instruction)!,
 		);
+	const selectedInBoundsPackedRestElements = new Set<CoreInstructionId>();
+	for (const row of recipeRows) {
+		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "indexed-length-loop")
+			continue;
+		const indexed = coreSpecializationRecipePayloadAt(
+			recipeTable,
+			row,
+			"indexed-length-loop",
+			"indexedLengthLoop",
+		);
+		for (const element of indexed.elements) {
+			if (
+				element.kind === "load" &&
+				element.arrayIndexIsUint32 &&
+				privatePackedRestElements.has(element.instruction)
+			)
+				selectedInBoundsPackedRestElements.add(element.instruction);
+		}
+	}
 	const directEntries = directEntryPlans.map((entry) => {
 		const representations = [...physicalRepresentations];
 		if (entry.valueRepresentations !== undefined) {
@@ -2523,7 +2542,14 @@ function lowerFunctionToTarget(
 					const instruction = coreInstructionId(
 						coreFunction.kernel.valueDefinitionOwner(value),
 					);
+					const opcode = coreFunction.instructionOpcodeName(instruction);
+					const directRestOperation =
+						(opcode === "loadProperty" &&
+							selectedInBoundsPackedRestElements.has(instruction)) ||
+						(opcode === "loadPropertyStatic" &&
+							privatePackedRestLengths.has(instruction));
 					if (
+						!directRestOperation &&
 						![
 							"binary",
 							"unary",
@@ -2537,7 +2563,7 @@ function lowerFunctionToTarget(
 							...(entry.argumentRepresentations === undefined
 								? []
 								: ["loadArgumentCount", "loadArgument", "loadStaticArgument"]),
-						].includes(coreFunction.instructionOpcodeName(instruction))
+						].includes(opcode)
 					)
 						representation = physicalRepresentations[register]!;
 				}

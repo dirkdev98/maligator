@@ -2714,24 +2714,46 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 			) {
 				continue;
 			}
-			let restUse = fn.kernel.valueFirstUse(rest);
-			let liveRestUses = 0;
-			let onlyElementReads = true;
-			for (let use = restUse; use >= 0; use = fn.kernel.useNext(use)) {
+			let restUse = -1;
+			const lengthReads: Array<{
+				readonly instruction: CoreInstructionId;
+				readonly result: CoreValueId;
+			}> = [];
+			let elementUses = 0;
+			let valid = true;
+			for (
+				let use = fn.kernel.valueFirstUse(rest);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
 				if (fn.kernel.useLive(use) === 0) continue;
 				const user = fn.kernel.useInstruction(use);
-				if (
-					fn.instructionKind(user) !== "operation" ||
-					fn.instructionOpcodeName(user) !== "loadProperty" ||
-					instructionOperand(fn, user, 0) !== rest
-				) {
-					onlyElementReads = false;
+				if (fn.instructionKind(user) !== "operation") {
+					valid = false;
 					break;
 				}
-				liveRestUses++;
-				if (restUse < 0 || fn.kernel.useLive(restUse) === 0) restUse = use;
+				const opcode = fn.instructionOpcodeName(user);
+				if (opcode === "loadProperty" && instructionOperand(fn, user, 0) === rest) {
+					elementUses++;
+					if (restUse < 0) restUse = use;
+					continue;
+				}
+				if (opcode === "loadPropertyStatic" && instructionOperand(fn, user, 0) === rest) {
+					const stringIndex = fn.instructionAttributes(user).stringIndex;
+					const result = instructionResult(fn, user, 0);
+					if (
+						typeof stringIndex === "number" &&
+						decodeString(program, stringIndex) === "length" &&
+						result !== undefined
+					) {
+						lengthReads.push({ instruction: user, result });
+						continue;
+					}
+				}
+				valid = false;
+				break;
 			}
-			if (!onlyElementReads || restUse < 0) continue;
+			if (!valid || restUse < 0) continue;
 			const load = fn.kernel.useInstruction(restUse);
 			const key = instructionOperand(fn, load, 1);
 			const loadResult = instructionResult(fn, load, 0);
@@ -2765,6 +2787,7 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 			}
 
 			let before = fn.blockTerminator(fn.entry);
+			let argumentCount: CoreValueId | undefined;
 			const snapshots = new Map<number, CoreValueId>();
 			for (const instruction of fn.bodyInstructionIds(fn.entry)) {
 				const opcode = fn.instructionOpcodeName(instruction);
@@ -2772,7 +2795,9 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 					before = instruction;
 					break;
 				}
-				if (opcode === "loadArgument") {
+				if (opcode === "loadArgumentCount") {
+					argumentCount = instructionResult(fn, instruction, 0);
+				} else {
 					const index = fn.instructionAttributes(instruction).index;
 					const result = instructionResult(fn, instruction, 0);
 					if (typeof index === "number" && result !== undefined) {
@@ -2781,6 +2806,57 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 				}
 			}
 			const editor = CoreEditor.open(program, item.function);
+			if (lengthReads.length > 0 && argumentCount === undefined) {
+				argumentCount = editor.insertInstruction(
+					fn.entry,
+					before,
+					"loadArgumentCount",
+					[],
+					{ sourcePosition: fn.instructionSourcePosition(producer) },
+				).outputs[0]!;
+			}
+			let restLength = argumentCount;
+			if (lengthReads.length > 0 && startIndex > 0) {
+				const prefixLength = editor.insertInstruction(
+					fn.entry,
+					before,
+					"createNumber",
+					[],
+					{
+						attributes: { value: startIndex },
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+				const difference = editor.insertInstruction(
+					fn.entry,
+					before,
+					"binary",
+					[argumentCount!, prefixLength],
+					{
+						attributes: { operator: "-" },
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+				const zero = editor.insertInstruction(fn.entry, before, "createNumber", [], {
+					attributes: { value: 0 },
+					sourcePosition: fn.instructionSourcePosition(producer),
+				}).outputs[0]!;
+				restLength = editor.insertInstruction(
+					fn.entry,
+					before,
+					"mathBinaryNumber",
+					[difference, zero],
+					{
+						attributes: {
+							operation: "Math.max",
+							worldAssumptions: {
+								...builtinWorldAssumptions("Math.max", "primitive"),
+							},
+						},
+						sourcePosition: fn.instructionSourcePosition(producer),
+					},
+				).outputs[0]!;
+			}
 			for (
 				let argumentIndex = startIndex;
 				argumentIndex <= startIndex + range.maximum;
@@ -2856,11 +2932,12 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 					default: selectedEdges[range.maximum]!,
 				});
 			}
-			const removeProducer = liveRestUses === 1 && fn.valueUseCount(rest) === 1;
-			editor.removeInstruction(load);
-			if (removeProducer) {
-				editor.removeInstruction(producer);
+			for (const read of lengthReads) {
+				editor.replaceValueUses(read.result, restLength!);
+				editor.removeInstruction(read.instruction);
 			}
+			editor.removeInstruction(load);
+			if (elementUses === 1) editor.removeInstruction(producer);
 			return editor.commit();
 		}
 		return undefined;
