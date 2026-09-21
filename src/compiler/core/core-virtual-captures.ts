@@ -82,22 +82,65 @@ function createdFunctionIndex(
 		: undefined;
 }
 
-function reachesThroughEmptyJumps(
+function reachesWithoutEnvironmentRebind(
 	fn: CoreFunctionStore,
 	source: CoreBlockId,
-	target: CoreBlockId,
+	targetInstruction: CoreInstructionId,
 ): boolean {
-	let block = source;
-	const visited = new Set<CoreBlockId>();
-	while (visited.size < 8 && !visited.has(block)) {
-		if (block === target) return true;
-		visited.add(block);
-		if ([...fn.bodyInstructionIds(block)].length !== 0) return false;
+	const target = fn.instructionBlock(targetInstruction);
+	const predecessors = new Map<CoreBlockId, Array<CoreBlockId>>();
+	for (const block of fn.blockIds()) {
 		const terminator = coreTerminatorInput(fn, fn.blockTerminator(block));
-		if (terminator.kind !== "jump") return false;
-		block = terminator.edge.block;
+		const targets =
+			terminator.kind === "jump"
+				? [terminator.edge.block]
+				: terminator.kind === "branch"
+					? [terminator.consequent.block, terminator.alternate.block]
+					: [];
+		for (const next of targets) {
+			const incoming = predecessors.get(next) ?? [];
+			incoming.push(block);
+			predecessors.set(next, incoming);
+		}
 	}
-	return false;
+	const canReachTarget = new Set<CoreBlockId>([target]);
+	const reverse = [target];
+	while (reverse.length > 0 && canReachTarget.size <= 32) {
+		const block = reverse.pop()!;
+		if (block === source) continue;
+		for (const predecessor of predecessors.get(block) ?? []) {
+			if (canReachTarget.has(predecessor)) continue;
+			canReachTarget.add(predecessor);
+			reverse.push(predecessor);
+		}
+	}
+	if (!canReachTarget.has(source) || canReachTarget.size > 32) return false;
+	const pending = [source];
+	const visited = new Set<CoreBlockId>();
+	let reachedTarget = false;
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		if (visited.has(block)) continue;
+		visited.add(block);
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			if (instruction === targetInstruction) {
+				reachedTarget = true;
+				break;
+			}
+			if (["envPush", "envCopy", "envPop"].includes(fn.instructionOpcodeName(instruction)))
+				return false;
+		}
+		if (block === target) continue;
+		const terminator = coreTerminatorInput(fn, fn.blockTerminator(block));
+		const targets =
+			terminator.kind === "jump"
+				? [terminator.edge.block]
+				: terminator.kind === "branch"
+					? [terminator.consequent.block, terminator.alternate.block]
+					: [];
+		for (const next of targets) if (canReachTarget.has(next)) pending.push(next);
+	}
+	return reachedTarget;
 }
 
 /** Virtualizes the one-slot per-iteration scope exposed by two-wave callback inlining. */
@@ -169,7 +212,6 @@ export function virtualizeGuardedCallbackEnvironment(
 	const creation = liveCreations[0]!;
 	const closure = fn.kernel.resultAt(fn.kernel.instructionResultStart(creation.id));
 	if (
-		creation.block !== fallbackCall.block ||
 		singleUseInstruction(fn, closure) !== fallbackCall.id ||
 		![...Array(fn.kernel.instructionOperandCount(fallbackCall.id)).keys()].some(
 			(index) => instructionOperand(fn, fallbackCall.id, index) === closure,
@@ -221,7 +263,7 @@ export function virtualizeGuardedCallbackEnvironment(
 	if (
 		guardBlock === undefined ||
 		fastBlock === undefined ||
-		!reachesThroughEmptyJumps(fn, fastBlock, loads[0]!.block) ||
+		!reachesWithoutEnvironmentRebind(fn, fastBlock, loads[0]!.id) ||
 		stores.some(({ block }) => block !== guardBlock)
 	) {
 		return undefined;
@@ -254,6 +296,7 @@ export function virtualizeGuardedCallbackEnvironment(
 		editor.removeInstruction(candidate.id);
 	}
 	const sourcePosition = fn.instructionSourcePosition(creation.id);
+	editor.moveInstruction(creation.id, fallbackCall.block, fallbackCall.id);
 	editor.insertInstruction(fallbackCall.block, creation.id, "envPush", [], {
 		attributes: { scopeId: scope.scopeId, slotCount: 1 },
 		sourcePosition,

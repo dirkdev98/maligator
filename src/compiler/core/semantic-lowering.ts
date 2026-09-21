@@ -12561,6 +12561,8 @@ function compileCall(
 		callee,
 		thisRegister,
 		args,
+		callExpression.arguments[0]?.type === "ArrowFunctionExpression" ||
+			callExpression.arguments[0]?.type === "FunctionExpression",
 	);
 	if (arrayPredicate !== undefined) return arrayPredicate;
 	const destination = nextCoreVariable(fn);
@@ -12581,6 +12583,7 @@ function tryCompileArrayPredicateCall(
 	callee: number,
 	receiver: number,
 	args: Array<number>,
+	callbackIsKnownCallable: boolean,
 ): number | undefined {
 	if (
 		calleeNode.type !== "MemberExpression" ||
@@ -12609,7 +12612,15 @@ function tryCompileArrayPredicateCall(
 		},
 		{
 			type: "call",
-			registers: [eligible, guard, undefinedValue, callee, receiver, methodId, args[0]!],
+			registers: [
+				eligible,
+				guard,
+				undefinedValue,
+				callee,
+				receiver,
+				methodId,
+				callbackIsKnownCallable ? callee : args[0]!,
+			],
 		},
 	);
 
@@ -12629,6 +12640,7 @@ function tryCompileArrayPredicateCall(
 	fallback.emitter.emit({
 		type: "call",
 		registers: [destination, callee, receiver, ...args],
+		guardedInlineFallback: true,
 	});
 	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",

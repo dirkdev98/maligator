@@ -179,49 +179,61 @@ function captureEnvironmentIsStable(
 ): boolean {
 	const creationBlock = fn.instructionBlock(creation);
 	const siteBlock = fn.instructionBlock(site);
-	let reachedEnd = false;
-	for (
-		let instruction = fn.instructionNext(creation);
-		instruction !== undefined;
-		instruction = fn.instructionNext(instruction)
-	) {
-		if (instruction === site) return true;
-		if (instruction === fn.blockTerminator(creationBlock)) {
-			reachedEnd = true;
-			break;
+	const predecessors = new Map<CoreBlockId, Array<CoreBlockId>>();
+	for (const block of fn.blockIds()) {
+		const last = fn.kernel.blockLastInstruction(block);
+		if (last < 0 || fn.instructionKind(coreInstructionId(last)) === "operation") continue;
+		const terminator = coreInstructionId(last);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		for (let edge = 0; edge < fn.kernel.terminatorEdgeCount(terminator); edge++) {
+			const target = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
+			const incoming = predecessors.get(target) ?? [];
+			incoming.push(block);
+			predecessors.set(target, incoming);
 		}
-		if (CAPTURE_ENVIRONMENT_REBINDS.has(fn.instructionOpcodeName(instruction)))
-			return false;
 	}
-	if (!reachedEnd || creationBlock === siteBlock) return false;
-	const terminator = fn.blockTerminator(creationBlock);
-	const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-	for (let edge = 0; edge < fn.kernel.terminatorEdgeCount(terminator); edge++) {
-		let block = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
-		const visited = new Set<CoreBlockId>();
-		while (visited.size < 8 && !visited.has(block)) {
-			visited.add(block);
-			let rebound = false;
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				if (block === siteBlock && instruction === site) return true;
-				if (CAPTURE_ENVIRONMENT_REBINDS.has(fn.instructionOpcodeName(instruction))) {
-					rebound = true;
-					break;
-				}
+	const canReachSite = new Set<CoreBlockId>([siteBlock]);
+	const reverse = [siteBlock];
+	while (reverse.length > 0 && canReachSite.size <= 64) {
+		const block = reverse.pop()!;
+		if (block === creationBlock) continue;
+		for (const predecessor of predecessors.get(block) ?? []) {
+			if (canReachSite.has(predecessor)) continue;
+			canReachSite.add(predecessor);
+			reverse.push(predecessor);
+		}
+	}
+	if (!canReachSite.has(creationBlock) || canReachSite.size > 64) return false;
+
+	let reachedSite = false;
+	const pending = [creationBlock];
+	const visited = new Set<CoreBlockId>();
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		if (visited.has(block)) continue;
+		visited.add(block);
+		let afterCreation = block !== creationBlock;
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			if (!afterCreation) {
+				afterCreation = instruction === creation;
+				continue;
 			}
-			if (rebound || block === siteBlock) break;
-			const nextTerminator = fn.blockTerminator(block);
-			if (
-				fn.instructionKind(nextTerminator) !== "jump" ||
-				fn.kernel.terminatorEdgeCount(nextTerminator) !== 1
-			)
+			if (instruction === site) {
+				reachedSite = true;
 				break;
-			block = fn.kernel.terminatorEdgeBlock(
-				fn.kernel.terminatorEdgeStart(nextTerminator),
-			);
+			}
+			if (CAPTURE_ENVIRONMENT_REBINDS.has(fn.instructionOpcodeName(instruction)))
+				return false;
+		}
+		if (block === siteBlock) continue;
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		for (let edge = 0; edge < fn.kernel.terminatorEdgeCount(terminator); edge++) {
+			const target = fn.kernel.terminatorEdgeBlock(edgeStart + edge);
+			if (canReachSite.has(target)) pending.push(target);
 		}
 	}
-	return false;
+	return reachedSite;
 }
 
 function directCaptureContext(
@@ -249,7 +261,23 @@ function directCaptureContext(
 		use = caller.kernel.useNext(use)
 	) {
 		if (caller.kernel.useLive(use) === 0) continue;
-		if (caller.kernel.useInstruction(use) !== site || ++uses > 1) return undefined;
+		const instruction = coreInstructionId(caller.kernel.useInstruction(use));
+		if (instruction === site) {
+			if (++uses > 1) return undefined;
+			continue;
+		}
+		if (
+			caller.instructionKind(instruction) !== "operation" ||
+			caller.instructionOpcodeName(instruction) !== "call" ||
+			caller.instructionAttributes(instruction)[
+				CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
+			] !== true
+		)
+			return undefined;
+		const descriptor = caller.registry.byId(caller.instructionOpcode(instruction));
+		if (descriptor.callTransfer?.arguments.kind !== "positional") return undefined;
+		const position = caller.kernel.useOperand(use);
+		if (position < descriptor.callTransfer.arguments.firstOperand) return undefined;
 	}
 	if (uses !== 1) return undefined;
 	return { caller, callee, site };
@@ -533,7 +561,7 @@ function offerFunctionCandidates(
 					(inline?.instructions.length ?? 0) +
 					(inline?.function.valueCapacity ?? 0) +
 					(open ? 4 : 1),
-				expansive: true,
+				expansive: captureContext === undefined,
 				...(target === functionId
 					? { unsupportedReason: "recursive" as const }
 					: inline === undefined

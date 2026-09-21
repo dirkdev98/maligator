@@ -355,6 +355,48 @@ describe("bounded Core cross-call transforms", () => {
 		).toEqual(["envPush", "storeCaptured", "createFunction", "call", "envPop"]);
 	});
 
+	it("virtualizes captured callbacks in guarded Array predicate loops", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function compare(groups) {
+					let matches = 0;
+					for (let index = 0; index < groups.length; index++) {
+						const values = groups[index];
+						const expected = groups[index];
+						matches += values.every((value, position) => value === expected[position]) ? 1 : 0;
+					}
+					return matches;
+				}
+				globalThis.compare = compare;`,
+				"core-inline-array-predicate-capture.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const compare = coreFunctionNamed(optimized!, "compare")!;
+		const operations = coreOperations(compare);
+		const fallback = operations.find(
+			({ opcode, attributes }) =>
+				opcode === "call" &&
+				attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		)!;
+		expect(operations.some(({ opcode }) => opcode === "loadCaptured")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "envCopy")).toBe(false);
+		expect(
+			operations.filter(({ opcode }) => opcode === "createFunction"),
+		).toHaveLength(1);
+		expect(
+			operations
+				.filter(({ block }) => block === fallback.block)
+				.map(({ opcode }) => opcode),
+		).toEqual(["envPush", "storeCaptured", "createFunction", "call", "envPop"]);
+	});
+
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

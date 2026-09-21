@@ -194,6 +194,37 @@ check(
 );
 
 check(
+	"every virtualizes immutable per-iteration captures",
+	(() => {
+		const groups = [
+			[1, 2, 3],
+			[4, 5, 6],
+		];
+		let matches = 0;
+		for (let index = 0; index < groups.length; index++) {
+			const expected = groups[index];
+			const values = expected.slice();
+			if (values.every((value, position) => value === expected[position])) matches++;
+		}
+		return matches === 2;
+	})(),
+);
+
+check(
+	"every fallback materializes distinct captured callbacks",
+	(() => {
+		const retained = [];
+		const values = [1];
+		values.every = (callback) => {
+			retained.push(callback);
+			return callback(1, 0);
+		};
+		for (const expected of [[1], [2]]) values.every((value) => value === expected[0]);
+		return retained[0](1) && !retained[1](1);
+	})(),
+);
+
+check(
 	"every snapshots length and observes deletion",
 	(() => {
 		const values = [1, 2, 3];

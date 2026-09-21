@@ -335,6 +335,8 @@ export type CompilerInstruction =
 
 			// [destination, callee, this, ...arguments]
 			registers: [number, number, number, ...Array<number>];
+			/** COMPILE-ONLY: this call is the semantic fallback for a guarded inline path. */
+			guardedInlineFallback?: true;
 			/**
 			 * Canonical fact-system call target. Consumers must validate the identity
 			 * proof and preserve its fallback obligation before specializing the call.
