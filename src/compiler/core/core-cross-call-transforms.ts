@@ -561,6 +561,7 @@ function constructorConsumerPlan(
 	tail: ReadonlyArray<CoreInstructionId>,
 	callResult: CoreValueId,
 	originalTerminator: CoreInstructionId,
+	layout: ScalarConstructorLayout,
 ): ConstructorConsumerPlan | undefined {
 	const aliases = new Set<CoreValueId>([callResult]);
 	let lastUse = -1;
@@ -569,9 +570,15 @@ function constructorConsumerPlan(
 		const operands = materializeInstructionOperands(fn, instruction);
 		for (const [position, operand] of operands.entries()) {
 			if (!aliases.has(operand)) continue;
+			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 			if (
 				!((opcode === "move" || opcode === "throwIfTdz") && position === 0) &&
-				!(opcode === "loadPropertyStatic" && position === 0)
+				!(
+					opcode === "loadPropertyStatic" &&
+					position === 0 &&
+					typeof stringIndex === "number" &&
+					layout.keyStringIndices.includes(stringIndex)
+				)
 			)
 				return undefined;
 			lastUse = index;
@@ -683,6 +690,31 @@ function callCarriesDirectCreatedFunction(
 	return operands
 		.slice(descriptor.callTransfer.arguments.firstOperand)
 		.some((value) => coreDirectCreatedFunction(fn, value) !== undefined);
+}
+
+function guardedConstructorConsumerDuplication(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	inline: InlineTarget | undefined,
+	site: CoreInstructionId,
+	result: CoreValueId | undefined,
+): number {
+	if (inline === undefined || result === undefined) return 0;
+	const layout = scalarConstructorLayout(program, inline);
+	if (layout === undefined) return 0;
+	const block = fn.instructionBlock(site);
+	const terminator = fn.blockTerminator(block);
+	if (fn.instructionKind(terminator) === "guard") return 0;
+	const tail: Array<CoreInstructionId> = [];
+	for (
+		let instruction = fn.instructionNext(site);
+		instruction !== undefined && instruction !== terminator;
+		instruction = fn.instructionNext(instruction)
+	)
+		tail.push(instruction);
+	return (
+		constructorConsumerPlan(fn, tail, result, terminator, layout)?.prefix.length ?? 0
+	);
 }
 
 function offerFunctionCandidates(
@@ -814,6 +846,15 @@ function offerFunctionCandidates(
 			continue;
 		}
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
+		const consumerDuplication = open
+			? guardedConstructorConsumerDuplication(
+					program,
+					fn,
+					inline,
+					site.instruction,
+					result,
+				)
+			: 0;
 		const bridgesResult =
 			inline !== undefined &&
 			result !== undefined &&
@@ -835,10 +876,12 @@ function offerFunctionCandidates(
 				generatedCodeCost:
 					(inline?.instructions.length ?? 0) +
 					(inline?.linear === false ? inline.blocks.length : 0) +
+					consumerDuplication +
 					(open ? 1 : 0),
 				compilerWorkCost:
 					(inline?.instructions.length ?? 0) +
 					(inline?.function.valueCapacity ?? 0) +
+					consumerDuplication +
 					(open ? 4 : 1),
 				expansive: captureContext === undefined,
 				...(target === functionId
@@ -1200,7 +1243,13 @@ function applyGuardedInline(
 	const consumerPlan =
 		scalarLayout === undefined
 			? undefined
-			: constructorConsumerPlan(caller, tail, callResult, originalTerminator);
+			: constructorConsumerPlan(
+					caller,
+					tail,
+					callResult,
+					originalTerminator,
+					scalarLayout,
+				);
 	const handlerBlock = caller.kernel.blockHandlerBlock(block);
 	const handlerArguments: Array<CoreValueId> = [];
 	const handlerArgumentStart = caller.kernel.blockHandlerArgumentStart(block);

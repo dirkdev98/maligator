@@ -181,5 +181,58 @@ try {
 }
 ok("non-writable prototype guard miss", sawLockedFieldError);
 
-ok("check count", checks === 17);
+class InheritedRead {
+	constructor(value) {
+		this.value = value;
+	}
+}
+InheritedRead.prototype.extra = 7;
+const readInherited = function (limit) {
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		const instance = new InheritedRead(index);
+		total += instance.extra;
+	}
+	return total;
+};
+ok("inherited data read", readInherited(4) === 28);
+
+class InheritedGetter {
+	constructor(value) {
+		this.value = value;
+	}
+}
+let inheritedGetterReads = 0;
+Object.defineProperty(InheritedGetter.prototype, "extra", {
+	get() {
+		inheritedGetterReads++;
+		return 9;
+	},
+});
+const readInheritedGetter = function (limit) {
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		const instance = new InheritedGetter(index);
+		total += instance.extra;
+	}
+	return total;
+};
+ok("inherited getter read", readInheritedGetter(4) === 36 && inheritedGetterReads === 4);
+
+class ConstructorRead {
+	constructor(value) {
+		this.value = value;
+	}
+}
+const readConstructor = function (limit) {
+	let matches = 0;
+	for (let index = 0; index < limit; index++) {
+		const instance = new ConstructorRead(index);
+		if (instance.constructor === ConstructorRead) matches++;
+	}
+	return matches;
+};
+ok("constructor identity read", readConstructor(4) === 4);
+
+ok("check count", checks === 20);
 console.log("direct-known-construct PASS");

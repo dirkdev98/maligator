@@ -287,6 +287,48 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it.each([
+		["inherited data", "pair.extra", "Pair.prototype.extra = 7;"],
+		[
+			"inherited accessor",
+			"pair.extra",
+			`Object.defineProperty(Pair.prototype, "extra", { get() { return 7; } });`,
+		],
+		["constructor identity", "pair.constructor", ""],
+	])("retains allocation for %s reads", (_name, read, setup) => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Pair { constructor(value) { this.value = value; } }
+				${setup}
+				function hot(limit) {
+					let result;
+					for (let index = 0; index < limit; index++) {
+						const pair = new Pair(index);
+						result = ${read};
+					}
+					return result;
+				}
+				hot(10);`,
+				"core-contained-base-inherited-read.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardBaseConstructorLayout")).toBe(
+			false,
+		);
+		expect(
+			operations.some(({ opcode }) => opcode === "createBaseConstructReceiver"),
+		).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("retains the callee source chain when inlining", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
