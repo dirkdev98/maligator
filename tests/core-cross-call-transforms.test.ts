@@ -235,9 +235,13 @@ describe("bounded Core cross-call transforms", () => {
 		expect(optimized).toBeDefined();
 		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
 		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
-		expect(operations.some(({ opcode }) => opcode === "loadPropertyStatic")).toBe(true);
-		expect(operations.some(({ opcode }) => opcode === "createObject")).toBe(true);
-		expect(operations.some(({ opcode }) => opcode === "setPrototype")).toBe(true);
+		expect(
+			operations.some(
+				({ opcode, attributes }) =>
+					opcode === "createBaseConstructReceiver" &&
+					attributes.constructorSlotReserve === 1,
+			),
+		).toBe(true);
 		expect(operations.some(({ opcode }) => opcode === "defineProperty")).toBe(true);
 		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
 		verifyCoreProgram(optimized!, { stage: "pre-target" });

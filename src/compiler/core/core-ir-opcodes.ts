@@ -51,6 +51,7 @@ export const CORE_OPCODES = [
 	"createModuleNamespace",
 	"createNull",
 	"createNumber",
+	"createBaseConstructReceiver",
 	"createObject",
 	"createObjectShaped",
 	"createPrivateName",
@@ -242,6 +243,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"constructSuper",
 	"constructSuperExplicit",
 	"copyDataProperties",
+	"createBaseConstructReceiver",
 	"defineAccessor",
 	"definePrivate",
 	"defineProperty",
@@ -331,6 +333,7 @@ const write = (
  * whole-family partitioning.
  */
 const OPCODE_ACCESSES = {
+	createBaseConstructReceiver: [read("object-slot", { baseOperand: 0 })],
 	queryStaticData: [read("object-slot"), write("object-slot")],
 	// The callee is implicit in the activation rather than an SSA operand.
 	generatorStart: [read("prototype")],
@@ -628,6 +631,7 @@ const INPUT_ARITIES = {
 	createModuleNamespace: [0, 0],
 	createNull: [0, 0],
 	createNumber: [0, 0],
+	createBaseConstructReceiver: [1, 1],
 	createObject: [0, 65_535],
 	createObjectShaped: [0, 65_535],
 	createPrivateName: [0, 0],

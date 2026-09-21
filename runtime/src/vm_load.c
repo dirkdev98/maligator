@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 53u
+#define WIRE_VERSION 54u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -619,6 +619,17 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
         case WIRE_CREATE_OBJECT:
             o->opcode = MAL_OP_CREATE_OBJECT;
             o->as.create_object.dst = rd_i32(r);
+            return;
+        case WIRE_CREATE_BASE_CONSTRUCT_RECEIVER:
+            o->opcode = MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER;
+            o->as.create_base_construct_receiver.dst = rd_i32(r);
+            o->as.create_base_construct_receiver.new_target = rd_i32(r);
+            o->as.create_base_construct_receiver.constructor_slot_reserve = rd_i32(r);
+            if (o->as.create_base_construct_receiver.constructor_slot_reserve < 0 ||
+                o->as.create_base_construct_receiver.constructor_slot_reserve >
+                    MAL_SHAPE_MAX_INLINE_SLOTS) {
+                r->ok = false;
+            }
             return;
         case WIRE_CREATE_OBJECT_SHAPED: {
             o->opcode = MAL_OP_CREATE_OBJECT_SHAPED;
@@ -1408,6 +1419,9 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CREATE_STRING, create_string);
         MAL_WRITES_DST(MAL_OP_CREATE_BIGINT, create_bigint);
         MAL_WRITES_DST(MAL_OP_CREATE_OBJECT, create_object);
+        MAL_WRITES_DST(
+            MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER,
+            create_base_construct_receiver);
         MAL_WRITES_DST(MAL_OP_CREATE_OBJECT_SHAPED, create_object_shaped);
         MAL_WRITES_DST(MAL_OP_CREATE_ARRAY, create_array);
         MAL_WRITES_DST(MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, instantiate_literal_template);

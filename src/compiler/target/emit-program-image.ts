@@ -2004,6 +2004,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CREATE_BIGINT, .as.create_bigint = { .dst = ${instruction.dst}, .bigint_index = ${instruction.bigintIndex} } }`;
 		case "CREATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = ${instruction.dst} } }`;
+		case "CREATE_BASE_CONSTRUCT_RECEIVER":
+			return `{ .opcode = MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER, .as.create_base_construct_receiver = { .dst = ${instruction.dst}, .new_target = ${instruction.newTarget}, .constructor_slot_reserve = ${instruction.constructorSlotReserve} } }`;
 		case "CREATE_OBJECT_SHAPED":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()}, .shape_cache_index = ${instruction.shapeCacheIndex} } }`;
 		case "CREATE_ARRAY":

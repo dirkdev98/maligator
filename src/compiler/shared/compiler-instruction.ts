@@ -172,6 +172,12 @@ export type CompilerInstruction =
 			registers: [number, ...Array<number>];
 	  }
 	| {
+			type: "createBaseConstructReceiver";
+			// [destination, new.target]
+			registers: [number, number];
+			constructorSlotReserve: number;
+	  }
+	| {
 			// A fully static data-property object literal: all keys are known
 			// non-index strings, so the final shape is built once and the slots are
 			// filled directly, skipping per-property defineProperty transitions.

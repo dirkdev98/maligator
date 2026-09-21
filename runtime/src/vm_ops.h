@@ -359,6 +359,8 @@ void mal_op_create_string(MalCallable *callable, const MalInstruction *instructi
 void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_create_base_construct_receiver(
+    MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction);
 
@@ -2381,6 +2383,8 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
  * creating frame's environment) so the closure resolves captured bindings.
  */
 MalValue mal_vm_op_create_object(MalVm *vm);
+MalValue mal_vm_op_create_base_construct_receiver(
+    MalVm *vm, MalValue new_target, u8 capacity);
 
 /**
  * Clone a compiler-emitted ordinary stack object into one managed cell before

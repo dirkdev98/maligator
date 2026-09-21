@@ -694,6 +694,12 @@ export type BytecodeInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "CREATE_BASE_CONSTRUCT_RECEIVER";
+			dst: number;
+			newTarget: number;
+			constructorSlotReserve: number;
+	  }
+	| {
 			opcode: "CREATE_OBJECT_SHAPED";
 			dst: number;
 			count: number;
@@ -3045,6 +3051,13 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
+			};
+		case "createBaseConstructReceiver":
+			return {
+				opcode: "CREATE_BASE_CONSTRUCT_RECEIVER",
+				dst: instruction.registers[0],
+				newTarget: instruction.registers[1],
+				constructorSlotReserve: instruction.constructorSlotReserve,
 			};
 		case "createObjectShaped":
 			return {

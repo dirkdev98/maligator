@@ -407,6 +407,7 @@ function cloneInstruction(
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
 		case "CREATE_OBJECT":
+		case "CREATE_BASE_CONSTRUCT_RECEIVER":
 		case "CREATE_ARRAY":
 		case "CREATE_UNDEFINED":
 		case "CREATE_EMPTY":

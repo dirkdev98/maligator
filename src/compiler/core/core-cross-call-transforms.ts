@@ -1,4 +1,5 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
 import {
@@ -477,41 +478,17 @@ function constructorReturnMode(
 	return undefined;
 }
 
-function staticStringIndex(
-	program: CoreProgram,
-	editor: CoreEditor,
-	value: string,
-): number {
-	const units = Array.from(value, (character) => character.charCodeAt(0));
-	const existing = program.stringConstants.findIndex(
-		(candidate) =>
-			candidate.length === units.length &&
-			candidate.every((unit, index) => unit === units[index]),
-	);
-	return existing >= 0 ? existing : editor.appendStringConstants([units]);
-}
-
 function appendConstructReceiver(
-	program: CoreProgram,
 	editor: CoreEditor,
 	block: CoreBlockId,
 	callee: CoreValueId,
+	slotReserve: number,
 	position: number | undefined,
-): { readonly receiver: CoreValueId; readonly introduced: number } {
-	const prototype = editor.appendInstruction(block, "loadPropertyStatic", [callee], {
-		attributes: {
-			stringIndex: staticStringIndex(program, editor, "prototype"),
-		},
+): CoreValueId {
+	return editor.appendInstruction(block, "createBaseConstructReceiver", [callee], {
+		attributes: { constructorSlotReserve: slotReserve },
 		sourcePosition: position,
 	}).outputs[0]!;
-	const receiver = editor.appendInstruction(block, "createObject", [], {
-		sourcePosition: position,
-	}).outputs[0]!;
-	editor.appendInstruction(block, "setPrototype", [receiver, prototype], {
-		attributes: { literal: true },
-		sourcePosition: position,
-	});
-	return { receiver, introduced: 3 };
 }
 
 function callCarriesDirectCreatedFunction(
@@ -1115,15 +1092,14 @@ function applyGuardedInline(
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
 	if (inline.construction) {
-		const created = appendConstructReceiver(
-			program,
+		receiver = appendConstructReceiver(
 			editor,
 			fast,
 			callee,
+			coreConstructorSlotReserve(inline.function),
 			callerPosition,
 		);
-		receiver = created.receiver;
-		introduced += created.introduced;
+		introduced++;
 	}
 	const bridgeValue = (
 		destination: CoreBlockId,

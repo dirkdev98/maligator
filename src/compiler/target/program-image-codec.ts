@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 53;
+export const WIRE_VERSION = 54;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -817,6 +817,14 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "CREATE_PRIVATE_NAME":
 			w.i32(i.dst);
 			return;
+		case "CREATE_BASE_CONSTRUCT_RECEIVER":
+			if (i.constructorSlotReserve < 0 || i.constructorSlotReserve > 64) {
+				throw new RangeError("program-image-codec: invalid constructor slot reserve");
+			}
+			w.i32(i.dst);
+			w.i32(i.newTarget);
+			w.i32(i.constructorSlotReserve);
+			return;
 		case "CREATE_PRIVATE_NAMES":
 			if (i.capturedIndices.length === 0) {
 				throw new RangeError("program-image-codec: empty private-name batch");
@@ -1595,6 +1603,21 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), bigintIndex: r.i32() };
 		case "CREATE_OBJECT":
 			return { opcode, dst: r.i32() };
+		case "CREATE_BASE_CONSTRUCT_RECEIVER": {
+			const instruction = {
+				opcode,
+				dst: r.i32(),
+				newTarget: r.i32(),
+				constructorSlotReserve: r.i32(),
+			} as const;
+			if (
+				instruction.constructorSlotReserve < 0 ||
+				instruction.constructorSlotReserve > 64
+			) {
+				throw new RangeError("program-image-codec: invalid constructor slot reserve");
+			}
+			return instruction;
+		}
 		case "CREATE_UNDEFINED":
 			return { opcode, dst: r.i32() };
 		case "CREATE_EMPTY":

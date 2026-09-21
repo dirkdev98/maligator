@@ -4356,6 +4356,11 @@ function emitInstruction(
 				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_root(&vm->heap), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
 				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
 			];
+		case "CREATE_BASE_CONSTRUCT_RECEIVER":
+			return [
+				`r${instruction.dst} = ${profileCall("allocation", `mal_vm_op_create_base_construct_receiver(vm, ${boxed(instruction.newTarget)}, ${instruction.constructorSlotReserve})`)};`,
+				throwCheck(),
+			];
 		case "CREATE_OBJECT_SHAPED": {
 			if (stackObjectSite?.elided === true) {
 				return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];

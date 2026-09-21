@@ -210,6 +210,10 @@ typedef struct MalInstruction {
         } create_object;
 
         struct {
+            i32 dst, new_target, constructor_slot_reserve;
+        } create_base_construct_receiver;
+
+        struct {
             // Side data: [count, string-constant indices..., value registers...].
             i32 dst, data_offset, shape_cache_index;
         } create_object_shaped;

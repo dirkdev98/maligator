@@ -766,6 +766,18 @@ MalValue mal_vm_op_create_object(MalVm *vm) {
     return mal_value_from_object(object);
 }
 
+MalValue mal_vm_op_create_base_construct_receiver(
+    MalVm *vm, MalValue new_target, u8 capacity
+) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+        return MAL_VALUE_UNDEFINED;
+    }
+    return mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, prototype, capacity));
+}
+
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
     assert(source->header.type == MAL_HEAP_OBJECT);
     assert(source->header.storage == MAL_HEAP_STORAGE_IMMORTAL);
@@ -816,6 +828,16 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
 
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
+}
+
+void mal_op_create_base_construct_receiver(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    callable->registers[instruction->as.create_base_construct_receiver.dst] =
+        mal_vm_op_create_base_construct_receiver(
+            callable->vm,
+            callable->registers[instruction->as.create_base_construct_receiver.new_target],
+            (u8) instruction->as.create_base_construct_receiver.constructor_slot_reserve);
 }
 
 void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction) {

@@ -2231,6 +2231,10 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_CREATE_OBJECT:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_create_object(frame, instruction));
                 break;
+            case MAL_OP_CREATE_BASE_CONSTRUCT_RECEIVER:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_create_base_construct_receiver(frame, instruction));
+                break;
             case MAL_OP_CREATE_OBJECT_SHAPED:
                 // Shaped literal creation can only raise the deferred GC poll; it
                 // cannot collect, call JavaScript, or replace this activation.
