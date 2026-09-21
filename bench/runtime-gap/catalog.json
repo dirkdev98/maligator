@@ -2516,6 +2516,19 @@
 			"fixture": "cases/constructor-scalar-fields-immediate-method.mjs"
 		},
 		{
+			"id": "constructor-scalar-fields-computed-nonescaping",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "constructor scalar replacement",
+			"category": "allocation-gc",
+			"mechanisms": ["constructor-call", "escape-analysis", "scalar-replacement"],
+			"inputShape": "nonescaping two-field base instance with computed values",
+			"unit": "constructed field sum",
+			"sourceSeam": "src/compiler/core/core-cross-call-transforms.ts",
+			"controls": ["constructor-scalar-fields-nonescaping"],
+			"fixture": "cases/constructor-scalar-fields-computed-nonescaping.mjs"
+		},
+		{
 			"id": "constructor-derived-super-retained",
 			"group": "runtime",
 			"suite": "runtime",
