@@ -121,6 +121,14 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr).toBe(0);
 	}
+
+	function uniquePayloadOffset(wire: Uint8Array, payload: Uint8Array): number {
+		const bytes = Buffer.from(wire);
+		const offset = bytes.indexOf(payload);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
+		return offset;
+	}
 	it("interns empty wire strings before installing language intrinsics", () => {
 		acceptsWire(
 			"empty-string-constant",
@@ -384,15 +392,35 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 33 after the
-		// fixed header, source-entry field, and explicit literal-shape count. Its
-		// explicit operand count follows the opcode tag and dst operand.
-		rejectsMutation("explicit-count", afterSourceEntry(33 + 1 + 1), 4); // ZigZag(2)
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
+		const encodedInstruction = Buffer.from([
+			WIRE_OPCODES.indexOf("CREATE_OBJECT_SHAPED"),
+			0,
+			2,
+			1,
+			0,
+			1,
+			0,
+		]);
+		const instructionOffset = uniquePayloadOffset(wire, encodedInstruction);
+		wire[instructionOffset + 2] = 4;
+		rejectsWire("explicit-count", wire);
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
-		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", afterSourceEntry(33 + 1 + 1 + 1 + 1 + 1), 2);
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
+		const encodedInstruction = Buffer.from([
+			WIRE_OPCODES.indexOf("CREATE_OBJECT_SHAPED"),
+			0,
+			2,
+			1,
+			0,
+			1,
+			0,
+		]);
+		const instructionOffset = uniquePayloadOffset(wire, encodedInstruction);
+		wire[instructionOffset + 5] = 2;
+		rejectsWire("paired-count", wire);
 	});
 
 	it("rejects guarded target metadata on CONSTRUCT", () => {
