@@ -2206,6 +2206,16 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
 
+            case MAL_OP_BASE_CONSTRUCT_RESULT: {
+                MalValue value = registers[instruction->as.base_construct_result.value];
+                registers[instruction->as.base_construct_result.dst] =
+                    mal_value_is_object(value)
+                    ? value
+                    : registers[instruction->as.base_construct_result.receiver];
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
+
             case MAL_OP_CREATE_NUMBER:
                 registers[instruction->as.create_number.dst] =
                     mal_value_from_i32(instruction->as.create_number.value);

@@ -307,6 +307,11 @@ export type CompilerInstruction =
 			registers: [number];
 	  }
 	| {
+			type: "baseConstructResult";
+			// [destination, receiver, returned value]
+			registers: [number, number, number];
+	  }
+	| {
 			type: "guardBaseConstructorLayout";
 			// [destination (boolean), callee]
 			registers: [number, number];

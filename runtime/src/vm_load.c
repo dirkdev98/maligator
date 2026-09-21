@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 55u
+#define WIRE_VERSION 56u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -586,6 +586,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_MOVE;
             o->as.move.dst = rd_i32(r);
             o->as.move.src = rd_i32(r);
+            return;
+        case WIRE_BASE_CONSTRUCT_RESULT:
+            o->opcode = MAL_OP_BASE_CONSTRUCT_RESULT;
+            o->as.base_construct_result.dst = rd_i32(r);
+            o->as.base_construct_result.receiver = rd_i32(r);
+            o->as.base_construct_result.value = rd_i32(r);
             return;
         case WIRE_RETURN:
             o->opcode = MAL_OP_RETURN;
@@ -1438,6 +1444,7 @@ static bool mal_loaded_instruction_writes_register(
     case opcode: return instruction->as.member.dst == target_register
     switch (instruction->opcode) {
         MAL_WRITES_DST(MAL_OP_MOVE, move);
+        MAL_WRITES_DST(MAL_OP_BASE_CONSTRUCT_RESULT, base_construct_result);
         MAL_WRITES_DST(MAL_OP_CREATE_NUMBER, create_number);
         MAL_WRITES_DST(MAL_OP_CREATE_F64, create_f64);
         MAL_WRITES_DST(MAL_OP_CREATE_BOOLEAN, create_boolean);
@@ -2110,6 +2117,7 @@ static bool mal_loaded_known_own_slot_valid(
 static bool mal_loaded_shape_case_transparent(const MalInstruction *instruction) {
     switch (instruction->opcode) {
         case MAL_OP_MOVE:
+        case MAL_OP_BASE_CONSTRUCT_RESULT:
         case MAL_OP_CREATE_NUMBER:
         case MAL_OP_CREATE_F64:
         case MAL_OP_CREATE_BOOLEAN:
@@ -2412,6 +2420,17 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             const MalInstruction *instruction = &fn->instructions[ip];
             if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
                 if (!mal_loaded_static_query_valid(def, fn, instruction)) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_BASE_CONSTRUCT_RESULT) {
+                i32 registers[] = {
+                    instruction->as.base_construct_result.dst,
+                    instruction->as.base_construct_result.receiver,
+                    instruction->as.base_construct_result.value,
+                };
+                for (usize index = 0; index < countof(registers); index++) {
+                    if (registers[index] < 0 || registers[index] >= fn->register_count) {
+                        r.ok = false;
+                    }
+                }
             } else if (instruction->opcode == MAL_OP_CALL) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call.data_offset];

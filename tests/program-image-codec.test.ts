@@ -53,6 +53,7 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "LOAD_INTRINSIC", dst: 5, intrinsic: "Math" },
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
+	{ opcode: "BASE_CONSTRUCT_RESULT", dst: 7, receiver: 10, value: 3 },
 	{ opcode: "LOAD_SUPER_PROPERTY", dst: 7, object: 10, key: 3, receiver: 10 },
 	{
 		opcode: "LOAD_PROPERTY_STATIC",

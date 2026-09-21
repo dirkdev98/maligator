@@ -182,6 +182,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 			return COMPILER_VALUE_KIND_SYMBOL;
 		case "createFunction":
 		case "createArray":
+		case "baseConstructResult":
 		case "createBaseConstructReceiver":
 		case "createObject":
 		case "createObjectShaped":

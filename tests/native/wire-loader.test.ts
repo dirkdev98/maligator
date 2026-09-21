@@ -55,6 +55,7 @@ const fn: BytecodeFunction = {
 			valueRegisters: [0],
 			shapeCacheIndex: 0,
 		},
+		{ opcode: "RETURN", value: 0 },
 	],
 	handlers: [],
 	fileIndex: 0,
@@ -119,7 +120,10 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, `${name}.malw`);
 		writeFileSync(wirePath, wire);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr).toBe(0);
+		expect(
+			result.status,
+			`signal=${result.signal ?? "none"} stderr=${result.stderr}`,
+		).toBe(0);
 	}
 
 	function uniquePayloadOffset(wire: Uint8Array, payload: Uint8Array): number {
@@ -152,6 +156,45 @@ describe("wire loader side-data validation", () => {
 		acceptsWire(
 			"empty-string-operations",
 			serializeRuntimeImage(image.runtime, { debugInfo: false }),
+		);
+	});
+	it("validates base constructor result registers", () => {
+		const resultFn: BytecodeFunction = {
+			...fn,
+			registerCount: 3,
+			literalShapeCount: 0,
+			instructions: [
+				{ opcode: "CREATE_OBJECT", dst: 0 },
+				{ opcode: "CREATE_UNDEFINED", dst: 1 },
+				{ opcode: "BASE_CONSTRUCT_RESULT", dst: 2, receiver: 0, value: 1 },
+				{ opcode: "RETURN", value: 2 },
+			],
+		};
+		acceptsWire(
+			"base-construct-result",
+			serializeRuntimeImage(
+				{ ...definition, functions: [resultFn] },
+				{ debugInfo: false },
+			),
+		);
+		rejectsWire(
+			"base-construct-result-register",
+			serializeRuntimeImage(
+				{
+					...definition,
+					functions: [
+						{
+							...resultFn,
+							instructions: resultFn.instructions.map((instruction) =>
+								instruction.opcode === "BASE_CONSTRUCT_RESULT"
+									? { ...instruction, dst: 3 }
+									: instruction,
+							),
+						},
+					],
+				},
+				{ debugInfo: false },
+			),
 		);
 	});
 	it("validates precise sum register bounds and bounded side data", () => {

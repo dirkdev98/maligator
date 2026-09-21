@@ -1990,6 +1990,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 	switch (instruction.opcode) {
 		case "MOVE":
 			return `{ .opcode = MAL_OP_MOVE, .as.move = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
+		case "BASE_CONSTRUCT_RESULT":
+			return `{ .opcode = MAL_OP_BASE_CONSTRUCT_RESULT, .as.base_construct_result = { .dst = ${instruction.dst}, .receiver = ${instruction.receiver}, .value = ${instruction.value} } }`;
 		case "RETURN":
 			return `{ .opcode = MAL_OP_RETURN, .as.ret = { .value = ${instruction.value} } }`;
 		case "JUMP_IF":

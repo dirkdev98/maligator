@@ -408,6 +408,7 @@ function cloneInstruction(
 		// Registers, instruction pointers, literal values, intrinsic/operator ids,
 		// and synthetic negative environment scope ids are image-local values.
 		case "MOVE":
+		case "BASE_CONSTRUCT_RESULT":
 		case "RETURN":
 		case "JUMP_IF":
 		case "JUMP":

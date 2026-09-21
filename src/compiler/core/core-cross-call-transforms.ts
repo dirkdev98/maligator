@@ -161,7 +161,6 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"callRestArguments",
 	"loadArgumentCount",
 	"loadCallee",
-	"loadNewTarget",
 	"loadStaticArgument",
 	"storeCaptured",
 ]);
@@ -335,6 +334,7 @@ function inlineTarget(
 			if (
 				++instructionCount > 48 ||
 				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
 				(opcode === "loadCaptured" && captureContext === undefined) ||
@@ -413,7 +413,7 @@ function inlineTarget(
 	};
 }
 
-type ConstructorReturnMode = "receiver" | "returned";
+type ConstructorReturnMode = "receiver" | "returned" | "dynamic";
 
 function constructorReturnMode(
 	fn: CoreFunctionStore,
@@ -436,15 +436,16 @@ function constructorReturnMode(
 		case "boxed":
 			break;
 	}
-	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return "dynamic";
 	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-	if (fn.instructionKind(definition) !== "operation") return undefined;
+	if (fn.instructionKind(definition) !== "operation") return "dynamic";
 	const opcode = fn.instructionOpcodeName(definition);
 	if (opcode === "move") {
 		const input = materializeInstructionOperands(fn, definition)[0];
 		return input === undefined ? undefined : constructorReturnMode(fn, input, seen);
 	}
 	if (opcode === "loadThis") return "receiver";
+	if (opcode === "loadNewTarget") return "returned";
 	if (
 		[
 			"createUndefined",
@@ -475,7 +476,7 @@ function constructorReturnMode(
 		].includes(opcode)
 	)
 		return "returned";
-	return undefined;
+	return "dynamic";
 }
 
 interface ScalarConstructorLayout {
@@ -1417,12 +1418,26 @@ function applyGuardedInline(
 		introduced++;
 	}
 	const emitReturn = (destination: CoreBlockId, value: CoreValueId): void => {
-		let result =
-			inline.construction && constructorReturnMode(inline.function, value) === "receiver"
-				? receiver
-				: values.get(value);
+		const returnMode = inline.construction
+			? constructorReturnMode(inline.function, value)
+			: undefined;
+		let result = returnMode === "receiver" ? receiver : values.get(value);
 		if (result === undefined)
 			throw new Error("Validated inline return has no caller value");
+		if (returnMode === "dynamic") {
+			if (receiver === undefined)
+				throw new Error("Validated dynamic constructor return has no receiver");
+			result = editor.appendInstruction(
+				destination,
+				"baseConstructResult",
+				[receiver, result],
+				{
+					outputRepresentations: ["boxed"],
+					sourcePosition: callerPosition,
+				},
+			).outputs[0]!;
+			introduced++;
+		}
 		const resultRepresentation = caller.valueRepresentation(result);
 		if (!canBridgeInlineResult(resultRepresentation, callRepresentation)) {
 			throw new Error(
@@ -1498,6 +1513,21 @@ function applyGuardedInline(
 				});
 				values.set(output, created.outputs[0]!);
 				introduced++;
+				continue;
+			}
+			if (opcode === "loadNewTarget") {
+				const output = materializeInstructionResults(inline.function, instruction)[0];
+				if (output === undefined)
+					throw new Error("Validated guarded inline new.target is unavailable");
+				values.set(
+					output,
+					bridgeValue(
+						destination,
+						callee,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
 				continue;
 			}
 			if (opcode === "loadThis") {

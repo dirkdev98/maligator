@@ -10,6 +10,7 @@ import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts
  */
 export const BYTECODE_OPERATIONS = [
 	"MOVE",
+	"BASE_CONSTRUCT_RESULT",
 	"RETURN",
 	"JUMP_IF",
 	"JUMP",

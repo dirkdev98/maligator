@@ -1423,6 +1423,7 @@ export function vmNativeInstructionMayCaptureStack(
 ): boolean {
 	switch (instruction.opcode) {
 		case "MOVE":
+		case "BASE_CONSTRUCT_RESULT":
 		case "CREATE_UNDEFINED":
 		case "CREATE_NULL":
 		case "CREATE_EMPTY":

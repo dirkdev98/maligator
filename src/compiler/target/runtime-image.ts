@@ -652,6 +652,12 @@ export type BytecodeInstruction =
 			src: number;
 	  }
 	| {
+			opcode: "BASE_CONSTRUCT_RESULT";
+			dst: number;
+			receiver: number;
+			value: number;
+	  }
+	| {
 			opcode: "RETURN";
 			value: number;
 	  }
@@ -1580,6 +1586,7 @@ const VM_SHAPE_CASE_MAX_SPAN = 64;
 function vmShapeCaseTransparent(instruction: BytecodeInstruction): boolean {
 	switch (instruction.opcode) {
 		case "MOVE":
+		case "BASE_CONSTRUCT_RESULT":
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
@@ -3165,6 +3172,13 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "LOAD_THIS",
 				dst: instruction.registers[0],
+			};
+		case "baseConstructResult":
+			return {
+				opcode: "BASE_CONSTRUCT_RESULT",
+				dst: instruction.registers[0],
+				receiver: instruction.registers[1],
+				value: instruction.registers[2],
 			};
 		case "loadNewTarget":
 			return {

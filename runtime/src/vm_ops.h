@@ -348,6 +348,9 @@ bool mal_vm_is_constructor(MalVm *vm, MalValue value);
 
 void mal_op_move(MalCallable *callable, const MalInstruction *instruction);
 
+void mal_op_base_construct_result(
+    MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_create_number(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_f64(MalCallable *callable, const MalInstruction *instruction);

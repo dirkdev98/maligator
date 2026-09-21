@@ -26,6 +26,7 @@ export const CORE_OPCODES = [
 	"arrayRest",
 	"asyncStart",
 	"await",
+	"baseConstructResult",
 	"binary",
 	"builtinError",
 	"preparedStringCompare",
@@ -180,6 +181,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
+	"baseConstructResult",
 	"createBoolean",
 	"createEmpty",
 	"createF64",
@@ -286,6 +288,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 ]);
 
 const DISCARDABLE = new Set<CoreOpcode>([
+	"baseConstructResult",
 	"createBigint",
 	"createBoolean",
 	"createEmpty",
@@ -554,6 +557,7 @@ function opcodeCallTransfer(opcode: CoreOpcode): CoreOpcodeCallTransfer | undefi
 
 /** Operands inspected without anything retaining the reference passed in. */
 const OBSERVES_OPERANDS = new Set<CoreOpcode>([
+	"baseConstructResult",
 	"isEmpty",
 	"move",
 	"rootUse",
@@ -615,6 +619,7 @@ const INPUT_ARITIES = {
 	arrayRest: [1, 1],
 	asyncStart: [0, 0],
 	await: [1, 1],
+	baseConstructResult: [2, 2],
 	binary: [2, 2],
 	builtinError: [0, 0],
 	preparedStringCompare: [2, 2],

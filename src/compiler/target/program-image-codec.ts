@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 55;
+export const WIRE_VERSION = 56;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -772,6 +772,11 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "MOVE":
 			w.i32(i.dst);
 			w.i32(i.src);
+			return;
+		case "BASE_CONSTRUCT_RESULT":
+			w.i32(i.dst);
+			w.i32(i.receiver);
+			w.i32(i.value);
 			return;
 		case "RETURN":
 		case "THROW":
@@ -1592,6 +1597,8 @@ function readInstruction(r: Reader): BytecodeInstruction {
 	switch (opcode) {
 		case "MOVE":
 			return { opcode, dst: r.i32(), src: r.i32() };
+		case "BASE_CONSTRUCT_RESULT":
+			return { opcode, dst: r.i32(), receiver: r.i32(), value: r.i32() };
 		case "RETURN":
 			return { opcode, value: r.i32() };
 		case "THROW":

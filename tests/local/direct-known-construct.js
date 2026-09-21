@@ -234,5 +234,53 @@ const readConstructor = function (limit) {
 };
 ok("constructor identity read", readConstructor(4) === 4);
 
-ok("check count", checks === 20);
+class StoredNewTarget {
+	constructor() {
+		this.target = new.target;
+	}
+}
+ok("stored direct new.target", new StoredNewTarget().target === StoredNewTarget);
+
+class ReturnedNewTarget {
+	constructor() {
+		return new.target;
+	}
+}
+ok("returned direct new.target", new ReturnedNewTarget() === ReturnedNewTarget);
+
+let dynamicReturnEffects = 0;
+const dynamicThrowMarker = {};
+const dynamicThrown = {};
+class DynamicReturn {
+	constructor(returned) {
+		dynamicReturnEffects++;
+		if (returned === dynamicThrowMarker) throw dynamicThrown;
+		this.value = returned;
+		return returned;
+	}
+}
+const dynamicPrimitives = [undefined, null, false, 0, "", 0n, Symbol("value")];
+for (let index = 0; index < dynamicPrimitives.length; index++) {
+	const primitive = dynamicPrimitives[index];
+	const result = new DynamicReturn(primitive);
+	ok(
+		"dynamic primitive return " + index,
+		result instanceof DynamicReturn && result.value === primitive,
+	);
+}
+const dynamicObjects = [{}, [], function returnedFunction() {}, new Proxy({}, {})];
+for (let index = 0; index < dynamicObjects.length; index++) {
+	const object = dynamicObjects[index];
+	ok("dynamic object return " + index, new DynamicReturn(object) === object);
+}
+let sawDynamicThrow = false;
+try {
+	new DynamicReturn(dynamicThrowMarker);
+} catch (error) {
+	sawDynamicThrow = error === dynamicThrown;
+}
+ok("dynamic return throw", sawDynamicThrow);
+ok("dynamic return side effects", dynamicReturnEffects === 12);
+
+ok("check count", checks === 35);
 console.log("direct-known-construct PASS");

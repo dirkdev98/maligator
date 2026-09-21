@@ -702,6 +702,15 @@ void mal_op_move(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.move.dst] = callable->registers[instruction->as.move.src];
 }
 
+void mal_op_base_construct_result(
+    MalCallable *callable, const MalInstruction *instruction) {
+    MalValue value = callable->registers[instruction->as.base_construct_result.value];
+    callable->registers[instruction->as.base_construct_result.dst] =
+        mal_value_is_object(value)
+        ? value
+        : callable->registers[instruction->as.base_construct_result.receiver];
+}
+
 void mal_op_create_number(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
 }

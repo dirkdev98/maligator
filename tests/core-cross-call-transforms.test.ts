@@ -247,6 +247,62 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it("maps direct new.target reads to the guarded callee", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Record {
+					constructor(value) {
+						this.value = value;
+						this.target = new.target;
+					}
+				}
+				function hot(value) { return new Record(value); }
+				hot(10);`,
+				"core-constructor-new-target.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadNewTarget")).toBe(false);
+		expect(
+			operations.some(({ opcode }) => opcode === "createBaseConstructReceiver"),
+		).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
+	it("selects dynamic base-constructor returns after guarded inlining", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Record {
+					constructor(value, returned) {
+						this.value = value;
+						return returned;
+					}
+				}
+				function hot(value, returned) { return new Record(value, returned); }
+				hot(10, null);`,
+				"core-constructor-dynamic-return.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "baseConstructResult")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("scalarizes contained base construction behind a prototype-layout guard", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

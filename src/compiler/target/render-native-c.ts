@@ -4272,6 +4272,10 @@ function emitInstruction(
 							: boxed(instruction.src);
 			return [`r${dst} = ${read};`];
 		}
+		case "BASE_CONSTRUCT_RESULT":
+			return [
+				`r${instruction.dst} = mal_value_is_object(${boxed(instruction.value)}) ? ${boxed(instruction.value)} : ${boxed(instruction.receiver)};`,
+			];
 		case "CREATE_UNDEFINED":
 			return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
 		case "CREATE_NULL":

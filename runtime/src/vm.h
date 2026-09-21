@@ -165,6 +165,10 @@ typedef struct MalInstruction {
         } move;
 
         struct {
+            i32 dst, receiver, value;
+        } base_construct_result;
+
+        struct {
             i32 value;
         } ret;
 
