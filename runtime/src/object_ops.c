@@ -160,6 +160,13 @@ bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     return true;
 }
 
+bool mal_object_reserve_private(MalObject *object, usize additional) {
+    bool private_only = !mal_object_has_public_overflow(object);
+    MalTable *table = mal_object_ensure_overflow(object);
+    object->overflow_private_only = private_only;
+    return mal_table_reserve(table, mal_table_size(table) + additional);
+}
+
 /**
  * Drop a shaped object to dictionary mode: migrate each inline slot into the
  * overflow table (preserving insertion order via the shape's slot order), then

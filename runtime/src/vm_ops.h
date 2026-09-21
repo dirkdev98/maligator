@@ -2562,6 +2562,12 @@ void mal_vm_op_create_private_names(
 /** AddPrivateName: install a private element on a new instance; dup install throws. */
 void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
 
+static inline void mal_vm_reserve_private_elements(MalValue object_value, u32 count) {
+    if (mal_value_is_object(object_value)) {
+        (void) mal_object_reserve_private(mal_value_to_object(object_value), count);
+    }
+}
+
 /** Install an ordered run of undefined-valued private instance fields. */
 void mal_vm_op_init_private_fields(
     MalVm *vm, MalValue object_value, i32 count, const MalValue *keys

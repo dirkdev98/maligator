@@ -2966,6 +2966,7 @@ function emitBody(
 	);
 	const constructorInitializationActionByIp =
 		nativeFastPaths.constructorInitializationActions;
+	const privateFieldReserve = nativeFastPaths.privateFieldReserve;
 	if (nativeFastPaths.constructorInitialization !== undefined) {
 		const id = nativeFastPaths.constructorInitialization.id;
 		lines.push(`bool __constructor_initialization_${id}_fast = false;`);
@@ -3234,6 +3235,8 @@ function emitBody(
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
 				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
+				privateFieldReserveCount:
+					privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined,
 				relocation,
 			},
 		);
@@ -3584,6 +3587,7 @@ interface NativeInstructionContext {
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
+	readonly privateFieldReserveCount?: number;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3681,6 +3685,7 @@ function emitInstruction(
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
 		constructorInitializationAction,
+		privateFieldReserveCount,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -8430,11 +8435,21 @@ function emitInstruction(
 		case "DEFINE_PRIVATE":
 			// AddPrivateName on a fresh instance/class object; a duplicate install throws.
 			return [
+				...(privateFieldReserveCount === undefined
+					? []
+					: [
+							`mal_vm_reserve_private_elements(${boxed(instruction.object)}, ${privateFieldReserveCount});`,
+						]),
 				`mal_vm_op_define_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
 				throwCheck(),
 			];
 		case "INIT_PRIVATE_FIELDS":
 			return [
+				...(privateFieldReserveCount === undefined
+					? []
+					: [
+							`mal_vm_reserve_private_elements(${boxed(instruction.object)}, ${privateFieldReserveCount});`,
+						]),
 				`mal_vm_op_init_private_fields(vm, ${boxed(instruction.object)}, ${instruction.keyRegisters.length}, (const MalValue[]){ ${instruction.keyRegisters.map((key) => boxed(key)).join(", ")} });`,
 				throwCheck(),
 			];

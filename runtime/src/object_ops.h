@@ -72,6 +72,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 /** Insert a fresh private data element without replacing an existing brand entry. */
 bool mal_object_add_private(MalObject *object, MalKey key, MalValue value);
 
+/** Reserve overflow-table capacity for a known run of private elements. */
+bool mal_object_reserve_private(MalObject *object, usize additional);
+
 /**
  * Prove once that `final` is exactly `source` plus `count` unique default data
  * properties. Failure leaves `plan` invalid.

@@ -56,6 +56,7 @@ export interface NativeFastPathLowering {
 		number,
 		NativeConstructorInitializationAction
 	>;
+	readonly privateFieldReserve?: NativePrivateFieldReservePlan;
 }
 
 export interface NativeIndexedLoopElement {
@@ -96,6 +97,11 @@ export interface NativeConstructorInitializationPlan {
 export interface NativeConstructorInitializationAction {
 	readonly plan: NativeConstructorInitializationPlan;
 	readonly index: number;
+}
+
+export interface NativePrivateFieldReservePlan {
+	readonly id: number;
+	readonly count: number;
 }
 
 const NATIVE_NUMBER_BINARY_OPERATORS = new Set([
@@ -335,6 +341,45 @@ function lowerConstructorInitialization(
 	});
 }
 
+function lowerPrivateFieldReserve(
+	fn: BytecodeFunction,
+): NativePrivateFieldReservePlan | undefined {
+	if (!fn.isClassConstructor || fn.isDerivedConstructor) return undefined;
+	const thisAliases = new Set<number>();
+	let firstIp: number | undefined;
+	let count = 0;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "LOAD_THIS") {
+			thisAliases.add(instruction.dst);
+			continue;
+		}
+		if (instruction.opcode === "MOVE") {
+			const aliasesThis = thisAliases.has(instruction.src);
+			thisAliases.delete(instruction.dst);
+			if (aliasesThis) thisAliases.add(instruction.dst);
+			continue;
+		}
+		const privateCount =
+			instruction.opcode === "DEFINE_PRIVATE" && thisAliases.has(instruction.object)
+				? 1
+				: instruction.opcode === "INIT_PRIVATE_FIELDS" &&
+					  thisAliases.has(instruction.object)
+					? instruction.keyRegisters.length
+					: 0;
+		if (privateCount > 0) {
+			firstIp ??= ip;
+			count += privateCount;
+		}
+		for (const register of vmInstructionWriteRegisters(instruction)) {
+			thisAliases.delete(register);
+		}
+	}
+	return firstIp === undefined || count < 2
+		? undefined
+		: Object.freeze({ id: firstIp, count });
+}
+
 function lowerPairedArrayLoops(
 	fn: BytecodeFunction,
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement>,
@@ -466,6 +511,7 @@ export function lowerNativeFastPaths(
 			pairedArrayLoopActions.has(candidate) ||
 			propertyProjectionActions.has(candidate),
 	);
+	const privateFieldReserve = lowerPrivateFieldReserve(fn);
 	const constructorInitializationActions = new Map<
 		number,
 		NativeConstructorInitializationAction
@@ -483,5 +529,6 @@ export function lowerNativeFastPaths(
 		propertyProjectionActions,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		constructorInitializationActions,
+		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
 	});
 }
