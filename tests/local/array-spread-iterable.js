@@ -26,6 +26,45 @@ check(
 	holes.length === 2 && 0 in holes && 1 in holes && holes[0] === undefined,
 );
 
+const frozenEmpty = Object.freeze([]);
+const frozenEmptyCopy = [...frozenEmpty];
+const frozenEmptyFrom = Array.from(frozenEmpty);
+check(
+	"frozen empty source stays iterable",
+	frozenEmptyCopy.length === 0 &&
+		frozenEmptyCopy !== frozenEmpty &&
+		frozenEmptyFrom.length === 0 &&
+		frozenEmptyFrom !== frozenEmpty,
+);
+
+let frozenIteratorGets = 0;
+const frozenObserved = [];
+Object.defineProperty(frozenObserved, Symbol.iterator, {
+	get() {
+		frozenIteratorGets++;
+		return Array.prototype.values;
+	},
+});
+Object.freeze(frozenObserved);
+check(
+	"frozen empty iterator getter is observed",
+	[...frozenObserved].length === 0 && frozenIteratorGets === 1,
+);
+
+const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const originalArrayIteratorNext = arrayIteratorPrototype.next;
+let overriddenNextCalls = 0;
+arrayIteratorPrototype.next = function () {
+	overriddenNextCalls++;
+	return overriddenNextCalls === 1 ? { value: 9, done: false } : { done: true };
+};
+const overriddenFrozenCopy = [...frozenEmpty];
+arrayIteratorPrototype.next = originalArrayIteratorNext;
+check(
+	"frozen empty iterator protocol override is observed",
+	overriddenFrozenCopy.join() === "9" && overriddenNextCalls === 2,
+);
+
 Object.defineProperty(Array.prototype, "0", {
 	configurable: true,
 	get() {

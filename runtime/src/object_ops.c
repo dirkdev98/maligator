@@ -217,7 +217,8 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     bool changed_dense_elements = false;
     if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) object;
-        bool packed_dense = array->elements != nullptr &&
+        bool packed_dense = !array->dense_deopted &&
+            (array->elements != nullptr || array->length == 0) &&
             array->dense_count == array->length && !array->dense_maybe_holey;
         if (packed_dense) {
             changed_dense_elements = array->dense_count != 0 &&
