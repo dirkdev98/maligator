@@ -4463,13 +4463,18 @@ function emitInstruction(
 			];
 		case "DEFINE_PROPERTY": {
 			const stringIndex = context.staticDefineStringIndexByIp.get(ip);
+			if (stringIndex !== undefined) {
+				const cache = `&__dpc_${ip}`;
+				return [
+					`static MalDefinePropertyCache __dpc_${ip};`,
+					`if (!mal_vm_try_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable})) {`,
+					`  mal_vm_op_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
+					`  ${throwCheck()}`,
+					`}`,
+				];
+			}
 			return [
-				...(stringIndex === undefined
-					? []
-					: [`static MalDefinePropertyCache __dpc_${ip};`]),
-				stringIndex === undefined
-					? `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`
-					: `mal_vm_op_define_property_static_cached(vm, &__dpc_${ip}, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
+				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 				throwCheck(),
 			];
 		}

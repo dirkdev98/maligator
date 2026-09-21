@@ -2441,6 +2441,24 @@ typedef struct MalDefinePropertyCache {
     u32 heap_epoch;
 } MalDefinePropertyCache;
 
+static inline bool mal_vm_try_define_property_static_cached(
+    MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
+    MalValue value, bool enumerable, bool writable, bool configurable
+) {
+    if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) ||
+        !enumerable || !writable || !configurable ||
+        cache->heap_identity != vm->heap.identity ||
+        cache->heap_epoch != vm->heap.epoch) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(object_value);
+    if (!mal_object_try_append_shaped_values(object, &cache->append, &value, 1)) {
+        return false;
+    }
+    MAL_PERF_COUNT(define_property_transition_hits);
+    return true;
+}
+
 /** Define a static-name property through a VM-lifetime guarded shape transition. */
 void mal_vm_op_define_property_static_cached(
     MalVm *vm, MalDefinePropertyCache *cache, MalValue object_value,
