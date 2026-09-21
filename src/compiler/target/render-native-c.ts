@@ -4026,6 +4026,19 @@ function emitInstruction(
 		nativePlan?.kind === "exact-packed-rest-array-element" &&
 		instruction.opcode === "LOAD_PROPERTY"
 	) {
+		if (
+			indexedLengthLoopAction?.role === "element" &&
+			indexedLengthLoopAction.element?.kind === "load" &&
+			indexedLengthLoopAction.element.arrayIndexIsUint32
+		) {
+			return [
+				"MAL_PERF_COUNT(array_contained_element_reads);",
+				`r${instruction.dst} = ${callValue(
+					instruction.dst,
+					`args[${nativePlan.startIndex} + (u32) ${typedNumber(instruction.key)}]`,
+				)};`,
+			];
+		}
 		const index = `__rest_index_${ip}`;
 		const length = `__rest_length_${ip}`;
 		const value = `__rest_value_${ip}`;
