@@ -382,14 +382,13 @@ describe("bounded Core cross-call transforms", () => {
 		const operations = coreOperations(compare);
 		const fallback = operations.find(
 			({ opcode, attributes }) =>
-				opcode === "call" &&
-				attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
 		)!;
 		expect(operations.some(({ opcode }) => opcode === "loadCaptured")).toBe(false);
 		expect(operations.some(({ opcode }) => opcode === "envCopy")).toBe(false);
-		expect(
-			operations.filter(({ opcode }) => opcode === "createFunction"),
-		).toHaveLength(1);
+		expect(operations.filter(({ opcode }) => opcode === "createFunction")).toHaveLength(
+			1,
+		);
 		expect(
 			operations
 				.filter(({ block }) => block === fallback.block)

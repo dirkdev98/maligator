@@ -127,7 +127,9 @@ function reachesWithoutEnvironmentRebind(
 				reachedTarget = true;
 				break;
 			}
-			if (["envPush", "envCopy", "envPop"].includes(fn.instructionOpcodeName(instruction)))
+			if (
+				["envPush", "envCopy", "envPop"].includes(fn.instructionOpcodeName(instruction))
+			)
 				return false;
 		}
 		if (block === target) continue;
