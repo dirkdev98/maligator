@@ -208,6 +208,41 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(program, { stage: "pre-target" });
 	});
 
+	it("inlines guarded base construction while retaining unsupported fallbacks", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Empty {}
+				class Base { field = 1; }
+				class Derived extends Base {}
+				function hot(limit) {
+					let value;
+					for (let index = 0; index < limit; index++) {
+						value = new Empty();
+						value = new Base();
+					}
+					return [value, new Derived()];
+				}
+				hot(10);`,
+				"core-guarded-base-construction.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		expect(optimized).toBeDefined();
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "loadPropertyStatic")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "createObject")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "setPrototype")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "defineProperty")).toBe(true);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("retains the callee source chain when inlining", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

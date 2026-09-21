@@ -74,6 +74,7 @@ interface AppliedTransform {
 
 interface InlineTarget {
 	readonly argumentSnapshots: boolean;
+	readonly construction: boolean;
 	readonly linear: boolean;
 	readonly returnValues: ReadonlyArray<CoreValueId>;
 	readonly function: CoreFunctionStore;
@@ -286,13 +287,16 @@ function directCaptureContext(
 function inlineTarget(
 	program: CoreProgram,
 	target: CoreFunctionId,
+	invocation: "call" | "construct",
 	captureContext?: InlineCaptureContext,
 ): InlineTarget | undefined {
 	const fn = program.function(target);
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
-		fn.metadata.isClassConstructor ||
+		(invocation === "call" && fn.metadata.isClassConstructor) ||
+		(invocation === "construct" &&
+			(!fn.metadata.hasPrototype || fn.metadata.isDerivedConstructor)) ||
 		fn.metadata.capturedCount !== 0
 	)
 		return undefined;
@@ -330,6 +334,8 @@ function inlineTarget(
 			if (
 				++instructionCount > 48 ||
 				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(invocation === "construct" &&
+					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
 				(opcode === "loadCaptured" && captureContext === undefined) ||
 				(opcode === "loadThis" && !fn.metadata.strict)
 			)
@@ -369,6 +375,11 @@ function inlineTarget(
 		return true;
 	};
 	if (!visit(fn.entry) || returns.length === 0) return undefined;
+	if (
+		invocation === "construct" &&
+		returns.some((value) => constructorReturnMode(fn, value) === undefined)
+	)
+		return undefined;
 	ordered.reverse();
 	const blocks: Array<InlineTarget["blocks"][number]> = [];
 	for (const [index, id] of ordered.entries()) {
@@ -391,6 +402,7 @@ function inlineTarget(
 	}
 	return {
 		argumentSnapshots: hasArgumentSnapshots,
+		construction: invocation === "construct",
 		function: fn,
 		linear,
 		returnValue: returns[0]!,
@@ -398,6 +410,108 @@ function inlineTarget(
 		blocks,
 		instructions: blocks.flatMap((block) => block.instructions),
 	};
+}
+
+type ConstructorReturnMode = "receiver" | "returned";
+
+function constructorReturnMode(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	seen = new Set<CoreValueId>(),
+): ConstructorReturnMode | undefined {
+	if (seen.has(value)) return undefined;
+	seen.add(value);
+	switch (fn.valueRepresentation(value)) {
+		case "f64":
+		case "i32":
+		case "boolean":
+		case "string":
+		case "string-span":
+			return "receiver";
+		case "projected-elements":
+		case "dense-elements":
+		case "scalarized-object":
+			return "returned";
+		case "boxed":
+			break;
+	}
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionKind(definition) !== "operation") return undefined;
+	const opcode = fn.instructionOpcodeName(definition);
+	if (opcode === "move") {
+		const input = materializeInstructionOperands(fn, definition)[0];
+		return input === undefined ? undefined : constructorReturnMode(fn, input, seen);
+	}
+	if (opcode === "loadThis") return "receiver";
+	if (
+		[
+			"createUndefined",
+			"createNull",
+			"createBoolean",
+			"createF64",
+			"createNumber",
+			"createString",
+			"createBigint",
+			"createPrivateName",
+			"createPrivateNames",
+			"binary",
+			"unary",
+			"typeofCompare",
+			"isEmpty",
+		].includes(opcode)
+	)
+		return "receiver";
+	if (
+		[
+			"createFunction",
+			"createArray",
+			"createObject",
+			"createObjectShaped",
+			"createModuleNamespace",
+			"createTemplateObject",
+			"instantiateLiteralTemplate",
+		].includes(opcode)
+	)
+		return "returned";
+	return undefined;
+}
+
+function staticStringIndex(
+	program: CoreProgram,
+	editor: CoreEditor,
+	value: string,
+): number {
+	const units = Array.from(value, (character) => character.charCodeAt(0));
+	const existing = program.stringConstants.findIndex(
+		(candidate) =>
+			candidate.length === units.length &&
+			candidate.every((unit, index) => unit === units[index]),
+	);
+	return existing >= 0 ? existing : editor.appendStringConstants([units]);
+}
+
+function appendConstructReceiver(
+	program: CoreProgram,
+	editor: CoreEditor,
+	block: CoreBlockId,
+	callee: CoreValueId,
+	position: number | undefined,
+): { readonly receiver: CoreValueId; readonly introduced: number } {
+	const prototype = editor.appendInstruction(block, "loadPropertyStatic", [callee], {
+		attributes: {
+			stringIndex: staticStringIndex(program, editor, "prototype"),
+		},
+		sourcePosition: position,
+	}).outputs[0]!;
+	const receiver = editor.appendInstruction(block, "createObject", [], {
+		sourcePosition: position,
+	}).outputs[0]!;
+	editor.appendInstruction(block, "setPrototype", [receiver, prototype], {
+		attributes: { literal: true },
+		sourcePosition: position,
+	});
+	return { receiver, introduced: 3 };
 }
 
 function callCarriesDirectCreatedFunction(
@@ -433,6 +547,9 @@ function offerFunctionCandidates(
 	}
 	for (const site of outgoing) {
 		if (!fn.isInstructionLive(site.instruction)) continue;
+		const invocation = fn.registry.byId(fn.instructionOpcode(site.instruction))
+			.callTransfer?.invocation;
+		if (invocation === undefined) continue;
 		const current = fn.instructionAttributes(site.instruction);
 		if (current[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true) continue;
 		const inLoop = analyses
@@ -448,13 +565,16 @@ function offerFunctionCandidates(
 				? fn.kernel.resultAt(fn.kernel.instructionResultStart(site.instruction))
 				: undefined;
 		const finiteTargets =
+			invocation === "call" &&
 			inLoop &&
 			!coreCalleeTargetsAreOpen(site.targets) &&
 			site.targets.functions.length > 1
 				? site.targets.functions
 				: undefined;
 		if (finiteTargets !== undefined) {
-			const inlines = finiteTargets.map((target) => inlineTarget(program, target));
+			const inlines = finiteTargets.map((target) =>
+				inlineTarget(program, target, invocation),
+			);
 			const bridgesResult =
 				result !== undefined &&
 				inlines.every(
@@ -522,7 +642,7 @@ function offerFunctionCandidates(
 			exactTarget === undefined
 				? undefined
 				: directCaptureContext(fn, site.callee, site.instruction, exactTarget);
-		const inline = inlineTarget(program, target, captureContext);
+		const inline = inlineTarget(program, target, invocation, captureContext);
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
 			(globalTargetUses.get(target) ?? 0) < 2;
@@ -620,8 +740,8 @@ function applyLinearInline(
 		return undefined;
 	const descriptor = caller.registry.byId(caller.instructionOpcode(candidate.site));
 	if (
-		descriptor.callTransfer?.invocation !== "call" ||
-		descriptor.callTransfer.result !== "call-completion"
+		descriptor.callTransfer === undefined ||
+		!["call-completion", "construct-completion"].includes(descriptor.callTransfer.result)
 	)
 		return undefined;
 	const operands = materializeInstructionOperands(caller, candidate.site);
@@ -630,9 +750,11 @@ function applyLinearInline(
 	const inline = inlineTarget(
 		program,
 		target,
+		descriptor.callTransfer.invocation,
 		directCaptureContext(caller, callee, candidate.site, target),
 	);
 	if (inline === undefined) return undefined;
+	if (inline.construction) return applyGuardedInline(program, candidate, editor, false);
 	if (!inline.linear) return applyGuardedInline(program, candidate, editor, false);
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
@@ -847,8 +969,8 @@ function applyGuardedInline(
 		return undefined;
 	const descriptor = caller.registry.byId(caller.instructionOpcode(candidate.site));
 	if (
-		descriptor.callTransfer?.invocation !== "call" ||
-		descriptor.callTransfer.result !== "call-completion"
+		descriptor.callTransfer === undefined ||
+		!["call-completion", "construct-completion"].includes(descriptor.callTransfer.result)
 	)
 		return undefined;
 	const operands = materializeInstructionOperands(caller, candidate.site);
@@ -857,9 +979,23 @@ function applyGuardedInline(
 	const inline = inlineTarget(
 		program,
 		target,
+		descriptor.callTransfer.invocation,
 		directCaptureContext(caller, callee, candidate.site, target),
 	);
 	if (inline === undefined) return undefined;
+	if (
+		inline.construction &&
+		inline.function.metadata.strict !== caller.metadata.strict &&
+		inline.instructions.some((instruction) =>
+			[
+				"deleteProperty",
+				"storeProperty",
+				"storePropertyStatic",
+				"storeSuperProperty",
+			].includes(inline.function.instructionOpcodeName(instruction)),
+		)
+	)
+		return undefined;
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
@@ -874,7 +1010,7 @@ function applyGuardedInline(
 	)
 		return undefined;
 	const receiverIndex = descriptor.callTransfer.receiverOperand;
-	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
+	let receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
 	const firstArgument =
 		descriptor.callTransfer.arguments.kind === "positional"
 			? descriptor.callTransfer.arguments.firstOperand
@@ -978,6 +1114,17 @@ function applyGuardedInline(
 
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = (guarded ? 1 : 0) + sunkFunctionCount;
+	if (inline.construction) {
+		const created = appendConstructReceiver(
+			program,
+			editor,
+			fast,
+			callee,
+			callerPosition,
+		);
+		receiver = created.receiver;
+		introduced += created.introduced;
+	}
 	const bridgeValue = (
 		destination: CoreBlockId,
 		value: CoreValueId,
@@ -1043,7 +1190,10 @@ function applyGuardedInline(
 		introduced++;
 	}
 	const emitReturn = (destination: CoreBlockId, value: CoreValueId): void => {
-		let result = values.get(value);
+		let result =
+			inline.construction && constructorReturnMode(inline.function, value) === "receiver"
+				? receiver
+				: values.get(value);
 		if (result === undefined)
 			throw new Error("Validated inline return has no caller value");
 		const resultRepresentation = caller.valueRepresentation(result);
@@ -1240,7 +1390,7 @@ function applyFiniteDispatch(
 	const representation = caller.valueRepresentation(result);
 	if (
 		candidate.targets.some((target) => {
-			const inline = inlineTarget(program, target);
+			const inline = inlineTarget(program, target, "call");
 			return (
 				inline === undefined ||
 				inline.returnValues.some(
