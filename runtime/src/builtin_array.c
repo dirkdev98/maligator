@@ -4929,6 +4929,62 @@ MalCompletion mal_builtin_array_iteration_direct(
         vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
+MalCompletion mal_builtin_array_every_paired_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 callback_function_index,
+    MalCompiledFunction compiled_callback,
+    i32 capture_owner_function_index,
+    i32 capture_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    bool exact = arg_count == 1 &&
+        mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) == mal_builtin_array_every &&
+        mal_value_is_function_object(args[0]) &&
+        mal_function_object_function_index(
+            mal_value_to_function_object(args[0])) == callback_function_index;
+#if MAL_REALMS
+    exact = exact && mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#endif
+    if (exact) {
+        MalFunctionObject *callback = mal_value_to_function_object(args[0]);
+        MalValue expected_value = mal_vm_load_captured(
+            callback->creation_env, capture_owner_function_index, capture_index);
+        MalArrayObject *values = mal_builtin_array_clean_dense(vm, this_value);
+        MalArrayObject *expected = mal_builtin_array_clean_dense(vm, expected_value);
+        if (!mal_value_is_empty(expected_value) &&
+            values != nullptr && expected != nullptr &&
+            !values->dense_maybe_holey && !expected->dense_maybe_holey &&
+            values->dense_count >= values->length &&
+            expected->dense_count >= values->length &&
+            expected->length >= values->length) {
+            MAL_PERF_COUNT(array_iteration_direct_hits);
+            for (u32 index = 0; index < values->length; index++) {
+                if (!mal_ops_strict_equal_bool(
+                        values->elements[index], expected->elements[index])) {
+                    return (MalCompletion) {
+                        .kind = MAL_COMPLETION_NORMAL,
+                        .value = mal_value_new_boolean(false),
+                    };
+                }
+            }
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_boolean(true),
+            };
+        }
+    }
+    return mal_builtin_array_iteration_direct(
+        vm, fallback_cache, MAL_BUILTIN_ARRAY_ITERATION_EVERY,
+        callback_function_index, compiled_callback,
+        callee, this_value, args, arg_count);
+}
+
 /**
  * Eligibility predicate for the compiler's guarded array-iteration inlining
  * (intrinsic slot MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE, invoked via

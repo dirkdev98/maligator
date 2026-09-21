@@ -29,6 +29,7 @@ describe("guarded Array callback fast paths", () => {
 
 	it("preserves compiled fast and fallback semantics", () => {
 		expect(source).toContain("mal_vm_array_try_get_present_proven_index(");
+		expect(source).toContain("mal_builtin_array_every_paired_direct(");
 		assertResultPass(runToStdout(compiled));
 	});
 

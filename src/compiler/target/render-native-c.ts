@@ -561,6 +561,85 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 	return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
 }
 
+interface NativePairedEveryCallback {
+	readonly ownerFunctionIndex: number;
+	readonly captureIndex: number;
+}
+
+function nativePairedEveryCallback(
+	fn: BytecodeFunction | undefined,
+): NativePairedEveryCallback | undefined {
+	if (
+		fn === undefined ||
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.handlers.length > 0 ||
+		fn.parameterCount < 2
+	)
+		return undefined;
+	type Value = "value" | "position" | "expected" | "projected" | "comparison";
+	const values = new Map<number, Value>([
+		[0, "value"],
+		[1, "position"],
+	]);
+	let capture: NativePairedEveryCallback | undefined;
+	let returned = false;
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		switch (instruction.opcode) {
+			case "LOAD_ARGUMENT":
+				if (instruction.index === 0) values.set(instruction.dst, "value");
+				else if (instruction.index === 1) values.set(instruction.dst, "position");
+				else return undefined;
+				break;
+			case "LOAD_CAPTURED":
+				if (capture !== undefined) return undefined;
+				capture = {
+					ownerFunctionIndex: instruction.ownerFunctionIndex,
+					captureIndex: instruction.index,
+				};
+				values.set(instruction.dst, "expected");
+				break;
+			case "MOVE": {
+				const value = values.get(instruction.src);
+				if (value === undefined) return undefined;
+				values.set(instruction.dst, value);
+				break;
+			}
+			case "THROW_IF_TDZ":
+				if (values.get(instruction.src) !== "expected") return undefined;
+				break;
+			case "LOAD_PROPERTY":
+				if (
+					values.get(instruction.object) !== "expected" ||
+					values.get(instruction.key) !== "position"
+				)
+					return undefined;
+				values.set(instruction.dst, "projected");
+				break;
+			case "BINARY": {
+				if (instruction.operator !== "===") return undefined;
+				const operands = new Set([
+					values.get(instruction.left),
+					values.get(instruction.right),
+				]);
+				if (!operands.has("value") || !operands.has("projected")) return undefined;
+				values.set(instruction.dst, "comparison");
+				break;
+			}
+			case "JUMP":
+				if (instruction.targetIp !== ip + 1) return undefined;
+				break;
+			case "RETURN":
+				if (values.get(instruction.value) !== "comparison" || returned) return undefined;
+				returned = true;
+				break;
+			default:
+				return undefined;
+		}
+	}
+	return returned ? capture : undefined;
+}
+
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
@@ -579,6 +658,7 @@ function emitCompiledVariant(
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -995,6 +1075,7 @@ function emitCompiledVariant(
 		fieldCalls,
 		nativeContract.literalSwitches,
 		stringConstants,
+		runtimeFunctions,
 	);
 	if (body === null) {
 		return null;
@@ -1312,6 +1393,7 @@ export function emitCompiledFunction(
 	relocatable = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -1327,6 +1409,7 @@ export function emitCompiledFunction(
 		undefined,
 		strictCompiledTargets,
 		stringConstants,
+		runtimeFunctions,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1349,6 +1432,7 @@ export function emitCompiledFunction(
 			entry,
 			strictCompiledTargets,
 			stringConstants,
+			runtimeFunctions,
 		);
 		if (emitted === null) return [];
 		const worker = debug ? null : numericLeafWorker(fn, entry);
@@ -2198,6 +2282,7 @@ function emitBody(
 	fieldCalls?: ReadonlyArray<NativeFieldCall>,
 	literalSwitches?: NativeFunctionPlan["literalSwitches"],
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	runtimeFunctions: ReadonlyArray<BytecodeFunction> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2994,6 +3079,7 @@ function emitBody(
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instructionPlan = nativeInstructions[ip];
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with different published frame metadata.
@@ -3197,6 +3283,14 @@ function emitBody(
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
 				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
+				pairedEveryCallback:
+					instructionPlan?.kind === "call" &&
+					instructionPlan.guardedBuiltinCall?.operation === "Array.prototype.every" &&
+					instructionPlan.directCallbackFunctionIndex !== undefined
+						? nativePairedEveryCallback(
+								runtimeFunctions[instructionPlan.directCallbackFunctionIndex],
+							)
+						: undefined,
 				relocation,
 			},
 		);
@@ -3545,6 +3639,7 @@ interface NativeInstructionContext {
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
+	readonly pairedEveryCallback?: NativePairedEveryCallback;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3640,6 +3735,7 @@ function emitInstruction(
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
 		constructorInitializationAction,
+		pairedEveryCallback,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -7453,6 +7549,24 @@ function emitInstruction(
 					callbackTarget !== undefined && directCompiledTargets.has(callbackTarget)
 						? `mal_compiled_${callbackTarget}${suffix}`
 						: "nullptr";
+				if (
+					arrayIterationOperation === "MAL_BUILTIN_ARRAY_ITERATION_EVERY" &&
+					pairedEveryCallback !== undefined &&
+					callbackTarget !== undefined &&
+					callbackSymbol !== "nullptr"
+				) {
+					const captureOwner =
+						pairedEveryCallback.ownerFunctionIndex < 0
+							? pairedEveryCallback.ownerFunctionIndex
+							: relocation.ownerFunctionIndex(pairedEveryCallback.ownerFunctionIndex);
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`MalCompletion ${tmp} = mal_builtin_array_every_paired_direct(vm, &__cc_${ip}, ${relocation.functionIndex(callbackTarget)}, ${callbackSymbol}, ${captureOwner}, ${pairedEveryCallback.captureIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						poll,
+					];
+				}
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
