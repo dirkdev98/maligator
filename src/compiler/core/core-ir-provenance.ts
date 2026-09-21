@@ -2434,8 +2434,27 @@ function indexedLengthLoopCandidates(
 		const output = instructionResult(fn, load, 0)!;
 		if (index.controlUses.has(roots.get(output) ?? output)) continue;
 		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
-		const comparison = uses.length === 1 ? uses[0]!.instruction : undefined;
+		const comparisons = uses.filter(({ instruction }) => {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "binary"
+			)
+				return false;
+			const operator = fn.instructionAttributes(instruction).operator;
+			return typeof operator === "string" && INDEXED_LENGTH_LOOP_OPERATORS.has(operator);
+		});
+		const comparison = comparisons.length === 1 ? comparisons[0]!.instruction : undefined;
 		if (comparison === undefined) continue;
+		if (
+			uses.some(({ instruction }) => {
+				if (instruction === comparison) return false;
+				if (fn.instructionKind(instruction) !== "operation") return true;
+				return !["move", "rootUse", "throwIfTdz"].includes(
+					fn.instructionOpcodeName(instruction),
+				);
+			})
+		)
+			continue;
 		const operator = fn.instructionAttributes(comparison).operator;
 		if (
 			fn.instructionKind(comparison) !== "operation" ||
@@ -2451,9 +2470,9 @@ function indexedLengthLoopCandidates(
 			.sort((left, right) => left.blocks.size - right.blocks.size)[0];
 		if (loop === undefined) continue;
 		const lengthPosition =
-			instructionOperand(fn, comparison, 0) === output
+			root(instructionOperand(fn, comparison, 0)!) === root(output)
 				? 1
-				: instructionOperand(fn, comparison, 1) === output
+				: root(instructionOperand(fn, comparison, 1)!) === root(output)
 					? 2
 					: undefined;
 		if (lengthPosition === undefined) continue;
@@ -2497,8 +2516,8 @@ function indexedLengthLoopCandidates(
 				!control.dominates(comparisonCoreBlock, instructionBlock) ||
 				(instructionBlock === comparisonCoreBlock &&
 					instructionIndex <= index.locationIndices[comparison]!) ||
-				instructionOperand(fn, instruction, 0) !== receiver ||
-				instructionOperand(fn, instruction, 1) !== induction
+				root(instructionOperand(fn, instruction, 0)!) !== root(receiver) ||
+				root(instructionOperand(fn, instruction, 1)!) !== root(induction)
 			)
 				continue;
 			elements.push({

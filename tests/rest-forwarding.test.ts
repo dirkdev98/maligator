@@ -88,11 +88,15 @@ describe("rest forwarding allocation contract", () => {
 		expect(emitted?.source).not.toContain("mal_vm_indexed_fast_load_index");
 	});
 
-	it("uses the indexed loop bounds for packed rest element loads", () => {
+	it.each([
+		["direct", "index < rest.length"],
+		["cached", "index < length"],
+	])("uses %s indexed loop bounds for packed rest element loads", (_name, condition) => {
 		const image = compile(
 			`function sum(...rest) {
 				let total = 0;
-				for (let index = 0; index < rest.length; index++) total += rest[index];
+				const length = rest.length;
+				for (let index = 0; ${condition}; index++) total += rest[index];
 				return total;
 			}`,
 			"locked",
