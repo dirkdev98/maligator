@@ -113,6 +113,36 @@ for (let i = 0; i < 8; i++) {
 	assert(object.computed === i, "computed transition store");
 }
 
+const wideComputed = {};
+for (let i = 0; i < 16; i++) {
+	wideComputed[["wide", i].join("-")] = i;
+}
+const cachedMissingKey = ["wide", "missing"].join("-");
+for (let i = 0; i < 64; i++) {
+	assert(!Object.hasOwn(wideComputed, cachedMissingKey), "computed miss remains absent");
+}
+wideComputed[cachedMissingKey] = 41;
+assert(wideComputed[cachedMissingKey] === 41, "computed miss permits later insertion");
+
+let computedSetterTotal = 0;
+const computedSetterPrototype = {};
+Object.defineProperty(computedSetterPrototype, cachedMissingKey, {
+	set(value) {
+		computedSetterTotal += value;
+	},
+	configurable: true,
+});
+const wideComputedReceiver = Object.create(computedSetterPrototype);
+for (let i = 0; i < 16; i++) {
+	wideComputedReceiver[["wide", i].join("-")] = i;
+}
+wideComputedReceiver[cachedMissingKey] = 9;
+assert(computedSetterTotal === 9, "computed miss still reaches inherited setter");
+assert(
+	!Object.hasOwn(wideComputedReceiver, cachedMissingKey),
+	"computed setter store stays inherited",
+);
+
 // Alternating source shapes on the same chain may refill one monomorphic site
 // without rebuilding its dependency registration. A later mutation must still
 // invalidate the reused registration.

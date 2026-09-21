@@ -312,10 +312,13 @@ i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller ca
         if (shape->inline_count > stats->max_width) stats->max_width = shape->inline_count;
         if (shape->inline_count > stats->max_comparisons) stats->max_comparisons = shape->inline_count;
     }
-    if (cache_set != nullptr && mal_value_is_string(key.value)
-        && mal_value_to_string(key.value)->header.storage
-            == MAL_HEAP_STORAGE_IMMORTAL) {
-        mal_shape_find_cache_fill(cache_set, shape, key.value, hash, -1);
+    if (cache_set != nullptr && mal_value_is_string(key.value)) {
+        MalString *string = mal_value_to_string(key.value);
+        // The untraced cache may retain dynamic atoms because their VM roots outlive it.
+        if (string->header.storage == MAL_HEAP_STORAGE_IMMORTAL ||
+            string->property_atom) {
+            mal_shape_find_cache_fill(cache_set, shape, key.value, hash, -1);
+        }
     }
     return -1;
 }

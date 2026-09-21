@@ -18,6 +18,7 @@ function field(line: string, name: string): number {
 describe("ordinary property transition inline cache", () => {
 	let compiled: string;
 	let interpreted: string;
+	let negativeCache: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -34,7 +35,50 @@ describe("ordinary property transition inline cache", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		negativeCache = buildNativeBinary({
+			fixture: "tests/local/shape-negative-cache.js",
+			name: "shape-negative-cache",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	}, 600_000);
+
+	it("caches rooted dynamic-key misses without retaining lookup scans", () => {
+		const result = spawnSync(negativeCache, [], {
+			env: {
+				...process.env,
+				MAL_PERF_STATS: "1",
+				MAL_PERF_CONTROL: "1",
+			},
+			encoding: "utf-8",
+		});
+		if (result.error !== undefined) throw result.error;
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertExactLines(result.stdout, ["shape-negative-cache PASS"]);
+		const line = result.stderr
+			.split("\n")
+			.find((candidate) => candidate.startsWith("[perf-shape-stats] caller=get_own "));
+		expect(line).toBeDefined();
+		const stats = line ?? "";
+		expect(field(stats, "misses")).toBeGreaterThanOrEqual(512);
+		expect(field(stats, "comparisons")).toBeLessThanOrEqual(field(stats, "calls") * 2);
+
+		const stressed = spawnSync(negativeCache, [], {
+			env: {
+				...process.env,
+				MAL_PERF_STATS: "1",
+				MAL_PERF_CONTROL: "1",
+				MAL_HOST_GC: "1",
+				...STRESS_ENV,
+			},
+			encoding: "utf-8",
+			timeout: 60_000,
+		});
+		if (stressed.error !== undefined) throw stressed.error;
+		expect(stressed.status, stressed.stderr || stressed.stdout).toBe(0);
+		assertExactLines(stressed.stdout, ["shape-negative-cache PASS"]);
+	});
 
 	it.each([
 		["compiled", () => compiled],
