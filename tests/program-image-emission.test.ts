@@ -2064,6 +2064,39 @@ describe("native update-expression representation", () => {
 		expect(emitted).toContain("mal_value_to_typed_array_object(");
 	});
 
+	it("reuses a bounded induction index across sibling fixed TypedArrays", () => {
+		const definition = lockedDefinition(`
+			function sum() {
+				const left = new Uint32Array(8);
+				const right = new Uint32Array(8);
+				const kinds = new Uint8Array(8);
+				let total = 0;
+				for (let index = 0; index < left.length; index++) {
+					total += left[index] + right[index] + kinds[index];
+				}
+				return total;
+			}
+			globalThis.result = sum();
+		`);
+		const loads = definition.runtime.functions.flatMap((fn, functionIndex) =>
+			fn.instructions.flatMap((instruction, instructionIndex) => {
+				const plan =
+					definition.native.functions[functionIndex]!.instructions[instructionIndex];
+				return instruction.opcode === "LOAD_PROPERTY" &&
+					plan?.kind === "contained-fixed-typed-array-element"
+					? [plan]
+					: [];
+			}),
+		);
+		expect(loads).toHaveLength(3);
+		expect(loads.every((plan) => plan.inBounds)).toBe(true);
+
+		const emitted = emitProgramImage(definition, { compiled: true });
+		expect(emitted).toContain("mal_scalar_load_native_u32(");
+		expect(emitted).toContain("mal_scalar_load_native_u8(");
+		expect(emitted).not.toContain("mal_vm_contained_fixed_numeric_typed_array_load(");
+	});
+
 	it("consumes scalarized and sunk object plans in emitted C", () => {
 		const scalarized = emitLocked(`
 			function read(value) {

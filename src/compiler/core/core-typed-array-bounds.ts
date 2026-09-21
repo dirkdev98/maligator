@@ -28,24 +28,26 @@ export function coreContainedTypedArrayIndexInBounds(
 		const value_ = fn.instructionAttributes(id).value;
 		return typeof value_ === "number" ? value_ : undefined;
 	};
+	const fixedExtent = (value: CoreValueId): number | undefined => {
+		const allocation = definition(value);
+		return allocation !== undefined &&
+			(fn.instructionOpcodeName(allocation) === "construct" ||
+				(fn.instructionOpcodeName(allocation) === "callKnown" &&
+					fn.instructionAttributes(allocation).construct === true &&
+					fn.instructionAttributes(allocation).argumentMode === undefined)) &&
+			fn.kernel.instructionOperandCount(allocation) === 2
+			? number(operand(allocation, 1))
+			: undefined;
+	};
 	const receiver = root(operand(instruction, 0));
 	if (
 		facts.valueClasses.containedFixedNumericTypedArray(receiver, instruction) ===
 		undefined
 	)
 		return false;
-	const index = operand(instruction, 1);
+	const index = root(operand(instruction, 1));
 	const block = coreBlockId(fn.kernel.instructionBlock(instruction));
-	const allocation = definition(receiver);
-	const extent =
-		allocation !== undefined &&
-		(fn.instructionOpcodeName(allocation) === "construct" ||
-			(fn.instructionOpcodeName(allocation) === "callKnown" &&
-				fn.instructionAttributes(allocation).construct === true &&
-				fn.instructionAttributes(allocation).argumentMode === undefined)) &&
-		fn.kernel.instructionOperandCount(allocation) === 2
-			? number(operand(allocation, 1))
-			: undefined;
+	const extent = fixedExtent(receiver);
 	const range = loops.range(index, block);
 	if (
 		extent !== undefined &&
@@ -74,16 +76,13 @@ export function coreContainedTypedArrayIndexInBounds(
 	)
 		return false;
 	const bound = definition(comparison.bound);
-	if (
-		bound === undefined ||
-		fn.instructionOpcodeName(bound) !== "loadPropertyStatic" ||
-		root(operand(bound, 0)) !== receiver
-	)
+	if (bound === undefined || fn.instructionOpcodeName(bound) !== "loadPropertyStatic")
 		return false;
+	const boundReceiver = root(operand(bound, 0));
 	const stringIndex = fn.instructionAttributes(bound).stringIndex;
 	const key =
 		typeof stringIndex === "number" ? program.stringConstants[stringIndex] : undefined;
-	return (
+	if (
 		key?.length === 6 &&
 		key[0] === 108 &&
 		key[1] === 101 &&
@@ -91,5 +90,15 @@ export function coreContainedTypedArrayIndexInBounds(
 		key[3] === 103 &&
 		key[4] === 116 &&
 		key[5] === 104
-	);
+	) {
+		if (boundReceiver === receiver) return true;
+		const boundExtent = fixedExtent(boundReceiver);
+		return (
+			extent !== undefined &&
+			extent === boundExtent &&
+			facts.valueClasses.containedFixedNumericTypedArray(boundReceiver, instruction) !==
+				undefined
+		);
+	}
+	return false;
 }
