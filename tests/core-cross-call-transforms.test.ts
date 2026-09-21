@@ -303,6 +303,39 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
+	it("elides a guarded receiver discarded by an explicit object return", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Record {
+					constructor(value) {
+						this.discarded = value;
+						return { value };
+					}
+				}
+				function hot(value) { return new Record(value); }
+				hot(10);`,
+				"core-constructor-object-return.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		expect(operations.some(({ opcode }) => opcode === "guardBaseConstructorLayout")).toBe(
+			true,
+		);
+		expect(
+			operations.some(({ opcode }) => opcode === "createBaseConstructReceiver"),
+		).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "storePropertyStatic")).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "construct")).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
+
 	it("scalarizes contained base construction behind a prototype-layout guard", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

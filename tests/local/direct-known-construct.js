@@ -55,6 +55,31 @@ const ObjectReturn = function ObjectReturn() {
 ok("primitive return substitution", new PrimitiveReturn().kind === "instance");
 ok("object return substitution", new ObjectReturn().kind === "object");
 
+let discardedSetterTotal = 0;
+class GuardedObjectReturn {
+	constructor(value) {
+		this.discarded = value;
+		return { value };
+	}
+}
+const makeGuardedObjectReturns = function (limit) {
+	let total = 0;
+	for (let index = 0; index < limit; index++) {
+		total += new GuardedObjectReturn(index).value;
+	}
+	return total;
+};
+ok("discarded receiver fast path", makeGuardedObjectReturns(4) === 6);
+Object.defineProperty(GuardedObjectReturn.prototype, "discarded", {
+	set(value) {
+		discardedSetterTotal += value;
+	},
+});
+ok(
+	"discarded receiver guard miss",
+	makeGuardedObjectReturns(4) === 6 && discardedSetterTotal === 6,
+);
+
 let Derived;
 class Base {
 	constructor(value) {
@@ -282,5 +307,5 @@ try {
 ok("dynamic return throw", sawDynamicThrow);
 ok("dynamic return side effects", dynamicReturnEffects === 12);
 
-ok("check count", checks === 35);
+ok("check count", checks === 37);
 console.log("direct-known-construct PASS");

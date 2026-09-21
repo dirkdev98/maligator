@@ -505,10 +505,11 @@ function scalarConstructorLayout(
 	program: CoreProgram,
 	inline: InlineTarget,
 ): ScalarConstructorLayout | undefined {
+	const returnMode = constructorReturnMode(inline.function, inline.returnValue);
 	if (
 		!inline.construction ||
 		!inline.linear ||
-		constructorReturnMode(inline.function, inline.returnValue) !== "receiver"
+		(returnMode !== "receiver" && returnMode !== "returned")
 	)
 		return undefined;
 	const parameters = new Set<CoreValueId>();
@@ -518,19 +519,26 @@ function scalarConstructorLayout(
 	const keys: Array<number> = [];
 	const values: Array<CoreValueId> = [];
 	const stores = new Set<CoreInstructionId>();
+	let receiverStoresComplete = false;
 	for (const instruction of inline.instructions) {
 		const opcode = inline.function.instructionOpcodeName(instruction);
 		const outputs = materializeInstructionResults(inline.function, instruction);
 		if (opcode === "loadThis") {
-			if (outputs.length !== 1) return undefined;
+			if (outputs.length !== 1 || receiverStoresComplete) return undefined;
 			receivers.add(outputs[0]!);
 			continue;
 		}
 		if (opcode === "createUndefined") continue;
-		if (opcode !== "storePropertyStatic") return undefined;
 		const operands = materializeInstructionOperands(inline.function, instruction);
+		if (opcode !== "storePropertyStatic") {
+			if (returnMode !== "returned" || operands.some((value) => receivers.has(value)))
+				return undefined;
+			receiverStoresComplete = true;
+			continue;
+		}
 		const stringIndex = inline.function.instructionAttributes(instruction).stringIndex;
 		if (
+			receiverStoresComplete ||
 			operands.length !== 2 ||
 			!receivers.has(operands[0]!) ||
 			!parameters.has(operands[1]!) ||
@@ -1241,6 +1249,9 @@ function applyGuardedInline(
 	)
 		tail.push(instruction);
 	const scalarLayout = guarded ? scalarConstructorLayout(program, inline) : undefined;
+	const receiverStoresElided =
+		scalarLayout !== undefined &&
+		constructorReturnMode(inline.function, inline.returnValue) === "returned";
 	const consumerPlan =
 		scalarLayout === undefined
 			? undefined
@@ -1263,7 +1274,9 @@ function applyGuardedInline(
 	const fallback = guarded ? editor.createBlock() : undefined;
 	const joinValues = consumerPlan?.liveOut ?? [callResult];
 	const join = editor.createBlock(
-		joinValues.map((value) => ({ representation: caller.valueRepresentation(value) })),
+		joinValues.map((value) => ({
+			representation: caller.valueRepresentation(value),
+		})),
 	);
 	const joinParameterStart = caller.kernel.blockParameterStart(join);
 	for (const instruction of consumerPlan?.suffix ?? tail)
@@ -1399,7 +1412,7 @@ function applyGuardedInline(
 		values.set(parameter, created.outputs[0]!);
 		introduced++;
 	}
-	if (inline.construction) {
+	if (inline.construction && !receiverStoresElided) {
 		if (scalarLayout !== undefined && consumerPlan !== undefined) {
 			const initialValues = scalarLayout.initialValues.map((value) => values.get(value)!);
 			receiver = editor.appendInstruction(fast, "createObjectShaped", initialValues, {
@@ -1481,10 +1494,11 @@ function applyGuardedInline(
 			const opcode = inline.function.instructionOpcodeName(instruction);
 			if (
 				scalarLayout !== undefined &&
-				consumerPlan !== undefined &&
+				(consumerPlan !== undefined || receiverStoresElided) &&
 				scalarLayout.stores.has(instruction)
 			)
 				continue;
+			if (opcode === "loadThis" && receiverStoresElided) continue;
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
@@ -1605,7 +1619,7 @@ function applyGuardedInline(
 	if (fallback !== undefined) {
 		const guard = editor.appendInstruction(
 			block,
-			scalarLayout !== undefined && consumerPlan !== undefined
+			scalarLayout !== undefined && (consumerPlan !== undefined || receiverStoresElided)
 				? "guardBaseConstructorLayout"
 				: "guardFunctionIndex",
 			[callee],
@@ -1613,7 +1627,8 @@ function applyGuardedInline(
 				outputRepresentations: ["boolean"],
 				attributes: {
 					functionIndex: target,
-					...(scalarLayout === undefined || consumerPlan === undefined
+					...(scalarLayout === undefined ||
+					(consumerPlan === undefined && !receiverStoresElided)
 						? {}
 						: { keyStringIndices: scalarLayout.keyStringIndices }),
 				},
