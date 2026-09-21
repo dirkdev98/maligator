@@ -2555,6 +2555,35 @@
 			"fixture": "cases/constructor-return-object-retained.mjs"
 		},
 		{
+			"id": "constructor-return-selected-retained",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "base constructor result selection",
+			"category": "language-features",
+			"mechanisms": ["constructor-call", "constructor-result"],
+			"inputShape": "runtime-selected primitive or prepared object return",
+			"unit": "constructed result",
+			"sourceSeam": "src/compiler/core/core-cross-call-transforms.ts",
+			"controls": [
+				"constructor-return-primitive-retained",
+				"constructor-return-object-retained"
+			],
+			"fixture": "cases/constructor-return-selected-retained.mjs"
+		},
+		{
+			"id": "constructor-new-target-direct-retained",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "new.target class construction",
+			"category": "language-features",
+			"mechanisms": ["constructor-call", "new-target"],
+			"inputShape": "exact base constructor observing new.target",
+			"unit": "constructed instance",
+			"sourceSeam": "src/compiler/core/core-cross-call-transforms.ts",
+			"controls": ["constructor-layout-straight-retained"],
+			"fixture": "cases/constructor-new-target-direct-retained.mjs"
+		},
+		{
 			"id": "constructor-new-target-selected-retained",
 			"group": "runtime",
 			"suite": "runtime",

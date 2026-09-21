@@ -947,6 +947,98 @@ function verify() {
 }
 
 addRuntimeBenchmark(
+	"constructor-return-selected-retained",
+	{
+		owner: "base constructor result selection",
+		category: "language-features",
+		mechanisms: ["constructor-call", "constructor-result"],
+		inputShape: "runtime-selected primitive or prepared object return",
+		unit: "constructed result",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+		controls: [
+			"constructor-return-primitive-retained",
+			"constructor-return-object-retained",
+		],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Record {
+	constructor(value, returned) {
+		this.value = value;
+		return returned;
+	}
+}
+
+const returned = Array.from({ length: 256 }, (_, index) =>
+	index & 1 ? { value: (seed + index) & 255 } : index,
+);
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const selected = index & 255;
+		const record = new Record((seed + index) & 255, returned[selected]);
+		retained[selected] = record;
+		checksum = (checksum + record.value) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (let index = 0; index < retained.length; index++) {
+		const record = retained[index];
+		if ((index & 1 ? record !== returned[index] : !(record instanceof Record))) {
+			throw new Error("dynamic constructor return selection differs");
+		}
+	}
+}`,
+);
+
+addRuntimeBenchmark(
+	"constructor-new-target-direct-retained",
+	{
+		owner: "new.target class construction",
+		category: "language-features",
+		mechanisms: ["constructor-call", "new-target"],
+		inputShape: "exact base constructor observing new.target",
+		unit: "constructed instance",
+		sourceSeam: "src/compiler/core/core-cross-call-transforms.ts",
+		controls: ["constructor-layout-straight-retained"],
+	},
+	`const seed = Number(process.argv[2] ?? "1") & 255;
+
+class Record {
+	constructor(value) {
+		this.value = value;
+		this.direct = new.target === Record;
+	}
+}
+
+const retained = new Array(256);
+
+function run(scale) {
+	let checksum = 0;
+	const operations = 50_000 * scale;
+	for (let index = 0; index < operations; index++) {
+		const record = new Record((seed + index) & 255);
+		retained[index & 255] = record;
+		checksum = (checksum + (record.direct ? 1 : 0)) | 0;
+	}
+	return { checksum: checksum >>> 0, operations };
+}
+
+function verify() {
+	for (const record of retained) {
+		if (!(record instanceof Record) || !record.direct) {
+			throw new Error("direct new.target observation differs");
+		}
+	}
+}`,
+);
+
+addRuntimeBenchmark(
 	"constructor-new-target-selected-retained",
 	{
 		owner: "new.target class construction",
