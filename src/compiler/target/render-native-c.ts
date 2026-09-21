@@ -31,6 +31,7 @@ import {
 } from "./emit-program-image.ts";
 import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
+	NativeConstructorInitializationAction,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
@@ -2937,6 +2938,13 @@ function emitBody(
 		staticPropertyProjectionConflicts,
 	);
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
+	const constructorInitializationActionByIp =
+		nativeFastPaths.constructorInitializationActions;
+	if (nativeFastPaths.constructorInitialization !== undefined) {
+		const id = nativeFastPaths.constructorInitialization.id;
+		lines.push(`bool __constructor_initialization_${id}_fast = false;`);
+		lines.push(`MalObject *__constructor_initialization_${id}_object = nullptr;`);
+	}
 	for (const projection of nativeFastPaths.propertyProjections) {
 		lines.push(`bool __property_projection_${projection.id}_fast = false;`);
 		for (const [index] of projection.loads.entries())
@@ -3188,6 +3196,7 @@ function emitBody(
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
+				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
 				relocation,
 			},
 		);
@@ -3535,6 +3544,7 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
+	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -3629,6 +3639,7 @@ function emitInstruction(
 		numericFusionAction,
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
+		constructorInitializationAction,
 		relocation,
 	} = context;
 	const profileSiteId = context.profileSiteId ?? -1;
@@ -5061,6 +5072,32 @@ function emitInstruction(
 				const { site, slot } = stackObjectAccess;
 				return [
 					`${stackObjectSlotReference(site, slot)} = ${site.scalarSlot === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
+				];
+			}
+			if (
+				instruction.opcode === "STORE_PROPERTY_STATIC" &&
+				constructorInitializationAction !== undefined
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const { plan, index } = constructorInitializationAction;
+				const fast = `__constructor_initialization_${plan.id}_fast`;
+				const object = `__constructor_initialization_${plan.id}_object`;
+				const cache = `&${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]`;
+				const begin =
+					index === 0
+						? [
+								`${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+								`${fast} = ${object} != nullptr && mal_vm_constructor_try_begin_initialization(${object}, (const MalInlineCache *const[]){ ${plan.stores.map((store) => `&${nativeBodyReference(resources, "propertyCache")}[${store.instruction.icIndex}]`).join(", ")} }, ${plan.stores.length});`,
+							]
+						: [];
+				return [
+					...begin,
+					`if (${fast}) {`,
+					`  mal_vm_constructor_initialization_store(${object}, ${cache}, ${boxed(instruction.value)});`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
 				];
 			}
 			const key =

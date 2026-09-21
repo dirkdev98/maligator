@@ -3,9 +3,11 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
 import {
 	assertPassLine,
 	buildNativeBinary,
+	buildNativeBinaryResult,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -15,20 +17,28 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-slot-coallocation-
 describe("shaped object slot coallocation", () => {
 	let compiled: string;
 	let interpreted: string;
+	let source: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		const result = buildNativeBinaryResult({
 			fixture: "tests/local/object_slot_coallocation.js",
 			name: "object-slot-coallocation",
 			compiled: true,
 			outDir,
 		});
+		compiled = result.binaryPath;
+		source = emitProgramImage(result.programImage, { compiled: true });
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/object_slot_coallocation.js",
 			name: "object-slot-coallocation-ni",
 			compiled: false,
 			outDir,
 		});
+	});
+
+	it("publishes admitted constructor shapes once and stores their slots directly", () => {
+		expect(source).toContain("mal_vm_constructor_try_begin_initialization(");
+		expect(source).toContain("mal_vm_constructor_initialization_store(");
 	});
 
 	it.each([

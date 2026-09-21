@@ -18,7 +18,8 @@ class AssignedRecord {
 		this.h = value + 7;
 	}
 }
-const assignedRecord = new AssignedRecord(10);
+let assignedRecord;
+for (let i = 0; i < 64; i++) assignedRecord = new AssignedRecord(10);
 check(
 	"assigned constructor slots",
 	assignedRecord.a === 10 && assignedRecord.d === 13 && assignedRecord.h === 17,

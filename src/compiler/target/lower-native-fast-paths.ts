@@ -49,6 +49,29 @@ export type NativePropertyProjectionAction =
 export interface NativeFastPathLowering {
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyProjectionActions: ReadonlyMap<number, NativePropertyProjectionAction>;
+	readonly constructorInitialization?: NativeConstructorInitializationPlan;
+	readonly constructorInitializationActions: ReadonlyMap<
+		number,
+		NativeConstructorInitializationAction
+	>;
+}
+
+type StaticPropertyStore = Extract<
+	BytecodeInstruction,
+	{ opcode: "STORE_PROPERTY_STATIC" }
+>;
+
+export interface NativeConstructorInitializationPlan {
+	readonly id: number;
+	readonly stores: ReadonlyArray<{
+		readonly ip: number;
+		readonly instruction: StaticPropertyStore;
+	}>;
+}
+
+export interface NativeConstructorInitializationAction {
+	readonly plan: NativeConstructorInitializationPlan;
+	readonly index: number;
 }
 
 const NATIVE_NUMBER_BINARY_OPERATORS = new Set([
@@ -224,6 +247,68 @@ function lowerPropertyProjection(
 	});
 }
 
+function lowerConstructorInitialization(
+	fn: BytecodeFunction,
+	jumpTargets: ReadonlySet<number>,
+	conflicts: (ip: number) => boolean,
+): NativeConstructorInitializationPlan | undefined {
+	if (!fn.isClassConstructor || fn.isDerivedConstructor) return undefined;
+	const thisAliases = new Set<number>();
+	const stores: Array<{ ip: number; instruction: StaticPropertyStore }> = [];
+	let thisEscaped = false;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "LOAD_THIS") {
+			thisAliases.add(instruction.dst);
+			continue;
+		}
+		if (instruction.opcode === "MOVE") {
+			const aliasesThis = thisAliases.has(instruction.src);
+			thisAliases.delete(instruction.dst);
+			if (aliasesThis) thisAliases.add(instruction.dst);
+			continue;
+		}
+		const usesThis = [...thisAliases].some((register) =>
+			vmInstructionUsesRegister(instruction, register),
+		);
+		const initialization =
+			(instruction.opcode === "DEFINE_PROPERTY" ||
+				instruction.opcode === "DEFINE_PRIVATE" ||
+				instruction.opcode === "INIT_PRIVATE_FIELDS") &&
+			thisAliases.has(instruction.object);
+		if (
+			instruction.opcode === "STORE_PROPERTY_STATIC" &&
+			thisAliases.has(instruction.object) &&
+			!thisEscaped &&
+			!conflicts(ip)
+		) {
+			stores.push({ ip, instruction });
+		} else if (
+			usesThis &&
+			!initialization &&
+			!(instruction.opcode === "THROW_IF_TDZ" && thisAliases.has(instruction.src))
+		) {
+			thisEscaped = true;
+		}
+		for (const register of vmInstructionWriteRegisters(instruction)) {
+			thisAliases.delete(register);
+		}
+	}
+	if (stores.length < 2 || stores.length > 32) return undefined;
+	const firstIp = stores[0]!.ip;
+	const lastIp = stores.at(-1)!.ip;
+	if (
+		stores.some(({ ip }) => ip > firstIp && jumpTargets.has(ip)) ||
+		[...jumpTargets].some((ip) => ip > firstIp && ip <= lastIp)
+	) {
+		return undefined;
+	}
+	return Object.freeze({
+		id: firstIp,
+		stores: Object.freeze(stores.map((store) => Object.freeze(store))),
+	});
+}
+
 export function lowerNativeFastPaths(
 	fn: BytecodeFunction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
@@ -253,8 +338,25 @@ export function lowerNativeFastPaths(
 			propertyProjectionActions.set(skippedIp, { role: "skip", plan });
 		}
 	}
+	const constructorInitialization = lowerConstructorInitialization(
+		fn,
+		jumpTargets,
+		(candidate) => conflicts(candidate) || propertyProjectionActions.has(candidate),
+	);
+	const constructorInitializationActions = new Map<
+		number,
+		NativeConstructorInitializationAction
+	>();
+	for (const [index, store] of constructorInitialization?.stores.entries() ?? []) {
+		constructorInitializationActions.set(store.ip, {
+			plan: constructorInitialization!,
+			index,
+		});
+	}
 	return Object.freeze({
 		propertyProjections: Object.freeze(propertyProjections),
 		propertyProjectionActions,
+		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
+		constructorInitializationActions,
 	});
 }

@@ -1825,6 +1825,52 @@ static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValu
     mal_gc_card(&object->header, value);
 }
 
+static inline bool mal_vm_constructor_try_begin_initialization(
+    MalObject *object,
+    const MalInlineCache *const *sites,
+    u32 site_count
+) {
+    if (site_count < 2 || mal_object_has_public_overflow(object) ||
+        !object->extensible || object->is_prototype || object->watched_method_proto) {
+        return false;
+    }
+    const MalShape *shape = object->shape;
+    for (u32 index = 0; index < site_count; index++) {
+        const MalInlineCache *site = sites[index];
+        if (site->mode == MAL_IC_MODE_TRANSITION &&
+            site->shape == shape &&
+            site->obj == object->prototype &&
+            site->poly_shape[0] != nullptr &&
+            site->slot != MAL_IC_VALUE_SLOT) {
+            shape = site->poly_shape[0];
+            continue;
+        }
+        if (site->mode != MAL_IC_MODE_SHAPE ||
+            site->shape != shape ||
+            site->slot == MAL_IC_VALUE_SLOT) {
+            return false;
+        }
+    }
+    u32 old_count = object->shape->inline_count;
+    u32 final_count = shape->inline_count;
+    if (final_count > object->slot_capacity) return false;
+    for (u32 slot = old_count; slot < final_count; slot++) {
+        object->slots[slot] = MAL_VALUE_UNDEFINED;
+    }
+    object->shape = (MalShape *) shape;
+    return true;
+}
+
+static inline void mal_vm_constructor_initialization_store(
+    MalObject *object,
+    const MalInlineCache *site,
+    MalValue value
+) {
+    mal_gc_write_barrier(object->slots[site->slot]);
+    object->slots[site->slot] = value;
+    mal_gc_card(&object->header, value);
+}
+
 /** Exact shaped-literal writable-slot overwrite with the ordinary store as fallback. */
 static inline bool mal_vm_try_store_known_own_slots(
     MalVm *vm,
