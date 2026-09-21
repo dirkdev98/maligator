@@ -654,7 +654,7 @@ bool mal_object_try_append_shaped_values(
     if (source_count > MAL_SHAPE_MAX_INLINE_SLOTS || final_count <= source_count
         || final_count > MAL_SHAPE_MAX_INLINE_SLOTS
         || count != final_count - source_count
-        || (source_count == 0) != (object->slots == nullptr)
+        || (source_count > 0 && object->slots == nullptr)
         || (source_count == 0 && object->slots_owned)) {
         return false;
     }

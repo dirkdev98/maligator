@@ -35,7 +35,8 @@ class InitializedRecord {
 	g = 7;
 	h = 8;
 }
-const initializedRecord = new InitializedRecord();
+let initializedRecord;
+for (let i = 0; i < 64; i++) initializedRecord = new InitializedRecord();
 check(
 	"initialized constructor slots",
 	initializedRecord.a === 1 && initializedRecord.d === 4 && initializedRecord.h === 8,

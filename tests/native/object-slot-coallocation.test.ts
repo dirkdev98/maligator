@@ -16,6 +16,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-slot-coallocation-
 
 describe("shaped object slot coallocation", () => {
 	let compiled: string;
+	let instrumented: string;
 	let interpreted: string;
 	let source: string;
 
@@ -28,6 +29,13 @@ describe("shaped object slot coallocation", () => {
 		});
 		compiled = result.binaryPath;
 		source = emitProgramImage(result.programImage, { compiled: true });
+		instrumented = buildNativeBinary({
+			fixture: "tests/local/object_slot_coallocation.js",
+			name: "object-slot-coallocation-perf",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/object_slot_coallocation.js",
 			name: "object-slot-coallocation-ni",
@@ -39,6 +47,21 @@ describe("shaped object slot coallocation", () => {
 	it("publishes admitted constructor shapes once and stores their slots directly", () => {
 		expect(source).toContain("mal_vm_constructor_try_begin_initialization(");
 		expect(source).toContain("mal_vm_constructor_initialization_store(");
+	});
+
+	it("reuses public field definition transitions on reserved receivers", () => {
+		const result = spawnSync(instrumented, [], {
+			env: {
+				...process.env,
+				MAL_PERF_STATS: "1",
+				MAL_PERF_CONTROL: "1",
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status).toBe(0);
+		assertPassLine(result.stdout, "object-slot-coallocation");
+		const hits = Number(result.stderr.match(/define_transition_hits=(\d+)/)?.[1] ?? 0);
+		expect(hits).toBeGreaterThanOrEqual(63 * 8);
 	});
 
 	it.each([
