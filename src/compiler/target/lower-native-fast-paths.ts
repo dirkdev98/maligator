@@ -184,6 +184,7 @@ function lowerPropertyProjection(
 	const usedLoads = new Set<number>();
 	const skippedIps = new Set<number>();
 	const steps: Array<NativePropertyProjectionStep> = [];
+	let receiverClobbered = second.dst === first.object;
 	const limit = Math.min(fn.instructions.length, firstIp + 20);
 	for (let ip = firstIp + 2; ip < limit; ip++) {
 		if (jumpTargets.has(ip) || conflicts(ip)) break;
@@ -191,7 +192,7 @@ function lowerPropertyProjection(
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 			instruction.object === first.object &&
-			instruction.dst !== first.object &&
+			!receiverClobbered &&
 			representations[instruction.dst] === "boxed" &&
 			loads.length < 4
 		) {
@@ -199,6 +200,7 @@ function lowerPropertyProjection(
 			loads.push({ ip, instruction });
 			aliases.set(instruction.dst, { kind: "load", index });
 			produced.add(instruction.dst);
+			receiverClobbered = instruction.dst === first.object;
 			continue;
 		}
 		if (instruction.opcode === "THROW_IF_TDZ" && aliases.has(instruction.src)) {

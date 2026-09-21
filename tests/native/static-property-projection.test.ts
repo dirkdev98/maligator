@@ -28,6 +28,9 @@ describe("native static-property projections", () => {
 		expect(source).toContain("mal_vm_property_try_load_static_number_triple(");
 		expect(source).toContain("mal_vm_property_try_load_static_number_quad(");
 		expect(source).toContain("f64 __property_projection_");
+		expect(source).toMatch(
+			/__nf_\d+_ok = true; __nf_\d+_value = __property_projection_\d+_step_/,
+		);
 		assertExactLines(runToStdout(binary), ["static-property-projection PASS"]);
 	});
 

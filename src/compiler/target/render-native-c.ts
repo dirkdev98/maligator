@@ -5470,12 +5470,30 @@ function emitInstruction(
 					operand(step.right),
 				);
 				if (expression === null) return null;
-				const fallback = emitGenericInstruction();
+				const last = index === plan.steps.length - 1;
+				const startsFusion =
+					last &&
+					numericFusionAction?.role === "start" &&
+					reps[instruction.dst] !== "number";
+				const fallback = startsFusion
+					? emitInstruction(
+							instruction,
+							ip,
+							suffix,
+							reps,
+							strict,
+							handlerIp,
+							gcUnlink,
+							thisSlot,
+							coro,
+							{ ...genericContext, numericFusionAction },
+						)
+					: emitGenericInstruction();
 				if (fallback === null) return null;
 				const result = `__property_projection_${plan.id}_step_${index}`;
-				const last = index === plan.steps.length - 1;
-				const store =
-					reps[instruction.dst] === "number"
+				const store = startsFusion
+					? `__nf_${numericFusionAction.id}_ok = true; __nf_${numericFusionAction.id}_value = ${result};`
+					: reps[instruction.dst] === "number"
 						? `r${instruction.dst} = ${result};`
 						: reps[instruction.dst] === "int32"
 							? `r${instruction.dst} = mal_ops_number_to_i32(${result});`
