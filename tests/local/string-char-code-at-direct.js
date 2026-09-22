@@ -53,6 +53,40 @@ function boundedChecksum(value) {
 }
 ok("bounded primitive loop", boundedChecksum("A\ud83d\ude00Z") === 112344);
 
+function concatenate(left, right) {
+	return left + right;
+}
+
+const flatChildren = concatenate("left-flat", "RIGHT-FLAT");
+ok("cons left child", flatChildren.charCodeAt(0) === 108);
+ok("cons left boundary", flatChildren.charCodeAt(8) === 116);
+ok("cons right boundary", flatChildren.charCodeAt(9) === 82);
+ok("cons right child", flatChildren.charCodeAt(flatChildren.length - 1) === 84);
+
+const dependentLeft = "__dependent-left__".slice(2, 16);
+const dependentRight = "__DEPENDENT-RIGHT__".slice(2, 17);
+const dependentChildren = concatenate(dependentLeft, dependentRight);
+ok("dependent left child", dependentChildren.charCodeAt(3) === 101);
+ok(
+	"dependent right child",
+	dependentChildren.charCodeAt(dependentLeft.length + 3) === 69,
+);
+
+const splitSurrogate = concatenate("split-\ud83d", "\ude00-pair");
+ok("split surrogate left unit", splitSurrogate.charCodeAt(6) === 0xd83d);
+ok("split surrogate right unit", splitSurrogate.charCodeAt(7) === 0xde00);
+
+const coerciveRope = concatenate("coercive-", "rope");
+ok(
+	"coercion GC keeps cons children",
+	coerciveRope.charCodeAt({
+		valueOf() {
+			if (typeof gc === "function") gc();
+			return 9;
+		},
+	}) === 114,
+);
+
 function mismatchedBound(bound, value) {
 	let result = 0;
 	for (let index = 0; index < bound.length; index++) {
@@ -90,5 +124,5 @@ function mutateWhileEvaluatingPosition(value) {
 ok("method captured before argument mutation", mutateWhileEvaluatingPosition("A") === 65);
 String.prototype.charCodeAt = original;
 
-ok("checks ran", passed === 16);
+ok("checks ran", passed === 25);
 console.log("string-char-code-at-direct PASS");

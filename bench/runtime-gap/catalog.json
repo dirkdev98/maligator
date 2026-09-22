@@ -4740,6 +4740,19 @@
 			"sourceSeam": "runtime/src/builtin_array.c",
 			"controls": ["dense-copy-slice-32"],
 			"fixture": "cases/dense-copy-to-spliced-32.mjs"
+		},
+		{
+			"id": "string-cons-full-scan-32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "String.prototype.charCodeAt over a fresh two-child rope",
+			"category": "api-builtins",
+			"mechanisms": ["string-allocation", "string-character-access"],
+			"inputShape": "two selected flat 16-code-unit children, then a full scan",
+			"unit": "32-code-unit rope scan",
+			"sourceSeam": "runtime/src/heap_string.h",
+			"controls": ["string-concatenation"],
+			"fixture": "cases/string-cons-full-scan-32.mjs"
 		}
 	]
 }

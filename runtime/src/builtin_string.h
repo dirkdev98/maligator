@@ -25,7 +25,7 @@ static inline MalValue mal_builtin_string_char_code_at_number(
     MalString *string = mal_value_to_string(this_value);
     MalValue result = position < 0 || position >= (f64) mal_string_length(string)
         ? mal_value_new_nan()
-        : mal_value_from_i32(mal_string_code_units(string)[(usize) position]);
+        : mal_value_from_i32(mal_string_code_unit_at(string, (usize) position));
     MAL_PERF_COUNT(string_char_code_at_direct_hits);
     return result;
 }
@@ -36,7 +36,7 @@ static inline MalValue mal_builtin_string_char_code_at_in_bounds(
     MalValue this_value, usize position
 ) {
     MalString *string = mal_value_to_string(this_value);
-    MalValue result = mal_value_from_i32(mal_string_code_units(string)[position]);
+    MalValue result = mal_value_from_i32(mal_string_code_unit_at(string, position));
     MAL_PERF_COUNT(string_char_code_at_direct_hits);
     return result;
 }

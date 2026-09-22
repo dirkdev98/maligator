@@ -969,7 +969,7 @@ static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue th
     }
 
     MalValue result = mal_value_from_i32(
-        mal_string_code_units(string)[(usize) position]);
+        mal_string_code_unit_at(string, (usize) position));
     mal_builtin_string_root_dispose(&string_root);
     return result;
 }

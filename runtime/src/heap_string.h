@@ -123,6 +123,24 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
     return mal_string_flatten((MalString *) string);
 }
 
+/** Read one in-bounds unit without flattening when a cons string's selected
+ * immediate child is already flat. Nested cons children retain flatten-once behavior. */
+static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
+    if (string->storage != MAL_STRING_STORAGE_CONS) {
+        return mal_string_code_units(string)[index];
+    }
+
+    MalString *child = string->left;
+    if (index >= child->length) {
+        index -= child->length;
+        child = string->right;
+    }
+    if (child->storage != MAL_STRING_STORAGE_CONS) {
+        return mal_string_code_units(child)[index];
+    }
+    return mal_string_code_units(string)[index];
+}
+
 /** Copy a valid range without flattening a lazy concatenation; destination holds length units. */
 void mal_string_copy_range_to(
     MalString *string, usize offset, usize length, c16 *destination);
