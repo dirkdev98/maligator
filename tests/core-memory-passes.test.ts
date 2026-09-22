@@ -16,10 +16,15 @@ import {
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
+	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS,
 	analyzeCoreProvenance,
 	discoverCoreLocalSpecializationCandidates,
 } from "../src/compiler/core/core-ir-provenance.ts";
+import {
+	CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
+	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
+} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -722,6 +727,98 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("loadPropertyStatic");
 		expect(opcodes).not.toContain("createObjectShaped");
 	});
+
+	it.each(["named", "unknown"] as const)(
+		"only requests relevant property proofs for a %s receiver",
+		(receiver) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const [one] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [one!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const [loaded] = builder.appendInstruction(
+				entry,
+				"loadPropertyStatic",
+				[receiver === "named" ? object! : builder.blockParameterValue(entry, 0)],
+				{ attributes: { stringIndex: 0 } },
+			);
+			const load = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const fn = core.function(builder.finish(entry).function);
+			const report = new CoreOptimizationReportBuilder(core);
+			const analyses = new CoreAnalysisManager(core, context, report);
+			const request = { scope: "function", function: fn.id } as const;
+			const provenance = analyses.get(
+				CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
+				request,
+			).provenance;
+			analyses.get(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS, request);
+			const before = provenance.statistics.valueQueries;
+			const pass = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "refine-contained-own-slot-accesses",
+			)!;
+			new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+				optionalMaxRunsPerWorkItem: 1,
+			}).runComponent("memory", [pass]);
+			expect(provenance.statistics.valueQueries - before).toBe(
+				receiver === "named" ? 1 : 2,
+			);
+			expect(fn.instructionAttributes(load)[CORE_EXACT_OWN_SLOT_ATTRIBUTE]).toBe(
+				receiver === "named" ? 0 : undefined,
+			);
+			if (receiver === "named")
+				expect(fn.instructionEffectRefinement(load)?.effects).toMatchObject({
+					mayThrow: false,
+					callsUserCode: false,
+				});
+			else expect(fn.instructionEffectRefinement(load)).toBeUndefined();
+		},
+	);
+
+	it.each(["initial", "later"] as const)(
+		"retains write effects when a weakly holdable value is stored %s",
+		(where) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const held = builder.blockParameterValue(entry, 0);
+			const [one] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[where === "initial" ? held : one!],
+				{ attributes: { keyStringIndices: [0] } },
+			);
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, one!], {
+				attributes: { stringIndex: 0 },
+			});
+			const firstWrite = builder.bodyInstructionIds(entry).at(-1)!;
+			if (where === "later")
+				builder.appendInstruction(entry, "storePropertyStatic", [object!, held], {
+					attributes: { stringIndex: 0 },
+				});
+			const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const fn = core.function(builder.finish(entry).function);
+			const report = new CoreOptimizationReportBuilder(core);
+			const analyses = new CoreAnalysisManager(core, context, report);
+			const pass = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "refine-contained-own-slot-accesses",
+			)!;
+			new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+				optionalMaxRunsPerWorkItem: 1,
+			}).runComponent("memory", [pass]);
+			expect(fn.instructionEffectRefinement(firstWrite)).toBeUndefined();
+		},
+	);
 
 	it("retains the boxing move when forwarding an unboxed slot value to global storage", () => {
 		const core = program();

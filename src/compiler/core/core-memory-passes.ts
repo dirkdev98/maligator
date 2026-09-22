@@ -788,26 +788,29 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 							mode,
 						)
 					: undefined;
-			const indexedLayout = provenance.allocationOf(base);
-			const indexedAccess = coreMemoryAccesses(fn, instruction, {
-				ownCell(candidateBase, key, accessMode) {
-					const resolved = provenance.ownCell(candidateBase, key, accessMode);
-					return resolved === undefined
-						? undefined
-						: { allocation: resolved.layout.instruction, cell: resolved.cell };
-				},
-			}).find(
-				(access) =>
-					access.base === base &&
-					coreMemoryLocationIsExact(access.location) &&
-					indexedLayout?.kind === "indexed" &&
-					(access.location.kind === "element" ||
-						access.location.kind === "object-slot") &&
-					access.location.allocation === indexedLayout.instruction &&
-					(access.location.kind === "element" ||
-						(access.location.kind === "object-slot" &&
-							isLengthString(program, access.location.key))),
-			);
+			const indexedLayout =
+				namedExact === undefined ? provenance.allocationOf(base) : undefined;
+			const indexedAccess =
+				indexedLayout?.kind === "indexed"
+					? coreMemoryAccesses(fn, instruction, {
+							ownCell(candidateBase, key, accessMode) {
+								const resolved = provenance.ownCell(candidateBase, key, accessMode);
+								return resolved === undefined
+									? undefined
+									: { allocation: resolved.layout.instruction, cell: resolved.cell };
+							},
+						}).find(
+							(access) =>
+								access.base === base &&
+								coreMemoryLocationIsExact(access.location) &&
+								(access.location.kind === "element" ||
+									access.location.kind === "object-slot") &&
+								access.location.allocation === indexedLayout.instruction &&
+								(access.location.kind === "element" ||
+									(access.location.kind === "object-slot" &&
+										isLengthString(program, access.location.key))),
+						)
+					: undefined;
 			const indexedExact =
 				indexedLayout?.kind === "indexed" &&
 				indexedAccess !== undefined &&
@@ -825,17 +828,27 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 			const exact = namedExact ?? indexedExact;
 			if (exact === undefined) continue;
 			if (mode === "write") {
-				kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 				const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
-					provenance.cannotBeHeldWeakly(value) || kinds!.scalarKind(value) !== undefined;
+					provenance.cannotBeHeldWeakly(value) ||
+					(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(
+						value,
+					) !== undefined;
 				const initial =
 					exact.layout.kind === "named-slots"
 						? exact.layout.initialValues[exact.slot]
 						: exact.layout.elements.get(exact.slot)?.value;
-				if (initial === undefined) continue;
-				const occupants = [initial];
+				if (initial === undefined || !cannotBeHeldWeakly(initial)) continue;
+				let safeOccupants = true;
 				for (const candidate of fn.instructionIds()) {
-					if (fn.instructionKind(candidate) !== "operation") continue;
+					if (
+						fn.instructionKind(candidate) !== "operation" ||
+						!fn.registry
+							.byId(fn.instructionOpcode(candidate))
+							.accesses?.some(
+								(access) => access.mode === "write" && access.valueOperand !== undefined,
+							)
+					)
+						continue;
 					const access = coreMemoryAccesses(fn, candidate, {
 						ownCell(candidateBase, key, accessMode) {
 							const resolved = provenance.ownCell(candidateBase, key, accessMode);
@@ -858,9 +871,12 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 								: candidateAccess.location.kind === "element" &&
 									candidateAccess.location.index === exact.slot),
 					);
-					if (access?.value !== undefined) occupants.push(access.value);
+					if (access?.value !== undefined && !cannotBeHeldWeakly(access.value)) {
+						safeOccupants = false;
+						break;
+					}
 				}
-				if (occupants.some((value) => !cannotBeHeldWeakly(value))) continue;
+				if (!safeOccupants) continue;
 			}
 			plans.push({
 				instruction,
