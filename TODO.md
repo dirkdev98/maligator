@@ -175,6 +175,9 @@ Runtime eval may remove source closure without invalidating authority closure.
       instruction visits, transfer/summary builds, cache reuse, and peak retained
       data in opt-in diagnostics. Do not trade a cheap emitter for hidden planning
       scans, uncontrolled cache growth, or a new unconditional whole-program pass.
+      After memory-source admission, build memory state for requested reads and
+      locations instead of every read in the function. Likewise, admit individual
+      late local candidates before materializing their complete target plans.
 
 - [ ] Add representative small, medium, and large compiler-scaling cases to the
       existing measurement workflow. Alternate Node and rebuilt self-hosted

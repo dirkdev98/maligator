@@ -3,10 +3,7 @@ import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-fac
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	analyzeCoreCallGraph,
-	coreDirectBuiltinCallbackTarget,
-} from "./core-ir-call-targets.ts";
+import { coreDirectBuiltinCallbackTarget } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -33,7 +30,7 @@ import type {
 	CoreRepresentation,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
-import { coreSpecializedOnlyFunctions } from "./core-native-body-reachability.ts";
+import { coreNativeBodyOmissionProofIsCurrent } from "./core-native-body-reachability.ts";
 import {
 	coreArgumentObservation,
 	coreNativeEntryProofIsCurrent,
@@ -1774,6 +1771,8 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 		...(plan.privatePackedRestArrayElements ?? []),
 		...(plan.unsignedArithmetic ?? []),
 	]);
+	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0)
+		proofPayloads.add(plan.specializedOnlyFunctions!);
 	for (const entry of plan.directEntries) {
 		for (const payload of [
 			entry.valueRepresentations,
@@ -1803,7 +1802,6 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	return copy(plan) as CoreOptimizationPlan;
 }
 
-/** Verify stable identities and target obligations without querying an analysis. */
 export function verifyCoreOptimizationPlan(
 	program: SealedCoreProgram,
 	plan: CoreOptimizationPlan,
@@ -1838,22 +1836,7 @@ export function verifyCoreOptimizationPlan(
 	) {
 		fail("live function mapping is not a sorted set of stable IDs");
 	}
-	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0) {
-		if (context?.facts.closure.sourceClosure.kind !== "known")
-			fail("native body omission requires source closure");
-		const targets = analyzeCoreCallGraph(program, true, undefined, undefined, context);
-		const eligible = new Set(
-			coreSpecializedOnlyFunctions(
-				program,
-				context,
-				targets,
-				plan.liveFunctions,
-				plan.directEntries,
-			),
-		);
-		if (plan.specializedOnlyFunctions!.some((functionId) => !eligible.has(functionId)))
-			fail("native body has a reachable generic use");
-	}
+
 	const blockProofs = verifyBlockOrders(program, plan);
 	const ids: Array<string> = [];
 	const claimedInstructions = new Map<
@@ -2097,6 +2080,12 @@ export function verifyCoreOptimizationPlan(
 			}
 		}
 		verifyCost(entry.cost, `direct entry ${entry.function}:${entry.id}`);
+	}
+	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0) {
+		if (context?.facts.closure.sourceClosure.kind !== "known")
+			fail("native body omission requires source closure");
+		if (!coreNativeBodyOmissionProofIsCurrent(program, context, plan))
+			fail("native body omission has no current reachability proof");
 	}
 	const selected = plan.recipes.count + plan.directEntries.length;
 	const generatedCode = [

@@ -13,6 +13,7 @@ import {
 } from "../src/compiler/core/core-ir-region-selection.ts";
 import {
 	corePlanAdmissionMode,
+	corePlanVersionStamp,
 	verifyCoreOptimizationPlan,
 } from "../src/compiler/core/core-ir-region-validity.ts";
 import type {
@@ -246,7 +247,7 @@ function stackObjectProgram(
 	return { program, function: functionId };
 }
 
-function directEntryProgram(): {
+function directEntryProgram(callCount = 1): {
 	readonly program: CoreProgram;
 	readonly caller: CoreFunctionId;
 	readonly callee: CoreFunctionId;
@@ -278,6 +279,11 @@ function directEntryProgram(): {
 			},
 		},
 	);
+	for (let index = 1; index < callCount; index++) {
+		callerBuilder.appendInstruction(callerEntry, "call", [calleeValue!, receiver!], {
+			attributes: { directFunctionIndex: 1 },
+		});
+	}
 	callerBuilder.setTerminator(callerEntry, { kind: "return", value: result! });
 	const omitted = callerBuilder.createBlock();
 	const [omittedCallee] = callerBuilder.appendInstruction(omitted, "createFunction", [], {
@@ -975,6 +981,95 @@ describe("late Core specialization plan", () => {
 			).native.functions.flatMap(({ specializations }) => specializations),
 		).toEqual(
 			definition.native.functions.flatMap(({ specializations }) => specializations),
+		);
+	});
+
+	it("spends a tight proof budget on a reused direct entry before a local scan", () => {
+		const { program, caller, callee } = directEntryProgram(4);
+		const context = programAnalysisContext();
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		let localScans = 0;
+		const plan = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			summaries,
+			[caller, callee],
+			{
+				context,
+				onLocalCandidates() {
+					localScans++;
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 8,
+					perCallerCompilerWork: 18,
+					programGeneratedCode: 8,
+					programCompilerWork: 18,
+				},
+			},
+		);
+		expect(plan.directEntries.map((entry) => entry.function)).toEqual([callee]);
+		expect(plan.directEntries[0]!.callSites).toHaveLength(4);
+		expect(localScans).toBe(0);
+		expect(plan.statistics.discovery.attempted).toBe(1);
+		verifyCoreOptimizationPlan(program.seal(), plan, context);
+	});
+
+	it("binds native-body omission to the proved calls and preserves it through verification", () => {
+		const { program, caller, callee } = directEntryProgram(2);
+		const { plan, context } = planning(program, [caller, callee]);
+		expect(plan.specializedOnlyFunctions).toEqual([callee]);
+		const sealed = program.seal();
+		const verified = verifyCoreOptimizationPlan(sealed, plan, context);
+		expect(
+			verifyCoreOptimizationPlan(sealed, verified, context).specializedOnlyFunctions,
+		).toEqual([callee]);
+		const omissions: Array<CoreFunctionId> = [];
+		const generic = verifyCoreOptimizationPlan(
+			sealed,
+			{ ...plan, specializedOnlyFunctions: omissions },
+			context,
+		);
+		omissions.push(callee);
+		expect(generic.specializedOnlyFunctions).toEqual([]);
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				sealed,
+				{
+					...plan,
+					directEntries: plan.directEntries.map((entry) => ({
+						...entry,
+						callSites: entry.callSites.slice(0, 1),
+					})),
+				},
+				context,
+			),
+		).toThrow(/reachability proof/);
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				sealed,
+				{
+					...plan,
+					specializedOnlyFunctions: Object.freeze([caller]),
+				},
+				context,
+			),
+		).toThrow(/reachability proof/);
+	});
+
+	it("rejects an omission proof after a function gains a callee observation", () => {
+		const { program, caller, callee } = directEntryProgram();
+		const { plan, context } = planning(program, [caller, callee]);
+		expect(plan.specializedOnlyFunctions).toEqual([callee]);
+		const editor = CoreEditor.open(program, callee);
+		editor.appendInstruction(program.function(callee).entry, "loadCallee", []);
+		editor.commit();
+		const changed = { ...plan, version: corePlanVersionStamp(program) };
+		expect(() => verifyCoreOptimizationPlan(program.seal(), changed, context)).toThrow(
+			/reachability proof/,
 		);
 	});
 

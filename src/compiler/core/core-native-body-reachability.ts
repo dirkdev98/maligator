@@ -1,11 +1,92 @@
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
-import type { CoreDirectEntryPlan } from "./core-ir-regions.ts";
+import type { CoreDirectEntryPlan, CoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreProgram } from "./core-store.ts";
 
+const omissionProofs = new WeakMap<
+	ReadonlyArray<CoreFunctionId>,
+	{
+		readonly program: CoreProgram;
+		readonly version: string;
+		readonly context: CoreCompilationContext | undefined;
+		readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
+		readonly entries: ReadonlyArray<{
+			readonly function: CoreFunctionId;
+			readonly calls: CoreDirectEntryPlan["callSites"];
+		}>;
+	}
+>();
+
+function omissionVersion(program: CoreProgram): string {
+	return `${program.generation}:${program.programFlowRevision}:${Object.values(program.versions).join(":")}`;
+}
+
 // Runtime identity can remain observable after every executable use selects a specialized entry.
 export function coreSpecializedOnlyFunctions(
+	program: CoreProgram,
+	context: CoreCompilationContext | undefined,
+	targets: CoreCallGraphIndex,
+	liveFunctions: ReadonlyArray<CoreFunctionId>,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlyArray<CoreFunctionId> {
+	const functions = Object.freeze(
+		findSpecializedOnlyFunctions(program, context, targets, liveFunctions, entries),
+	);
+	if (functions.length > 0) {
+		omissionProofs.set(functions, {
+			program,
+			version: omissionVersion(program),
+			context,
+			liveFunctions: [...liveFunctions],
+			entries: entries.map((entry) => ({
+				function: entry.function,
+				calls: entry.callSites.map((site) => ({ ...site })),
+			})),
+		});
+	}
+	return functions;
+}
+
+export function coreNativeBodyOmissionProofIsCurrent(
+	program: CoreProgram,
+	context: CoreCompilationContext | undefined,
+	plan: CoreOptimizationPlan,
+): boolean {
+	const proof =
+		plan.specializedOnlyFunctions === undefined
+			? undefined
+			: omissionProofs.get(plan.specializedOnlyFunctions);
+	return (
+		proof !== undefined &&
+		proof.program === program &&
+		proof.context === context &&
+		proof.version === omissionVersion(program) &&
+		proof.liveFunctions.length === plan.liveFunctions.length &&
+		proof.liveFunctions.every(
+			(functionId, index) => functionId === plan.liveFunctions[index],
+		) &&
+		proof.entries.length === plan.directEntries.length &&
+		proof.entries.every((entry, index) => {
+			const current = plan.directEntries[index]!;
+			return (
+				entry.function === current.function &&
+				entry.calls.length === current.callSites.length &&
+				entry.calls.every((site, index) => {
+					const call = current.callSites[index]!;
+					return (
+						site.caller === call.caller &&
+						site.instruction === call.instruction &&
+						site.numericSortCallback === call.numericSortCallback &&
+						site.fieldObject === call.fieldObject
+					);
+				})
+			);
+		})
+	);
+}
+
+function findSpecializedOnlyFunctions(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	targets: CoreCallGraphIndex,

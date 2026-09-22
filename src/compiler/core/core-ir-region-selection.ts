@@ -1188,9 +1188,7 @@ function guardedCallOpportunities(
 				caller,
 				generatedCodeCost: targetFunctions.length,
 				compilerWorkCost: 1,
-				priorityScore:
-					-(loopBlocks.has(fn.instructionBlock(site.instruction)) ? 32 : 8) /
-					targetFunctions.length,
+				priorityScore: -(loopBlocks.has(fn.instructionBlock(site.instruction)) ? 32 : 8),
 				resolve: () => {
 					const selection: CorePlanSpecialization = Object.freeze({
 						id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
@@ -1414,9 +1412,7 @@ function directEntryOpportunities(
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
-			priorityScore:
-				(-callSites.reduce((sum, site) => sum + callWeight(site), 0) * 8) /
-				generatedCodeCost,
+			priorityScore: -callSites.reduce((sum, site) => sum + callWeight(site), 0) * 8,
 			resolve: () => {
 				const fn = program.function(target);
 				const summary = summaries.summary(target);
@@ -1846,6 +1842,7 @@ export function buildCoreOptimizationPlan(
 	opportunities.sort(
 		(left, right) =>
 			left.priorityScore - right.priorityScore ||
+			left.generatedCodeCost - right.generatedCodeCost ||
 			left.caller - right.caller ||
 			left.kind.localeCompare(right.kind),
 	);
@@ -1883,8 +1880,15 @@ export function buildCoreOptimizationPlan(
 			opportunity.kind === "local" && provenLocal.has(opportunity.caller)
 				? { ...opportunity, compilerWorkCost: 0 }
 				: opportunity;
+		// Admission must leave enough work for applying a successful proof.
+		const applicationWork =
+			opportunity.kind === "local" ? 1 : opportunity.compilerWorkCost;
 		const reason =
-			service.programBudgetExhaustionReason() ?? service.admitDiscovery(cost);
+			service.programBudgetExhaustionReason() ??
+			service.admitDiscovery({
+				...cost,
+				compilerWorkCost: cost.compilerWorkCost + applicationWork,
+			});
 		if (reason !== undefined) {
 			discovery.skipped++;
 			increment(discovery.skippedByReason, reason);
