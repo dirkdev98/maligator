@@ -569,6 +569,94 @@ async function main() {
 	const spliced = [1, 2, 3, 4, 5];
 	const removed = spliced.splice(1, 3, 8, 9);
 	check("splice", removed.join() === "2,3,4" && spliced.join() === "1,8,9,5");
+	const spliceHoleSource = [, 1, 2];
+	const spliceHoleRemoved = spliceHoleSource.splice(0, 2);
+	check(
+		"splice preserves removed holes",
+		spliceHoleRemoved.length === 2 &&
+			!(0 in spliceHoleRemoved) &&
+			spliceHoleRemoved[1] === 1 &&
+			spliceHoleSource.join() === "2",
+	);
+	const zeroDeleteSource = [1, 2];
+	const zeroDeleteRemoved = zeroDeleteSource.splice(1, 0);
+	check(
+		"splice zero deletion returns fresh empty array",
+		zeroDeleteRemoved.length === 0 &&
+			zeroDeleteRemoved !== zeroDeleteSource &&
+			zeroDeleteSource.join() === "1,2",
+	);
+	const shrinkingSplice = [1, 2, 3];
+	shrinkingSplice.constructor = {
+		get [Symbol.species]() {
+			shrinkingSplice.length = 1;
+			return Array;
+		},
+	};
+	const shrunkSpliceRemoved = shrinkingSplice.splice(0, 3);
+	check(
+		"splice revalidates after species side effects",
+		shrunkSpliceRemoved.length === 3 &&
+			shrunkSpliceRemoved[0] === 1 &&
+			!(1 in shrunkSpliceRemoved) &&
+			!(2 in shrunkSpliceRemoved) &&
+			shrinkingSplice.length === 0,
+	);
+	let occupiedSpliceGetterCalls = 0;
+	const occupiedSpliceSource = [7, 8];
+	occupiedSpliceSource.constructor = {
+		[Symbol.species]: function (length) {
+			const result = new Array(length);
+			Object.defineProperty(result, 0, {
+				configurable: true,
+				get() {
+					occupiedSpliceGetterCalls++;
+					return 99;
+				},
+			});
+			return result;
+		},
+	};
+	const occupiedSpliceRemoved = occupiedSpliceSource.splice(0, 1);
+	check(
+		"splice does not bulk-copy into occupied species results",
+		occupiedSpliceGetterCalls === 0 &&
+			occupiedSpliceRemoved[0] === 7 &&
+			occupiedSpliceSource.join() === "8",
+	);
+	const lengthSetterSplice = [1, 2, 3];
+	let removedLength = -1;
+	lengthSetterSplice.constructor = {
+		[Symbol.species]: function () {
+			return {
+				set length(value) {
+					removedLength = value;
+					lengthSetterSplice[2] = 99;
+				},
+			};
+		},
+	};
+	const lengthSetterRemoved = lengthSetterSplice.splice(0, 1);
+	check(
+		"splice sets removed length before source mutation",
+		removedLength === 1 &&
+			lengthSetterRemoved[0] === 1 &&
+			lengthSetterSplice.join() === "2,99",
+	);
+	const aliasSplice = [1, 2, 3];
+	aliasSplice.constructor = {
+		[Symbol.species]: function () {
+			return aliasSplice;
+		},
+	};
+	const aliasSpliceRemoved = aliasSplice.splice(1, 1);
+	check(
+		"splice preserves aliased species result behavior",
+		aliasSpliceRemoved === aliasSplice &&
+			aliasSplice.length === 2 &&
+			aliasSplice[0] === 2 &&
+			!(1 in aliasSplice),
+	);
 	const copiedWithin = [1, 2, 3, 4, 5];
 	copiedWithin.copyWithin(1, 3);
 	check("copyWithin", copiedWithin.join() === "1,4,5,4,5");

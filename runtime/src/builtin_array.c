@@ -4003,21 +4003,37 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     }
     MalRootSpan removed_span;
     mal_gc_root(&removed_span, &removed, 1);
-    for (f64 index = 0; index < delete_count; index++) {
-        MalValue element;
-        if (mal_builtin_array_try_get_wide(vm, this_value, start + index, &element)) {
-            if (!mal_builtin_array_create_data_property_wide(vm, removed, index, element)) {
+    bool removed_built_dense = false;
+    if (delete_count <= (f64) UINT32_MAX && start <= (f64) UINT32_MAX) {
+        MalArrayObject *source_array =
+            mal_builtin_array_clean_dense(vm, this_value);
+        u32 source_start = (u32) start;
+        u32 copy_count = (u32) delete_count;
+        MalArrayObject *removed_array =
+            mal_builtin_array_presized_dense_builder(removed, copy_count);
+        removed_built_dense = source_array != nullptr && removed_array != nullptr &&
+            (f64) source_start == start && (f64) copy_count == delete_count &&
+            mal_array_object_dense_build_range(
+                removed_array, 0, source_array, source_start, copy_count,
+                false, false);
+    }
+    if (!removed_built_dense) {
+        for (f64 index = 0; index < delete_count; index++) {
+            MalValue element;
+            if (mal_builtin_array_try_get_wide(vm, this_value, start + index, &element)) {
+                if (!mal_builtin_array_create_data_property_wide(vm, removed, index, element)) {
+                    goto removed_done;
+                }
+            } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 goto removed_done;
             }
-        } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        }
+
+        // Set the removed array's length before mutating O. This is observable when
+        // a species constructor returns a Proxy or an object with an inherited setter.
+        if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(delete_count))) {
             goto removed_done;
         }
-    }
-
-    // Set the removed array's length before mutating O. This is observable when
-    // a species constructor returns a Proxy or an object with an inherited setter.
-    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(delete_count))) {
-        goto removed_done;
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
