@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 58;
+export const WIRE_VERSION = 59;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -951,6 +951,12 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		// intentionally dropped — deserialize restores it as 0.
 		case "TRY_BEGIN":
 		case "TRY_END":
+			return;
+		case "PGO_CALL":
+			if (!Number.isInteger(i.site) || i.site < 0 || i.site > 0x7fffffff)
+				throw new Error("Invalid PGO call site");
+			w.i32(i.site);
+			return;
 		case "GENERATOR_START":
 		case "ASYNC_START":
 		case "WITH_EXIT":
@@ -1877,6 +1883,11 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, handlerIp: 0 };
 		case "TRY_END":
 			return { opcode };
+		case "PGO_CALL": {
+			const site = r.i32();
+			if (site < 0) throw new Error("Invalid PGO call site");
+			return { opcode, site };
+		}
 		case "GENERATOR_START":
 			return { opcode };
 		case "ASYNC_START":

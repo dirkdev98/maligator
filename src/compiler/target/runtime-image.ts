@@ -646,6 +646,7 @@ export function buildArgumentSnapshotPlan(
  * Keep inline with the C struct
  */
 export type BytecodeInstruction =
+	| { opcode: "PGO_CALL"; site: number }
 	| {
 			opcode: "MOVE";
 			dst: number;
@@ -3017,6 +3018,8 @@ function lowerInstructionToBytecodeInstruction(
 	instruction: CompilerInstruction,
 ): BytecodeInstruction {
 	switch (instruction.type) {
+		case "pgoCall":
+			return { opcode: "PGO_CALL", site: instruction.site };
 		case "sourcePos":
 			// Markers are consumed into `positions` and stripped before this point.
 			throw new Error("sourcePos marker must be stripped before lowering");

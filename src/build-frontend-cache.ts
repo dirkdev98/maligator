@@ -26,6 +26,7 @@ import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.t
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
+import type { CorePgoInput } from "./compiler/core/core-pgo.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
@@ -143,6 +144,8 @@ export interface CompiledBuildFrontend {
 }
 
 export interface CompileBuildFrontendOptions {
+	pgoTraining?: boolean;
+	pgo?: CorePgoInput;
 	entrypoint: string;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
@@ -209,6 +212,11 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
+			pgoTraining: options.pgoTraining === true,
+			pgo:
+				options.pgo === undefined
+					? undefined
+					: { digest: options.pgo.digest, policy: options.pgo.policy },
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
@@ -528,7 +536,7 @@ export function compileBuildFrontend(
 		};
 	};
 
-	if (!options.forceCompile) {
+	if (!options.forceCompile && options.pgoTraining !== true) {
 		const validationStartedAt = Date.now();
 		const cached = loadCached(root, artifactRoot, entrypoint, identity, session);
 		phases.validationMs = Date.now() - validationStartedAt;
@@ -612,6 +620,8 @@ export function compileBuildFrontend(
 	if (
 		options.relocatable === true &&
 		options.forceCompile !== true &&
+		options.pgoTraining !== true &&
+		options.pgo === undefined &&
 		options.optimization === "development" &&
 		options.enforcePolicies !== false
 	) {
@@ -795,6 +805,8 @@ function compileProgramImage(
 		coreVerification: options.coreVerification,
 		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: options.profile,
+		pgoTraining: options.pgoTraining,
+		pgo: options.pgo,
 		afterCoreOptimization(program, context, report, plan) {
 			options.afterCoreOptimization?.(program, context, report, plan);
 			onOptimization(report, plan);

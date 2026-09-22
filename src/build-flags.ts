@@ -94,6 +94,7 @@ export interface NativeFeatureInput {
 	nodeEnabled?: boolean;
 	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
 	profileEnabled?: boolean;
+	pgoEnabled?: boolean;
 	/** Compile the private self-hosted CLI development and test API. */
 	developmentApiEnabled?: boolean;
 	/** Selected per-service Intl Cargo features; empty means the full Intl surface. */
@@ -115,6 +116,7 @@ export interface NativeFeatureSpec {
 	temporalEnabled: boolean;
 	nodeEnabled: boolean;
 	profileEnabled: boolean;
+	pgoEnabled: boolean;
 	developmentApiEnabled: boolean;
 	intlFeatures: Array<string>;
 	cDefines: Array<string>;
@@ -138,6 +140,7 @@ export function normalizeNativeFeatures(
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const nodeEnabled = input.nodeEnabled ?? false;
 	const profileEnabled = input.profileEnabled ?? false;
+	const pgoEnabled = input.pgoEnabled ?? false;
 	const developmentApiEnabled = input.developmentApiEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
 	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
@@ -190,6 +193,7 @@ export function normalizeNativeFeatures(
 		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
 		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
 		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
+		...(pgoEnabled ? ["-DMAL_PGO=1"] : []),
 		...(developmentApiEnabled ? ["-DMAL_DEVELOPMENT_API=1"] : []),
 	];
 	const cargoFeatures = sortedUnique([
@@ -209,6 +213,7 @@ export function normalizeNativeFeatures(
 		temporalEnabled,
 		nodeEnabled,
 		profileEnabled,
+		pgoEnabled,
 		developmentApiEnabled,
 		intlFeatures,
 		cDefines,

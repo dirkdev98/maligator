@@ -243,13 +243,16 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## P2: source closure and generated-code profitability
 
-- [ ] Implement VM training feedback and Core priority selection through stages
-      0–2 of [the PGO decision log](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
-      Keep exact profile origins, unknown-site handling, and lazy proof admission
-      separate from semantic eligibility.
-      The [first function-origin checkpoint](docs/decisions/08-profile-guided-and-incremental-optimization.md#d012--2026-09-22--first-function-origin-checkpoint)
-      is implemented in diagnostic profile sidecars. Original call-site identities,
-      workload coverage, VM training counters, and Core feedback remain unfinished.
+- [x] Implement VM training feedback, profile-guided Core budget admission, and the
+      persistent single-module Core pilot through stages 1–3 of
+      [the PGO decision log](docs/decisions/08-profile-guided-and-incremental-optimization.md#d014--2026-09-22--vm-training-capture-and-explicit-merge).
+      Focused native and unit checks cover attribution, lazy proof admission,
+      cache invalidation, relocation, and independent module state.
+- [ ] Complete representative PGO training and performance acceptance; tune the
+      measured/unknown allowances and make remaining cross-call proof discovery lazy.
+- [ ] Integrate the persistent Core pilot into ordinary dependency builds (ADR stage 4),
+      including Meriyah selection, dependency invalidation and initialization/closure
+      contracts. The explicit pilot API does not yet accelerate normal module builds.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

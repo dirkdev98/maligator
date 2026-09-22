@@ -13,6 +13,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import type { CorePgoHints } from "./core-pgo.ts";
 import { coreStaticMemberOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
@@ -475,6 +476,7 @@ export function specializeCoreStaticArguments(
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
 	limits: CoreTransformBudgetLimits,
+	pgo?: CorePgoHints,
 ): ReadonlyArray<CoreFunctionId> {
 	const plans = new Map<
 		string,
@@ -482,13 +484,12 @@ export function specializeCoreStaticArguments(
 	>();
 	let visits = 0;
 	for (const caller of program.functionIds()) {
-		const fn = program.function(caller),
-			analysis = analyses.get(CORE_STATIC_VALUE_ANALYSIS, {
-				scope: "function",
-				function: caller,
-			});
+		const fn = program.function(caller);
+		let analysis: CoreStaticValueAnalysis | undefined;
 		for (const site of summaries.targets.outgoing(caller)) {
 			if (++visits > limits.programCompilerWork) break;
+			const exposure = pgo?.callAttempts(caller, site.instruction);
+			if (exposure === 0) continue;
 			if (
 				site.targets.functions.length !== 1 ||
 				coreCalleeTargetsAreOpen(site.targets) ||
@@ -504,6 +505,10 @@ export function specializeCoreStaticArguments(
 				parameter < targetFn.parameterCount && parameter + 2 < args.length;
 				parameter++
 			) {
+				analysis ??= analyses.get(CORE_STATIC_VALUE_ANALYSIS, {
+					scope: "function",
+					function: caller,
+				});
 				const fact = analysis.queryAt(args[parameter + 2]!, site.instruction);
 				if (fact.kind !== "known") continue;
 				const plan = staticParameterPlan(program, targetFn, parameter, fact, analysis);
@@ -511,11 +516,12 @@ export function specializeCoreStaticArguments(
 				analysis.verify(fact, site.instruction);
 				const candidate: CoreTransformCandidate = {
 					kind: "static-argument-specialization",
+					exposure,
 					caller,
 					site: site.instruction,
 					revision: summaries.version(target),
 					priorityClass: 0,
-					priorityScore: 0,
+					priorityScore: -(exposure ?? 0),
 					targets: [target],
 					generatedCodeCost: plan.cost,
 					compilerWorkCost: targetFn.liveStorageCounts().instructions + plan.cost,

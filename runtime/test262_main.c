@@ -1,3 +1,4 @@
+#include "pgo.h"
 #include "vm.h"
 #include "test262_host.h"
 #include "perf_stats.h"
@@ -28,6 +29,7 @@ int main(int argc, char **argv) {
 
 	int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 	mal_profile_finish(&vm);
+	mal_pgo_finish(&vm);
 
     // Leak-audit teardown (MAL_GC_AT_EXIT): force a final full collection, then
     // tear the VM down so it frees every reclaimable allocation. A `leaks` /

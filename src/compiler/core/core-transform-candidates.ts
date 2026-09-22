@@ -41,6 +41,7 @@ export type CoreTransformDeclineReason =
 	| "target-support";
 
 export interface CoreTransformCandidate {
+	readonly exposure?: number;
 	readonly kind: CoreTransformKind;
 	readonly caller: CoreFunctionId;
 	readonly site: CoreInstructionId;
@@ -56,6 +57,7 @@ export interface CoreTransformCandidate {
 }
 
 export interface CoreTransformDiscoveryCost {
+	readonly exposure?: number;
 	readonly caller: CoreFunctionId;
 	// A lower bound for admission; discovery itself does not consume generated code.
 	readonly generatedCodeCost: number;
@@ -171,6 +173,8 @@ function candidatePrecedes(
 	left: CoreTransformCandidate,
 	right: CoreTransformCandidate,
 ): boolean {
+	if ((left.exposure === undefined) !== (right.exposure === undefined))
+		return left.exposure !== undefined;
 	if (left.priorityClass !== right.priorityClass)
 		return left.priorityClass < right.priorityClass;
 	if (left.priorityScore !== right.priorityScore)
@@ -251,6 +255,38 @@ export class CoreTransformCandidateService {
 	#declined = 0;
 	#generatedCode = 0;
 	#compilerWork = 0;
+	#profileScheduling = false;
+	readonly #unknownUse = { work: 0, code: 0 };
+	readonly #measuredUse = { work: 0, code: 0 };
+	enablePgoScheduling(): void {
+		this.#profileScheduling = true;
+	}
+	#profileBudget(
+		cost: CoreTransformDiscoveryCost,
+	): CoreTransformDeclineReason | undefined {
+		if (!this.#profileScheduling) return undefined;
+		const unknown = cost.exposure === undefined;
+		const used = unknown ? this.#unknownUse : this.#measuredUse;
+		const work = Math.floor(this.#limits.programCompilerWork * 0.2);
+		const code = Math.floor(this.#limits.programGeneratedCode * 0.2);
+		if (
+			used.work + cost.compilerWorkCost >
+			(unknown ? work : this.#limits.programCompilerWork - work)
+		)
+			return "compiler-work-cost";
+		if (
+			used.code + cost.generatedCodeCost >
+			(unknown ? code : this.#limits.programGeneratedCode - code)
+		)
+			return "generated-code-cost";
+		return undefined;
+	}
+	#recordProfile(cost: CoreTransformDiscoveryCost, applied: boolean): void {
+		if (!this.#profileScheduling) return;
+		const used = cost.exposure === undefined ? this.#unknownUse : this.#measuredUse;
+		used.work += cost.compilerWorkCost;
+		if (applied) used.code += cost.generatedCodeCost;
+	}
 
 	constructor(limits: CoreTransformBudgetLimits = DEFAULT_CORE_TRANSFORM_BUDGETS) {
 		this.#limits = limits;
@@ -338,6 +374,8 @@ export class CoreTransformCandidateService {
 		limits?: CoreTransformBudgetLimits,
 	): CoreTransformDeclineReason | undefined {
 		if (candidate.unsupportedReason !== undefined) return candidate.unsupportedReason;
+		const profileReason = this.#profileBudget(candidate);
+		if (profileReason !== undefined) return profileReason;
 		const active = this.#activeLimits(limits);
 		const caller = this.#caller.get(candidate.caller) ?? {
 			expansions: 0,
@@ -369,23 +407,27 @@ export class CoreTransformCandidateService {
 	admitDiscovery(
 		cost: CoreTransformDiscoveryCost,
 	): CoreTransformDeclineReason | undefined {
+		const profileReason = this.#profileBudget(cost);
+		if (profileReason !== undefined) return profileReason;
+		const active = this.#limits;
 		const caller = this.#caller.get(cost.caller);
 		if (
 			(caller?.generatedCode ?? 0) + cost.generatedCodeCost >
-				this.#limits.perCallerGeneratedCode ||
-			this.#generatedCode + cost.generatedCodeCost > this.#limits.programGeneratedCode
+				active.perCallerGeneratedCode ||
+			this.#generatedCode + cost.generatedCodeCost > active.programGeneratedCode
 		)
 			return "generated-code-cost";
 		if (
 			(caller?.compilerWork ?? 0) + cost.compilerWorkCost >
-				this.#limits.perCallerCompilerWork ||
-			this.#compilerWork + cost.compilerWorkCost > this.#limits.programCompilerWork
+				active.perCallerCompilerWork ||
+			this.#compilerWork + cost.compilerWorkCost > active.programCompilerWork
 		)
 			return "compiler-work-cost";
 		return undefined;
 	}
 
 	recordDiscovery(cost: CoreTransformDiscoveryCost): void {
+		this.#recordProfile(cost, false);
 		const caller = this.#caller.get(cost.caller) ?? {
 			expansions: 0,
 			generatedCode: 0,
@@ -397,6 +439,7 @@ export class CoreTransformCandidateService {
 	}
 
 	recordApplied(candidate: CoreTransformCandidate): void {
+		this.#recordProfile(candidate, true);
 		const caller = this.#caller.get(candidate.caller) ?? {
 			expansions: 0,
 			generatedCode: 0,

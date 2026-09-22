@@ -7,7 +7,8 @@ import { verifyNativeExecutionProgram } from "./verify-native-execution.ts";
 export function lowerExecutionToProgramImage(
 	program: ExecutionProgram,
 	profile = false,
+	pgoTraining = false,
 ): ProgramImage {
 	verifyNativeExecutionProgram(program);
-	return lowerVerifiedExecutionToProgramImage(program, profile);
+	return lowerVerifiedExecutionToProgramImage(program, profile, pgoTraining);
 }

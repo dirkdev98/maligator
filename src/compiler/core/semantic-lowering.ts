@@ -82,6 +82,8 @@ import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreProgram } from "./core-store.ts";
 
 interface CoreFrontendContext {
+	pgoTraining: boolean;
+	captureModuleExports: boolean;
 	sourceOrigins?: SourceFunctionOrigins;
 	/**
 	 * The semantic program that we are compiling.
@@ -794,6 +796,8 @@ function isCompilerBinaryOperator(operator: string): operator is CompilerBinaryO
 export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: {
+		pgoTraining?: boolean;
+		captureModuleExports?: boolean;
 		sourceOrigins?: SourceFunctionOriginOptions;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -803,6 +807,8 @@ export function constructSemanticProgramCore(
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
+		pgoTraining: options.pgoTraining === true,
+		captureModuleExports: options.captureModuleExports === true,
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
@@ -939,6 +945,16 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
 				sourceCallSites: program.sourceOrigins?.callSites(),
+				moduleExports: !program.captureModuleExports
+					? undefined
+					: [...program.moduleNamespaces].flatMap(([path, exports]) =>
+							exports.flatMap(({ name, exporter }) => {
+								const location = program.bindingToStorage.get(exporter);
+								return location?.type === "global"
+									? [{ path, name, slot: location.index }]
+									: [];
+							}),
+						),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,
 				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(
@@ -5133,8 +5149,9 @@ function compileIteratorDrainInto(
 	});
 	const body = fn.blocks[bodyIdx]!;
 	body.emitter.emit({
-		type: "storeProperty",
+		type: "defineProperty",
 		registers: [array, index, valueRegister],
+		enumerable: true,
 	});
 	// Increment in place: index is loop-carried.
 	body.emitter.emit({
@@ -8340,7 +8357,11 @@ function tryEmitSelfTailCall(
 	cursor: CoreFrontendCursor,
 	call: ESTree.CallExpression,
 ): boolean {
-	if (fn.bodyEntryBlock === undefined || fn.tailCallNode === undefined) {
+	if (
+		program.pgoTraining ||
+		fn.bodyEntryBlock === undefined ||
+		fn.tailCallNode === undefined
+	) {
 		return false;
 	}
 	const callee = call.callee as unknown as ESTree.Node;
@@ -9463,7 +9484,11 @@ function compileChainElement(
 		}
 
 		if (node.arguments.some((arg) => arg.type === "SpreadElement")) {
-			if (node.arguments.length === 1 && node.arguments[0]?.type === "SpreadElement") {
+			if (
+				!program.pgoTraining &&
+				node.arguments.length === 1 &&
+				node.arguments[0]?.type === "SpreadElement"
+			) {
 				const iterable = compileExpression(
 					program,
 					fn,
@@ -11671,8 +11696,9 @@ function compileSpreadArgumentsArray(
 
 		const value = compileExpression(program, fn, cursor, arg);
 		cursor.block.emitter.emit({
-			type: "storeProperty",
+			type: "defineProperty",
 			registers: [array, index, value],
+			enumerable: true,
 		});
 		cursor.block.emitter.emit({
 			type: "binary",
@@ -12487,6 +12513,8 @@ function emitSourceCall(
 	instruction: CompilerInstruction,
 ): void {
 	const sourceCall = program.sourceOrigins?.call(fn.semanticFile, node);
+	if (program.pgoTraining && sourceCall !== undefined)
+		cursor.block.emitter.emit({ type: "pgoCall", site: sourceCall });
 	cursor.block.emitter.emit(
 		sourceCall === undefined ? instruction : { ...instruction, sourceCall },
 	);
@@ -12561,6 +12589,7 @@ function compileCall(
 	}
 	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
 		if (
+			!program.pgoTraining &&
 			callExpression.arguments.length === 1 &&
 			callExpression.arguments[0]?.type === "SpreadElement"
 		) {

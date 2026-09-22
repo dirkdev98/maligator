@@ -690,7 +690,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-21)).toEqual([
+		expect(WIRE_OPCODES.slice(-22)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -712,6 +712,7 @@ describe("program-image-codec", () => {
 			"BUILTIN_ERROR",
 			"PREPARED_STRING_COMPARE",
 			"PRECISE_NUMBER_SUM",
+			"PGO_CALL",
 		]);
 	});
 

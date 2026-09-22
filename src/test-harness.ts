@@ -174,6 +174,7 @@ export interface BuildOptions {
 	temporalEnabled?: boolean;
 	/** Compile the production profile recorder into this native fixture. */
 	profileEnabled?: boolean;
+	pgoTraining?: boolean;
 	/** Use the probed production native plan (LTO and stripping where supported). */
 	production?: boolean;
 	/**
@@ -241,7 +242,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		options,
 		config,
 		programImage,
-		options.compiled ?? true,
+		options.pgoTraining ? false : (options.compiled ?? true),
 		options.name,
 	);
 	return { ...linked, programImage };
@@ -272,7 +273,7 @@ export function buildNativeProgramImageResult(
 		harnessOptions,
 		config,
 		image,
-		options.compiled ?? true,
+		options.pgoTraining ? false : (options.compiled ?? true),
 		options.name,
 	);
 	return { ...linked, programImage: image };
@@ -315,6 +316,7 @@ function compileFixtureProgramImage(
 		const canReuseFrontend =
 			options.entryGoal === undefined &&
 			options.profileEnabled !== true &&
+			options.pgoTraining !== true &&
 			options.coreOptimizationBenchmarkAblation === undefined;
 		if (canReuseFrontend) {
 			const frontend = compileBuildFrontend({
@@ -338,6 +340,7 @@ function compileFixtureProgramImage(
 		return compileSemanticProgramToProgramImage(semanticProgram, {
 			facts: compilerProgramFactsFromConfig(config),
 			profile: options.profileEnabled,
+			pgoTraining: options.pgoTraining,
 			coreOptimizationBenchmarkAblation: options.coreOptimizationBenchmarkAblation,
 		});
 	} finally {
@@ -414,18 +417,22 @@ function resolveHarnessNativeContext(
 	subject: string,
 ): { context: NativeBuildContext; cacheSuffix: string } {
 	const baseDerivation = buildDerivationFromConfig(config);
-	const derivation = options.profileEnabled
-		? {
-				features: normalizeNativeFeatures({
-					...baseDerivation.features,
-					profileEnabled: true,
-				}),
-				cacheSuffix:
-					baseDerivation.cacheSuffix === ""
-						? "profile"
-						: `${baseDerivation.cacheSuffix}-profile`,
-			}
-		: baseDerivation;
+	const derivation =
+		options.profileEnabled || options.pgoTraining
+			? {
+					features: normalizeNativeFeatures({
+						...baseDerivation.features,
+						profileEnabled: options.profileEnabled === true,
+						pgoEnabled: options.pgoTraining === true,
+					}),
+					cacheSuffix:
+						baseDerivation.cacheSuffix === ""
+							? options.pgoTraining
+								? "pgo"
+								: "profile"
+							: `${baseDerivation.cacheSuffix}-${options.pgoTraining ? "pgo" : "profile"}`,
+				}
+			: baseDerivation;
 	return {
 		context: resolveNativeBuildContext({
 			cacheDirectory: options.cacheDirectory,

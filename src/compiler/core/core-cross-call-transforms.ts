@@ -54,6 +54,7 @@ import {
 	coreNumericFieldArgument,
 	coreReadOnlyNumericParameterFields,
 } from "./core-native-field-analysis.ts";
+import type { CorePgoHints } from "./core-pgo.ts";
 import {
 	CORE_PROGRAM_FLOW_ANALYSIS,
 	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
@@ -1147,6 +1148,7 @@ function offerFunctionCandidates(
 	functionId: CoreFunctionId,
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
+	pgo?: CorePgoHints,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1167,6 +1169,8 @@ function offerFunctionCandidates(
 		if (invocation === undefined) continue;
 		const current = fn.instructionAttributes(site.instruction);
 		if (current[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true) continue;
+		const measured = pgo?.callAttempts(functionId, site.instruction);
+		if (measured === 0) continue;
 		const block = fn.instructionBlock(site.instruction);
 		let loopFrequency = blockFrequencies.get(block);
 		if (loopFrequency === undefined) {
@@ -1182,6 +1186,7 @@ function offerFunctionCandidates(
 			blockFrequencies.set(block, loopFrequency);
 		}
 		const inLoop = loopFrequency > 1;
+		const exposure = measured ?? loopFrequency;
 		const predicate = inLoop
 			? coreArrayPredicateCall(program, fn, site.instruction)
 			: undefined;
@@ -1201,12 +1206,13 @@ function offerFunctionCandidates(
 				service.offer({
 					kind: "array-predicate-inline",
 					caller: functionId,
+					exposure: measured,
 					site: site.instruction,
 					revision: summaries.version(callback),
 					priorityClass: 2,
 					// The eligibility helper replaces builtin dispatch; credit one callback only.
 					priorityScore: inlinePriorityScore(
-						loopFrequency,
+						exposure,
 						generatedCodeCost,
 						CORE_GENERATED_CODE_COST_WEIGHTS.runtime.admissionCheck,
 					),
@@ -1283,6 +1289,7 @@ function offerFunctionCandidates(
 				Object.freeze({
 					kind: "finite-dispatch",
 					caller: functionId,
+					exposure: measured,
 					site: site.instruction,
 					revision: finiteTargets.reduce(
 						(revision, target) => revision * 31 + summaries.version(target),
@@ -1290,7 +1297,7 @@ function offerFunctionCandidates(
 					),
 					priorityClass: targetSetKind === "closed" ? 2 : 3,
 					priorityScore: inlinePriorityScore(
-						loopFrequency,
+						exposure,
 						generatedCodeCost,
 						(finiteTargets.length - (targetSetKind === "closed" ? 1 : 0)) *
 							CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard,
@@ -1374,11 +1381,12 @@ function offerFunctionCandidates(
 			Object.freeze({
 				kind: open ? "guarded-inline" : "inline",
 				caller: functionId,
+				exposure: measured,
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass: hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
-					loopFrequency,
+					exposure,
 					generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
 				),
@@ -1420,6 +1428,7 @@ export function discoverCoreCrossCallCandidates(
 	service: CoreTransformCandidateService,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
+	pgo?: CorePgoHints,
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	for (const functionId of functions) {
@@ -1431,6 +1440,7 @@ export function discoverCoreCrossCallCandidates(
 			functionId,
 			instanceMethodHints,
 			liveFunctions,
+			pgo,
 		);
 	}
 }
@@ -2408,9 +2418,11 @@ export function runCoreCrossCallTransforms(
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
 	candidateService?: CoreTransformCandidateService,
+	pgo?: CorePgoHints,
 ): CoreCrossCallTransformResult {
 	const phaseLimits = limits ?? DEFAULT_CORE_TRANSFORM_BUDGETS;
 	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
+	if (pgo !== undefined) service.enablePgoScheduling();
 	const budgetBaseline = service.statistics();
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
@@ -2453,6 +2465,7 @@ export function runCoreCrossCallTransforms(
 		summaries,
 		service,
 		phaseLimits,
+		pgo,
 	);
 
 	if (specialized.length !== 0) {
@@ -2473,6 +2486,8 @@ export function runCoreCrossCallTransforms(
 			summaries,
 			service,
 			new Set(flow.reachability.liveFunctions),
+			undefined,
+			pgo,
 		);
 		const foldsByCaller = discoverProgramValueKindObservations(program, readValueKinds());
 		const editors = new Map<CoreFunctionId, CoreEditor>();

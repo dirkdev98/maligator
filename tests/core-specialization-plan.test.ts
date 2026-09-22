@@ -148,6 +148,7 @@ function charCodeAtProgram() {
 function numericProgram(
 	startOperator = "*",
 	finishOperator = "+",
+	into?: CoreProgram,
 ): {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionId;
@@ -155,9 +156,11 @@ function numericProgram(
 	readonly first: CoreInstructionId;
 	readonly finish: CoreInstructionId;
 } {
-	const program = new CoreProgram(coreOpcodeRegistry, {
-		stringConstants: [[]],
-	});
+	const program =
+		into ??
+		new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[]],
+		});
 	const builder = new CoreFunctionBuilder(program, {
 		metadata: { sourcePath: "/entry.js" },
 	});
@@ -661,6 +664,70 @@ describe("late Core specialization plan", () => {
 		});
 		editor.commit();
 		expect(() => candidate.bounded).toThrow("Stale specialization detail analysis");
+	});
+
+	it.each([0, undefined, 100])(
+		"only pulls a local proof for admitted PGO exposure %s",
+		(exposure) => {
+			const { program, function: functionId } = numericProgram();
+			const first = planning(program, [functionId]);
+			let queries = 0;
+			const plan = buildCoreOptimizationPlan(
+				program,
+				first.analyses,
+				first.summaries,
+				[functionId],
+				{
+					pgo: {
+						digest: "fixture",
+						functionEntries: () => exposure,
+						callAttempts: () => undefined,
+					},
+					onLocalCandidates() {
+						queries++;
+					},
+				},
+			);
+			expect(queries).toBe(exposure === 0 ? 0 : 1);
+			expect(plan.statistics.discovery.skippedByReason["observed-zero"] ?? 0).toBe(
+				exposure === 0 ? 1 : 0,
+			);
+			verifyCoreOptimizationPlan(program.seal(), plan);
+		},
+	);
+
+	it("spends a tight discovery budget on the hotter function only", () => {
+		const first = numericProgram();
+		const second = numericProgram("*", "+", first.program);
+		const prepared = planning(first.program, [first.function]);
+		const queried: Array<CoreFunctionId> = [];
+		const budget = prepared.plan.statistics.compilerWorkConsumed;
+		const plan = buildCoreOptimizationPlan(
+			first.program,
+			prepared.analyses,
+			prepared.summaries,
+			[first.function, second.function],
+			{
+				pgo: {
+					digest: "fixture",
+					functionEntries: (id) => (id === second.function ? 2 : 1),
+					callAttempts: () => undefined,
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 1000,
+					perCallerCompilerWork: 1000,
+					programGeneratedCode: 1000,
+					programCompilerWork: Math.ceil(budget / 0.8),
+				},
+				onLocalCandidates(id) {
+					queried.push(id);
+				},
+			},
+		);
+		expect(queried).toEqual([second.function]);
+		expect(plan.statistics.discovery.skipped).toBe(1);
 	});
 
 	it("reports local discovery from the planner's single query", () => {

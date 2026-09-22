@@ -680,6 +680,7 @@ export interface ProgramImage {
 	readonly runtime: RuntimeImage;
 	readonly native: NativePlan;
 	readonly diagnostics: {
+		pgoTraining?: boolean;
 		sourceCallSites?: ReadonlyArray<SourceCallSite>;
 		profileFunctions?: ReadonlyArray<SourceFunctionOrigin | undefined>;
 		profileSites?: Array<ProfileSite>;
@@ -1571,6 +1572,7 @@ export function compactProgramImageConstants(
 export function lowerVerifiedExecutionToProgramImage(
 	program: ExecutionProgram,
 	profile = false,
+	pgoTraining = false,
 ): ProgramImage {
 	const runtimePlan = lowerVerifiedExecutionToRuntimePlan(program);
 	const runtime = runtimePlan.runtime;
@@ -1610,12 +1612,13 @@ export function lowerVerifiedExecutionToProgramImage(
 		},
 		diagnostics: {},
 	};
-	if (profile) {
+	if (profile || pgoTraining) {
+		definition.diagnostics.pgoTraining = pgoTraining;
 		definition.diagnostics.sourceCallSites = context.data.sourceCallSites;
 		definition.diagnostics.profileFunctions = program.functionMap.executionToCore.map(
 			(id) => program.core.function(id).metadata.sourceOrigin,
 		);
-		buildProfileMetadata(program.core, context, definition);
+		if (profile) buildProfileMetadata(program.core, context, definition);
 	}
 	if (profile) {
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(

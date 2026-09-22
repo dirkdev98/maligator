@@ -28,6 +28,7 @@ export interface CoreHostInstallCandidate {
  * copied into this closed contract instead.
  */
 export interface CoreProgramData {
+	readonly moduleExports?: ReadonlyArray<{ path: string; name: string; slot: number }>;
 	readonly sourceCallSites?: ReadonlyArray<SourceCallSite>;
 	readonly entrypointPath: string;
 	readonly moduleEvaluationOrder: ReadonlyArray<string>;

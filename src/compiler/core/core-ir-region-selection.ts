@@ -84,6 +84,7 @@ import type {
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
+import type { CorePgoHints } from "./core-pgo.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
@@ -1153,6 +1154,7 @@ function guardedCallOpportunities(
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
+	pgo?: CorePgoHints,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
 	const instanceMethodHints = coreInstanceMethodHints(program);
@@ -1208,6 +1210,7 @@ function guardedCallOpportunities(
 			}
 			candidates.push({
 				kind: "guarded-call",
+				exposure: pgo?.callAttempts(caller, site.instruction),
 				caller,
 				generatedCodeCost: targetFunctions.length,
 				compilerWorkCost: 1,
@@ -1280,6 +1283,7 @@ function directEntryOpportunities(
 	localCandidates: (
 		functionId: CoreFunctionId,
 	) => ReadonlyArray<CorePendingOptimizationCandidate>,
+	pgo?: CorePgoHints,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
@@ -1439,6 +1443,7 @@ function directEntryOpportunities(
 		const generatedCodeCost = Math.max(8, [...fn.instructionIds()].length);
 		candidates.push({
 			kind: "direct-entry",
+			exposure: pgo?.functionEntries(target),
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
@@ -1767,6 +1772,7 @@ function claim(
 }
 
 export interface BuildCoreOptimizationPlanOptions {
+	readonly pgo?: CorePgoHints;
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly candidateService?: CoreTransformCandidateService;
 	readonly perFunctionExpansions?: number;
@@ -1856,6 +1862,7 @@ export function buildCoreOptimizationPlan(
 			if (input.discovery === undefined) continue;
 			opportunities.push({
 				kind: "local",
+				exposure: options.pgo?.functionEntries(input.function),
 				caller: input.function,
 				generatedCodeCost: 1,
 				...input.discovery,
@@ -1863,14 +1870,32 @@ export function buildCoreOptimizationPlan(
 			});
 		}
 		opportunities.push(
-			...guardedCallOpportunities(program, summaries, liveFunctions, analyses),
+			...guardedCallOpportunities(
+				program,
+				summaries,
+				liveFunctions,
+				analyses,
+				options.pgo,
+			),
 		);
 		opportunities.push(
-			...directEntryOpportunities(program, summaries, live, analyses, resolveLocal),
+			...directEntryOpportunities(
+				program,
+				summaries,
+				live,
+				analyses,
+				resolveLocal,
+				options.pgo,
+			),
 		);
 	}
 	opportunities.sort(
 		(left, right) =>
+			(options.pgo === undefined
+				? 0
+				: (left.exposure === undefined ? 1 : 0) -
+						(right.exposure === undefined ? 1 : 0) ||
+					(right.exposure ?? 0) - (left.exposure ?? 0)) ||
 			left.priorityScore - right.priorityScore ||
 			left.generatedCodeCost - right.generatedCodeCost ||
 			left.caller - right.caller ||
@@ -1905,7 +1930,13 @@ export function buildCoreOptimizationPlan(
 	const claimed = new Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>();
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
+	if (options.pgo !== undefined) service.enablePgoScheduling();
 	for (const opportunity of opportunities) {
+		if (options.pgo !== undefined && opportunity.exposure === 0) {
+			discovery.skipped++;
+			increment(discovery.skippedByReason, "observed-zero");
+			continue;
+		}
 		const cost =
 			opportunity.kind === "local" && provenLocal.has(opportunity.caller)
 				? { ...opportunity, compilerWorkCost: 0 }
@@ -1929,7 +1960,10 @@ export function buildCoreOptimizationPlan(
 		discovery.compilerWork += cost.compilerWorkCost;
 		for (const candidate of opportunity.resolve()) {
 			increment(discoveredByKind, candidate.budget.kind);
-			const budget = candidate.budget;
+			const budget =
+				options.pgo === undefined
+					? candidate.budget
+					: { ...candidate.budget, exposure: opportunity.exposure };
 			if (service.offer(budget)) byBudget.set(budget, candidate);
 		}
 

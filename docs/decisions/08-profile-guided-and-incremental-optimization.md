@@ -575,3 +575,136 @@ keys survive unrelated insertion; changing the owning function invalidates its
 call keys. VM training must add independent event anchors after argument/spread
 completion, preserve those anchors through lowering, and report uninstrumented
 sites separately from observed zero.
+
+## D014 — 2026-09-22 — VM training capture and explicit merge
+
+**Status:** Implemented; focused VM and format checks passed. **Refines:** D003.
+**Supersedes:** None.
+
+Training uses a separate `MAL_PGO` runtime feature and an interpreter image. It does
+not enable the diagnostic sampler, allocation histograms, or compiler timers.
+Optional Core transforms and frontend self-tail-call rewriting are disabled in
+training. A fresh frame increments function entry before JavaScript parameter
+initialization; generator/async resumes do not increment entry again. Original
+invocation markers execute after argument and spread evaluation. An invalid callee
+still records an attempt; an argument throw or optional-chain short circuit does
+not. Hidden spread arrays define own properties so inherited setters cannot change
+training behavior.
+
+Counters are bounded unsigned 64-bit integers, with saturating arithmetic and an
+explicit overflow flag. Raw schema/semantics version 1 contains dense function and
+source-site arrays plus a capture identity. Actual emitted markers determine which
+sites are instrumented. Uninstrumented, unknown-owner, and observed-zero sites are
+separate coverage states. Wire schema advances to 59 for the training-only marker.
+Runtime function IDs remain local to the capture; source identities own merging.
+
+A run starts with an incomplete manifest. Only successful process completion plus
+validated atomic raw publication produces a complete manifest. Normal fast exits
+flush explicitly, independently of optional VM teardown. Unsupported runtime image
+changes or nested VM execution invalidate the capture. Dynamic-code coverage is
+not inferred from existing IDs.
+
+Use explicit commands:
+
+```sh
+node ./src/index.ts run app.mjs --pgo-train --pgo-workload representative -- input.json
+node ./src/index.ts pgo merge .cache/pgo/runs/<run-id> --out .cache/pgo/selected.json
+node ./src/index.ts build app.mjs --production --pgo-use .cache/pgo/selected.json
+```
+
+Merge reads only the supplied complete captures, checks raw/map identities and
+checksums, deduplicates run IDs, rejects conflicting duplicates, and orders inputs
+deterministically. Counts sum with equal per-run weight and saturation. Merged
+profiles are immutable: publishing the same content is idempotent; a different
+profile requires another path. Training and diagnostic profiling, training and
+profile use, and training deployment/wire-only artifacts are mutually exclusive.
+`build --pgo-train` emits a training binary and `.pgo.json` map; `run --pgo-train`
+owns the complete capture lifecycle.
+
+Focused native coverage includes callbacks, default-parameter throws, failed
+calls, throwing spread iterators, optional calls, recursion, generator creation and
+resumption, async continuation, constructors, super, tagged templates, and mutable
+array-prototype setters. Format coverage includes exact values above 2^53, partial
+files, incomplete exits, corruption, duplicate inputs, and overflow.
+
+## D015 — 2026-09-22 — Profile exposure selects compiler work
+
+**Status:** Implemented; focused ordering and cache checks passed. **Refines:** D004.
+**Supersedes:** None.
+
+`--pgo-use` loads a validated merged profile. A memoized adapter matches exact
+source function revisions and original source-call keys against constructed Core.
+It lives outside compiler facts: profile observations never justify semantic
+eligibility, guard removal, representation changes, or unreachable-code deletion.
+Unmatched revisions remain unknown. Generator entry does not estimate body heat.
+Calls copied into another owner and new specialized function IDs remain unknown;
+verified equivalent-call rewrites preserve the original call reference.
+
+Cross-call candidates use measured attempts instead of static loop frequency in
+profitability scores, retaining existing guard and generated-code costs. Measured
+and unknown candidates occupy distinct ordering categories. Static-argument
+specialization skips observed-zero calls before asking for static-value analysis.
+Late local/direct-entry opportunities use function-entry exposure; this is an
+estimate for regions, not a claim to have counted each region. Heat admission runs
+before lazy specialization proof resolution. Observed-zero work does not consume
+the unknown allowance.
+
+The shared candidate service reserves 20% of compiler-work and generated-code
+budgets for unknown candidates; measured candidates get the remainder. Discovery
+and application both consume their category's allowance across phases. The first
+policy deliberately does not transfer unused allowance. Static scoring orders the
+unknown category and remains a tie-break within measured exposure. Profile digest
+and the scheduling/adapter implementation identity participate in frontend cache
+keys; filenames do not.
+
+Focused checks show a measured count of two beating a static-loop count of one,
+a measured count of one beating an unknown loop, and only the hotter function
+requesting a proof under a tight budget. Zero exposure requests no lazy local proof.
+The remaining cross-call target/bridge discovery is partly eager; this stage does
+not claim all compiler analysis has become demand driven. Representative workload
+coverage, quota tuning, and end-to-end performance acceptance remain later work.
+
+## D016 — 2026-09-22 — Persistent Core module pilot
+
+**Status:** Implemented as an explicit compiler API; focused round-trip and native
+checks passed. **Refines:** D005, D006 and stage 3 of D009. **Supersedes:** None.
+
+`loadOrCompileCoreModule` accepts one JavaScript ESM source, a logical module key,
+its current diagnostic path, and an explicit cache directory. The first boundary
+supports strict functions, module-private mutable globals, live exported slots,
+scalar constants/arithmetic, branches, and internal calls. Imports, unresolved
+external globals, captured environments, classes, suspension, templates, opaque
+facts, effect refinements, target representations, guards and switches are rejected
+as unsupported. The caller retains responsibility for its ordinary fallback.
+
+The persisted record contains canonical Core and a completed `conservative-local-v1`
+variant. The recipe runs the local optimizer without application facts or program
+flow. Exhausted work cannot publish a completed variant. It does not persist solver
+queues, register allocation, or an interrupted pass. Cache identity covers lossless
+UTF-16 source content, logical module key, boundary/schema, recipe limits, and a
+dedicated transitive producer fingerprint including the codec and importer.
+
+A warm hit validates and imports the selected optimized artifact, skipping source
+parsing, semantic/Core frontend construction and completed local optimization.
+Canonical Core is decoded only when requested. Artifact verification and relocation
+still perform work; the pilot does not claim their cost is zero. Export-slot
+projection is opt-in, so ordinary builds pay no extra export-table construction.
+
+The codec uses an explicit opcode/attribute boundary. Import relocates functions,
+private globals, strings, source positions, blocks and SSA values. Special numeric
+values and UTF-16 units survive serialization. It validates in temporary Core before
+mutating the destination, because Core editors do not support rollback. Each import
+returns an initializer and live export slots; the caller invokes the initializer
+before using them. Each module instance receives separate state.
+
+Native acceptance imports canonical, cold optimized, and warm optimized variants
+behind existing function/global/string/source-position IDs. All return the same
+values, and mutating one instance leaves the others unchanged. The assembly builds
+its current plan and lowers normally without rerunning the completed local recipe.
+Source/recipe changes and corrupt receipts miss; unsupported boundaries fail before
+destination mutation. Warm evidence reports zero frontend and optimizer functions.
+
+This is a persistent Core pilot, not automatic Meriyah or dependency-graph reuse.
+Stage 4 must integrate module selection, dependency contracts, initializers and
+closure boundaries into ordinary builds, then measure reuse on representative
+applications before widening this boundary.

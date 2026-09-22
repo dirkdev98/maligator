@@ -91,6 +91,7 @@ interface LoweredParallelCopy {
 }
 
 const REGISTERLESS_CORE_OPERATIONS: ReadonlySet<string> = new Set([
+	"pgoCall",
 	"asyncStart",
 	"createPrivateNames",
 	"envCopy",

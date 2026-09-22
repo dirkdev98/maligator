@@ -128,6 +128,7 @@ export const BYTECODE_OPERATIONS = [
 	"BUILTIN_ERROR",
 	"PREPARED_STRING_COMPARE",
 	"PRECISE_NUMBER_SUM",
+	"PGO_CALL",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

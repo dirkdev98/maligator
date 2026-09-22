@@ -218,6 +218,9 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				args,
 				store,
 				attributes: {
+					...(typeof fn.instructionAttributes(instruction).sourceCall === "number"
+						? { sourceCall: fn.instructionAttributes(instruction).sourceCall! }
+						: {}),
 					operation,
 					...(construct ? { construct: true } : {}),
 					...(argumentMode === undefined ? {} : { argumentMode }),

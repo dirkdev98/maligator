@@ -1,3 +1,4 @@
+#include "pgo.h"
 #include "vm.h"
 #include "perf_stats.h"
 #include "profile.h"
@@ -132,6 +133,7 @@ int main(int argc, char **argv) {
 
 	int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 	mal_profile_finish(&vm);
+	mal_pgo_finish(&vm);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

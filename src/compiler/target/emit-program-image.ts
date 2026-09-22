@@ -2098,6 +2098,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_TRY_BEGIN }`;
 		case "TRY_END":
 			return `{ .opcode = MAL_OP_TRY_END }`;
+		case "PGO_CALL":
+			return `{ .opcode = MAL_OP_PGO_CALL, .as.pgo_call = { .site = ${instruction.site} } }`;
 		case "GENERATOR_START":
 			return `{ .opcode = MAL_OP_GENERATOR_START }`;
 		case "ASYNC_START":

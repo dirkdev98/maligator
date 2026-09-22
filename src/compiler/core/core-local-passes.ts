@@ -1146,6 +1146,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						: arguments_.slice(0, exactRewrite.forwardedArgumentLimit);
 				editor.replaceInstruction(instruction, "callKnown", [receiver, ...forwarded], {
 					attributes: {
+						...(typeof fn.instructionAttributes(instruction).sourceCall === "number"
+							? { sourceCall: fn.instructionAttributes(instruction).sourceCall! }
+							: {}),
 						operation: exactRewrite.id,
 						specialized: exactRewrite.id,
 						worldAssumptions: {

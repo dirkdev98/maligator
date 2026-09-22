@@ -15,6 +15,7 @@ import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import type { CorePgoHints } from "../src/compiler/core/core-pgo.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -43,7 +44,11 @@ import {
 	programAnalysisContext,
 } from "./helpers/core-program-analysis.ts";
 
-function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits) {
+function runTransforms(
+	program: CoreProgram,
+	limits?: CoreTransformBudgetLimits,
+	pgo?: CorePgoHints,
+) {
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
 	const analyses = new CoreAnalysisManager(program, context, report);
@@ -64,6 +69,7 @@ function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits)
 		limits,
 		undefined,
 		candidates,
+		pgo,
 	);
 	return {
 		...result,
@@ -362,6 +368,43 @@ describe("bounded Core cross-call transforms", () => {
 			verifyCoreProgram(program, { stage: "pre-target" });
 		},
 	);
+
+	it("selects measured exposure over a static loop under a one-inline budget", () => {
+		const program = analysisProgram();
+		const loop = appendBudgetCaller(program, 2, true);
+		const hot = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+		runTransforms(
+			program,
+			{ ...TINY_CODE_BUDGET, perCallerGeneratedCode: 1, programGeneratedCode: 1 },
+			{
+				digest: "fixture",
+				functionEntries: () => undefined,
+				callAttempts: (id) => (id === hot.function ? 2 : 1),
+			},
+		);
+		expect(callInstructions(program, hot.function)).toEqual([]);
+		expect(callInstructions(program, loop.function)).toEqual([loop.call]);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("keeps measured counts separate from unknown static loop weights", () => {
+		const program = analysisProgram();
+		const unknown = appendBudgetCaller(program, 2, true);
+		const hot = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+		runTransforms(
+			program,
+			{ ...TINY_CODE_BUDGET, perCallerGeneratedCode: 1, programGeneratedCode: 1 },
+			{
+				digest: "fixture",
+				functionEntries: () => undefined,
+				callAttempts: (id) => (id === hot.function ? 1 : undefined),
+			},
+		);
+		expect(callInstructions(program, hot.function)).toEqual([]);
+		expect(callInstructions(program, unknown.function)).toEqual([unknown.call]);
+	});
 
 	it("prefers a smaller inline over an earlier larger body at the same frequency", () => {
 		const program = analysisProgram();
