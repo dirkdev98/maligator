@@ -189,12 +189,19 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			function: fn,
 		});
 		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBe(stored);
+		expect(memory.statistics.indexedInstructions).toBe(0);
+		expect(memory.statistics.solvedPartitions).toBe(0);
+		const scanned = memory.statistics.localReadInstructions;
+		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBe(stored);
+		expect(memory.statistics.localReadInstructions).toBe(scanned);
 		expect(memory.statistics.heapAccessesResolved).toBe(0);
 		const result = report.finish(core, { directEntries: [], specializations: [] });
 		expect(result.analyses.some(({ analysis }) => analysis === "local-fact-bundle")).toBe(
 			false,
 		);
 		expect(result.counters.provenanceEscapeChecks).toBe(0);
+		expect(result.counters.memoryLocalReadAnswers).toBe(1);
+		expect(result.counters.memoryLocalReadInstructions).toBe(scanned);
 	});
 
 	it("proves only queried heap allocations and reuses their proofs", () => {

@@ -22,6 +22,7 @@ import type {
 	CoreEffectDomain,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreInstructionEffects,
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
 	CoreValueId,
@@ -313,11 +314,108 @@ export class CoreMemoryValueSources {
 	}
 }
 
+function memoryFamilyIsKilled(
+	family: CoreMemoryFamily,
+	effects: CoreInstructionEffects,
+	accesses: ReadonlyArray<CoreMemoryAccess>,
+): boolean {
+	if (effects.callsUserCode || effects.maySuspend) return true;
+	for (const domain of CORE_MEMORY_FAMILY_DOMAINS[family]) {
+		let covered = false;
+		for (const access of accesses) {
+			if (
+				access.mode !== "write" ||
+				!CORE_MEMORY_FAMILY_DOMAINS[coreMemoryLocationFamily(access.location)].includes(
+					domain,
+				)
+			)
+				continue;
+			covered = true;
+			if (!coreMemoryLocationIsExact(access.location)) return true;
+		}
+		if (!covered && effects.writes.includes(domain)) return true;
+	}
+	return false;
+}
+
+type CoreSlotMemoryLocation = Exclude<
+	CoreExactMemoryLocation,
+	{ readonly kind: "object-slot" | "element" }
+>;
+
+function sameSlotLocation(
+	left: CoreMemoryLocation,
+	right: CoreSlotMemoryLocation,
+): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "global-slot":
+		case "local-slot":
+			return "slot" in right && left.slot === right.slot;
+		case "captured-slot":
+			return (
+				right.kind === "captured-slot" &&
+				left.owner === right.owner &&
+				left.index === right.index
+			);
+		case "activation-this":
+			return true;
+		default:
+			return false;
+	}
+}
+
+const LOCAL_MEMORY_READ_UNRESOLVED = Symbol("local-memory-read-unresolved");
+type LocalMemoryReadValue = CoreValueId | undefined | typeof LOCAL_MEMORY_READ_UNRESOLVED;
+
+function localMemoryRead(
+	fn: CoreFunctionStore,
+	read: CoreInstructionId,
+	location: CoreSlotMemoryLocation,
+): { readonly value: LocalMemoryReadValue; readonly instructions: number } {
+	if (
+		!coreMemoryAccesses(fn, read).some(
+			(access) => access.mode === "read" && sameSlotLocation(access.location, location),
+		)
+	)
+		return { value: undefined, instructions: 0 };
+	let instructions = 0;
+	for (
+		let instruction = fn.instructionPrevious(read);
+		instruction !== undefined && instructions < 32;
+		instruction = fn.instructionPrevious(instruction)
+	) {
+		instructions++;
+		const effects = coreInstructionEffects(fn, instruction);
+		if (
+			!effects.callsUserCode &&
+			!effects.maySuspend &&
+			!CORE_MEMORY_FAMILY_DOMAINS[location.kind].some((domain) =>
+				effects.writes.includes(domain),
+			)
+		)
+			continue;
+		const accesses = coreMemoryAccesses(fn, instruction);
+		// The full solver compares kill versions before the store and before the read.
+		if (memoryFamilyIsKilled(location.kind, effects, accesses))
+			return { value: undefined, instructions };
+		for (let index = accesses.length - 1; index >= 0; index--) {
+			const access = accesses[index]!;
+			if (access.mode === "write" && sameSlotLocation(access.location, location))
+				return { value: access.value, instructions };
+		}
+	}
+	return { value: LOCAL_MEMORY_READ_UNRESOLVED, instructions };
+}
+
 export interface CoreMemoryVersions {
 	readonly function: CoreFunctionId;
 	readonly statistics: {
 		readonly accesses: number;
 		readonly indexedInstructions: number;
+		readonly localReadAttempts: number;
+		readonly localReadAnswers: number;
+		readonly localReadInstructions: number;
 		readonly heapAccessesResolved: number;
 		readonly events: number;
 		readonly compactedEvents: number;
@@ -370,6 +468,9 @@ function prepareMemoryVersions(
 	const statistics = {
 		accesses: 0,
 		indexedInstructions: 0,
+		localReadAttempts: 0,
+		localReadAnswers: 0,
+		localReadInstructions: 0,
 		heapAccessesResolved: 0,
 		events: 0,
 		compactedEvents: 0,
@@ -695,26 +796,7 @@ function prepareMemoryVersions(
 								coreMemoryLocationFamily(access.location) === partition.family &&
 								exactReads.has(locationTable.id(access.location)),
 						);
-						for (const domain of CORE_MEMORY_FAMILY_DOMAINS[partition.family]) {
-							let covered = false;
-							for (const access of raw) {
-								if (
-									access.mode !== "write" ||
-									!CORE_MEMORY_FAMILY_DOMAINS[
-										coreMemoryLocationFamily(access.location)
-									].includes(domain)
-								)
-									continue;
-								covered = true;
-								if (!coreMemoryLocationIsExact(access.location)) defines = true;
-							}
-							if (
-								effects.callsUserCode ||
-								effects.maySuspend ||
-								(!covered && effects.writes.includes(domain))
-							)
-								defines = true;
-						}
+						defines = memoryFamilyIsKilled(partition.family, effects, raw);
 						if (defines) familyWidenings++;
 					}
 				}
@@ -1004,6 +1086,13 @@ function prepareMemoryVersions(
 		return versions;
 	};
 	const readHashes = new Map<CoreInstructionId, number>();
+	const localReads = new Map<
+		CoreInstructionId,
+		{
+			readonly location: CoreMemoryLocationId;
+			readonly value: LocalMemoryReadValue;
+		}
+	>();
 	return Object.freeze({
 		function: fn.id,
 		get statistics() {
@@ -1036,8 +1125,40 @@ function prepareMemoryVersions(
 			);
 		},
 		valueForRead(instruction: CoreInstructionId, location: CoreExactMemoryLocation) {
+			const locationId = locationTable.id(location);
+			const knownSlot = slotByLocation.get(locationId);
+			if (
+				location.kind !== "object-slot" &&
+				location.kind !== "element" &&
+				(knownSlot === undefined || solved[knownSlot] === undefined)
+			) {
+				let local = localReads.get(instruction);
+				if (local?.location !== locationId && !fn.hasActiveEditor) {
+					if (
+						!fn.isInstructionLive(instruction) ||
+						fn.instructionKind(instruction) !== "operation" ||
+						!cfg.reachable.has(fn.instructionBlock(instruction))
+					)
+						return undefined;
+					const result = runOwner(CORE_OPTIMIZATION_OWNER.memoryEventExtraction, () =>
+						localMemoryRead(fn, instruction, location),
+					);
+					local = { location: locationId, value: result.value };
+					localReads.set(instruction, local);
+					addStatistics({
+						localReadAttempts: 1,
+						localReadAnswers: result.value === LOCAL_MEMORY_READ_UNRESOLVED ? 0 : 1,
+						localReadInstructions: result.instructions,
+					});
+				}
+				if (
+					local?.location === locationId &&
+					local.value !== LOCAL_MEMORY_READ_UNRESOLVED
+				)
+					return local.value;
+			}
 			const slots = slotsForRead(instruction);
-			const slot = slotByLocation.get(locationTable.id(location));
+			const slot = slotByLocation.get(locationId);
 			if (slot === undefined || !slots?.has(slot)) return undefined;
 			const version = solveSlot(slot).get(instruction);
 			if (version === undefined) return undefined;
@@ -1061,6 +1182,9 @@ const MEMORY_FUNCTION_DEPENDENCIES = [
 const EMPTY_MEMORY_STATISTICS: CoreMemoryVersions["statistics"] = Object.freeze({
 	accesses: 0,
 	indexedInstructions: 0,
+	localReadAttempts: 0,
+	localReadAnswers: 0,
+	localReadInstructions: 0,
 	heapAccessesResolved: 0,
 	events: 0,
 	compactedEvents: 0,

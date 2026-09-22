@@ -153,6 +153,9 @@ export interface CoreCompilerWorkCounters {
 	readonly valueClassContainmentChecks: number;
 	readonly memoryAccesses: number;
 	readonly memoryInstructionsIndexed: number;
+	readonly memoryLocalReadAttempts: number;
+	readonly memoryLocalReadAnswers: number;
+	readonly memoryLocalReadInstructions: number;
 	readonly memoryHeapAccessesResolved: number;
 	readonly memoryEvents: number;
 	readonly memoryCompactedEvents: number;
@@ -308,6 +311,9 @@ const COUNTER_KEYS = [
 	"valueClassContainmentChecks",
 	"memoryAccesses",
 	"memoryInstructionsIndexed",
+	"memoryLocalReadAttempts",
+	"memoryLocalReadAnswers",
+	"memoryLocalReadInstructions",
 	"memoryHeapAccessesResolved",
 	"memoryEvents",
 	"memoryCompactedEvents",
@@ -895,6 +901,9 @@ export class CoreOptimizationReportBuilder {
 				readonly statistics?: {
 					readonly accesses?: number;
 					readonly indexedInstructions?: number;
+					readonly localReadAttempts?: number;
+					readonly localReadAnswers?: number;
+					readonly localReadInstructions?: number;
 					readonly heapAccessesResolved?: number;
 					readonly events?: number;
 					readonly compactedEvents?: number;
@@ -911,6 +920,9 @@ export class CoreOptimizationReportBuilder {
 		).statistics;
 		this.increment("memoryAccesses", statistics?.accesses ?? 0);
 		this.increment("memoryInstructionsIndexed", statistics?.indexedInstructions ?? 0);
+		this.increment("memoryLocalReadAttempts", statistics?.localReadAttempts ?? 0);
+		this.increment("memoryLocalReadAnswers", statistics?.localReadAnswers ?? 0);
+		this.increment("memoryLocalReadInstructions", statistics?.localReadInstructions ?? 0);
 		this.increment("memoryHeapAccessesResolved", statistics?.heapAccessesResolved ?? 0);
 		this.increment("memoryEvents", statistics?.events ?? 0);
 		this.increment("memoryCompactedEvents", statistics?.compactedEvents ?? 0);

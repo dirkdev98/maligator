@@ -12,6 +12,7 @@ import {
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
 } from "../src/compiler/core/core-ir-memory.ts";
+import type { CoreExactMemoryLocation } from "../src/compiler/core/core-ir-memory.ts";
 import {
 	CORE_OPCODES,
 	coreOpcodeRegistry,
@@ -318,10 +319,13 @@ describe("Core IR", () => {
 		const memory = analyzeCoreMemoryVersions(program, id);
 		expect(memory.statistics.accesses).toBe(0);
 		expect(memory.valueForRead(reads[0]!, { kind: "global-slot", slot: 0 })).toBe(stored);
-		expect(memory.statistics.solvedPartitions).toBe(2);
+		expect(memory.statistics.solvedPartitions).toBe(0);
 		const hash = memory.readHash(reads[0]!);
 		expect(memory.readsEquivalent(reads[0]!, reads.at(-1)!)).toBe(true);
 		expect(memory.statistics.solvedPartitions).toBe(2);
+		expect(memory.valueForRead(reads[1]!, { kind: "global-slot", slot: 1 })).toBe(stored);
+		expect(memory.statistics.solvedPartitions).toBe(2);
+		memory.readHash(reads[1]!);
 		expect(memory.valueForRead(reads[1]!, { kind: "global-slot", slot: 1 })).toBe(stored);
 		expect(memory.statistics.solvedPartitions).toBe(3);
 		expect(memory.readHash(reads[0]!)).toBe(hash);
@@ -364,6 +368,261 @@ describe("Core IR", () => {
 			);
 			expect(() => memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toThrow(
 				"Stale memory-version analysis",
+			);
+		},
+	);
+
+	it.each([
+		{
+			load: "loadGlobal",
+			store: "storeGlobal",
+			attributes: { index: 1 },
+			location: { kind: "global-slot", slot: 1 },
+		},
+		{
+			load: "loadLocal",
+			store: "storeLocal",
+			attributes: { index: 1 },
+			location: { kind: "local-slot", slot: 1 },
+		},
+		{
+			load: "loadCaptured",
+			store: "storeCaptured",
+			attributes: { functionIndex: 2, index: 1 },
+			location: { kind: "captured-slot", owner: 2, index: 1 },
+		},
+		{
+			load: "loadThis",
+			store: "setThis",
+			attributes: {},
+			location: { kind: "activation-this" },
+		},
+	] as const)(
+		"resolves $load locally and preserves the answer after full analysis",
+		({ load, store, attributes, location }) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.appendInstruction(entry, store, [stored!], { attributes });
+			builder.appendInstruction(entry, "storeLocal", [stored!], {
+				attributes: { index: 0 },
+			});
+			const [loaded] = builder.appendInstruction(entry, load, [], { attributes });
+			const read = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const id = builder.finish(entry).function;
+			const memory = analyzeCoreMemoryVersions(program, id);
+			expect(memory.valueForRead(read, location)).toBe(stored);
+			expect(memory.statistics).toMatchObject({
+				indexedInstructions: 0,
+				solvedPartitions: 0,
+			});
+			const other: CoreExactMemoryLocation = {
+				kind: "captured-slot",
+				owner: 3,
+				index: 1,
+			};
+			expect(memory.valueForRead(read, other)).toBeUndefined();
+			expect(memory.valueForRead(read, location)).toBe(stored);
+			memory.readHash(read);
+			expect(memory.valueForRead(read, location)).toBe(stored);
+			const editor = CoreEditor.open(program, id);
+			editor.appendStringConstants([[120]]);
+			editor.commit();
+			expect(() => memory.valueForRead(read, location)).toThrow(
+				"Stale memory-version analysis",
+			);
+		},
+	);
+
+	it.each(["call", "suspend", "family", "unmodeled", "unknown-value"] as const)(
+		"does not forward past a local %s barrier, including one that declares a store",
+		(barrier) => {
+			const opcodes = new CoreOpcodeRegistry();
+			for (const opcode of CORE_OPCODES)
+				opcodes.define(coreOpcodeRegistry.require(opcode));
+			opcodes.define({
+				opcode: "barrier",
+				inputs: coreArity(1),
+				outputs: coreArity(0),
+				discardable: false,
+				attributeRelocations: [],
+				effects: {
+					...CORE_NO_EFFECTS,
+					writes: ["global-slot"],
+					callsUserCode: barrier === "call",
+					maySuspend: barrier === "suspend",
+				},
+				accesses:
+					barrier === "unmodeled"
+						? []
+						: [
+								{
+									family: "global-slot",
+									mode: "write",
+									attributes: barrier === "family" ? [] : ["index"],
+									...(barrier === "unknown-value" ? {} : { valueOperand: 0 }),
+								},
+							],
+			});
+			const program = new CoreProgram(opcodes, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.appendInstruction(entry, "storeGlobal", [stored!], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(entry, "barrier", [stored!], {
+				attributes: { index: 0 },
+			});
+			const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const read = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
+			expect(memory.statistics.indexedInstructions).toBe(0);
+			memory.readHash(read);
+			expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
+		},
+	);
+
+	it("uses refined effects locally and invalidates cached answers after refinement edits", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		const proof = builder.addFact({
+			kind: "local-call-effects",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "local-call-effects" },
+			obligations: [],
+			origin: "test",
+		});
+		builder.appendInstruction(entry, "call", [stored!, stored!], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+		});
+		const call = builder.bodyInstructionIds(entry).at(-1)!;
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const read = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const id = builder.finish(entry).function;
+		const location = { kind: "global-slot", slot: 0 } as const;
+		const memory = analyzeCoreMemoryVersions(program, id);
+		expect(memory.valueForRead(read, location)).toBe(stored);
+		expect(memory.statistics.indexedInstructions).toBe(0);
+		const editor = CoreEditor.open(program, id);
+		editor.clearInstructionEffectRefinement(call);
+		editor.commit();
+		expect(() => memory.valueForRead(read, location)).toThrow(
+			"Stale memory-version analysis",
+		);
+		expect(
+			analyzeCoreMemoryVersions(program, id).valueForRead(read, location),
+		).toBeUndefined();
+	});
+
+	it("ignores refined-away slot writes and reads in local proofs", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [discarded] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 8 },
+		});
+		const proof = builder.addFact({
+			kind: "slot-effects",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "slot-effects" },
+			obligations: [],
+			origin: "test",
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [discarded!], {
+			attributes: { index: 0 },
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+		});
+		builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+		});
+		const omitted = builder.bodyInstructionIds(entry).at(-1)!;
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const read = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+		const location = { kind: "global-slot", slot: 0 } as const;
+		expect(memory.valueForRead(omitted, location)).toBeUndefined();
+		expect(memory.valueForRead(read, location)).toBe(stored);
+		expect(memory.statistics.indexedInstructions).toBe(0);
+		memory.readHash(read);
+		expect(memory.valueForRead(omitted, location)).toBeUndefined();
+		expect(memory.valueForRead(read, location)).toBe(stored);
+	});
+
+	it.each(["unreachable", "predecessor", "long-block"] as const)(
+		"preserves %s answers when local lookup cannot supply a value",
+		(flow) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const body = flow === "long-block" ? entry : builder.createBlock();
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.appendInstruction(
+				flow === "unreachable" ? body : entry,
+				"storeGlobal",
+				[stored!],
+				{ attributes: { index: 0 } },
+			);
+			if (flow === "unreachable")
+				builder.setTerminator(entry, { kind: "return", value: stored! });
+			if (flow === "predecessor")
+				builder.setTerminator(entry, {
+					kind: "jump",
+					edge: { block: body, arguments: [] },
+				});
+			if (flow === "long-block")
+				for (let index = 0; index < 40; index++)
+					builder.appendInstruction(body, "createNumber", [], {
+						attributes: { value: index },
+					});
+			const [loaded] = builder.appendInstruction(body, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const read = builder.bodyInstructionIds(body).at(-1)!;
+			builder.setTerminator(body, { kind: "return", value: loaded! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			const location = { kind: "global-slot", slot: 0 } as const;
+			expect(memory.valueForRead(read, location)).toBe(
+				flow === "unreachable" ? undefined : stored,
+			);
+			if (flow === "long-block") expect(memory.statistics.localReadInstructions).toBe(32);
+			memory.readHash(read);
+			expect(memory.valueForRead(read, location)).toBe(
+				flow === "unreachable" ? undefined : stored,
 			);
 		},
 	);
@@ -555,6 +814,7 @@ describe("Core IR", () => {
 			expect(memory.valueForRead(exchange, location)).toBe(second);
 			expect(memory.valueForRead(afterExchange, location)).toBe(first);
 			expect(memory.valueForRead(final, location)).toBe(unknown ? undefined : second);
+			memory.readHash(final);
 			expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
 		},
 	);
@@ -768,6 +1028,7 @@ describe("Core IR", () => {
 
 		const read = builder.bodyInstructionIds(entry).at(-1)!;
 		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
+		memory.readHash(read);
 		expect(memory.statistics.familyWidenings).toBe(1);
 	});
 
