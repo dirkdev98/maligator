@@ -420,8 +420,18 @@ function privateArrayFromSeeds(
 	context: CoreCompilationContext,
 ): Array<CorePrivateArraySeed> {
 	const seeds: Array<CorePrivateArraySeed> = [];
+	let roots: ReadonlyMap<CoreValueId, CoreValueId> | undefined;
 	for (const instruction of fn.instructionIds()) {
-		const result = coreExactArrayFromCallResult(program, fn, cfg, context, instruction);
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			opcode !== "call" &&
+			(opcode !== "callKnown" ||
+				fn.instructionAttributes(instruction).operation !== "Array.from")
+		)
+			continue;
+		roots ??= coreCanonicalValueRoots(fn, cfg);
+		const result = coreExactArrayFromCallResult(program, fn, roots, context, instruction);
 		if (result === undefined) continue;
 		seeds.push({ allocation: instruction, root: result });
 	}

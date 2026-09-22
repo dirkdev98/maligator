@@ -1205,7 +1205,7 @@ describe("Core control-flow analyses and passes", () => {
 			coreExactArrayFromCallResult(
 				program,
 				fn,
-				buildCoreControlFlow(program, functionId),
+				coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId)),
 				lockedArrayContext,
 				definingInstruction(fn, result!),
 			),

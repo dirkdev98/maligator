@@ -19,10 +19,7 @@ import type {
 } from "../shared/static-values.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
-	coreCanonicalValueRoots,
-} from "./core-ir-control-flow.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
@@ -69,7 +66,7 @@ function coreStringConstantIs(
 export function coreExactArrayFromCallResult(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
-	cfg: CoreControlFlow,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	context: CoreCompilationContext,
 	instruction: CoreInstructionId,
 ): CoreValueId | undefined {
@@ -81,7 +78,6 @@ export function coreExactArrayFromCallResult(
 		return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode !== "call" && opcode !== "callKnown") return undefined;
-	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const definition = (value: CoreValueId): CoreInstructionId | undefined => {
 		const canonical = root(value);
