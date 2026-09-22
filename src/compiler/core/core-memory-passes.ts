@@ -1955,6 +1955,11 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const proofs = context.analysis(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS);
+		const candidates = proofs.proofs.filter(
+			(candidate) =>
+				candidate.mode === "activation-local" && candidate.materializations.length === 0,
+		);
+		if (candidates.length === 0) return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const controlFlowUses = coreValueControlFlowUseMask(fn);
 		const refinements = new Map<CoreValueId, "i32" | "f64" | "boolean">();
@@ -2007,9 +2012,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 			})();
 			return content === "boxed" || !canRefine(value, content) ? "boxed" : content;
 		};
-		for (const candidate of proofs.proofs) {
-			if (candidate.mode !== "activation-local" || candidate.materializations.length > 0)
-				continue;
+		for (const candidate of candidates) {
 			const contents = new Array<CoreAggregateCellContent>(candidate.slotCount).fill(
 				"uninitialized",
 			);

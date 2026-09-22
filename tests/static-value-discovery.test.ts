@@ -667,6 +667,126 @@ it.each([
 	expect(result.structure.genericCalls).toBe(2);
 });
 
+it.each(["loadGlobal", "loadCaptured"] as const)(
+	"defers an unwritten %s cell proof until its consumer",
+	(opcode) => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [loaded] = builder.appendInstruction(entry, opcode, [], {
+			attributes: opcode === "loadGlobal" ? { index: 0 } : { functionIndex: 0, index: 0 },
+		});
+		builder.appendInstruction(entry, "throwIfTdz", [loaded!]);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = program.function(builder.finish(entry).function);
+		let cellQueries = 0;
+		const analysis = new CoreStaticValueAnalysis(
+			program,
+			fn,
+			() => buildCoreControlFlow(program, fn.id),
+			65536,
+			context,
+			undefined,
+			() => {
+				cellQueries++;
+				return undefined;
+			},
+		);
+		expect(analysis.query(loaded!).kind).toBe("unknown");
+		expect(cellQueries).toBe(0);
+		expect(analysis.queryAt(loaded!, fn.blockTerminator(entry)).kind).toBe("unknown");
+		expect(cellQueries).toBe(1);
+	},
+);
+
+it("does not seek slot aliases for a joined array without a shared identity", () => {
+	const program = new CoreProgram(coreOpcodeRegistry);
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{ representation: "boxed" }]);
+	const left = builder.createBlock(),
+		right = builder.createBlock();
+	const merge = builder.createBlock([{ representation: "boxed" }]);
+	const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 7 },
+	});
+	builder.appendInstruction(entry, "storeLocal", [stored!], { attributes: { index: 0 } });
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: builder.blockParameterValue(entry, 0),
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	for (const block of [left, right]) {
+		const [array] = builder.appendInstruction(block, "createArray", [], {
+			attributes: { length: 2 },
+		});
+		builder.setTerminator(block, {
+			kind: "jump",
+			edge: { block: merge, arguments: [array!] },
+		});
+	}
+	builder.appendInstruction(merge, "loadLocal", [], { attributes: { index: 0 } });
+	const joined = builder.blockParameterValue(merge, 0);
+	builder.setTerminator(merge, { kind: "return", value: joined });
+	const fn = program.function(builder.finish(entry).function);
+	const analysis = new CoreStaticValueAnalysis(
+		program,
+		fn,
+		() => buildCoreControlFlow(program, fn.id),
+		65536,
+		context,
+		() => {
+			throw new Error("Identity-less observation requested an unrelated slot");
+		},
+	);
+	const fact = analysis.queryAt(joined, fn.blockTerminator(merge));
+	expect(fact).toMatchObject({ kind: "known", brand: "array", identity: undefined });
+	if (fact.kind !== "known") throw new Error("Expected joined array fact");
+	expect(program.staticDescriptions.description(fact.description)).toMatchObject({
+		kind: "array",
+		length: 2,
+	});
+});
+
+it("does not analyze the unused receiver of Object.create", () => {
+	const program = new CoreProgram(coreOpcodeRegistry);
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [nil] = builder.appendInstruction(entry, "createNull", []);
+	const [callee] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+		attributes: { intrinsic: "Object.create" },
+	});
+	builder.appendInstruction(entry, "storeLocal", [nil!], { attributes: { index: 0 } });
+	const [receiver] = builder.appendInstruction(entry, "loadLocal", [], {
+		attributes: { index: 0 },
+	});
+	const [object] = builder.appendInstruction(
+		entry,
+		"callKnown",
+		[callee!, receiver!, nil!],
+		{
+			attributes: { builtin: "Object.create" },
+		},
+	);
+	builder.setTerminator(entry, { kind: "return", value: object! });
+	const fn = program.function(builder.finish(entry).function);
+	const analysis = new CoreStaticValueAnalysis(
+		program,
+		fn,
+		() => buildCoreControlFlow(program, fn.id),
+		65536,
+		context,
+		() => {
+			throw new Error("Unconsumed receiver requested memory analysis");
+		},
+	);
+	expect(analysis.query(object!)).toMatchObject({
+		kind: "known",
+		brand: "object",
+		prototype: { kind: "null" },
+	});
+});
+
 it("defers private initializer proofs until a read passes its TDZ check", () => {
 	const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 	const writer = new CoreFunctionBuilder(program),

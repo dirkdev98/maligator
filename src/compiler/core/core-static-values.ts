@@ -684,7 +684,10 @@ export class CoreStaticValueAnalysis {
 					aliases.add(this.#fn.kernel.resultAt(result));
 					continue;
 				}
-				if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
+				if (
+					initial.identity !== undefined &&
+					["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)
+				) {
 					const output = this.#fn.kernel.resultAt(
 						this.#fn.kernel.instructionResultStart(instruction),
 					);
@@ -1313,16 +1316,18 @@ export class CoreStaticValueAnalysis {
 								owner: attributes.functionIndex as number,
 								index: attributes.index as number,
 							};
-			const input = (this.#memorySources ??= new CoreMemoryValueSources(fn)).maySupply(
-				location,
-			)
+			const maySupply = (this.#memorySources ??= new CoreMemoryValueSources(
+				fn,
+			)).maySupply(location);
+			const input = maySupply
 				? this.#memory().valueForRead(instruction, location)
 				: undefined;
 			if (input !== undefined && input !== value) {
 				const fact = this.query(input);
 				if (fact.kind === "known") return { ...fact, value };
 			}
-			if (this.#cells !== undefined && opcode !== "loadLocal") {
+			// Without a local initializer, a cell proof needs a later consumer's TDZ check.
+			if (maySupply && this.#cells !== undefined && opcode !== "loadLocal") {
 				this.#cellRevision = this.#program.programFlowRevision;
 				const fact = this.#cells(this.#fn, instruction, value, instruction);
 				if (fact !== undefined) return fact;
@@ -1646,7 +1651,11 @@ export class CoreStaticValueAnalysis {
 				const factory = canonical.match(
 					/^(Temporal\.(?:Instant|Duration|PlainDate|PlainTime|PlainDateTime|PlainYearMonth|PlainMonthDay|ZonedDateTime))\.(?:from|fromEpochMilliseconds|fromEpochNanoseconds)$/,
 				)?.[1];
-				const receiver = operands[1] === undefined ? undefined : this.query(operands[1]);
+				const receiver =
+					(canonical === "Array.from" || canonical === "Array.of") &&
+					operands[1] !== undefined
+						? this.query(operands[1])
+						: undefined;
 				const arrayFactory =
 					(canonical === "Array.from" || canonical === "Array.of") &&
 					receiver?.kind === "known" &&

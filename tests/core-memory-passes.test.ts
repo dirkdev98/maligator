@@ -754,6 +754,38 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		);
 	});
 
+	it("does not solve value kinds for a stack object requiring materialization", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7.5 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const id = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(core);
+		const analyses = new CoreAnalysisManager(core, lockedContext, report);
+		const pass = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "refine-stack-object-cell-representations",
+		)!;
+		new CoreFunctionPassScheduler(core, lockedContext, analyses, report, id).runComponent(
+			"memory",
+			[pass],
+		);
+		const result = report.finish(core, { directEntries: [], specializations: [] });
+		expect(result.passes.find(({ pass: name }) => name === pass.name)?.runs).toBe(1);
+		expect(
+			result.analyses.find(({ analysis }) => analysis === "local-value-kinds"),
+		).toBeUndefined();
+		expect(core.function(id).valueRepresentation(value!)).toBe("boxed");
+	});
+
 	it.each(["binary", "unary"] as const)(
 		"preserves the numeric input contract when refining a %s stack cell",
 		(opcode) => {
