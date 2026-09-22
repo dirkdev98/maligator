@@ -8,6 +8,7 @@ import { parseCliArgs } from "../src/cli.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
+	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
@@ -26,7 +27,7 @@ afterEach(() => {
 		rmSync(directory, { recursive: true, force: true });
 });
 
-it.each([false, true])(
+it.each(["unchanged", "before", "annotation"] as const)(
 	"rechecks construction cleanup only after imported body edits: %s",
 	(edit) => {
 		const { root, options } = fixture();
@@ -53,13 +54,24 @@ it.each([false, true])(
 		});
 		const imported = new Set(compilation.reusedFunctions!.keys());
 		const target = [...compilation.program.functionIds()].find((id) => imported.has(id))!;
-		if (edit) {
+		const mutate = () => {
 			const editor = CoreEditor.open(compilation.program, target);
 			editor.appendInstruction(editor.function.entry, "createNumber", [], {
 				attributes: { value: 12345 },
 			});
-			editor.commit();
-		}
+			return editor.commit();
+		};
+		if (edit === "before") mutate();
+		const annotation = CORE_CONSTRUCTION_ANNOTATION_PASSES[0]!;
+		const annotate = annotation.run.bind(annotation);
+		let injected = false;
+		vi.spyOn(annotation, "run").mockImplementation((context) => {
+			if (edit === "annotation" && context.item.function === target && !injected) {
+				injected = true;
+				return mutate();
+			}
+			return annotate(context);
+		});
 		// eslint-disable-next-line @typescript-eslint/unbound-method -- The spy forwards each scheduler receiver.
 		const run = CoreFunctionPassScheduler.prototype.runComponent;
 		const runComponent = vi.spyOn(CoreFunctionPassScheduler.prototype, "runComponent");
@@ -88,7 +100,8 @@ it.each([false, true])(
 			);
 		});
 		optimizeCore(compilation, { verification: "per-pass" });
-		expect(normalized.has(target)).toBe(edit);
+		expect(normalized.has(target)).toBe(edit !== "unchanged");
+		expect(injected).toBe(edit === "annotation");
 		for (const id of imported) if (id !== target) expect(normalized.has(id)).toBe(false);
 		for (const id of imported) expect(primary.has(id)).toBe(true);
 	},
