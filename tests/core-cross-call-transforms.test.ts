@@ -17,7 +17,10 @@ import type { CoreOptimizationReport } from "../src/compiler/core/core-optimizat
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
-import { CoreTransformCandidateService } from "../src/compiler/core/core-transform-candidates.ts";
+import {
+	coreProgramTransformBudgets,
+	CoreTransformCandidateService,
+} from "../src/compiler/core/core-transform-candidates.ts";
 import type {
 	CoreTransformBudgetLimits,
 	CoreTransformCandidate,
@@ -92,6 +95,55 @@ const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 };
 
 describe("bounded Core cross-call transforms", () => {
+	it.each([
+		{ code: 10, work: 0, reason: "generated-code-cost" },
+		{ code: 0, work: 10, reason: "compiler-work-cost" },
+	])(
+		"scales program $reason allowance without relaxing caller limits",
+		({ code, work, reason }) => {
+			const limits: CoreTransformBudgetLimits = {
+				perSiteExpansions: 1,
+				perCallerExpansions: 4,
+				perCallerGeneratedCode: 10,
+				perCallerCompilerWork: 10,
+				programGeneratedCode: 100,
+				programCompilerWork: 100,
+			};
+			const small = new CoreTransformCandidateService(
+				coreProgramTransformBudgets(limits, 100),
+			);
+			const large = new CoreTransformCandidateService(
+				coreProgramTransformBudgets(limits, 65_536),
+			);
+			const candidate = (caller: number, site = 0): CoreTransformCandidate => ({
+				kind: "inline",
+				caller: caller as CoreTransformCandidate["caller"],
+				site: site as CoreTransformCandidate["site"],
+				revision: 0,
+				priorityClass: 0,
+				priorityScore: 0,
+				targets: [],
+				generatedCodeCost: code,
+				compilerWorkCost: work,
+				expansive: true,
+			});
+			for (let caller = 0; caller < 10; caller++) {
+				for (const service of [small, large]) {
+					expect(service.admit(candidate(caller))).toBeUndefined();
+					service.recordApplied(candidate(caller));
+				}
+			}
+			expect(small.admit(candidate(10))).toBe(reason);
+			expect(large.admit(candidate(0))).toBe("expansion-limit");
+			expect(large.admit(candidate(0, 1))).toBe(reason);
+			for (let caller = 10; caller < 20; caller++) {
+				expect(large.admit(candidate(caller))).toBeUndefined();
+				large.recordApplied(candidate(caller));
+			}
+			expect(large.admit(candidate(20))).toBe(reason);
+		},
+	);
+
 	it("retains attempted discovery work across phases without consuming code budget", () => {
 		const service = new CoreTransformCandidateService({
 			perSiteExpansions: 1,

@@ -90,6 +90,19 @@ export const DEFAULT_CORE_SPECIALIZATION_BUDGETS: CoreTransformBudgetLimits =
 		programCompilerWork: 32_768,
 	});
 
+export function coreProgramTransformBudgets(
+	limits: CoreTransformBudgetLimits,
+	liveInstructions: number,
+): CoreTransformBudgetLimits {
+	// Keep optimization density stable as reachable code grows, without inflating individual bodies.
+	const scale = Math.max(1, liveInstructions / 32_768);
+	return Object.freeze({
+		...limits,
+		programGeneratedCode: Math.ceil(limits.programGeneratedCode * scale),
+		programCompilerWork: Math.ceil(limits.programCompilerWork * scale),
+	});
+}
+
 export const CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION = 4;
 
 export interface CoreTransformBudgetStatistics {

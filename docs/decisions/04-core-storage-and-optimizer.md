@@ -182,6 +182,14 @@ reasons for declined candidates. The resulting `CoreOptimizationPlan` is separat
 from canonical Core, is verified against the sealed program and its versions, and is
 the only specialization policy consumed by target lowering.
 
+Full-mode program budgets for cross-call transforms and late specialization grow
+linearly with reachable live instructions, measured after local optimization and
+before cross-call expansion. Programs up to 32,768 instructions retain the baseline
+allowance. Larger programs receive the same allowance per 32,768 instructions; code
+introduced by expansion cannot increase it. Per-site and per-function limits remain
+fixed, and development-mode budgets remain fixed. Discovery is admitted before
+expensive proofs and charged even when no usable candidate is found.
+
 The generic semantic path remains in canonical Core and stays valid if the plan is
 ignored. Target lowering receives the sealed program and plan, not the analysis
 manager, and may not rerun Core analysis or rediscover optimization policy.

@@ -36,8 +36,10 @@ import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.t
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
+	coreProgramTransformBudgets,
 	CoreTransformCandidateService,
 	DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+	DEFAULT_CORE_TRANSFORM_BUDGETS,
 } from "./core-transform-candidates.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
@@ -285,9 +287,18 @@ export function optimizeCore(
 	const initialFlow = measurePhase("program-flow", () =>
 		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
 	);
-	const o3Candidates = new CoreTransformCandidateService(
-		profile.o3Budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+	const liveInstructions = initialFlow.reachability.liveFunctions.reduce(
+		(total, functionId) =>
+			total + compilation.program.function(functionId).liveStorageCounts().instructions,
+		0,
 	);
+	const o3Candidates = new CoreTransformCandidateService(
+		profile.o3Budgets ??
+			coreProgramTransformBudgets(DEFAULT_CORE_SPECIALIZATION_BUDGETS, liveInstructions),
+	);
+	const crossCallBudgets =
+		profile.o3Budgets ??
+		coreProgramTransformBudgets(DEFAULT_CORE_TRANSFORM_BUDGETS, liveInstructions);
 	const crossCall = measurePhase(
 		"cross-call-transforms",
 		() =>
@@ -310,7 +321,7 @@ export function optimizeCore(
 									benchmarkAblation: ablatedFamily,
 								},
 							).optimizeCrossCall(editor),
-						profile.o3Budgets,
+						crossCallBudgets,
 						initialFlow,
 						o3Candidates,
 					),
