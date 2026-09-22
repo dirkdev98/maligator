@@ -290,9 +290,11 @@ export function analyzeCoreShapeProvenance(
 		function: functionId,
 		statistics: {
 			allocations: origins.size,
-			contained: [...origins].filter(
-				([instruction]) => provenance.escape(instruction) === "contained",
-			).length,
+			get contained() {
+				return [...origins].filter(
+					([instruction]) => provenance.escape(instruction) === "contained",
+				).length;
+			},
 			get exactSlotQueries() {
 				return exactSlotQueries;
 			},

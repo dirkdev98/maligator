@@ -38,6 +38,7 @@ import type {
 	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -142,7 +143,10 @@ export interface CoreProvenance {
 		readonly contained: number;
 		readonly escaped: number;
 		readonly valueQueries: number;
+		readonly layoutsMaterialized: number;
+		readonly escapeChecks: number;
 	};
+	layout(allocation: CoreInstructionId): CoreAllocationLayout | undefined;
 	allocationOf(value: CoreValueId): CoreAllocationLayout | undefined;
 	escape(allocation: CoreInstructionId): CoreAllocationEscape;
 	ownCell(
@@ -165,7 +169,9 @@ export interface CoreContainedAggregateProvenance {
 
 export interface CoreProvenanceOptions {
 	readonly canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>;
-	readonly index?: CoreLocalFactIndex;
+	readonly index?: CoreLocalFactIndex | (() => CoreLocalFactIndex);
+	readonly runOwner?: CoreOptimizationOwnerRunner;
+	readonly onWork?: (kind: "layout" | "escape") => void;
 }
 
 function numberArray(value: unknown): ReadonlyArray<number> | undefined {
@@ -460,22 +466,109 @@ export function buildCoreProvenance(
 	options: CoreProvenanceOptions = {},
 ): CoreProvenance {
 	const roots = options.canonicalRoots ?? coreCanonicalValueRoots(fn, cfg);
-	const index = options.index ?? buildCoreLocalFactIndex(fn, roots);
+	let localIndex: CoreLocalFactIndex | undefined;
+	const index = (): CoreLocalFactIndex =>
+		(localIndex ??=
+			typeof options.index === "function"
+				? options.index()
+				: (options.index ?? buildCoreLocalFactIndex(fn, roots)));
+	const generation = program.generation,
+		versions = fn.versions,
+		dataVersion = program.programVersion("data");
+	const dependencies = ["body", "cfg", "exceptionFlow", "memoryEffects"] as const;
+	const assertCurrent = (representations = false): void => {
+		if (
+			program.generation !== generation ||
+			program.function(fn.id) !== fn ||
+			program.programVersion("data") !== dataVersion ||
+			(representations && versions.representations !== fn.version("representations")) ||
+			dependencies.some((domain) => versions[domain] !== fn.version(domain))
+		)
+			throw new Error("Stale allocation provenance analysis");
+	};
+	const run = <T>(kind: "layout" | "escape", compute: () => T): T => {
+		options.onWork?.(kind);
+		return options.runOwner === undefined
+			? compute()
+			: options.runOwner(
+					CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+					compute,
+				);
+	};
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const layouts = index.operations
-		.map((instruction) => allocationLayout(fn, instruction))
-		.filter((layout): layout is CoreAllocationLayout => layout !== undefined);
+	const layoutsByInstruction = new Map<CoreInstructionId, CoreAllocationLayout | null>();
+	let layoutsMaterialized = 0,
+		escapeChecks = 0;
+	const layout = (instruction: CoreInstructionId): CoreAllocationLayout | undefined => {
+		assertCurrent();
+		const known = layoutsByInstruction.get(instruction);
+		if (known !== undefined) return known ?? undefined;
+		if (
+			!fn.isInstructionLive(instruction) ||
+			fn.instructionKind(instruction) !== "operation"
+		)
+			return undefined;
+		const result = run("layout", () => allocationLayout(fn, instruction));
+		layoutsMaterialized++;
+		layoutsByInstruction.set(instruction, result ?? null);
+		return result;
+	};
+	let allocationInstructions: Array<CoreInstructionId> | undefined;
+	let allocationsByRoot: Map<CoreValueId, Array<CoreInstructionId>> | undefined;
+	const allocationIndex = (): Map<CoreValueId, Array<CoreInstructionId>> => {
+		if (allocationsByRoot !== undefined) return allocationsByRoot;
+		allocationInstructions = [];
+		allocationsByRoot = new Map();
+		for (const block of fn.blockIds())
+			for (const instruction of fn.bodyInstructionIds(block)) {
+				if (fn.registry.byId(fn.instructionOpcode(instruction)).allocation === undefined)
+					continue;
+				const result = instructionResult(fn, instruction, 0);
+				if (result === undefined) continue;
+				allocationInstructions.push(instruction);
+				const resolved = root(result),
+					bucket = allocationsByRoot.get(resolved) ?? [];
+				bucket.push(instruction);
+				allocationsByRoot.set(resolved, bucket);
+			}
+		return allocationsByRoot;
+	};
 	const layoutByRoot = new Map<CoreValueId, CoreAllocationLayout | null>();
-	for (const layout of layouts) {
-		const valueRoot = root(layout.result);
-		layoutByRoot.set(valueRoot, layoutByRoot.has(valueRoot) ? null : layout);
-	}
+	const resolveLayout = (valueRoot: CoreValueId): CoreAllocationLayout | undefined => {
+		const cached = layoutByRoot.get(valueRoot);
+		if (cached !== undefined) return cached ?? undefined;
+		let found: CoreAllocationLayout | undefined;
+		for (const instruction of allocationIndex().get(valueRoot) ?? []) {
+			const candidate = layout(instruction);
+			if (candidate === undefined) continue;
+			if (found !== undefined) {
+				layoutByRoot.set(valueRoot, null);
+				return undefined;
+			}
+			found = candidate;
+		}
+		layoutByRoot.set(valueRoot, found ?? null);
+		return found;
+	};
+	let allLayouts: ReadonlyArray<CoreAllocationLayout> | undefined;
+	const layouts = (): ReadonlyArray<CoreAllocationLayout> => {
+		assertCurrent();
+		allocationIndex();
+		return (allLayouts ??= Object.freeze(
+			allocationInstructions!
+				.map(layout)
+				.filter((value): value is CoreAllocationLayout => value !== undefined),
+		));
+	};
 	let valueQueries = 0;
 	const allocationOf = (value: CoreValueId): CoreAllocationLayout | undefined => {
+		assertCurrent();
 		valueQueries++;
-		return layoutByRoot.get(root(value)) ?? undefined;
+		return resolveLayout(root(value));
 	};
-	const cellForString = coreOwnCellResolver(program.stringConstants);
+	let stringResolver: ReturnType<typeof coreOwnCellResolver> | undefined;
+	const cellForString = (index: number): CoreOwnCell | undefined =>
+		(stringResolver ??= coreOwnCellResolver(program.stringConstants))(index);
 	const keyCells = new Map<CoreValueId, CoreOwnCell | null>();
 	const cellForValue = (value: CoreValueId): CoreOwnCell | undefined => {
 		const valueRoot = root(value);
@@ -518,39 +611,49 @@ export function buildCoreProvenance(
 			: (isLengthCell(cell, program.stringConstants) && mode === "read") ||
 				(cell.kind === "element" && layout.elements.has(cell.index));
 
-	const escaped = new Set<CoreInstructionId>();
-	for (const layout of layouts) {
-		const valueRoot = root(layout.result);
-		if (layoutByRoot.get(valueRoot) !== layout) continue;
-		if (index.controlUses.has(valueRoot)) escaped.add(layout.instruction);
-		for (const { instruction, position: operand } of index.uses.get(valueRoot) ?? []) {
-			if (fn.instructionKind(instruction) !== "operation") {
-				escaped.add(layout.instruction);
-				continue;
+	const escapes = new Map<CoreInstructionId, CoreAllocationEscape>();
+	const escape = (allocation: CoreInstructionId): CoreAllocationEscape => {
+		assertCurrent();
+		const known = escapes.get(allocation);
+		if (known !== undefined) return known;
+		const candidate = layout(allocation);
+		if (candidate === undefined || resolveLayout(root(candidate.result)) !== candidate)
+			return "contained";
+		const result = run("escape", (): CoreAllocationEscape => {
+			escapeChecks++;
+			const layout = candidate;
+			const valueRoot = root(layout.result);
+			if (index().controlUses.has(valueRoot)) return "escaped";
+			for (const { instruction, position: operand } of index().uses.get(valueRoot) ??
+				[]) {
+				if (fn.instructionKind(instruction) !== "operation") {
+					return "escaped";
+				}
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (
+					opcode === "move" ||
+					opcode === "throwIfTdz" ||
+					opcode === "rootUse" ||
+					observesWithoutRetention(fn, instruction)
+				) {
+					continue;
+				}
+				const access = baseAccessForOperand(fn, instruction, operand);
+				const key = access === undefined ? undefined : accessKey(fn, instruction, access);
+				const cell = key === undefined ? undefined : cellForKey(key);
+				if (
+					access === undefined ||
+					cell === undefined ||
+					!cellBelongs(layout, cell, access.mode)
+				) {
+					return "escaped";
+				}
 			}
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (
-				opcode === "move" ||
-				opcode === "throwIfTdz" ||
-				opcode === "rootUse" ||
-				observesWithoutRetention(fn, instruction)
-			) {
-				continue;
-			}
-			const access = baseAccessForOperand(fn, instruction, operand);
-			const key = access === undefined ? undefined : accessKey(fn, instruction, access);
-			const cell = key === undefined ? undefined : cellForKey(key);
-			if (
-				access === undefined ||
-				cell === undefined ||
-				!cellBelongs(layout, cell, access.mode)
-			) {
-				escaped.add(layout.instruction);
-			}
-		}
-	}
-	const escape = (allocation: CoreInstructionId): CoreAllocationEscape =>
-		escaped.has(allocation) ? "escaped" : "contained";
+			return "contained";
+		});
+		escapes.set(allocation, result);
+		return result;
+	};
 	const ownCell = (
 		base: CoreValueId,
 		key: CoreAccessKey,
@@ -559,15 +662,16 @@ export function buildCoreProvenance(
 		| { readonly layout: CoreAllocationLayout; readonly cell: CoreOwnCell }
 		| undefined => {
 		const layout = allocationOf(base);
+		if (layout === undefined) return undefined;
 		const cell = cellForKey(key);
-		return layout !== undefined &&
-			cell !== undefined &&
-			escape(layout.instruction) === "contained" &&
-			cellBelongs(layout, cell, mode)
+		return cell !== undefined &&
+			cellBelongs(layout, cell, mode) &&
+			escape(layout.instruction) === "contained"
 			? { layout, cell }
 			: undefined;
 	};
 	const cannotBeHeldWeakly = (value: CoreValueId): boolean => {
+		assertCurrent(true);
 		if (fn.valueRepresentation(value) !== "boxed") return true;
 		const definition = definingInstruction(fn, root(value));
 		return (
@@ -576,20 +680,34 @@ export function buildCoreProvenance(
 			fn.registry.byId(fn.instructionOpcode(definition)).resultCannotBeHeldWeakly === true
 		);
 	};
-	const contained = layouts.filter(
-		(layout) => escape(layout.instruction) === "contained",
-	).length;
 	const result: CoreProvenance = {
 		function: fn.id,
-		layouts: Object.freeze(layouts),
+		get layouts() {
+			return layouts();
+		},
 		statistics: {
-			allocations: layouts.length,
-			contained,
-			escaped: layouts.length - contained,
+			get allocations() {
+				return layouts().length;
+			},
+			get contained() {
+				return layouts().filter((layout) => escape(layout.instruction) === "contained")
+					.length;
+			},
+			get escaped() {
+				return layouts().filter((layout) => escape(layout.instruction) === "escaped")
+					.length;
+			},
 			get valueQueries() {
 				return valueQueries;
 			},
+			get layoutsMaterialized() {
+				return layoutsMaterialized;
+			},
+			get escapeChecks() {
+				return escapeChecks;
+			},
 		},
+		layout,
 		allocationOf,
 		escape,
 		ownCell,
@@ -639,7 +757,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 		],
 		programDependencies: ["data"],
 		contextIdentity: (context) => context.facts.world.primordialPolicy,
-		compute({ program, context, request, get, runOwner }) {
+		compute({ program, context, request, get, runOwner, recordResult }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			const functionId = request.function;
@@ -671,7 +789,12 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 						() =>
 							buildCoreProvenance(program, fn, control, {
 								canonicalRoots: roots,
-								index: index(),
+								index,
+								runOwner,
+								onWork:
+									recordResult === undefined
+										? undefined
+										: (kind) => recordResult({ provenanceWork: kind }),
 							}),
 					));
 				},

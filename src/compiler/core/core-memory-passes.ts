@@ -34,6 +34,7 @@ import {
 	CORE_OWN_DATA_CELL_FACT,
 } from "./core-ir-provenance.ts";
 import type {
+	CoreLocalFactBundle,
 	CoreLocalFactIndex,
 	CoreNamedAllocationLayout,
 	CoreProvenance,
@@ -2231,12 +2232,21 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		let memory: CoreMemoryVersions | undefined;
 		let sources: CoreMemoryValueSources | undefined;
-		const { provenance, roots } = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let localFacts: CoreLocalFactBundle | undefined;
+		const facts = () =>
+			(localFacts ??= context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS));
+		const provenance = () => facts().provenance;
+		let kinds: CoreValueKindAnalysis | undefined;
+		const allocations: Array<CoreInstructionId> = [];
 		const lifetimeIndependent = (value: CoreValueId): boolean => {
-			if (provenance.cannotBeHeldWeakly(value) || kinds.exactScalar(value) !== undefined)
+			if (
+				provenance().cannotBeHeldWeakly(value) ||
+				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
+					value,
+				) !== undefined
+			)
 				return true;
-			const root = roots.get(value) ?? value;
+			const root = facts().roots.get(value) ?? value;
 			if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
 			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
 			if (fn.instructionKind(definition) !== "operation") return false;
@@ -2254,6 +2264,11 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		>();
 		for (const instruction of fn.instructionIds()) {
 			if (
+				fn.instructionKind(instruction) === "operation" &&
+				fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined
+			)
+				allocations.push(instruction);
+			if (
 				fn.instructionKind(instruction) !== "operation" ||
 				!effectsPermitRemoval(fn, instruction)
 			)
@@ -2262,7 +2277,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 			const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			for (const access of coreMemoryAccesses(fn, instruction, {
 				ownCell(base, key, mode) {
-					const resolved = provenance.ownCell(base, key, mode);
+					const resolved = provenance().ownCell(base, key, mode);
 					return resolved === undefined
 						? undefined
 						: { allocation: resolved.layout.instruction, cell: resolved.cell };
@@ -2298,8 +2313,10 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		}
 		const removableStores = new Set<CoreInstructionId>();
 		const removableAllocations = new Set<CoreInstructionId>();
-		for (const layout of provenance.layouts) {
-			if (provenance.escape(layout.instruction) !== "contained") continue;
+		for (const allocation of allocations) {
+			const layout = provenance().layout(allocation);
+			if (layout === undefined) continue;
+			if (provenance().escape(layout.instruction) !== "contained") continue;
 			const initialValues = layout.kind === "named-slots" ? layout.initialValues : [];
 			if (initialValues.some((value) => !lifetimeIndependent(value))) continue;
 			let removable = true;
@@ -2308,8 +2325,11 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 				string,
 				{ readonly instruction: CoreInstructionId; readonly operand: number }
 			>();
-			for (const value of fn.valueIds()) {
-				if (provenance.allocationOf(value)?.instruction !== layout.instruction) continue;
+			for (const value of facts().index.valuesByRoot.get(
+				facts().roots.get(layout.result) ?? layout.result,
+			) ?? []) {
+				if (provenance().allocationOf(value)?.instruction !== layout.instruction)
+					continue;
 				let use = fn.kernel.valueFirstUse(value);
 				while (use >= 0) {
 					const instruction = fn.kernel.useInstruction(use);
@@ -2333,7 +2353,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 				}
 				const accesses = coreMemoryAccesses(fn, use.instruction, {
 					ownCell(base, key, mode) {
-						const resolved = provenance.ownCell(base, key, mode);
+						const resolved = provenance().ownCell(base, key, mode);
 						return resolved === undefined
 							? undefined
 							: { allocation: resolved.layout.instruction, cell: resolved.cell };

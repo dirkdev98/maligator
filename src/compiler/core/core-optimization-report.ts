@@ -147,7 +147,12 @@ export interface CoreCompilerWorkCounters {
 	readonly sccTransfers: number;
 	readonly localFactRebuilds: number;
 	readonly provenanceRebuilds: number;
+	readonly provenanceLayoutsMaterialized: number;
+	readonly provenanceEscapeChecks: number;
 	readonly memoryAccesses: number;
+	readonly memoryInstructionsIndexed: number;
+	readonly memoryHeapAccessesResolved: number;
+	readonly memoryEvents: number;
 	readonly memoryLocations: number;
 	readonly memoryPartitionsSolved: number;
 	readonly memoryTouchedBlocks: number;
@@ -294,7 +299,12 @@ const COUNTER_KEYS = [
 	"sccTransfers",
 	"localFactRebuilds",
 	"provenanceRebuilds",
+	"provenanceLayoutsMaterialized",
+	"provenanceEscapeChecks",
 	"memoryAccesses",
+	"memoryInstructionsIndexed",
+	"memoryHeapAccessesResolved",
+	"memoryEvents",
 	"memoryLocations",
 	"memoryPartitionsSolved",
 	"memoryTouchedBlocks",
@@ -858,11 +868,20 @@ export class CoreOptimizationReportBuilder {
 			);
 			return;
 		}
+		if (analysis === "local-fact-bundle") {
+			const kind = (value as { readonly provenanceWork?: string }).provenanceWork;
+			if (kind === "layout") this.increment("provenanceLayoutsMaterialized");
+			else if (kind === "escape") this.increment("provenanceEscapeChecks");
+			return;
+		}
 		if (analysis !== "local-memory-versions") return;
 		const statistics = (
 			value as {
 				readonly statistics?: {
 					readonly accesses?: number;
+					readonly indexedInstructions?: number;
+					readonly heapAccessesResolved?: number;
+					readonly events?: number;
 					readonly partitions?: number;
 					readonly solvedPartitions?: number;
 					readonly touchedBlocks?: number;
@@ -875,6 +894,9 @@ export class CoreOptimizationReportBuilder {
 			}
 		).statistics;
 		this.increment("memoryAccesses", statistics?.accesses ?? 0);
+		this.increment("memoryInstructionsIndexed", statistics?.indexedInstructions ?? 0);
+		this.increment("memoryHeapAccessesResolved", statistics?.heapAccessesResolved ?? 0);
+		this.increment("memoryEvents", statistics?.events ?? 0);
 		this.increment("memoryLocations", statistics?.partitions ?? 0);
 		this.increment("memoryPartitionsSolved", statistics?.solvedPartitions ?? 0);
 		this.increment("memoryTouchedBlocks", statistics?.touchedBlocks ?? 0);

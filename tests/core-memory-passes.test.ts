@@ -158,6 +158,87 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(result.counters.memoryAccesses).toBe(1);
 	});
 
+	it("forwards an exact global without proving unrelated heap allocations", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		for (let index = 0; index < 100; index++) {
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [stored!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+		}
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const read = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const memory = analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, {
+			scope: "function",
+			function: fn,
+		});
+		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBe(stored);
+		expect(memory.statistics.heapAccessesResolved).toBe(0);
+		const result = report.finish(core, { directEntries: [], specializations: [] });
+		expect(result.analyses.some(({ analysis }) => analysis === "local-fact-bundle")).toBe(
+			false,
+		);
+		expect(result.counters.provenanceEscapeChecks).toBe(0);
+	});
+
+	it("proves only queried heap allocations and reuses their proofs", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const queries = Array.from({ length: 100 }, () => {
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [stored!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const allocation = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			return { allocation, read: builder.bodyInstructionIds(entry).at(-1)! };
+		});
+		builder.setTerminator(entry, { kind: "return", value: stored! });
+		const fn = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const memory = analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, {
+			scope: "function",
+			function: fn,
+		});
+		for (const [index, demanded] of [
+			[0, 1],
+			[1, 2],
+			[0, 2],
+		] as const) {
+			const { allocation, read } = queries[index]!;
+			expect(memory.valueForRead(read, { kind: "object-slot", allocation, key: 0 })).toBe(
+				stored,
+			);
+			const result = report.finish(core, { directEntries: [], specializations: [] });
+			expect(result.counters.provenanceLayoutsMaterialized).toBe(demanded);
+			expect(result.counters.provenanceEscapeChecks).toBe(demanded);
+			expect(memory.statistics.heapAccessesResolved).toBe(demanded);
+			expect(memory.statistics.events).toBe(demanded * 2);
+		}
+	});
+
 	it("keeps reads with no modeled memory location across a clobber", () => {
 		const registry = new CoreOpcodeRegistry();
 		registry.define({

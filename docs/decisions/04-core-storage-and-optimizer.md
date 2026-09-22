@@ -140,8 +140,19 @@ recomputations, invalidations, and elapsed time for every analysis.
 Demand-driven products stay within that versioned lifetime. Structural CFG queries
 need no dominators; dominance products are computed on the first dominance query.
 Packed-rest consumers request value kinds and CFG only after finding a relevant
-access. A memory-version handle initially builds no graph: its first proof query
-extracts shared events and provenance, and only the requested partitions are solved.
+access. A memory-version handle initially builds no graph. Its first proof query
+indexes raw memory accesses and writers; each requested partition then builds its
+own events and versions. Exact global, local, captured, and activation slots need
+no heap provenance. Heap partitions inspect accesses sharing the allocation's
+canonical root and its initializer. A shared family-kill column retains store
+checkpoints for every location with reads, including locations queried later.
+
+Allocation layouts and escape proofs are cached per allocation. Layout and shape
+candidate queries do not request escape proofs; an exact own-cell query does. Bulk
+layout enumeration remains explicit. Representation-only edits preserve layout
+and escape queries, but invalidate representation-dependent weak-hold queries.
+The shared instruction, allocation-root, and use indexes still scan their snapshot
+when needed. Requested partitions still cover all their reads and control flow.
 Each partition is finalized once, including phi aliases and family-kill state at
 both reads and reaching stores. Later queries cannot change an earlier answer.
 Memory queries reject stale function or program-data versions before using either
@@ -150,8 +161,8 @@ cached results or lazy dependencies.
 Repeated-load consumers first match opcode, operands, attributes, representation,
 and dominance. Only then do they request complete memory equivalence. Candidate
 read states are indexed after this first demand so intervening stores do not turn
-proof lookup into a quadratic scan. Shared event extraction and all readers of a
-requested partition remain function-wide; this is not yet per-read slicing.
+proof lookup into a quadratic scan. Requested partitions retain complete reader
+sets; this is not yet per-read slicing.
 Instrumentation records preparation and solve deltas as work happens. Analysis
 handle creation is not a memory solve, and retaining old graphs for final reporting
 is unnecessary.

@@ -177,10 +177,13 @@ Runtime eval may remove source closure without invalidating authority closure.
       scans, uncontrolled cache growth, or a new unconditional whole-program pass.
       Memory versions now solve requested partitions, repeated-load proofs start
       after matching inputs and dominance, and late target payloads are built only
-      after selection. Remaining work: slice shared memory event/provenance
-      extraction and partition state to the requested reads, and defer candidate
-      recognition while preserving exact ranking and costs. Measure retained
-      snapshot memory before extending these caches.
+      after selection. Memory events now belong to requested partitions, heap
+      accesses resolve by allocation root, and layouts/escape proofs are lazy per
+      allocation. Slot-only queries avoid heap provenance entirely. Remaining
+      work: narrow shared instruction/root/use indexing and partition state to
+      requested reads, and defer candidate recognition while preserving exact
+      ranking and costs. Measure retained snapshot memory before extending these
+      caches.
 
 - [ ] Repair indexed-length-loop region cost verification for the existing
       `core-primitive-numeric` Array.from length and holey-array checksum cases.

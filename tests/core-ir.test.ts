@@ -27,7 +27,6 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import {
-	CORE_EFFECT_DOMAINS,
 	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
@@ -290,9 +289,7 @@ describe("Core IR", () => {
 		expect(memory.statistics).toMatchObject({ accesses: 0, solvedPartitions: 0 });
 		for (const instruction of builder.bodyInstructionIds(entry))
 			memory.readHash(instruction);
-		expect(memory.statistics.partitions).toBe(
-			CORE_EFFECT_DOMAINS.length + exactReadCount,
-		);
+		expect(memory.statistics.partitions).toBe(exactReadCount);
 		expect(memory.statistics.stateEntries).toBe(exactReadCount * 2);
 	});
 
@@ -370,6 +367,100 @@ describe("Core IR", () => {
 			);
 		},
 	);
+
+	it("retains stores for locations queried after the shared call barriers are solved", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index: 0 } });
+		const before = builder.bodyInstructionIds(entry).at(-1)!;
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "call", [callee!, callee!]);
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 1 },
+		});
+		builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index: 1 } });
+		const restored = builder.bodyInstructionIds(entry).at(-1)!;
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const clobbered = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+		expect(memory.valueForRead(before, { kind: "global-slot", slot: 0 })).toBe(stored);
+		expect(memory.valueForRead(restored, { kind: "global-slot", slot: 1 })).toBe(stored);
+		expect(
+			memory.valueForRead(clobbered, { kind: "global-slot", slot: 0 }),
+		).toBeUndefined();
+	});
+
+	it("includes refined element writes when the array domain is queried first", () => {
+		const registry = new CoreOpcodeRegistry();
+		for (const opcode of CORE_OPCODES) {
+			const descriptor = coreOpcodeRegistry.require(opcode);
+			registry.define(
+				["loadProperty", "storeProperty", "defineProperty"].includes(opcode)
+					? { ...descriptor, effects: { ...descriptor.effects, callsUserCode: false } }
+					: descriptor,
+			);
+		}
+		registry.define({
+			opcode: "readElements",
+			inputs: coreArity(0),
+			outputs: coreArity(1),
+			effects: { ...CORE_NO_EFFECTS, reads: ["object-property", "array-element"] },
+			accesses: [{ family: "element", mode: "read" }],
+			discardable: true,
+			attributeRelocations: [],
+		});
+		registry.define({
+			opcode: "clobberElements",
+			inputs: coreArity(0),
+			outputs: coreArity(0),
+			effects: { ...CORE_NO_EFFECTS, writes: ["array-element"] },
+			discardable: false,
+			attributeRelocations: [],
+		});
+		const program = new CoreProgram(registry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [index] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [array] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 1 },
+		});
+		builder.appendInstruction(entry, "defineProperty", [array!, index!, value!]);
+		builder.appendInstruction(entry, "readElements", []);
+		const before = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.appendInstruction(entry, "storeProperty", [array!, index!, value!]);
+		builder.appendInstruction(entry, "readElements", []);
+		const after = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.appendInstruction(entry, "clobberElements", []);
+		builder.appendInstruction(entry, "readElements", []);
+		const clobbered = builder.bodyInstructionIds(entry).at(-1)!;
+		const [loaded] = builder.appendInstruction(entry, "loadProperty", [array!, index!]);
+		const exact = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const id = builder.finish(entry).function;
+		const memory = analyzeCoreMemoryVersions(program, id);
+		expect(memory.readHash(before)).toBeDefined();
+		expect(memory.statistics.heapAccessesResolved).toBe(3);
+		expect(memory.readsEquivalent(before, after)).toBe(false);
+		expect(memory.readsEquivalent(after, clobbered)).toBe(false);
+		const reversed = analyzeCoreMemoryVersions(program, id);
+		expect(reversed.readHash(exact)).toBeDefined();
+		expect(reversed.readsEquivalent(before, after)).toBe(false);
+	});
 
 	it("does not materialize write-only memory events", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
