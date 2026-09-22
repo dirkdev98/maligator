@@ -4,6 +4,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
+import type { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
 	CoreFunctionOptimizationResources,
@@ -13,6 +14,7 @@ import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/cor
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import type { CorePgoHints } from "../src/compiler/core/core-pgo.ts";
@@ -48,6 +50,11 @@ function runTransforms(
 	program: CoreProgram,
 	limits?: CoreTransformBudgetLimits,
 	pgo?: CorePgoHints,
+	beforeOptimizeCaller?: (
+		wave: number,
+		functionId: CoreFunctionId,
+		editor: CoreEditor,
+	) => void,
 ) {
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
@@ -57,15 +64,17 @@ function runTransforms(
 	const result = runCoreCrossCallTransforms(
 		program,
 		analyses,
-		(wave, functionId, editor) =>
-			new CoreFunctionOptimizationSession(
+		(wave, functionId, editor) => {
+			beforeOptimizeCaller?.(wave, functionId, editor);
+			return new CoreFunctionOptimizationSession(
 				program,
 				context,
 				report,
 				resources,
 				functionId,
 				{ crossCallWave: wave },
-			).optimizeCrossCall(editor),
+			).optimizeCrossCall(editor);
+		},
 		limits,
 		undefined,
 		candidates,
@@ -1975,7 +1984,7 @@ describe("bounded Core cross-call transforms", () => {
 				.finish(program, result.plan)
 				.analyses.find(({ analysis }) => analysis === "program-flow-valueKinds")
 				?.recomputations,
-		).toBe(1);
+		).toBeUndefined();
 		const refreshed = result.analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
 			scope: "program",
 		});
@@ -2059,5 +2068,197 @@ describe("bounded Core cross-call transforms", () => {
 		expect(callInstructions(program, 0)).toEqual([]);
 		expect(transformed.statistics.appliedByKind.inline).toBeGreaterThanOrEqual(2);
 		expect(transformed.statistics.compilerWorkConsumed).toBeGreaterThan(0);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBe(0);
+	});
+
+	it("folds local kinds through arithmetic, moves and joins without global propagation", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{}]);
+		const [condition] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const block of [left, right]) {
+			const [number] = builder.appendInstruction(block, "createNumber", [], {
+				attributes: { value: 3 },
+			});
+			const [sum] = builder.appendInstruction(block, "binary", [number!, number!], {
+				attributes: { operator: "+" },
+			});
+			const [moved] = builder.appendInstruction(block, "move", [sum!]);
+			builder.setTerminator(block, {
+				kind: "jump",
+				edge: { block: join, arguments: [moved!] },
+			});
+		}
+		const [result] = builder.appendInstruction(
+			join,
+			"typeofCompare",
+			[builder.blockParameterValue(join, 0)],
+			{ attributes: { expected: "number" } },
+		);
+		builder.setTerminator(join, { kind: "return", value: result! });
+		const fn = builder.finish(entry).function;
+		const transformed = runTransforms(program);
+		expect(transformed.statistics.valueKindFolds).toBe(1);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBe(0);
+		expect(coreOperations(program.function(fn))).toContainEqual(
+			expect.objectContaining({ opcode: "createBoolean", attributes: { value: true } }),
+		);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("keeps opaque observations without propagating unrelated script calls", () => {
+		const program = analysisProgram();
+		appendCaller(program, 2);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [object] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const stringIndex = builder.editor.appendStringConstants([[120]]);
+		const [property] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex },
+		});
+		const [result] = builder.appendInstruction(entry, "typeofCompare", [property!], {
+			attributes: { expected: "number" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = builder.finish(entry).function;
+		appendLeaf(program);
+		const transformed = runTransforms(program);
+		expect(transformed.statistics.valueKindFolds).toBe(0);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBe(0);
+		expect(
+			coreOperations(program.function(fn)).some(
+				({ opcode }) => opcode === "typeofCompare",
+			),
+		).toBe(true);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("folds strict receiver observations using global call inputs", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [called] = caller.appendInstruction(entry, "call", [callee!, receiver!]);
+		caller.setTerminator(entry, { kind: "return", value: called! });
+		caller.finish(entry);
+		const leaf = new CoreFunctionBuilder(program, { metadata: { strict: true } });
+		const body = leaf.createBlock();
+		const [thisValue] = leaf.appendInstruction(body, "loadThis", []);
+		const [result] = leaf.appendInstruction(body, "typeofCompare", [thisValue!], {
+			attributes: { expected: "number" },
+		});
+		leaf.setTerminator(body, { kind: "return", value: result! });
+		const fn = leaf.finish(body).function;
+		const transformed = runTransforms(program);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBeGreaterThan(0);
+		expect(coreOperations(program.function(fn))).toContainEqual(
+			expect.objectContaining({ opcode: "createBoolean", attributes: { value: true } }),
+		);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("solves a cyclic join only when its comparison needs the fixed point", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const loop = builder.createBlock([{}]);
+		const exit = builder.createBlock();
+		const [seed] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: loop, arguments: [seed!] },
+		});
+		const value = builder.blockParameterValue(loop, 0);
+		const [condition] = builder.appendInstruction(loop, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(loop, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: loop, arguments: [value] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [result] = builder.appendInstruction(exit, "typeofCompare", [value], {
+			attributes: { expected: "number" },
+		});
+		builder.setTerminator(exit, { kind: "return", value: result! });
+		const fn = builder.finish(entry).function;
+		const transformed = runTransforms(program);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBeGreaterThan(0);
+		expect(coreOperations(program.function(fn))).toContainEqual(
+			expect.objectContaining({ opcode: "createBoolean", attributes: { value: true } }),
+		);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("admits a new global type consumer after a local-only wave", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		const [argument] = caller.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 3 },
+		});
+		const [called] = caller.appendInstruction(entry, "call", [
+			callee!,
+			receiver!,
+			argument!,
+		]);
+		caller.setTerminator(entry, { kind: "return", value: called! });
+		caller.finish(entry);
+		const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const body = leaf.createBlock([{}]);
+		const parameter = leaf.blockParameterValue(body, 0);
+		const [result] = leaf.appendInstruction(body, "createBoolean", [], {
+			attributes: { value: false },
+		});
+		const target = leaf.bodyInstructionIds(body).at(-1)!;
+		leaf.appendInstruction(body, "typeofCompare", [result!], {
+			attributes: { expected: "boolean" },
+		});
+		leaf.setTerminator(body, { kind: "return", value: result! });
+		const fn = leaf.finish(body).function;
+		let introduced = false;
+		const transformed = runTransforms(
+			program,
+			{ ...TINY_CODE_BUDGET, programGeneratedCode: 1_000 },
+			undefined,
+			(wave, functionId, editor) => {
+				if (wave !== 0 || functionId !== fn) return;
+				editor.replaceInstruction(target, "typeofCompare", [parameter], {
+					attributes: { expected: "number" },
+				});
+				introduced = true;
+			},
+		);
+		expect(introduced).toBe(true);
+		expect(transformed.statistics.valueKindFunctionEvaluations).toBeGreaterThan(0);
+		expect(coreOperations(program.function(fn))).toContainEqual(
+			expect.objectContaining({ opcode: "createBoolean", attributes: { value: true } }),
+		);
+		verifyCoreProgram(program, { stage: "pre-target" });
 	});
 });

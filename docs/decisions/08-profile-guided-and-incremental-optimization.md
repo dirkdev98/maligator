@@ -1027,3 +1027,48 @@ loads, and global folds through parameters, receivers, calls, moves and block
 parameters. Edits that introduce demand must match a fresh analysis run. Measure
 actual avoided solver evaluations and matched output alongside end-to-end compile
 time; time attributed to the current solver is an upper bound, not a promised gain.
+
+## D025 — 2026-09-22 — Solve global types only for consumed SSA dependencies
+
+**Status:** Implemented with focused verification; broad performance acceptance
+remains open. **Implements:** D024. **Refines:** Its full-solver admission boundary.
+
+Each cross-call wave first discovers observations and evaluates program-independent
+kinds along their value dependencies. The reader uses the solver's existing transfer
+rules. It distinguishes fixed unknown kinds from inputs that need global propagation;
+cycles conservatively request the existing solver. Publicly reachable parameters and
+receivers remain unknown, and opaque calls do not trigger propagation that cannot
+refine them. Successful local folds remain eligible without a global query. Committed
+caller edits retain the next wave without solving global types merely to schedule it.
+Readers are recreated each wave so changes to call targets cannot leave stale demand.
+
+Admission alone does not remove the dominant work when any useful global consumer
+remains. Global type evaluation therefore builds transfers only for the dependencies
+of values its consumers read: reachable return operands, consumed outgoing arguments
+and strict receivers, wildcard call inputs, and values queried by the observation
+evaluator. Observations include live instructions in unreachable blocks, matching
+the existing folding contract. Surplus call arguments and callee identities are not
+type demands. Root lists and call-site indexes are reused within one propagation
+solve; they are rebuilt for the next solve under ordinary invalidation.
+
+Dependency collection follows the same operation rules and all existing CFG
+predecessors, including exceptional handler-argument offsets. Values are marked
+before following dependencies, then the ordinary monotone worklist solves their
+cycles. This changes the transfer set, not the lattice or convergence rules.
+Ordinary local analysis still solves its complete value set and retains lazy integer
+proofs. Global snapshots expose only kind and lattice-mask queries and do not build
+integer-proof recipes that none of their consumers use.
+
+A global snapshot owns solved masks and computed-value membership. Reading an
+unrequested value throws instead of returning lattice bottom and silently narrowing
+a summary. Snapshots retain no function, CFG, call-target or current-summary handles;
+older results remain stable after edits. Later consumers must extend the explicit
+root contract before querying more values. The bounded Core string decoder also
+serves observation constants, avoiding host argument-count limits during admission.
+
+Focused acceptance covers local arithmetic and joins, opaque inputs, strict receivers,
+cyclic joins, demand introduced in a later wave, delayed versus fresh propagation,
+unused SSA chains becoming consumed after edits, old snapshot stability, local integer
+proofs and long UTF-16 constants. Exact matched MALW and generated-C comparisons
+accompany work and timing measurements; function-evaluation counts alone do not measure
+the reduction in values and transfers.

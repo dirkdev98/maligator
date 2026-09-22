@@ -1,3 +1,4 @@
+import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
 	coreArrayPredicateCall,
@@ -30,6 +31,7 @@ import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+	coreValueKindDemand,
 	coreValueKindObservation,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -2391,22 +2393,60 @@ export function emptyCoreCrossCallTransformResult(
 
 function discoverProgramValueKindObservations(
 	program: CoreProgram,
-	kinds: CoreProgramValueKinds,
+	analyses: CoreAnalysisManager,
+	flow: CoreProgramFlowState,
+	readValueKinds: () => CoreProgramValueKinds,
 ): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreValueKindFold>> {
 	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
-	for (const functionId of kinds.changedFunctions) {
+	const pending = new Map<CoreFunctionId, Array<CoreInstructionId>>();
+	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
-		const values = kinds.values(functionId);
+		let fixedKind: ReturnType<typeof coreValueKindDemand> | undefined;
 		const folds: Array<CoreValueKindFold> = [];
 		for (let index = 0; index < fn.instructionCapacity; index++) {
 			const instruction = index as CoreInstructionId;
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
-			const result = coreValueKindObservation(program, fn, instruction, (value) =>
-				values.kindMask(value),
-			);
+			let demand = false;
+			const result = coreValueKindObservation(program, fn, instruction, (value) => {
+				fixedKind ??= coreValueKindDemand(
+					fn,
+					() =>
+						analyses
+							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							})
+							.exceptional(),
+					flow.targets,
+					flow.summaries.summary(functionId)?.externallyReachable === true,
+				);
+				const kind = fixedKind(value);
+				if (kind === undefined) demand = true;
+				return kind ?? COMPILER_VALUE_KIND_TOP;
+			});
 			if (result !== undefined) folds.push({ instruction, result });
+			else if (demand) {
+				let instructions = pending.get(functionId);
+				if (instructions === undefined) pending.set(functionId, (instructions = []));
+				instructions.push(instruction);
+			}
 		}
-		if (folds.length > 0) foldsByCaller.set(functionId, Object.freeze(folds));
+		if (folds.length > 0) foldsByCaller.set(functionId, folds);
+	}
+	if (pending.size > 0) {
+		const kinds = readValueKinds();
+		for (const [functionId, instructions] of pending) {
+			const fn = program.function(functionId);
+			const values = kinds.values(functionId);
+			const folds = [...(foldsByCaller.get(functionId) ?? [])];
+			for (const instruction of instructions) {
+				const result = coreValueKindObservation(program, fn, instruction, (value) =>
+					values.kindMask(value),
+				);
+				if (result !== undefined) folds.push({ instruction, result });
+			}
+			if (folds.length > 0) foldsByCaller.set(functionId, folds);
+		}
 	}
 	return foldsByCaller;
 }
@@ -2489,7 +2529,12 @@ export function runCoreCrossCallTransforms(
 			undefined,
 			pgo,
 		);
-		const foldsByCaller = discoverProgramValueKindObservations(program, readValueKinds());
+		const foldsByCaller = discoverProgramValueKindObservations(
+			program,
+			analyses,
+			flow,
+			readValueKinds,
+		);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);
 		for (const functionId of appliedCallers)
@@ -2599,13 +2644,7 @@ export function runCoreCrossCallTransforms(
 			service.programBudgetExhaustionReason(phaseLimits) !== undefined
 		)
 			break;
-		const nextValueKinds = readValueKinds();
-		const publishedChanged =
-			flow.targets.changedCallers.size > 0 ||
-			flow.summaries.changedFunctions.size > 0 ||
-			nextValueKinds.changedFunctions.size > 0 ||
-			flow.reachability.statistics.resultSetUpdates > 0;
-		if (!publishedChanged) break;
+		// Committed edits can introduce consumers without changing published summaries.
 	}
 	const budget = service.statisticsSince(budgetBaseline);
 	return Object.freeze({

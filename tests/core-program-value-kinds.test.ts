@@ -4,6 +4,10 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	coreValueKindObservation,
+} from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
@@ -34,6 +38,79 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 const OBSERVATION_OPERATORS = new Set(["typeof", "!", "===", "!=="]);
+
+it("solves newly consumed values without changing an older partial snapshot", () => {
+	const program = analysisProgram();
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [seed] = builder.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 3 },
+	});
+	let unused = seed!;
+	for (let index = 0; index < 500; index++) {
+		const [next] = builder.appendInstruction(entry, "binary", [unused, seed!], {
+			attributes: { operator: "+" },
+		});
+		unused = next!;
+	}
+	builder.setTerminator(entry, { kind: "return", value: seed! });
+	const fn = builder.finish(entry).function;
+	const manager = new CoreAnalysisManager(
+		program,
+		programAnalysisContext(),
+		new CoreOptimizationReportBuilder(program),
+	);
+	const before = manager
+		.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+		.kinds.values(fn);
+	expect(before.kindMask(seed!)).toBe(COMPILER_VALUE_KIND_NUMBER);
+	expect(() => before.latticeMask(unused)).toThrow("Unrequested program value kind");
+	expect(
+		manager
+			.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, { scope: "function", function: fn })
+			.exactScalar(seed!),
+	).toBe("int32");
+	const editor = CoreEditor.open(program, fn);
+	editor.replaceTerminator(entry, { kind: "return", value: unused });
+	editor.commit();
+	const after = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	expect(after.values(fn).kindMask(unused)).toBe(COMPILER_VALUE_KIND_NUMBER);
+	expect(() => before.kindMask(unused)).toThrow("Unrequested program value kind");
+	const fresh = new CoreAnalysisManager(
+		program,
+		programAnalysisContext(),
+		new CoreOptimizationReportBuilder(program),
+	).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	expect(after.summary(fn)).toEqual(fresh.summary(fn));
+	expect(after.values(fn).kindMask(unused)).toBe(fresh.values(fn).kindMask(unused));
+});
+
+it("compares typeof with a long UTF-16 constant without a host argument limit", () => {
+	const program = analysisProgram();
+	const builder = new CoreFunctionBuilder(program);
+	const block = builder.createBlock();
+	const stringIndex = builder.editor.appendStringConstants([
+		[...Array<number>(1_000_000).fill(120), 0xd800],
+	]);
+	const [number] = builder.appendInstruction(block, "createNumber", [], {
+		attributes: { value: 1 },
+	});
+	const [type] = builder.appendInstruction(block, "unary", [number!], {
+		attributes: { operator: "typeof" },
+	});
+	const [text] = builder.appendInstruction(block, "createString", [], {
+		attributes: { stringIndex },
+	});
+	const [equal] = builder.appendInstruction(block, "binary", [type!, text!], {
+		attributes: { operator: "===" },
+	});
+	const observation = builder.bodyInstructionIds(block).at(-1)!;
+	builder.setTerminator(block, { kind: "return", value: equal! });
+	const fn = program.function(builder.finish(block).function);
+	expect(
+		coreValueKindObservation(program, fn, observation, () => COMPILER_VALUE_KIND_NUMBER),
+	).toBe(false);
+});
 
 it("uses program-flow dirtiness without serialized version or target keys", () => {
 	const source = readFileSync(

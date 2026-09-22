@@ -137,6 +137,7 @@ export interface CoreProgramFlowValueKindState<
 }
 
 export interface CoreProgramFlowValueKindInputs {
+	readonly demandedValues: ReadonlyArray<CoreValueId>;
 	readonly parameterMasks?: ReadonlyArray<number>;
 	readonly receiverMask?: number;
 	readonly operationResultMask?: (
@@ -146,10 +147,14 @@ export interface CoreProgramFlowValueKindInputs {
 }
 
 export interface CoreProgramFlowValueKindSemantics<Analysis> {
+	observationValues(
+		program: CoreProgram,
+		fn: CoreFunctionStore,
+	): ReadonlyArray<CoreValueId>;
 	analyze(
 		fn: CoreFunctionStore,
 		controlFlow: CoreControlFlow,
-		inputs?: CoreProgramFlowValueKindInputs,
+		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
 	readonly top: number;
@@ -2120,6 +2125,11 @@ export class CoreProgramFlowEngine {
 		let callerWakeups = 0;
 		let calleeWakeups = 0;
 		let functionsEvaluated = 0;
+		const demands = new Map<CoreFunctionId, ReadonlyArray<CoreValueId>>();
+		const callSiteIndices = new Map<
+			CoreFunctionId,
+			ReadonlyMap<CoreInstructionId, ReturnType<Targets["outgoing"]>[number]>
+		>();
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2289,8 +2299,43 @@ export class CoreProgramFlowEngine {
 					const fn = this.#program.function(functionId);
 					const summary = summaries.get(functionId)!;
 					const sites = targets.outgoing(functionId);
-					const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
-					const values = semantics.analyze(fn, controlFlow(functionId), {
+					let byInstruction = callSiteIndices.get(functionId);
+					if (byInstruction === undefined) {
+						byInstruction = new Map(sites.map((site) => [site.instruction, site]));
+						callSiteIndices.set(functionId, byInstruction);
+					}
+					const cfg = controlFlow(functionId);
+					let demandedValues = demands.get(functionId);
+					if (demandedValues === undefined) {
+						const roots = new Set(semantics.observationValues(this.#program, fn));
+						for (const block of cfg.reachable) {
+							const terminator = fn.blockTerminator(block);
+							if (fn.instructionKind(terminator) === "return")
+								roots.add(
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+								);
+						}
+						for (const site of sites) {
+							let parameterCount = 0,
+								needsReceiver = site.targets.anyScript;
+							if (site.targets.anyScript) parameterCount = maximumParameterCount;
+							else
+								for (const callee of site.targets.functions) {
+									const target = this.#program.function(callee);
+									parameterCount = Math.max(parameterCount, target.parameterCount);
+									needsReceiver ||= target.metadata.strict;
+								}
+							for (let index = 0; index < parameterCount; index++) {
+								const argument = site.arguments?.[index];
+								if (argument !== undefined) roots.add(argument);
+							}
+							if (needsReceiver && site.receiver !== undefined) roots.add(site.receiver);
+						}
+						demandedValues = [...roots];
+						demands.set(functionId, demandedValues);
+					}
+					const values = semantics.analyze(fn, cfg, {
+						demandedValues,
 						parameterMasks: summary.parameterKinds,
 						receiverMask: summary.receiverKind,
 						operationResultMask(instruction) {
@@ -2316,7 +2361,6 @@ export class CoreProgramFlowEngine {
 					valueAnalyses.set(functionId, values);
 					functionsEvaluated++;
 					let returnKind = 0;
-					const cfg = controlFlow(functionId);
 					for (const block of cfg.reachable) {
 						const terminator = fn.blockTerminator(block);
 						if (fn.instructionKind(terminator) === "return") {

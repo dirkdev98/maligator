@@ -265,13 +265,19 @@ iterator cursor is not, by itself, permission to delete its language object.
       retaining verification of missing, cyclic and non-dominating uses.
 - [x] Persist completed scalar/structural cleanup with strict budget completion and
       version witnesses; skip unchanged imports' initial construction cleanup.
-- [ ] Make cross-call value-kind propagation consumer-driven: collect foldable
+- [x] Make cross-call value-kind propagation consumer-driven: collect foldable
       observations first and request global types only when their unresolved inputs
       depend on call results, parameters or receivers. Preserve local folds and
       conservative fallback through moves, block parameters and later edits.
+- [x] Restrict global type transfers to the dependencies of return values, consumed
+      call inputs and type observations. Keep local integer proofs complete and
+      distinguish unrequested values from lattice bottom in published snapshots.
 - [ ] Transfer already-dense function storage across construction generations without
       copying its columns. Preserve retired-handle and iterator failures, kernel
       ownership, version accounting and compaction for functions with holes.
+- [ ] Investigate repeated execution-register liveness in lowering, verification and
+      runtime-image emission. Reuse valid work across consumers with different
+      safepoint sets while preserving body-change invalidation and exact GC roots.
 - [ ] Design and measure explicit optimized-only cold-cache capture, skipping unused
       canonical capture, validation and encoding. Preserve D020/D023's current
       canonical publication and load-only access contracts until an append-only
