@@ -116,7 +116,7 @@ export function coreStaticDataQueryPlan(
 				break;
 			}
 			case "string": {
-				const slot = program.stringConstantSlot(value.codeUnits);
+				const slot = program.stringConstantSlot(value.codeUnits, "last");
 				if (slot === undefined) return undefined;
 				words.push(5, slot);
 				break;

@@ -1556,6 +1556,30 @@ describe("Core store", () => {
 		expect(inspectCoreInstructionOperands(fn, identity)).toEqual([constant]);
 	});
 
+	it("keeps first and last string slots current across appends and pool replacement", () => {
+		const { program, fn } = oneFunction();
+		CoreEditor.configureProgram(program, {
+			stringConstants: [[], [120], [120], [0xd800]],
+		});
+		expect(program.stringConstantSlot("", "first")).toBe(0);
+		expect(program.stringConstantSlot([120], "first")).toBe(1);
+		expect(program.stringConstantSlot("x", "last")).toBe(2);
+		expect(program.stringConstantSlot("\ud800", "first")).toBe(3);
+		expect(program.stringConstantSlot("y", "first")).toBeUndefined();
+		const editor = CoreEditor.open(program, fn.id);
+		editor.appendStringConstants([[120], [121], []]);
+		expect(program.stringConstantSlot("x", "first")).toBe(1);
+		expect(program.stringConstantSlot([120], "last")).toBe(4);
+		expect(program.stringConstantSlot("y", "first")).toBe(5);
+		expect(program.stringConstantSlot("", "last")).toBe(6);
+		editor.commit();
+		CoreEditor.configureProgram(program, { stringConstants: [[121], [120]] });
+		expect(program.stringConstantSlot("x", "first")).toBe(1);
+		expect(program.stringConstantSlot("x", "last")).toBe(1);
+		expect(program.stringConstantSlot("y", "first")).toBe(0);
+		expect(program.stringConstantSlot("", "first")).toBeUndefined();
+	});
+
 	it("keeps every reader result outside the mutation boundary", () => {
 		const { program, fn } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;

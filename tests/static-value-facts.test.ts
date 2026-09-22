@@ -14,6 +14,45 @@ import {
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 describe("static descriptions and allocation identities", () => {
+	it("preserves UTF-16 strings across repeated queries, pool appends and replacement", () => {
+		const texts = [
+			"",
+			"\u0000",
+			"\ud800",
+			"\udc00",
+			`${"x".repeat(1023)}\ud83d\ude00tail`,
+		];
+		const units = (text: string) =>
+			Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: texts.map(units),
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const fn = program.function(builder.finish(entry).function);
+		const analysis = () =>
+			new CoreStaticValueAnalysis(program, fn, () =>
+				buildCoreControlFlow(program, fn.id),
+			);
+		const first = analysis();
+		for (const facts of [first, first, analysis()])
+			for (const [index, text] of texts.entries()) expect(facts.string(index)).toBe(text);
+		const editor = CoreEditor.open(program, fn.id);
+		const appended = editor.appendStringConstants([units("new")]);
+		expect(first.string(0)).toBe("");
+		expect(first.string(appended)).toBe("new");
+		editor.commit();
+		CoreEditor.configureProgram(program, { stringConstants: [units("replacement")] });
+		expect(first.string(0)).toBe("replacement");
+		expect(analysis().string(0)).toBe("replacement");
+		const other = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [units("other")],
+		});
+		expect(other.stringConstantText(0)).toBe("other");
+	});
+
 	it("skips mutable contents for a constant query and observes later property mutations on demand", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
 		const builder = new CoreFunctionBuilder(program);

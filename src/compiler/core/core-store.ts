@@ -329,6 +329,13 @@ function checkedCount(value: number, name: string): number {
 	return value;
 }
 
+function decodeCoreString(units: ReadonlyArray<number>): string {
+	let text = "";
+	for (let offset = 0; offset < units.length; offset += 1024)
+		text += String.fromCharCode(...units.slice(offset, offset + 1024));
+	return text;
+}
+
 function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
 	return [...ids].sort((left, right) => left - right);
 }
@@ -2557,7 +2564,8 @@ export class CoreProgram {
 	readonly #programFlowDomainMasks: Array<number> = [];
 	#stringConstants: ReadonlyArray<ReadonlyArray<number>> = [];
 	#bigintConstants: ReadonlyArray<bigint> = [];
-	#stringConstantSlots: Map<string, number> | undefined;
+	#stringConstantSlots: Map<string, { readonly first: number; last: number }> | undefined;
+	readonly #stringConstantTexts = new WeakMap<ReadonlyArray<number>, string>();
 	#bigintConstantSlots: Map<string, number> | undefined;
 	#literalTemplateData: ReadonlyArray<number> = [];
 	#literalTemplates: Map<string, number> | undefined;
@@ -2630,13 +2638,36 @@ export class CoreProgram {
 		return this.#bigintConstants;
 	}
 
-	stringConstantSlot(codeUnits: ReadonlyArray<number>): number | undefined {
+	stringConstantText(index: number): string {
+		const units = this.#stringConstants[index];
+		if (units === undefined) throw new Error(`Unknown Core string constant ${index}`);
+		const cached = this.#stringConstantTexts.get(units);
+		if (cached !== undefined) return cached;
+		const text = decodeCoreString(units);
+		this.#stringConstantTexts.set(units, text);
+		return text;
+	}
+
+	stringConstantSlot(
+		value: string | ReadonlyArray<number>,
+		occurrence: "first" | "last",
+	): number | undefined {
 		if (this.#stringConstantSlots === undefined) {
-			this.#stringConstantSlots = new Map(
-				this.#stringConstants.map((units, index) => [units.join(","), index]),
-			);
+			this.#stringConstantSlots = new Map();
+			for (let index = 0; index < this.#stringConstants.length; index++)
+				this.#indexStringConstant(index);
 		}
-		return this.#stringConstantSlots.get(codeUnits.join(","));
+		return this.#stringConstantSlots.get(
+			typeof value === "string" ? value : decodeCoreString(value),
+		)?.[occurrence];
+	}
+
+	#indexStringConstant(index: number): void {
+		const key = this.stringConstantText(index);
+		const slots = this.#stringConstantSlots!.get(key);
+		if (slots === undefined)
+			this.#stringConstantSlots!.set(key, { first: index, last: index });
+		else slots.last = index;
 	}
 
 	bigintConstantSlot(decimal: string): number | undefined {
@@ -2815,9 +2846,8 @@ export class CoreProgram {
 			...values.map((units) => Object.freeze([...units])),
 		]);
 		if (this.#stringConstantSlots !== undefined) {
-			for (const [offset, units] of values.entries()) {
-				this.#stringConstantSlots.set(units.join(","), start + offset);
-			}
+			for (let offset = 0; offset < values.length; offset++)
+				this.#indexStringConstant(start + offset);
 		}
 		return start;
 	}

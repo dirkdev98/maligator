@@ -2317,11 +2317,7 @@ export class CoreStaticValueAnalysis {
 	}
 
 	string(index: number): string {
-		const units = this.#program.stringConstants[index]!;
-		let result = "";
-		for (let offset = 0; offset < units.length; offset += 1024)
-			result += String.fromCharCode(...units.slice(offset, offset + 1024));
-		return result;
+		return this.#program.stringConstantText(index);
 	}
 
 	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {

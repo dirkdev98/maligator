@@ -1315,24 +1315,12 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				});
 			else editor.replaceOperands(plan.instruction, [input, ...plan.inputs.slice(1)]);
 		}
-		const strings = new Map<string, number>(),
-			bigints = new Map<bigint, number>();
-		const stringIndex = (value: string) => {
-			let index = strings.get(value);
-			if (index === undefined) {
-				index = program.stringConstants.findIndex(
-					(units) =>
-						units.length === value.length &&
-						units.every((unit, index) => unit === value.charCodeAt(index)),
-				);
-				if (index < 0)
-					index = editor.appendStringConstants([
-						Array.from({ length: value.length }, (_, index) => value.charCodeAt(index)),
-					]);
-				strings.set(value, index);
-			}
-			return index;
-		};
+		const bigints = new Map<bigint, number>();
+		const stringIndex = (value: string) =>
+			program.stringConstantSlot(value, "first") ??
+			editor.appendStringConstants([
+				Array.from({ length: value.length }, (_, index) => value.charCodeAt(index)),
+			]);
 		for (const plan of plans) {
 			if ("collation" in plan) {
 				const that =
