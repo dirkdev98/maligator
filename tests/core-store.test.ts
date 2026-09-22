@@ -109,6 +109,82 @@ function registry(): CoreOpcodeRegistry {
 	return registry;
 }
 
+it("snapshots caller-owned table entries even when their outer arrays are frozen", () => {
+	const units = [65];
+	const position = { line: 7, column: 3 };
+	const bigints = [9n];
+	const templates = [11];
+	let getterLine = 12;
+	const accessorPosition = Object.freeze({
+		get line() {
+			return getterLine;
+		},
+		column: 0,
+	});
+	const data = {
+		stringConstants: Object.freeze([units]),
+		sourcePositions: Object.freeze([position, accessorPosition]),
+		bigintConstants: bigints,
+		literalTemplateData: templates,
+	};
+	const constructed = new CoreProgram(registry(), data);
+	const configured = new CoreProgram(registry());
+	CoreEditor.configureProgram(configured, data);
+	units[0] = 66;
+	position.line = 99;
+	getterLine = 100;
+	bigints[0] = 10n;
+	templates[0] = 22;
+	for (const program of [constructed, configured]) {
+		expect(program.stringConstants).toEqual([[65]]);
+		expect(program.sourcePositions).toEqual([
+			{ line: 7, column: 3 },
+			{ line: 12, column: 0 },
+		]);
+		expect(program.bigintConstants).toEqual([9n]);
+		expect(program.literalTemplateData).toEqual([11]);
+	}
+});
+
+it("shares owned immutable tables while appending independently to each program", () => {
+	const opcodes = registry();
+	const first = new CoreProgram(opcodes, {
+		stringConstants: [[65]],
+		sourcePositions: [{ line: 7, column: 3 }],
+		bigintConstants: [9n],
+		literalTemplateData: [11],
+	});
+	const tables = {
+		stringConstants: first.stringConstants,
+		sourcePositions: first.sourcePositions,
+		bigintConstants: first.bigintConstants,
+		literalTemplateData: first.literalTemplateData,
+	};
+	const second = new CoreProgram(opcodes, tables);
+	for (const key of [
+		"stringConstants",
+		"sourcePositions",
+		"bigintConstants",
+		"literalTemplateData",
+	] as const)
+		expect(second[key]).toBe(first[key]);
+	const built = oneFunction(first);
+	const editor = CoreEditor.open(first, built.fn.id);
+	editor.appendStringConstants(second.stringConstants);
+	editor.appendSourcePositions(second.sourcePositions);
+	editor.appendBigintConstants([10n]);
+	editor.commit();
+	expect(first.stringConstants[1]).toBe(second.stringConstants[0]);
+	expect(first.sourcePositions[1]).toBe(second.sourcePositions[0]);
+	expect(second.stringConstants).toEqual([[65]]);
+	expect(second.sourcePositions).toEqual([{ line: 7, column: 3 }]);
+	expect(second.bigintConstants).toEqual([9n]);
+	CoreEditor.configureProgram(first, { stringConstants: [[90]] });
+	expect(second.stringConstants).toBe(tables.stringConstants);
+	expect(second.stringConstants).toEqual([[65]]);
+	expect(second.literalTemplateData).toEqual([11]);
+});
+
 function oneFunction(program = new CoreProgram(registry())) {
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{ representation: "boxed" }]);

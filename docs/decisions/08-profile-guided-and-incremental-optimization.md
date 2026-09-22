@@ -911,3 +911,28 @@ variants together. Successful positive and negative hits refresh entry recency.
 Negative receipts remain small manifests with exact unsupported/budget-limited
 statuses. The format change invalidates previous receipt identities rather than
 adding a compatibility reader. Function-body demand loading remains separate.
+
+## D021 — 2026-09-22 — Share Core-owned immutable constant table snapshots
+
+**Status:** Implemented with focused verification; isolated timing acceptance remains
+open. **Refines:** D019.
+
+The Core store records ownership of frozen table arrays, string rows and source
+position records in a private weak set. Constructing or configuring another program
+can reuse these snapshots directly. Merged outer arrays still receive a fresh frozen
+snapshot, but their already-owned entries retain identity. Appending constants or
+positions replaces the outer snapshot, leaving other programs and earlier readers
+unchanged.
+
+Caller-provided objects still receive defensive copies. A frozen outer array does
+not prove its entries immutable, and frozen accessor-bearing records can still
+return changing values. Ownership, rather than a shallow frozen check, is the
+sharing authority. The frontend retains imported readonly rows and position records
+when it resumes lowering instead of copying them back into mutable entries only to
+freeze them again at finalization. Literal words that embed relocated pool references
+still require remapping.
+
+Focused checks cover caller mutation after construction/configuration, frozen
+outer arrays with mutable entries, frozen getters, independent program appends and
+reconfiguration, and the identity of shared immutable snapshots. Native and VM
+parity and unchanged MALW bytes retain the existing output contract.

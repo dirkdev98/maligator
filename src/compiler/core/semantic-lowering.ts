@@ -82,6 +82,7 @@ import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { importCoreModule } from "./core-module-artifact.ts";
 import type { CompletedCoreModule } from "./core-module-artifact.ts";
 import { CoreProgram } from "./core-store.ts";
+import type { CoreSourcePosition } from "./core-store.ts";
 
 interface CoreFrontendContext {
 	reusableModule?: (sourcePath: string) => CompletedCoreModule | undefined;
@@ -123,29 +124,11 @@ interface CoreFrontendContext {
 	directEvalPersistentScopeBinding?: Binding;
 
 	nextFunctionIndex: number;
-	stringConstants: Array<Array<number>>;
+	stringConstants: Array<ReadonlyArray<number>>;
 	stringConstantToIndex: Map<string, number>;
 
-	/**
-	 * Interned source positions for debug info / stack traces. Each entry is a
-	 * (line, column) pair (1-based line, 0-based column, as Meriyah reports). The
-	 * index is the `pos` carried by `sourcePos` markers. The file is resolved
-	 * per-function (a function body lives in one file), so only line/column are
-	 * interned here and shared across every function.
-	 */
-	/**
-	 * A leaf entry has just line/column. An *inline* entry (added by the inliner)
-	 * additionally carries `inlinedFunctionIndex` (the function whose body this
-	 * position is in) and `callerPosId` (the position one level out, where it was
-	 * inlined) — a chain the trace formatter expands into one frame per inline
-	 * level, so inlined code still shows its own frame.
-	 */
-	sourcePositions: Array<{
-		line: number;
-		column: number;
-		inlinedFunctionIndex?: number;
-		callerPosId?: number;
-	}>;
+	/** Positions resolve files through their owning function; inlining adds a caller chain. */
+	sourcePositions: Array<CoreSourcePosition>;
 	sourcePositionToIndex: Map<string, number>;
 
 	/**
@@ -1115,11 +1098,11 @@ function emitReusableModuleInit(
 	program.nextFunctionIndex = program.core.functionCapacity;
 	program.nextGlobalIndex = program.core.globalCount;
 	for (const units of program.core.stringConstants.slice(program.stringConstants.length))
-		program.stringConstants.push([...units]);
+		program.stringConstants.push(units);
 	for (const position of program.core.sourcePositions.slice(
 		program.sourcePositions.length,
 	))
-		program.sourcePositions.push({ ...position });
+		program.sourcePositions.push(position);
 	for (const value of program.core.bigintConstants.slice(program.bigintConstants.length))
 		program.bigintConstants.push(value);
 	for (const word of program.core.literalTemplateData.slice(

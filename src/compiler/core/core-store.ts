@@ -237,6 +237,26 @@ export interface CoreProgramDataTables {
 	readonly globalCount?: number;
 }
 
+// Only Core-owned snapshots are reusable; frozen caller objects can still contain getters.
+const immutableCoreData = new WeakSet<object>();
+function freezeCoreData<T extends object>(value: T): Readonly<T> {
+	const frozen = Object.freeze(value);
+	immutableCoreData.add(frozen);
+	return frozen;
+}
+function snapshotCoreArray<T>(
+	values: ReadonlyArray<T>,
+	snapshotEntry?: (value: T) => T,
+): ReadonlyArray<T> {
+	if (immutableCoreData.has(values)) return values;
+	return freezeCoreData(
+		snapshotEntry === undefined ? [...values] : values.map(snapshotEntry),
+	);
+}
+function snapshotSourcePosition(position: CoreSourcePosition): CoreSourcePosition {
+	return immutableCoreData.has(position) ? position : freezeCoreData({ ...position });
+}
+
 /** Relocation callbacks must be pure; the source transfers exclusive ownership. */
 export interface CoreProgramRelocation {
 	readonly data: CoreProgramDataTables;
@@ -2940,7 +2960,7 @@ export class CoreProgram {
 		let templateOffset = this.#literalTemplates.get(key);
 		if (templateOffset === undefined) {
 			templateOffset = this.#literalTemplateData.length;
-			this.#literalTemplateData = Object.freeze([...this.#literalTemplateData, ...data]);
+			this.#literalTemplateData = freezeCoreData([...this.#literalTemplateData, ...data]);
 			this.#literalTemplates.set(key, templateOffset);
 		}
 		if (!cache) return { templateOffset };
@@ -2959,9 +2979,9 @@ export class CoreProgram {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
 		const start = this.#stringConstants.length;
-		this.#stringConstants = Object.freeze([
+		this.#stringConstants = freezeCoreData([
 			...this.#stringConstants,
-			...values.map((units) => Object.freeze([...units])),
+			...values.map((units) => snapshotCoreArray(units)),
 		]);
 		if (this.#stringConstantSlots !== undefined) {
 			for (let offset = 0; offset < values.length; offset++)
@@ -2977,7 +2997,7 @@ export class CoreProgram {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
 		const start = this.#bigintConstants.length;
-		this.#bigintConstants = Object.freeze([...this.#bigintConstants, ...values]);
+		this.#bigintConstants = freezeCoreData([...this.#bigintConstants, ...values]);
 		if (this.#bigintConstantSlots !== undefined) {
 			for (const [offset, value] of values.entries()) {
 				this.#bigintConstantSlots.set(String(value), start + offset);
@@ -2993,9 +3013,9 @@ export class CoreProgram {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
 		const start = this.#sourcePositions.length;
-		this.#sourcePositions = Object.freeze([
+		this.#sourcePositions = freezeCoreData([
 			...this.#sourcePositions,
-			...positions.map((position) => Object.freeze({ ...position })),
+			...positions.map(snapshotSourcePosition),
 		]);
 		return start;
 	}
@@ -3025,17 +3045,18 @@ export class CoreProgram {
 	}
 
 	#wireData(data: CoreProgramDataTables): void {
-		this.#stringConstants = Object.freeze(
-			(data.stringConstants ?? []).map((units) => Object.freeze([...units])),
+		this.#stringConstants = snapshotCoreArray(data.stringConstants ?? [], (units) =>
+			snapshotCoreArray(units),
 		);
-		this.#bigintConstants = Object.freeze([...(data.bigintConstants ?? [])]);
+		this.#bigintConstants = snapshotCoreArray(data.bigintConstants ?? []);
 		this.#stringConstantSlots = undefined;
 		this.#bigintConstantSlots = undefined;
-		this.#literalTemplateData = Object.freeze([...(data.literalTemplateData ?? [])]);
+		this.#literalTemplateData = snapshotCoreArray(data.literalTemplateData ?? []);
 		this.#literalTemplates = undefined;
 		this.#literalPoolSlots.clear();
-		this.#sourcePositions = Object.freeze(
-			(data.sourcePositions ?? []).map((position) => Object.freeze({ ...position })),
+		this.#sourcePositions = snapshotCoreArray(
+			data.sourcePositions ?? [],
+			snapshotSourcePosition,
 		);
 		this.#globalCount = checkedCount(data.globalCount ?? 0, "Core global count");
 	}
