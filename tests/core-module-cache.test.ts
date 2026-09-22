@@ -1,4 +1,12 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -88,7 +96,7 @@ it("misses after source or recipe changes and repairs a corrupt entry before imp
 	const input = options();
 	const initial = loadOrCompileCoreModule(input);
 	if (initial.status !== "ready") throw new Error(initial.reason);
-	writeFileSync(path.join(input.cacheDirectory, `${initial.key}.json`), "partial");
+	writeFileSync(path.join(input.cacheDirectory, initial.key, "manifest.json"), "partial");
 	expect(loadOrCompileCoreModule(input)).toMatchObject({
 		status: "ready",
 		cache: "miss",
@@ -100,6 +108,91 @@ it("misses after source or recipe changes and repairs a corrupt entry before imp
 		status: "ready",
 		cache: "miss",
 	});
+});
+it("loads only the selected payload and memoizes canonical validation on demand", () => {
+	const input = options();
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const directory = path.join(input.cacheDirectory, cold.key);
+	const receipt = JSON.parse(
+		readFileSync(path.join(directory, "manifest.json"), "utf8"),
+	) as { canonicalDigest: string; optimizedDigest: string };
+	const canonicalFile = path.join(directory, `${receipt.canonicalDigest}.json`);
+	const canonicalBytes = readFileSync(canonicalFile, "utf8");
+	rmSync(canonicalFile);
+	const warm = loadOrCompileCoreModule({
+		...input,
+		onWork() {
+			throw new Error("Repeated compiler work");
+		},
+	});
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	expect(() => warm.canonical).toThrow();
+	writeFileSync(canonicalFile, "corrupt");
+	expect(() => warm.canonical).toThrow("digest mismatch");
+	writeFileSync(canonicalFile, canonicalBytes);
+	const canonical = warm.canonical;
+	expect(encodeCoreModule(canonical)).toBe(encodeCoreModule(cold.canonical));
+	rmSync(canonicalFile);
+	expect(warm.canonical).toBe(canonical);
+	const program = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(program, warm.optimized, input.sourcePath);
+	verifyCoreProgram(program, { stage: "pre-target" });
+});
+it("repairs corrupt selected payloads and rejects paths outside the cache entry", () => {
+	const input = options();
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const directory = path.join(input.cacheDirectory, cold.key);
+	const manifest = path.join(directory, "manifest.json");
+	const receipt = JSON.parse(readFileSync(manifest, "utf8")) as {
+		canonicalDigest: string;
+		optimizedDigest: string;
+	};
+	const optimizedFile = path.join(directory, `${receipt.optimizedDigest}.json`);
+	for (const corruption of ["payload", "path"] as const) {
+		if (corruption === "payload") writeFileSync(optimizedFile, "partial");
+		else
+			writeFileSync(
+				manifest,
+				JSON.stringify({ ...receipt, optimizedDigest: "../outside" }),
+			);
+		const repaired = loadOrCompileCoreModule(input);
+		expect(repaired).toMatchObject({ status: "ready", cache: "miss" });
+		const warm = loadOrCompileCoreModule(input);
+		expect(warm).toMatchObject({ status: "ready", cache: "hit" });
+		if (warm.status !== "ready") throw new Error(warm.reason);
+		expect(encodeCoreModule(warm.optimized)).toBe(encodeCoreModule(cold.optimized));
+	}
+	expect(readdirSync(directory).some((file) => file.includes(".tmp-"))).toBe(false);
+});
+it("keeps a cold result usable without publishing an incomplete manifest", () => {
+	const input = options();
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const directory = path.join(input.cacheDirectory, cold.key);
+	const manifest = path.join(directory, "manifest.json");
+	const receipt = JSON.parse(readFileSync(manifest, "utf8")) as {
+		canonicalDigest: string;
+		optimizedDigest: string;
+	};
+	const optimizedFile = path.join(directory, `${receipt.optimizedDigest}.json`);
+	rmSync(manifest);
+	rmSync(optimizedFile);
+	mkdirSync(optimizedFile);
+	expect(loadOrCompileCoreModule(input)).toMatchObject({
+		status: "ready",
+		cache: "miss",
+	});
+	expect(existsSync(manifest)).toBe(false);
+	expect(readdirSync(directory).some((file) => file.includes(".tmp-"))).toBe(false);
+	rmSync(optimizedFile, { recursive: true });
+	expect(loadOrCompileCoreModule(input)).toMatchObject({
+		status: "ready",
+		cache: "miss",
+	});
+	expect(loadOrCompileCoreModule(input)).toMatchObject({ status: "ready", cache: "hit" });
 });
 it.each([
 	"import { x } from './missing.mjs'; export { x };",

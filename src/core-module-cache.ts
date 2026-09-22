@@ -1,6 +1,7 @@
 import { hash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { touchCacheEntry } from "./cache-management.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { lowerSemanticProgramToCore } from "./compiler/core/core-frontend.ts";
 import { CoreLocalOptimizer } from "./compiler/core/core-local-optimizer.ts";
@@ -20,6 +21,7 @@ import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-fac
 
 const BOUNDARY = "strict-esm-private-cells-boxed-local-v3";
 const RECIPE = "conservative-local-v1";
+const RECEIPT_SCHEMA = 2;
 export interface CoreModuleCacheOptions {
 	source: string;
 	sourcePath: string;
@@ -35,6 +37,7 @@ export type CoreModuleCacheResult =
 	| {
 			status: "ready";
 			cache: "hit" | "miss";
+			/** Warm hits load this variant on demand and throw if its payload is unavailable. */
 			canonical: CoreModuleArtifact;
 			optimized: CoreModuleArtifact;
 			completedRecipe: typeof RECIPE;
@@ -43,15 +46,14 @@ export type CoreModuleCacheResult =
 	  }
 	| { status: "unsupported" | "budget-limited"; reason: string };
 interface ModuleReceipt {
-	schema: 1;
+	schema: typeof RECEIPT_SCHEMA;
 	key: string;
-	canonical: string;
-	optimized: string;
+	status: "ready";
 	canonicalDigest: string;
 	optimizedDigest: string;
 }
 interface UnsupportedReceipt {
-	schema: 1;
+	schema: typeof RECEIPT_SCHEMA;
 	key: string;
 	unsupported: string;
 	status: "unsupported" | "budget-limited";
@@ -89,15 +91,11 @@ function rejectUnsupportedSyntax(value: unknown): void {
 	for (const child of Object.values(node)) rejectUnsupportedSyntax(child);
 }
 
-function publishReceipt(file: string, receipt: ModuleReceipt | UnsupportedReceipt): void {
+function writeAtomic(file: string, bytes: string): void {
 	const temporary = `${file}.tmp-${randomUUID()}`;
 	try {
-		mkdirSync(path.dirname(file), { recursive: true });
-		writeFileSync(temporary, JSON.stringify(receipt), { flag: "wx" });
+		writeFileSync(temporary, bytes, { flag: "wx" });
 		renameSync(temporary, file);
-	} catch (error) {
-		// Optional persistence must not turn a valid build into a cache-permission failure.
-		if (!(error instanceof Error) || !("code" in error)) throw error;
 	} finally {
 		try {
 			rmSync(temporary, { force: true });
@@ -105,6 +103,31 @@ function publishReceipt(file: string, receipt: ModuleReceipt | UnsupportedReceip
 			/* A failed publication may leave no writable directory. */
 		}
 	}
+}
+
+function publishReceipt(
+	directory: string,
+	receipt: ModuleReceipt | UnsupportedReceipt,
+	payloads: ReadonlyArray<{ digest: string; bytes: string }> = [],
+): void {
+	try {
+		mkdirSync(directory, { recursive: true });
+		for (const payload of payloads)
+			writeAtomic(path.join(directory, `${payload.digest}.json`), payload.bytes);
+		// Readers can only observe a manifest after its immutable payloads are complete.
+		writeAtomic(path.join(directory, "manifest.json"), JSON.stringify(receipt));
+	} catch (error) {
+		// Optional persistence must not turn a valid build into a cache-permission failure.
+		if (!(error instanceof Error) || !("code" in error)) throw error;
+	}
+}
+
+function loadPayload(directory: string, expectedDigest: string): CoreModuleArtifact {
+	if (!/^[a-f0-9]{64}$/.test(expectedDigest))
+		throw new Error("Invalid Core payload digest");
+	const bytes = readFileSync(path.join(directory, `${expectedDigest}.json`), "utf8");
+	if (digest(bytes) !== expectedDigest) throw new Error("Core payload digest mismatch");
+	return decodeCoreModule(bytes);
 }
 
 /** Callers import the selected variant and invoke its initializer before reading live exports. */
@@ -115,10 +138,10 @@ export function loadOrCompileCoreModule(
 	const maxEdits = options.maxEdits ?? 100_000;
 	const key = digest(
 		JSON.stringify({
-			schema: 1,
+			schema: RECEIPT_SCHEMA,
 			boundary: BOUNDARY,
 			recipe: RECIPE,
-			producer: compilerProducerIdentity("core-module", 1),
+			producer: compilerProducerIdentity("core-module", RECEIPT_SCHEMA),
 			module: options.moduleKey,
 			source: digest(JSON.stringify(options.source)),
 			maxWorkItems,
@@ -126,34 +149,40 @@ export function loadOrCompileCoreModule(
 			parser: options.parsed?.producer,
 		}),
 	);
-	const file = path.join(options.cacheDirectory, `${key}.json`);
+	const directory = path.join(options.cacheDirectory, key);
 	try {
-		const receipt = JSON.parse(readFileSync(file, "utf8")) as
-			| ModuleReceipt
-			| UnsupportedReceipt;
+		const receipt = JSON.parse(
+			readFileSync(path.join(directory, "manifest.json"), "utf8"),
+		) as ModuleReceipt | UnsupportedReceipt;
 		if (
-			receipt.schema === 1 &&
+			receipt.schema === RECEIPT_SCHEMA &&
 			receipt.key === key &&
 			"unsupported" in receipt &&
+			(receipt.status === "unsupported" || receipt.status === "budget-limited") &&
 			typeof receipt.unsupported === "string"
-		)
+		) {
+			touchCacheEntry(directory);
 			return {
-				status: receipt.status === "budget-limited" ? "budget-limited" : "unsupported",
+				status: receipt.status,
 				reason: receipt.unsupported,
 			};
+		}
 		if (
 			!("unsupported" in receipt) &&
-			receipt.schema === 1 &&
+			receipt.schema === RECEIPT_SCHEMA &&
 			receipt.key === key &&
-			digest(receipt.canonical) === receipt.canonicalDigest &&
-			digest(receipt.optimized) === receipt.optimizedDigest
+			receipt.status === "ready" &&
+			typeof receipt.canonicalDigest === "string" &&
+			typeof receipt.optimizedDigest === "string"
 		) {
-			const optimized = decodeCoreModule(receipt.optimized);
+			const optimized = loadPayload(directory, receipt.optimizedDigest);
+			let canonical: CoreModuleArtifact | undefined;
+			touchCacheEntry(directory);
 			return {
 				status: "ready",
 				cache: "hit",
 				get canonical() {
-					return decodeCoreModule(receipt.canonical);
+					return (canonical ??= loadPayload(directory, receipt.canonicalDigest));
 				},
 				optimized,
 				completedRecipe: RECIPE,
@@ -243,14 +272,16 @@ export function loadOrCompileCoreModule(
 				"Reusable Core exceeds the artifact size limit",
 			);
 		const receipt: ModuleReceipt = {
-			schema: 1,
+			schema: RECEIPT_SCHEMA,
 			key,
-			canonical: canonicalBytes,
-			optimized: optimizedBytes,
+			status: "ready",
 			canonicalDigest: digest(canonicalBytes),
 			optimizedDigest: digest(optimizedBytes),
 		};
-		publishReceipt(file, receipt);
+		publishReceipt(directory, receipt, [
+			{ digest: receipt.canonicalDigest, bytes: canonicalBytes },
+			{ digest: receipt.optimizedDigest, bytes: optimizedBytes },
+		]);
 		return {
 			status: "ready",
 			cache: "miss",
@@ -270,7 +301,12 @@ export function loadOrCompileCoreModule(
 		) {
 			const status =
 				error instanceof CoreModuleBudgetError ? "budget-limited" : "unsupported";
-			publishReceipt(file, { schema: 1, key, unsupported: error.message, status });
+			publishReceipt(directory, {
+				schema: RECEIPT_SCHEMA,
+				key,
+				unsupported: error.message,
+				status,
+			});
 			return { status, reason: error.message };
 		}
 		throw error;

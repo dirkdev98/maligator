@@ -886,3 +886,28 @@ reads both artifact variants, and table preparation still copies immutable pool
 contents. Separately addressable variants, sharing immutable table entries and
 function-level loading remain distinct opportunities; this change does not claim
 that all cached-module analysis or allocation has disappeared.
+
+## D020 — 2026-09-22 — Load only the selected persistent Core variant
+
+**Status:** Implemented with focused verification; repeated performance acceptance
+remains open. **Refines:** D018 and D019.
+
+Receipt schema 2 stores each cache key in one directory, with a small manifest and
+digest-addressed canonical and optimized payloads. Payloads publish atomically
+before the manifest. Concurrent writers cannot expose partial bodies or mix a
+manifest with another generation's contents. Temporary files stay within the entry
+and are removed after publication attempts. Optional persistence failures still
+leave the freshly compiled result usable.
+
+An ordinary hit reads, hashes, decodes and verifies only the optimized payload.
+Canonical access loads and verifies that variant on demand, memoizing successful
+decoding. A missing or corrupt canonical variant throws when explicitly requested;
+it does not invalidate a usable optimized result or trigger hidden compiler work.
+An unusable optimized variant remains a cache miss before destination mutation.
+Only validated digest names can select files within the entry.
+
+The cache manager counts and prunes the directory as one module, preserving both
+variants together. Successful positive and negative hits refresh entry recency.
+Negative receipts remain small manifests with exact unsupported/budget-limited
+statuses. The format change invalidates previous receipt identities rather than
+adding a compatibility reader. Function-body demand loading remains separate.
