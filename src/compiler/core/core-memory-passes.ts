@@ -19,9 +19,11 @@ import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+	CoreMemoryValueSources,
 	coreMemoryAccesses,
 	coreMemoryLocationIsExact,
 } from "./core-ir-memory.ts";
+import type { CoreMemoryVersions } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
@@ -132,7 +134,8 @@ function hasExactMemoryLoadForwardingOpportunity(fn: CoreFunctionStore): boolean
 	for (const instruction of fn.instructionIds()) {
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
-			!effectsPermitRemoval(fn, instruction)
+			!effectsPermitRemoval(fn, instruction) ||
+			coreInstructionEffects(fn, instruction).reads.length === 0
 		)
 			continue;
 		const opcode = fn.instructionOpcodeName(instruction);
@@ -452,6 +455,7 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 	let allocation = false;
 	let propertyConsumer = false;
+	let sources: CoreMemoryValueSources | undefined;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
@@ -470,7 +474,10 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 			fn.kernel.instructionResultCount(instruction) === 1 &&
 			effectsPermitRemoval(fn, instruction) &&
 			coreMemoryAccesses(fn, instruction).some(
-				(access) => access.mode === "read" && coreMemoryLocationIsExact(access.location),
+				(access) =>
+					access.mode === "read" &&
+					coreMemoryLocationIsExact(access.location) &&
+					(sources ??= new CoreMemoryValueSources(fn)).maySupply(access.location),
 			)
 		)
 			return true;
@@ -2192,7 +2199,8 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
+		let memory: CoreMemoryVersions | undefined;
+		let sources: CoreMemoryValueSources | undefined;
 		const { provenance, roots } = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const lifetimeIndependent = (value: CoreValueId): boolean => {
@@ -2230,9 +2238,15 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 						: { allocation: resolved.layout.instruction, cell: resolved.cell };
 				},
 			})) {
-				if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location))
+				if (
+					access.mode !== "read" ||
+					!coreMemoryLocationIsExact(access.location) ||
+					!(sources ??= new CoreMemoryValueSources(fn)).maySupply(access.location)
+				)
 					continue;
-				const value = memory.valueForRead(instruction, access.location);
+				const value = (memory ??= context.analysis(
+					CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+				)).valueForRead(instruction, access.location);
 				if (value === undefined || value === output) continue;
 				const sourceRepresentation = fn.valueRepresentation(value);
 				const destinationRepresentation = fn.valueRepresentation(output);

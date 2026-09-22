@@ -13,6 +13,37 @@ import {
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 describe("static descriptions and allocation identities", () => {
+	it.each(["Global", "Local", "Captured"] as const)(
+		"does not build memory versions for an unwritten %s slot",
+		(family) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.appendInstruction(entry, `store${family}`, [stored!], {
+				attributes: family === "Captured" ? { functionIndex: 1, index: 0 } : { index: 1 },
+			});
+			const [loaded] = builder.appendInstruction(entry, `load${family}`, [], {
+				attributes: family === "Captured" ? { functionIndex: 0, index: 0 } : { index: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const fn = program.function(builder.finish(entry).function);
+			const facts = new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				undefined,
+				undefined,
+				() => {
+					throw new Error("Unwritten slot requested memory versions");
+				},
+			);
+			expect(facts.query(loaded!).kind).toBe("unknown");
+		},
+	);
+
 	it("interns equal recipes without equating separately evaluated objects or aliases", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

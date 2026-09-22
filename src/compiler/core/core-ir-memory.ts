@@ -275,6 +275,41 @@ export function coreMemoryAccesses(
 	return Object.freeze(accesses);
 }
 
+export class CoreMemoryValueSources {
+	readonly #locations = new CoreMemoryLocationTable();
+	readonly #writes = new Set<CoreMemoryLocationId>();
+
+	constructor(fn: CoreFunctionStore) {
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+			if (
+				!descriptor.accesses?.some(
+					(access) => access.mode === "write" && access.valueOperand !== undefined,
+				)
+			)
+				continue;
+			for (const access of coreMemoryAccesses(fn, instruction)) {
+				if (
+					access.mode === "write" &&
+					access.value !== undefined &&
+					coreMemoryLocationIsExact(access.location)
+				)
+					this.#writes.add(this.#locations.id(access.location));
+			}
+		}
+	}
+
+	maySupply(location: CoreExactMemoryLocation): boolean {
+		// Heap initializers and aliases need provenance; slot values require an explicit local write.
+		return (
+			location.kind === "object-slot" ||
+			location.kind === "element" ||
+			this.#writes.has(this.#locations.id(location))
+		);
+	}
+}
+
 export interface CoreMemoryVersions {
 	readonly function: CoreFunctionId;
 	readonly statistics: {

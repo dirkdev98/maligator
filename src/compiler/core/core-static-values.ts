@@ -23,6 +23,7 @@ import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+	CoreMemoryValueSources,
 	analyzeCoreMemoryVersions,
 } from "./core-ir-memory.ts";
 import type { CoreMemoryVersions, CoreExactMemoryLocation } from "./core-ir-memory.ts";
@@ -367,6 +368,7 @@ export class CoreStaticValueAnalysis {
 	readonly #limit: number;
 	readonly #context: CoreCompilationContext | undefined;
 	readonly #memory: () => CoreMemoryVersions;
+	#memorySources: CoreMemoryValueSources | undefined;
 	readonly #cells:
 		| ((
 				fn: CoreFunctionStore,
@@ -1311,7 +1313,11 @@ export class CoreStaticValueAnalysis {
 								owner: attributes.functionIndex as number,
 								index: attributes.index as number,
 							};
-			const input = this.#memory().valueForRead(instruction, location);
+			const input = (this.#memorySources ??= new CoreMemoryValueSources(fn)).maySupply(
+				location,
+			)
+				? this.#memory().valueForRead(instruction, location)
+				: undefined;
 			if (input !== undefined && input !== value) {
 				const fact = this.query(input);
 				if (fact.kind === "known") return { ...fact, value };

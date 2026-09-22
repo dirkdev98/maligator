@@ -68,6 +68,32 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("does not request memory versions for repeated memory-free operations", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		builder.appendInstruction(entry, "createNumber", [], { attributes: { value: 7 } });
+		const [result] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = core.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+		new CoreFunctionPassScheduler(core, context, analyses, report, fn.id).runComponent(
+			"memory",
+			[forwarding],
+		);
+		expect(
+			report
+				.finish(core, { directEntries: [], specializations: [] })
+				.analyses.some(({ analysis }) => analysis === "local-memory-versions"),
+		).toBe(false);
+	});
+
 	it("batches repeated reads while preserving a load after a clobber", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
 		const builder = new CoreFunctionBuilder(program);
