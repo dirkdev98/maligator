@@ -380,6 +380,7 @@ export class CoreStaticValueAnalysis {
 				load: CoreInstructionId,
 				value: CoreValueId,
 				consumer: CoreInstructionId,
+				requestedKey?: string,
 		  ) => CoreStaticValue | undefined)
 		| undefined;
 	#cellRevision: number | undefined;
@@ -411,6 +412,7 @@ export class CoreStaticValueAnalysis {
 			load: CoreInstructionId,
 			value: CoreValueId,
 			consumer: CoreInstructionId,
+			requestedKey?: string,
 		) => CoreStaticValue | undefined,
 	) {
 		this.#program = program;
@@ -498,8 +500,12 @@ export class CoreStaticValueAnalysis {
 		return result;
 	}
 
-	queryAt(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
-		return this.#queryAt(value, consumer);
+	queryAt(
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		demand?: { readonly property: string },
+	): CoreStaticValueResult {
+		return this.#queryAt(value, consumer, demand?.property);
 	}
 
 	#queryAt(
@@ -603,7 +609,9 @@ export class CoreStaticValueAnalysis {
 				)
 			) {
 				this.#cellRevision = this.#program.programFlowRevision;
-				return this.#cells(this.#fn, definition, value, consumer) ?? initial;
+				return (
+					this.#cells(this.#fn, definition, value, consumer, requestedKey) ?? initial
+				);
 			}
 		}
 		// A pooled template is admitted only when every use preserves private immutable contents.
@@ -1467,7 +1475,7 @@ export class CoreStaticValueAnalysis {
 			// Without a local initializer, a cell proof needs a later consumer's TDZ check.
 			if (maySupply && this.#cells !== undefined && opcode !== "loadLocal") {
 				this.#cellRevision = this.#program.programFlowRevision;
-				const fact = this.#cells(this.#fn, instruction, value, instruction);
+				const fact = this.#cells(this.#fn, instruction, value, instruction, requestedKey);
 				if (fact !== undefined) return fact;
 			}
 		}
@@ -2373,7 +2381,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 				65536,
 				context,
 				() => get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request),
-				(fn, load, value, consumer) =>
+				(fn, load, value, consumer, requestedKey) =>
 					get(CORE_STATIC_CELL_INDEX, { scope: "program" }).query(
 						fn,
 						load,
@@ -2389,6 +2397,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 								scope: "function",
 								function: fn.id,
 							}).exceptional(),
+						requestedKey,
 					),
 			);
 		},
