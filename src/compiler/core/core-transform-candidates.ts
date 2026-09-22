@@ -5,6 +5,7 @@ export type CoreTransformKind =
 	| "finite-dispatch"
 	| "inline"
 	| "guarded-inline"
+	| "array-predicate-inline"
 	| "direct-entry"
 	| "guarded-direct-call"
 	| "stack-object-plan"
@@ -106,6 +107,7 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"finite-dispatch": 0,
 		inline: 0,
 		"guarded-inline": 0,
+		"array-predicate-inline": 0,
 		"direct-entry": 0,
 		"guarded-direct-call": 0,
 		"stack-object-plan": 0,

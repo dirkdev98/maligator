@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import { expect } from "vitest";
 import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
 import {
@@ -14,6 +14,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-array-callback-fast-path-"));
 
 describe("guarded Array callback fast paths", () => {
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 	let compiled: string;
 	let interpreted: string;
 	let source: string;

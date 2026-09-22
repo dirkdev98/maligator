@@ -4,6 +4,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
@@ -21,6 +22,7 @@ import type {
 	CoreTransformBudgetLimits,
 	CoreTransformCandidate,
 } from "../src/compiler/core/core-transform-candidates.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
@@ -760,6 +762,75 @@ describe("bounded Core cross-call transforms", () => {
 				.filter(({ block }) => block === fallback.block)
 				.map(({ opcode }) => opcode),
 		).toEqual(["envPush", "storeCaptured", "createFunction", "call", "envPop"]);
+	});
+
+	it.each([
+		{ name: "unknown callback", callback: "callback", mode: "full" as const },
+		{
+			name: "callback with its own loop",
+			callback: "value => { while (value > 3) value--; return value === 3; }",
+			mode: "full" as const,
+		},
+		{
+			name: "no expansion budget",
+			callback: "value => value === 3",
+			mode: "development" as const,
+		},
+	])("keeps Array predicates compact with $name", ({ callback, mode }) => {
+		const core = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function count(groups, callback) {
+				let total = 0;
+				for (let index = 0; index < groups.length; index++) {
+					total += groups[index].some(${callback}) ? 1 : 0;
+				}
+				return total;
+			}
+			globalThis.count = count;
+		`,
+				"compact-array-predicate.js",
+			),
+		);
+		const hasExpansion = (program: CoreProgram) =>
+			coreOperations(coreFunctionNamed(program, "count")!).some(
+				({ opcode, attributes }) =>
+					opcode === "loadIntrinsic" &&
+					attributes.intrinsic === "__arrayIterationEligible",
+			);
+		expect(hasExpansion(core.program)).toBe(false);
+		const result = optimizeCore(core, { verification: "per-pass", mode });
+		expect(hasExpansion(result.compilation.program)).toBe(false);
+	});
+
+	it("preserves exception edges when expanding a hot Array predicate", () => {
+		const core = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function inspect(groups, predicate) {
+				let total = 0;
+				for (let index = 0; index < groups.length; index++) {
+					try {
+						if (groups[index].some(value => predicate(value))) total++;
+					} catch {
+						total--;
+					}
+				}
+				return total;
+			}
+			globalThis.inspect = inspect;
+		`,
+				"exceptional-array-predicate.js",
+			),
+		);
+		const { compilation } = optimizeCore(core, { verification: "per-pass" });
+		expect(
+			coreOperations(coreFunctionNamed(compilation.program, "inspect")!).some(
+				({ opcode, attributes }) =>
+					opcode === "loadIntrinsic" &&
+					attributes.intrinsic === "__arrayIterationEligible",
+			),
+		).toBe(true);
 	});
 
 	it("guards and inlines hot global rest argument snapshots", () => {

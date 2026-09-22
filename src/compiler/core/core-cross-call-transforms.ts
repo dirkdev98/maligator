@@ -1,4 +1,8 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import {
+	coreArrayPredicateCall,
+	expandCoreArrayPredicateCall,
+} from "./core-array-predicates.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
@@ -1148,6 +1152,37 @@ function offerFunctionCandidates(
 			})
 			.ordinary()
 			.loops.some((loop) => loop.blocks.has(fn.instructionBlock(site.instruction)));
+		const predicate = inLoop
+			? coreArrayPredicateCall(program, fn, site.instruction)
+			: undefined;
+		const callback =
+			predicate === undefined
+				? undefined
+				: coreDirectCreatedFunction(fn, predicate.callback);
+		if (predicate !== undefined && callback !== undefined && callback !== functionId) {
+			const inline = inlineTarget(
+				program,
+				callback,
+				"call",
+				directCaptureContext(fn, predicate.callback, site.instruction, callback),
+			);
+			if (inline?.linear) {
+				service.offer({
+					kind: "array-predicate-inline",
+					caller: functionId,
+					site: site.instruction,
+					revision: summaries.version(callback),
+					priorityClass: 2,
+					priorityScore: 0,
+					targets: [callback],
+					generatedCodeCost: 32 + inline.instructions.length,
+					compilerWorkCost:
+						32 + inline.instructions.length + inline.function.valueCapacity,
+					expansive: true,
+				});
+				continue;
+			}
+		}
 		const resultCount = fn.kernel.instructionResultCount(site.instruction);
 		const result =
 			resultCount === 1
@@ -1357,6 +1392,7 @@ function applyLinearInline(
 	program: CoreProgram,
 	candidate: CoreTransformCandidate,
 	editor: CoreEditor,
+	selectedInline?: InlineTarget,
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
@@ -1375,12 +1411,14 @@ function applyLinearInline(
 	const operands = materializeInstructionOperands(caller, candidate.site);
 	const callee = operands[descriptor.callTransfer.calleeOperand];
 	if (callee === undefined) return undefined;
-	const inline = inlineTarget(
-		program,
-		target,
-		descriptor.callTransfer.invocation,
-		directCaptureContext(caller, callee, candidate.site, target),
-	);
+	const inline =
+		selectedInline ??
+		inlineTarget(
+			program,
+			target,
+			descriptor.callTransfer.invocation,
+			directCaptureContext(caller, callee, candidate.site, target),
+		);
 	if (inline === undefined) return undefined;
 	if (inline.construction) return applyGuardedInline(program, candidate, editor, false);
 	if (!inline.linear) return applyGuardedInline(program, candidate, editor, false);
@@ -1929,6 +1967,7 @@ function applyGuardedInline(
 					expansive: false,
 				},
 				editor,
+				inline,
 			);
 			if (applied === undefined)
 				throw new Error("Validated constructor method inline became inapplicable");
@@ -2200,6 +2239,43 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
+		case "array-predicate-inline": {
+			const fn = program.function(candidate.caller);
+			if (!fn.isInstructionLive(candidate.site)) return undefined;
+			const predicate = coreArrayPredicateCall(program, fn, candidate.site);
+			const target = candidate.targets[0];
+			if (
+				predicate === undefined ||
+				target === undefined ||
+				coreDirectCreatedFunction(fn, predicate.callback) !== target
+			)
+				return undefined;
+			const inline = inlineTarget(
+				program,
+				target,
+				"call",
+				directCaptureContext(fn, predicate.callback, candidate.site, target),
+			);
+			if (!inline?.linear) return undefined;
+			const expanded = expandCoreArrayPredicateCall(
+				fn,
+				editor,
+				candidate.site,
+				predicate,
+			);
+			const applied = applyLinearInline(
+				program,
+				{ ...candidate, kind: "inline", site: expanded.callback },
+				editor,
+			);
+			if (applied === undefined)
+				throw new Error("Admitted array predicate callback lost its inline proof");
+			return {
+				instructionsIntroduced:
+					expanded.instructionsIntroduced + applied.instructionsIntroduced,
+				blocksIntroduced: expanded.blocksIntroduced + applied.blocksIntroduced,
+			};
+		}
 		case "finite-dispatch":
 			return applyFiniteDispatch(program, candidate, editor);
 		case "inline":
@@ -2371,7 +2447,11 @@ export function runCoreCrossCallTransforms(
 			appliedCallers.add(candidate.caller);
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;
-			if (candidate.kind === "inline" || candidate.kind === "guarded-inline") {
+			if (
+				candidate.kind === "inline" ||
+				candidate.kind === "guarded-inline" ||
+				candidate.kind === "array-predicate-inline"
+			) {
 				published = true;
 			}
 		}

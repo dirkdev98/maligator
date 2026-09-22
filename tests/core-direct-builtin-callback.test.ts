@@ -36,7 +36,7 @@ describe("direct builtin callback targets", () => {
 		expect(output).toContain(
 			`MAL_BUILTIN_ARRAY_ITERATION_SOME, ${target}, mal_compiled_${target}`,
 		);
-		expect(output).toContain("MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE");
+		expect(output).not.toContain("MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE");
 		expect(output.match(new RegExp(`mal_compiled_${target}\\(`, "g"))).toHaveLength(2);
 	});
 
