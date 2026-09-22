@@ -140,7 +140,8 @@ function legacyV2Capture(): Uint8Array {
 }
 
 const prepared: PreparedProfile = {
-	schema: 4,
+	schema: 5,
+	calls: [],
 	mode: "sampling",
 	buildId: "a".repeat(64),
 	entrypoint: "/project/app.js",

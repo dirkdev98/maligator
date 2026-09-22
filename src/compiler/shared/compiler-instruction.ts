@@ -63,7 +63,9 @@ export interface CompilerNumericSortCallback {
 	readonly entryId: number;
 }
 
-export type CompilerInstruction =
+export type CompilerInstruction = CompilerOperation & { readonly sourceCall?: number };
+
+type CompilerOperation =
 	| {
 			/**
 			 * Source-position marker — carries no runtime opcode. Records the

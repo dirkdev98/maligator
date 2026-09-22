@@ -1,5 +1,6 @@
 import type { PlatformData } from "../../platform/catalog.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import type { SourceCallSite } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
@@ -27,6 +28,7 @@ export interface CoreHostInstallCandidate {
  * copied into this closed contract instead.
  */
 export interface CoreProgramData {
+	readonly sourceCallSites?: ReadonlyArray<SourceCallSite>;
 	readonly entrypointPath: string;
 	readonly moduleEvaluationOrder: ReadonlyArray<string>;
 	/** Source text retained for stable profile-site identities and diagnostics. */

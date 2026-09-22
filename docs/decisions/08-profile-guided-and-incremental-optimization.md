@@ -549,3 +549,29 @@ entry/call-attempt capture from D003, keeping original events distinct from
 optimized instances. Only after attribution tests pass should Core use those
 counts to rank work. Persistent Core reuse can develop against the same identity
 foundation, but admission and proof validity remain separate requirements.
+
+## D013 — 2026-09-22 — Original call-site identity and coverage
+
+**Status:** Accepted and implemented for source capture and diagnostic publication.
+**Refines:** D002 and D012. **Supersedes:** None.
+
+Capture invocation sites in the same pre-lowering traversal as function origins.
+A call key combines the original owner's exact identity/revision with function-local
+UTF-16 offsets and invocation kind. Compilation-wide numeric references connect
+Core calls to this table; clones must retain the original reference rather than
+reinterpret a local ordinal against their new containing function. Source-call
+references are stripped before runtime lowering.
+
+Record ordinary/optional calls, construction, `super`, and tagged-template calls.
+Compiler-generated iterator, initializer, and loader helper calls do not acquire a
+source call identity. Retain explicit lowering coverage: direct eval and static
+CommonJS require currently lack a general ordinary-call anchor. Top-level and
+unsupported lexical owners remain unknown instead of inheriting a generated
+wrapper's identity. These limits constrain profile coverage, not program behavior.
+
+The diagnostic sidecar advances to schema 5 and includes original-call records in
+its capture checksum. It does not claim execution counts for these records. Stable
+keys survive unrelated insertion; changing the owning function invalidates its
+call keys. VM training must add independent event anchors after argument/spread
+completion, preserve those anchors through lowering, and report uninstrumented
+sites separately from observed zero.

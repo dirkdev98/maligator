@@ -938,6 +938,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		context: {
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
+				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,
 				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(
@@ -9470,7 +9471,7 @@ function compileChainElement(
 					node.arguments[0].argument,
 				);
 				const destination = nextCoreVariable(fn);
-				cursor.block.emitter.emit({
+				emitSourceCall(program, fn, cursor, node, {
 					type: "callSpreadIterable",
 					registers: [destination, callee, thisRegister, iterable],
 				});
@@ -9483,7 +9484,7 @@ function compileChainElement(
 				node.arguments,
 			);
 			const destination = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
+			emitSourceCall(program, fn, cursor, node, {
 				type: "callSpread",
 				registers: [destination, callee, thisRegister, argumentsArray],
 			});
@@ -9494,7 +9495,7 @@ function compileChainElement(
 			arg.type === "SpreadElement" ? -1 : compileExpression(program, fn, cursor, arg),
 		);
 		const destination = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
+		emitSourceCall(program, fn, cursor, node, {
 			type: "call",
 			registers: [destination, callee, thisRegister, ...args],
 		});
@@ -10271,7 +10272,7 @@ function compileTaggedTemplate(
 	);
 
 	const destination = nextCoreVariable(fn);
-	cursor.block.emitter.emit({
+	emitSourceCall(program, fn, cursor, expression, {
 		type: "call",
 		registers: [destination, callee, thisRegister, stringsRegister, ...args],
 	});
@@ -12478,6 +12479,19 @@ function compileDynamicImport(
 			});
 }
 
+function emitSourceCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	node: ESTree.Node,
+	instruction: CompilerInstruction,
+): void {
+	const sourceCall = program.sourceOrigins?.call(fn.semanticFile, node);
+	cursor.block.emitter.emit(
+		sourceCall === undefined ? instruction : { ...instruction, sourceCall },
+	);
+}
+
 function compileCall(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -12557,7 +12571,7 @@ function compileCall(
 				callExpression.arguments[0].argument,
 			);
 			const destination = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
+			emitSourceCall(program, fn, cursor, callExpression, {
 				type: "callSpreadIterable",
 				registers: [destination, callee, thisRegister, iterable],
 			});
@@ -12570,7 +12584,7 @@ function compileCall(
 			callExpression.arguments,
 		);
 		const destination = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
+		emitSourceCall(program, fn, cursor, callExpression, {
 			type: "callSpread",
 			registers: [destination, callee, thisRegister, argumentsArray],
 		});
@@ -12587,7 +12601,7 @@ function compileCall(
 	});
 	const destination = nextCoreVariable(fn);
 
-	cursor.block.emitter.emit({
+	emitSourceCall(program, fn, cursor, callExpression, {
 		type: "call",
 		registers: [destination, callee, thisRegister, ...args],
 	});
@@ -12632,7 +12646,7 @@ function compileSuperCall(
 			type: "move",
 			registers: [destination, currentThis],
 		});
-		cursor.block.emitter.emit({
+		emitSourceCall(program, fn, cursor, callExpression, {
 			type: "constructSuperExplicit",
 			registers: [destination, parent, argumentsArray, newTarget, destination],
 		});
@@ -12656,7 +12670,7 @@ function compileSuperCall(
 		}
 		return destination;
 	}
-	cursor.block.emitter.emit({
+	emitSourceCall(program, fn, cursor, callExpression, {
 		type: "constructSuper",
 		registers: [destination, parent, argumentsArray],
 	});
@@ -12715,7 +12729,7 @@ function compileNewExpression(
 			expression.arguments,
 		);
 		const destination = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
+		emitSourceCall(program, fn, cursor, expression, {
 			type: "constructSpread",
 			registers: [destination, callee, argumentsArray],
 		});
@@ -12732,7 +12746,7 @@ function compileNewExpression(
 	});
 	const destination = nextCoreVariable(fn);
 
-	cursor.block.emitter.emit({
+	emitSourceCall(program, fn, cursor, expression, {
 		type: "construct",
 		registers: [destination, callee, ...args],
 	});

@@ -3,11 +3,18 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import * as path from "node:path";
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
-import type { SourceFunctionOrigin } from "./compiler/frontend/source-function-origins.ts";
 import type { CompilerFactFlowReport } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { profilePhaseName } from "./profile-phases.ts";
+import {
+	SourceProfileIdentities,
+	canonicalProfileJson as canonicalJson,
+} from "./source-profile-identity.ts";
+import type {
+	ProfileFunctionIdentity,
+	ProfileCallIdentity,
+} from "./source-profile-identity.ts";
 
 const CAPTURE_LEGACY_HEADER_BYTES = 40;
 const CAPTURE_V3_HEADER_BYTES = 48;
@@ -73,17 +80,16 @@ const ALLOCATION_FAMILY_NAMES = [
 	"metadata",
 ];
 
-export type ProfileFunctionIdentity =
-	| {
-			readonly status: "known" | "shared";
-			readonly origin: string;
-			readonly revision: string;
-			readonly portability: "portable" | "checkout";
-	  }
-	| { readonly status: "unknown" | "ambiguous"; readonly reason: string };
-
 export interface PreparedProfile {
-	schema: 4;
+	schema: 5;
+	calls: Array<{
+		file: string;
+		line: number;
+		column: number;
+		kind: string;
+		lowered: boolean;
+		identity: ProfileCallIdentity;
+	}>;
 	mode: "sampling" | "compiler";
 	buildId: string;
 	captureIdentity?: string;
@@ -157,26 +163,6 @@ interface CompilerCapture {
 	allocations: Array<CompilerAllocationCounter>;
 }
 
-function canonicalJson(value: unknown): string {
-	if (
-		value === null ||
-		typeof value === "string" ||
-		typeof value === "number" ||
-		typeof value === "boolean"
-	) {
-		const encoded = JSON.stringify(value);
-		if (encoded === undefined) throw new Error("profile metadata is not serializable");
-		return encoded;
-	}
-	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-	if (typeof value !== "object") throw new Error("profile metadata is not serializable");
-	return `{${Object.entries(value)
-		.filter(([, entry]) => entry !== undefined)
-		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-		.join(",")}}`;
-}
-
 /** Content identity binding the linked binary hash to its complete profile sidecar. */
 export function profileCaptureIdentity(prepared: PreparedProfile): string {
 	const payload = Object.fromEntries(
@@ -188,7 +174,7 @@ export function profileCaptureIdentity(prepared: PreparedProfile): string {
 function validatedCaptureIdentity(prepared: PreparedProfile): string {
 	const identity = prepared.captureIdentity;
 	if (
-		prepared.schema !== 4 ||
+		prepared.schema !== 5 ||
 		identity === undefined ||
 		!/^[0-9a-f]{64}$/u.test(identity)
 	) {
@@ -273,51 +259,18 @@ function functionName(image: ProgramImage, index: number): string {
 	);
 }
 
-function profileFunctionIdentities(image: ProgramImage): Array<ProfileFunctionIdentity> {
-	const memo = new Map<SourceFunctionOrigin, ProfileFunctionIdentity>();
+function profileFunctionIdentities(
+	image: ProgramImage,
+	resolver: SourceProfileIdentities,
+): Array<ProfileFunctionIdentity> {
 	const counts = new Map<string, number>();
-	const identities = image.runtime.functions.map((_, index): ProfileFunctionIdentity => {
-		const source = image.diagnostics.profileFunctions?.[index];
-		if (source === undefined) return { status: "unknown", reason: "no-source-origin" };
-		let identity = memo.get(source);
-		if (identity === undefined) {
-			if (source.status !== "captured") {
-				identity = { status: source.status, reason: source.reason };
-			} else {
-				const declaration = {
-					version: 1,
-					module: source.source.moduleKey,
-					portability: source.source.portability,
-					declaration: source.declaration,
-				};
-				identity = {
-					status: "known",
-					origin: hash("sha256", canonicalJson(declaration), "hex"),
-					revision: hash(
-						"sha256",
-						canonicalJson({
-							...declaration,
-							goal: source.source.goal,
-							commonjs: source.source.commonjs,
-							strict: source.strict,
-							kind: source.kind,
-							async: source.async,
-							generator: source.generator,
-							bindings: source.bindings,
-							source: source.source.contents.slice(source.start, source.end),
-						}),
-						"hex",
-					),
-					portability: source.portability,
-				};
-			}
-			memo.set(source, identity);
-		}
-		if (identity.status === "known") {
+	const identities = image.runtime.functions.map((_, index) =>
+		resolver.functionIdentity(image.diagnostics.profileFunctions?.[index]),
+	);
+	for (const identity of identities) {
+		if (identity.status === "known")
 			counts.set(identity.origin, (counts.get(identity.origin) ?? 0) + 1);
-		}
-		return identity;
-	});
+	}
 	return identities.map((identity) =>
 		identity.status === "known" && counts.get(identity.origin)! > 1
 			? { ...identity, status: "shared" }
@@ -332,9 +285,18 @@ export function prepareProfile(
 	mode: PreparedProfile["mode"] = "sampling",
 	optimization: ProfileOptimizationSidecar = {},
 ): PreparedProfile {
-	const identities = profileFunctionIdentities(image);
+	const resolver = new SourceProfileIdentities();
+	const identities = profileFunctionIdentities(image, resolver);
 	const prepared: PreparedProfile = {
-		schema: 4,
+		schema: 5,
+		calls: (image.diagnostics.sourceCallSites ?? []).map((site) => ({
+			file: site.file,
+			line: site.line,
+			column: site.column,
+			kind: site.kind,
+			lowered: site.lowered,
+			identity: resolver.callIdentity(site),
+		})),
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
 		entrypoint: image.runtime.entrypointPath,

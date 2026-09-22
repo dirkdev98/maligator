@@ -57,6 +57,55 @@ function known(profile: PreparedProfile, name: string) {
 
 const reader = "let x = 1; function read() { return x; } globalThis.saved = read;";
 
+test("original call keys distinguish sibling calls and survive unrelated insertion", () => {
+	const source = "function run(fn) { return fn(1) + fn(2); } globalThis.saved = run;";
+	const before = publish(compile(source).image);
+	const after = publish(compile(`function unrelated() { return 9; }\n${source}`).image);
+	const keys = (profile: PreparedProfile) =>
+		profile.calls.map((call) => {
+			expect(call.identity.status).toBe("known");
+			expect(call.lowered).toBe(true);
+			return call.identity.status === "known" ? call.identity.key : "";
+		});
+	expect(keys(before)).toHaveLength(2);
+	expect(new Set(keys(before)).size).toBe(2);
+	expect(keys(after)).toEqual(keys(before));
+	expect(keys(publish(compile(source.replace("fn(2)", "fn(3)")).image))).not.toEqual(
+		keys(before),
+	);
+});
+
+test("source call kinds exclude implicit iterator and constructor helper calls", () => {
+	const profile = publish(
+		compile(
+			"function run(fn, args) { fn?.(...args); new fn(...args); fn`tag`; } globalThis.saved = run;",
+		).image,
+	);
+	expect(
+		profile.calls.map((call) => [call.kind, call.lowered, call.identity.status]),
+	).toEqual([
+		["call", true, "known"],
+		["construct", true, "known"],
+		["tagged-template", true, "known"],
+	]);
+});
+
+test("special and unsupported source calls retain explicit lowering coverage", () => {
+	const profile = publish(
+		compile("function run(text) { return eval(text); } globalThis.saved = run; run('1');")
+			.image,
+	);
+	expect(profile.calls).toHaveLength(2);
+	expect(profile.calls[0]).toMatchObject({
+		lowered: false,
+		identity: { status: "unknown", reason: "dynamic-scope" },
+	});
+	expect(profile.calls[1]).toMatchObject({
+		lowered: true,
+		identity: { status: "unknown", reason: "no-source-origin" },
+	});
+});
+
 test("origin-only Core metadata edits survive runtime lowering and publication", () => {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		reader,

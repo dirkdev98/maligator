@@ -46,6 +46,19 @@ export interface SourceFunctionOriginOptions {
 
 export interface SourceFunctionOrigins {
 	get(file: SemanticFile, node: ESTree.Node): SourceFunctionOrigin | undefined;
+	call(file: SemanticFile, node: ESTree.Node): number | undefined;
+	callSites(): ReadonlyArray<SourceCallSite>;
+}
+
+export interface SourceCallSite {
+	readonly owner: SourceFunctionOrigin | undefined;
+	readonly kind: "call" | "construct" | "super" | "tagged-template";
+	readonly start: number | undefined;
+	readonly end: number | undefined;
+	readonly file: string;
+	readonly line: number;
+	readonly column: number;
+	readonly lowered: boolean;
 }
 
 interface FunctionDraft {
@@ -139,6 +152,16 @@ export function collectSourceFunctionOrigins(
 		owners: Map<ESTree.Node, FunctionDraft | undefined>;
 	}> = [];
 	const moduleKeys = new Set<string>();
+	const calls: Array<{
+		file: SemanticFile;
+		node: ESTree.Node;
+		owner: FunctionDraft | undefined;
+		kind: SourceCallSite["kind"];
+		start: number | undefined;
+		end: number | undefined;
+		lowered: boolean;
+	}> = [];
+	const callIds = new Map<ESTree.Node, number>();
 
 	for (const file of semantic.files) {
 		const supplied = options.moduleKeys?.get(file.path);
@@ -199,6 +222,37 @@ export function collectSourceFunctionOrigins(
 				functions.set(node, owner);
 			}
 			if (scopeNodes.has(node)) owners.set(node, owner);
+			if (
+				node.type === "CallExpression" ||
+				node.type === "NewExpression" ||
+				node.type === "TaggedTemplateExpression"
+			) {
+				callIds.set(node, calls.length);
+				const start = sourceOffset(offsets, node.loc?.start);
+				const end = sourceOffset(offsets, node.loc?.end);
+				calls.push({
+					file,
+					node,
+					owner,
+					kind:
+						node.type === "NewExpression"
+							? "construct"
+							: node.type === "TaggedTemplateExpression"
+								? "tagged-template"
+								: (node.callee as ESTree.Node).type === "Super"
+									? "super"
+									: "call",
+					start:
+						start === undefined || owner?.start === undefined
+							? undefined
+							: start - owner.start,
+					end:
+						end === undefined || owner?.start === undefined
+							? undefined
+							: end - owner.start,
+					lowered: false,
+				});
+			}
 			if (file.withDynamicNodes.has(node)) {
 				for (let fn = owner; fn !== undefined; fn = fn.parent) fn.dynamic = true;
 			}
@@ -262,7 +316,32 @@ export function collectSourceFunctionOrigins(
 		}
 	}
 
-	return {
+	const result: SourceFunctionOrigins = {
+		call(file, node) {
+			const id = callIds.get(node);
+			if (id === undefined || calls[id]!.file !== file) return undefined;
+			calls[id]!.lowered = true;
+			return id;
+		},
+		callSites() {
+			return Object.freeze(
+				calls.map((call) =>
+					Object.freeze({
+						owner:
+							call.owner === undefined
+								? undefined
+								: result.get(call.file, call.owner.node),
+						kind: call.kind,
+						start: call.start,
+						end: call.end,
+						file: call.file.path,
+						line: call.node.loc?.start.line ?? 0,
+						column: call.node.loc?.start.column ?? 0,
+						lowered: call.lowered,
+					}),
+				),
+			);
+		},
 		get(file, node) {
 			const draft = drafts.get(file)?.get(node);
 			if (draft === undefined) return undefined;
@@ -319,4 +398,5 @@ export function collectSourceFunctionOrigins(
 			return origin;
 		},
 	};
+	return result;
 }
