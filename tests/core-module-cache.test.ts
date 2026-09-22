@@ -15,6 +15,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import { coreValueId } from "../src/compiler/core/core-ir.ts";
 import {
 	decodeCoreModule,
 	encodeCoreModule,
@@ -193,6 +194,53 @@ it("keeps a cold result usable without publishing an incomplete manifest", () =>
 		cache: "miss",
 	});
 	expect(loadOrCompileCoreModule(input)).toMatchObject({ status: "ready", cache: "hit" });
+});
+it("decodes already available operands without temporary use lists", () => {
+	const cold = loadOrCompileCoreModule({
+		...options(),
+		source: "export function add(x) { return x + 1; }",
+	});
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const encoded = encodeCoreModule(cold.optimized);
+	const replaced = vi.spyOn(CoreEditor.prototype, "replaceOperands");
+	const decoded = decodeCoreModule(encoded);
+	expect(replaced).not.toHaveBeenCalled();
+	const program = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(program, decoded, "/straight.mjs");
+	for (const id of program.functionIds()) {
+		const fn = program.function(id);
+		expect(fn.instructionCapacity).toBe([...fn.instructionIds()].length);
+	}
+	verifyCoreProgram(program, { stage: "pre-target" });
+});
+it("resolves forward operands across reordered blocks and rejects unresolved or cyclic uses", () => {
+	const cold = loadOrCompileCoreModule({
+		...options(),
+		source:
+			"export function choose(x) { const y = x + 1; if (x) return y * 2; return y; }",
+	});
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const reordered = structuredClone(cold.canonical);
+	for (const fn of reordered.functions) fn.blocks = [...fn.blocks].reverse();
+	const replaced = vi.spyOn(CoreEditor.prototype, "replaceOperands");
+	const decoded = decodeCoreModule(encodeCoreModule(reordered));
+	expect(replaced).toHaveBeenCalled();
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(destination, decoded, "/reordered.mjs");
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	for (const kind of ["missing", "cycle"] as const) {
+		const bad = structuredClone(reordered);
+		const operation = bad.functions
+			.flatMap((fn) => fn.blocks.flatMap((block) => block.operations))
+			.find((op) => op.opcode === "binary")!;
+		operation.inputs = [
+			kind === "missing" ? coreValueId(999_999) : operation.outputs[0]!,
+			...operation.inputs.slice(1),
+		];
+		const before = destination.functionCapacity;
+		expect(() => importCoreModule(destination, bad, "/invalid.mjs")).toThrow();
+		expect(destination.functionCapacity).toBe(before);
+	}
 });
 it.each([
 	"import { x } from './missing.mjs'; export { x };",

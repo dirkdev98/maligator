@@ -744,7 +744,8 @@ function importValidatedCoreModule(
 			);
 		}
 		const entry = mapped(blocks, fn.entry);
-		const placeholder = builder.editor.appendInstruction(entry, "createUndefined", []);
+		// Serialized block order need not put dominators before their consumers.
+		let placeholder: ReturnType<CoreEditor["appendInstruction"]> | undefined;
 		const pending: Array<{
 			instruction: CoreInstructionId;
 			inputs: ReadonlyArray<CoreValueId>;
@@ -753,10 +754,18 @@ function importValidatedCoreModule(
 			p === undefined ? undefined : positionBase + index(p, artifact.positions.length);
 		for (const block of fn.blocks)
 			for (const operation of block.operations) {
+				let hasForwardInputs = false;
+				const inputs = operation.inputs.map((value) => {
+					const input = values.get(value);
+					if (input !== undefined) return input;
+					hasForwardInputs = true;
+					placeholder ??= builder.editor.appendInstruction(entry, "createUndefined", []);
+					return placeholder.outputs[0]!;
+				});
 				const created = builder.editor.appendInstruction(
 					mapped(blocks, block.id),
 					operation.opcode,
-					operation.inputs.map(() => placeholder.outputs[0]!),
+					inputs,
 					{
 						outputCount: operation.outputs.length,
 						attributes: attributes(
@@ -774,14 +783,16 @@ function importValidatedCoreModule(
 					},
 				);
 				operation.outputs.forEach((value, i) => setValue(value, created.outputs[i]!));
-				pending.push({ instruction: created.instruction, inputs: operation.inputs });
+				if (hasForwardInputs)
+					pending.push({ instruction: created.instruction, inputs: operation.inputs });
 			}
 		for (const operation of pending)
 			builder.editor.replaceOperands(
 				operation.instruction,
 				operation.inputs.map((value) => mapped(values, value)),
 			);
-		builder.editor.removeInstruction(placeholder.instruction);
+		if (placeholder !== undefined)
+			builder.editor.removeInstruction(placeholder.instruction);
 		const edge = (e: { block: CoreBlockId; arguments: ReadonlyArray<CoreValueId> }) => ({
 			block: mapped(blocks, e.block),
 			arguments: e.arguments.map((value) => mapped(values, value)),

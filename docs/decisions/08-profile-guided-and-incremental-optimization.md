@@ -936,3 +936,20 @@ Focused checks cover caller mutation after construction/configuration, frozen
 outer arrays with mutable entries, frozen getters, independent program appends and
 reconfiguration, and the identity of shared immutable snapshots. Native and VM
 parity and unchanged MALW bytes retain the existing output contract.
+
+## D022 — 2026-09-22 — Build temporary decoder operands only for forward references
+
+**Status:** Implemented with focused verification. **Refines:** D019.
+
+Selected-artifact materialization registers all block parameters before operations.
+An operation whose inputs already exist now attaches their real use links directly.
+Only a reference to a not-yet-materialized instruction creates a placeholder and a
+pending operand repair. A function with no forward references allocates no dummy
+instruction or value, and zero-input operations need no pending record.
+
+Serialized block order need not follow dominance order, so the forward-reference
+fallback remains necessary. All pending inputs must resolve, and ordinary Core
+verification still rejects cyclic or non-dominating uses before import. This changes
+temporary construction work, not proof authority or the selected optimization
+recipe. Focused tests cover direct operands, valid reordered blocks, unresolved and
+cyclic references, followed by native/VM output parity.
