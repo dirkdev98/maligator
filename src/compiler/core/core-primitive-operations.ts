@@ -2149,6 +2149,14 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 						truthyBranches.size
 			)
 				continue;
+			const stringConversions = new Set<CoreInstructionId>();
+			for (const { instruction, operation, args } of allocations.values())
+				if (
+					operation === "String" &&
+					args[1] !== undefined &&
+					analysis.constant(args[1]) === undefined
+				)
+					stringConversions.add(instruction);
 			const editor = CoreEditor.open(program, fn.id);
 			for (const [consumer, observation] of objectObservations)
 				lowerPrimitiveWrapperObservation(editor, fn, consumer, observation);
@@ -2191,11 +2199,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 			} of allocations.values()) {
 				if (operation === "Object")
 					editor.replaceInstruction(producer, "move", [args[1]!]);
-				else if (
-					operation === "String" &&
-					args[1] !== undefined &&
-					analysis.constant(args[1]) === undefined
-				) {
+				else if (args[1] !== undefined && stringConversions.has(producer)) {
 					// String construction uses ordinary ToString, including Symbol rejection.
 					editor.replaceInstruction(producer, "unary", [args[1]], {
 						attributes: { operator: "tostring" },
