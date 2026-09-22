@@ -2047,15 +2047,24 @@ export class CoreProgramFlowEngine {
 			aggregateInitiallyAffected = targets.graph.hasAggregate();
 		} else {
 			for (const functionId of dirtyFunctions ?? functionIds) affected.add(functionId);
-			for (const functionId of targets.changedCallers) affected.add(functionId);
+			let targetsChanged = false;
+			for (const functionId of functionIds) {
+				const before = previous.targets.outgoing(functionId),
+					after = targets.outgoing(functionId);
+				if (before !== after && (before.length !== 0 || after.length !== 0)) {
+					affected.add(functionId);
+					targetsChanged = true;
+				}
+			}
 			for (const functionId of externallyChangedFunctions ?? functionIds) {
 				if (previous.external.get(functionId) !== external.get(functionId)) {
 					affected.add(functionId);
 				}
 			}
-			aggregateInitiallyAffected = targets.graph.changedNodes.has(
-				CORE_ANY_SCRIPT_AGGREGATE,
-			);
+			aggregateInitiallyAffected =
+				targetsChanged ||
+				!sameMasks(previous.targets.graph.functions, targets.graph.functions) ||
+				!sameMasks(previous.targets.graph.wildcardCallers, targets.graph.wildcardCallers);
 			if (previous.targets.graph.hasAggregate() && !targets.graph.hasAggregate()) {
 				for (const functionId of functionIds) affected.add(functionId);
 			}
@@ -2349,8 +2358,16 @@ export class CoreProgramFlowEngine {
 									: semantics.latticeMask(values, site.receiver);
 							continue;
 						}
-						const incomingParameterKinds = Array<number>(maximumParameterCount);
-						for (let index = 0; index < maximumParameterCount; index++) {
+						if (site.targets.functions.length === 0) continue;
+						let parameterCount = 0,
+							needsReceiver = false;
+						for (const callee of site.targets.functions) {
+							const target = this.#program.function(callee);
+							parameterCount = Math.max(parameterCount, target.parameterCount);
+							needsReceiver ||= target.metadata.strict;
+						}
+						const incomingParameterKinds = Array<number>(parameterCount);
+						for (let index = 0; index < parameterCount; index++) {
 							const argument = site.arguments?.[index];
 							incomingParameterKinds[index] =
 								site.arguments === undefined
@@ -2359,15 +2376,12 @@ export class CoreProgramFlowEngine {
 										? semantics.undefined
 										: semantics.latticeMask(values, argument);
 						}
-						for (const callee of site.targets.functions) {
-							applyIncoming(
-								callee,
-								incomingParameterKinds,
-								site.receiver === undefined
-									? semantics.top
-									: semantics.latticeMask(values, site.receiver),
-							);
-						}
+						const receiverKind =
+							!needsReceiver || site.receiver === undefined
+								? semantics.top
+								: semantics.latticeMask(values, site.receiver);
+						for (const callee of site.targets.functions)
+							applyIncoming(callee, incomingParameterKinds, receiverKind);
 					}
 					if (hasAnyScriptSite) {
 						const contribution: CoreProgramFlowValueKindWildcardContribution = {

@@ -13,6 +13,7 @@ import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
 	CORE_PROGRAM_FLOW_REACHABILITY,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
+	coreProgramFlowDimensionsForDomains,
 	CORE_PROGRAM_FLOW_SUMMARIES,
 	CORE_PROGRAM_FLOW_TARGETS,
 } from "./core-program-flow.ts";
@@ -22,7 +23,6 @@ export interface CoreProgramFlowState {
 	readonly flowRevision: number;
 	readonly targets: CoreCallGraphIndexState;
 	readonly summaries: CoreProgramSummaryState;
-	readonly valueKinds: CoreProgramValueKindState;
 	readonly reachability: CoreFunctionReachabilityState;
 }
 
@@ -100,30 +100,6 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						prior?.summaries,
 						summaryDirty,
 					);
-		const externallyReachableChanges = new Set(
-			[...summaries.changedFunctions].filter(
-				(functionId) =>
-					prior?.summaries.summary(functionId)?.externallyReachable !==
-					summaries.summary(functionId)?.externallyReachable,
-			),
-		);
-		const valueKindDirty = dirtyFor(CORE_PROGRAM_FLOW_RETURN_KIND);
-		const valueKinds =
-			prior !== undefined &&
-			!unjournaledInvalidation &&
-			valueKindDirty.length === 0 &&
-			!targetsChanged &&
-			externallyReachableChanges.size === 0
-				? prior.valueKinds
-				: programFlow.solveValueKinds(
-						targets,
-						(functionId) => summaries.summary(functionId)?.externallyReachable === true,
-						exceptionalControl,
-						CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
-						prior?.valueKinds,
-						valueKindDirty,
-						externallyReachableChanges,
-					);
 		const reachabilityDirty = dirtyFor(CORE_PROGRAM_FLOW_REACHABILITY);
 		const reachability =
 			prior !== undefined &&
@@ -141,7 +117,6 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			flowRevision: epoch.revision,
 			targets,
 			summaries,
-			valueKinds,
 			reachability,
 		});
 	},
@@ -164,5 +139,66 @@ function programFlowView<Key extends keyof CoreProgramFlowState>(
 
 export const CORE_CALL_GRAPH_ANALYSIS = programFlowView("targets");
 export const CORE_PROGRAM_SUMMARIES_ANALYSIS = programFlowView("summaries");
-export const CORE_PROGRAM_VALUE_KIND_ANALYSIS = programFlowView("valueKinds");
+interface CoreProgramValueKindAnalysis {
+	readonly flowRevision: number;
+	readonly kinds: CoreProgramValueKindState;
+}
+
+export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgramValueKindAnalysis> =
+	{
+		key: "program-flow-valueKinds",
+		scope: "program",
+		owner: CORE_OPTIMIZATION_OWNER.programFlowConvergence,
+		functionDependencies: CORE_PROGRAM_FLOW_ANALYSIS.functionDependencies,
+		programDependencies: CORE_PROGRAM_FLOW_ANALYSIS.programDependencies,
+		contextIdentity: CORE_PROGRAM_FLOW_ANALYSIS.contextIdentity,
+		compute({ program, request, previous, get, programFlow }) {
+			const prior = previous as CoreProgramValueKindAnalysis | undefined;
+			const { targets, summaries, flowRevision } = get(
+				CORE_PROGRAM_FLOW_ANALYSIS,
+				request,
+			);
+			const dirty = new Set<CoreFunctionId>();
+			// Other dimensions can advance their journal cursor while kinds remain unrequested.
+			for (let cursor = prior?.flowRevision ?? 0; cursor < flowRevision; cursor++) {
+				if (
+					(coreProgramFlowDimensionsForDomains(program.programFlowDomainMaskAt(cursor)) &
+						CORE_PROGRAM_FLOW_RETURN_KIND) !==
+					0
+				)
+					dirty.add(program.programFlowFunctionAt(cursor));
+			}
+			const externallyChanged = new Set<CoreFunctionId>();
+			for (const functionId of program.functionIds()) {
+				if (
+					prior?.kinds.external.get(functionId) !==
+					(summaries.summary(functionId)?.externallyReachable === true)
+				)
+					externallyChanged.add(functionId);
+			}
+			const unjournaledInvalidation =
+				prior !== undefined && prior.flowRevision === flowRevision;
+			const kinds =
+				prior !== undefined &&
+				!unjournaledInvalidation &&
+				dirty.size === 0 &&
+				externallyChanged.size === 0 &&
+				prior.kinds.targets === targets
+					? prior.kinds
+					: programFlow.solveValueKinds(
+							targets,
+							(functionId) => summaries.summary(functionId)?.externallyReachable === true,
+							(functionId) =>
+								get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+									scope: "function",
+									function: functionId,
+								}).exceptional(),
+							CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
+							prior?.kinds,
+							unjournaledInvalidation ? undefined : [...dirty],
+							externallyChanged,
+						);
+			return Object.freeze({ flowRevision, kinds });
+		},
+	};
 export const CORE_FUNCTION_REACHABILITY_ANALYSIS = programFlowView("reachability");

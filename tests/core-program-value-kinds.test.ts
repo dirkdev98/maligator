@@ -6,7 +6,10 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import {
+	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
+	CORE_PROGRAM_FLOW_ANALYSIS,
+} from "../src/compiler/core/core-program-flow-analysis.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -172,7 +175,9 @@ describe("whole-program Core value kinds", () => {
 					programAnalysisContext(),
 					new CoreOptimizationReportBuilder(program),
 				);
-				const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+				const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+					scope: "program",
+				}).kinds;
 				expect(kinds.summary(callerId).returnKind).toBe(
 					unknown && operator !== "+"
 						? COMPILER_VALUE_KIND_TOP
@@ -304,14 +309,16 @@ describe("whole-program Core value kinds", () => {
 			value: inspectCoreBlockParameters(leaf, leafEntry)[0]!.value,
 		});
 		const leafId = leaf.finish(leafEntry).function;
+		const unrelated = appendLeaf(program);
 		const manager = new CoreAnalysisManager(
 			program,
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
 		expect(
-			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).summary(leafId)
-				.parameterKinds,
+			manager
+				.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+				.kinds.summary(leafId).parameterKinds,
 		).toEqual([COMPILER_VALUE_KIND_STRING]);
 		for (const published of [true, false]) {
 			const editor = CoreEditor.open(program, callerId);
@@ -324,10 +331,17 @@ describe("whole-program Core value kinds", () => {
 				},
 			);
 			editor.commit();
+			manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+			const other = CoreEditor.open(program, unrelated.function);
+			other.replaceInstruction(unrelated.valueInstruction, "createBoolean", [], {
+				attributes: { value: published },
+			});
+			other.commit();
+			manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 			expect(
 				manager
 					.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
-					.summary(leafId).parameterKinds,
+					.kinds.summary(leafId).parameterKinds,
 			).toEqual([published ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_STRING]);
 		}
 	});
@@ -389,8 +403,9 @@ describe("whole-program Core value kinds", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const parameterKinds = () =>
-			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).summary(leafId)
-				.parameterKinds;
+			manager
+				.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+				.kinds.summary(leafId).parameterKinds;
 		expect(parameterKinds()).toEqual([COMPILER_VALUE_KIND_TOP]);
 		const refined = CoreEditor.open(program, callerId);
 		const proof = refined.addFact({
@@ -431,7 +446,9 @@ describe("whole-program Core value kinds", () => {
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
-		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 		const unrelatedValues = first.values(unrelated.function);
 
 		const editor = CoreEditor.open(program, edited.function);
@@ -439,7 +456,9 @@ describe("whole-program Core value kinds", () => {
 			attributes: { value: true },
 		});
 		editor.commit();
-		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 
 		expect(second.statistics).toMatchObject({
 			functionsEvaluated: 3,
@@ -464,7 +483,9 @@ describe("whole-program Core value kinds", () => {
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
-		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 		const unrelatedValues = first.values(unrelated.at(-1)!.function);
 
 		const editor = CoreEditor.open(program, edited.function);
@@ -472,7 +493,9 @@ describe("whole-program Core value kinds", () => {
 			attributes: { value: true },
 		});
 		editor.commit();
-		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 
 		expect(second.statistics).toMatchObject({
 			functions: 66,
@@ -494,7 +517,9 @@ describe("whole-program Core value kinds", () => {
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
-		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 		expect(kinds.statistics.functionsEvaluated).toBeLessThanOrEqual(length * 2);
 	});
 
@@ -565,7 +590,9 @@ describe("whole-program Core value kinds", () => {
 				programAnalysisContext(),
 				new CoreOptimizationReportBuilder(program),
 			);
-			const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+			const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+				scope: "program",
+			}).kinds;
 
 			const expected = published ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_STRING;
 			expect(kinds.values(callerId).kindMask(result!)).toBe(expected);
@@ -629,7 +656,9 @@ describe("whole-program Core value kinds", () => {
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
-		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 		for (const leaf of leaves)
 			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_TOP]);
 	});
@@ -697,7 +726,7 @@ describe("whole-program Core value kinds", () => {
 		);
 		const initial = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
 			scope: "program",
-		});
+		}).kinds;
 		expect(initial.summary(isolated.function).parameterKinds).toEqual([
 			COMPILER_VALUE_KIND_STRING,
 		]);
@@ -707,7 +736,7 @@ describe("whole-program Core value kinds", () => {
 		editor.commit();
 		const updated = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
 			scope: "program",
-		});
+		}).kinds;
 
 		expect(updated.statistics).toMatchObject({
 			affectedFunctions: 1,

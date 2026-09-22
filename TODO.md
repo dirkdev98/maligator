@@ -185,9 +185,14 @@ Runtime eval may remove source closure without invalidating authority closure.
       queries avoid replaying mutable contents. Scalar-family queries now skip
       integer propagation, and heap brands skip containment/use/range indexes.
       Integer proofs follow requested COPY/JOIN dependencies; containment checks
-      follow requested allocation roots. Remaining work: narrow shared instruction/
-      root/use indexing and partition state to requested reads, and defer candidate
-      recognition while preserving exact ranking and costs. Measure the compact
+      follow requested allocation roots. Program kinds now have an independent
+      query and journal cursor; terminal cross-call refreshes update summaries and
+      reachability without solving unused kinds. Static queries skip impossible
+      cell/identity proofs. Memory columns share broad clobbers and compact
+      unobserved intermediate definitions. Remaining work: decode memory accesses
+      by requested family, narrow shared instruction/root/use indexing and partition
+      state to requested reads, query only the needed property contents, and defer
+      candidate recognition while preserving exact ranking and costs. Measure the compact
       integer snapshot's retained memory and representative compile time before
       extending these caches.
 

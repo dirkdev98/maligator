@@ -28,7 +28,10 @@ import {
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	coreValueKindObservation,
 } from "./core-ir-value-kinds.ts";
-import type { CoreProgramValueKinds } from "./core-ir-value-kinds.ts";
+import type {
+	CoreProgramValueKinds,
+	CoreProgramValueKindState,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -47,7 +50,10 @@ import {
 	coreNumericFieldArgument,
 	coreReadOnlyNumericParameterFields,
 } from "./core-native-field-analysis.ts";
-import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
+import {
+	CORE_PROGRAM_FLOW_ANALYSIS,
+	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
+} from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -2377,7 +2383,21 @@ export function runCoreCrossCallTransforms(
 	let wildcardAggregateRecomputations = summaries.statistics.aggregateRecomputations;
 	let exactReverseCallerVisits = summaries.statistics.exactReverseCallerVisits;
 	let wildcardReverseCallerVisits = summaries.statistics.wildcardReverseCallerVisits;
-	let valueKindFunctionEvaluations = flow.valueKinds.statistics.functionsEvaluated;
+	let valueKindFunctionEvaluations = 0;
+	let valueKinds: CoreProgramValueKindState | undefined;
+	const readValueKinds = () => {
+		const next = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
+		if (next !== valueKinds) {
+			valueKindFunctionEvaluations += next.statistics.functionsEvaluated;
+			wildcardAggregateRecomputations += next.statistics.aggregateRecomputations;
+			exactReverseCallerVisits += next.statistics.exactReverseCallerVisits;
+			wildcardReverseCallerVisits += next.statistics.wildcardReverseCallerVisits;
+		}
+		valueKinds = next;
+		return next;
+	};
 	let instructionsIntroduced = 0;
 	let blocksIntroduced = 0;
 	let waves = 0;
@@ -2413,7 +2433,7 @@ export function runCoreCrossCallTransforms(
 			service,
 			new Set(flow.reachability.liveFunctions),
 		);
-		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
+		const foldsByCaller = discoverProgramValueKindObservations(program, readValueKinds());
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);
 		for (const functionId of appliedCallers)
@@ -2518,17 +2538,19 @@ export function runCoreCrossCallTransforms(
 			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
 			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		}
-		if (flow.valueKinds !== priorFlow.valueKinds) {
-			valueKindFunctionEvaluations += flow.valueKinds.statistics.functionsEvaluated;
-		}
+		if (
+			wave + 1 === 2 ||
+			service.programBudgetExhaustionReason(phaseLimits) !== undefined
+		)
+			break;
+		const nextValueKinds = readValueKinds();
 		const publishedChanged =
 			flow.targets.changedCallers.size > 0 ||
 			flow.summaries.changedFunctions.size > 0 ||
-			flow.valueKinds.changedFunctions.size > 0 ||
+			nextValueKinds.changedFunctions.size > 0 ||
 			flow.reachability.statistics.resultSetUpdates > 0;
 		if (!publishedChanged) break;
 	}
-	const valueKinds = flow.valueKinds;
 	const budget = service.statisticsSince(budgetBaseline);
 	return Object.freeze({
 		summaries,
@@ -2549,12 +2571,9 @@ export function runCoreCrossCallTransforms(
 			callerWakeups,
 			valueKindFunctionEvaluations,
 			valueKindFolds,
-			wildcardAggregateRecomputations:
-				wildcardAggregateRecomputations + valueKinds.statistics.aggregateRecomputations,
-			exactReverseCallerVisits:
-				exactReverseCallerVisits + valueKinds.statistics.exactReverseCallerVisits,
-			wildcardReverseCallerVisits:
-				wildcardReverseCallerVisits + valueKinds.statistics.wildcardReverseCallerVisits,
+			wildcardAggregateRecomputations,
+			exactReverseCallerVisits,
+			wildcardReverseCallerVisits,
 		}),
 	});
 }

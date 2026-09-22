@@ -15,6 +15,7 @@ import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
@@ -66,6 +67,8 @@ function runTransforms(program: CoreProgram, limits?: CoreTransformBudgetLimits)
 	);
 	return {
 		...result,
+		analyses,
+		report,
 		plan: buildCoreOptimizationPlan(
 			program,
 			analyses,
@@ -1771,6 +1774,23 @@ describe("bounded Core cross-call transforms", () => {
 		expect(callInstructions(program, specializedCaller.function)).toHaveLength(1);
 		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
 		expect(result.statistics.generatedCodeConsumed).toBe(1);
+		expect(
+			result.report
+				.finish(program, result.plan)
+				.analyses.find(({ analysis }) => analysis === "program-flow-valueKinds")
+				?.recomputations,
+		).toBe(1);
+		const refreshed = result.analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		});
+		expect(refreshed.flowRevision).toBe(program.programFlowRevision);
+		const fresh = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		for (const id of program.functionIds())
+			expect(refreshed.kinds.summary(id)).toEqual(fresh.summary(id));
 		expect(result.plan.statistics.discovery.attempted).toBe(0);
 		expect(
 			result.plan.statistics.discovery.skippedByReason["generated-code-cost"],

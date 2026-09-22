@@ -6,7 +6,10 @@ import { updateCoreCallGraph } from "../src/compiler/core/core-call-graph.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import { CORE_PROGRAM_FLOW_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import {
+	CORE_PROGRAM_FLOW_ANALYSIS,
+	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
+} from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
 	CORE_PROGRAM_FLOW_EFFECTS,
@@ -18,6 +21,10 @@ import {
 } from "../src/compiler/core/core-program-flow.ts";
 import { CORE_PROGRAM_FLOW_MEMORY } from "../src/compiler/core/core-store.ts";
 import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	analysisProgram,
 	appendCaller,
 	appendLeaf,
@@ -25,6 +32,119 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("Core program flow", () => {
+	it("leaves program kinds uncomputed when only summaries and reachability are requested", () => {
+		const program = analysisProgram();
+		appendLeaf(program);
+		const report = new CoreOptimizationReportBuilder(program);
+		const manager = new CoreAnalysisManager(program, programAnalysisContext(), report);
+		const flow = manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		expect(flow.reachability.liveFunctions).toHaveLength(1);
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.analyses.find(({ analysis }) => analysis === "program-flow-valueKinds"),
+		).toBeUndefined();
+	});
+
+	it("retains kind changes across intervening base-flow refreshes", () => {
+		const program = analysisProgram();
+		const leaf = appendLeaf(program);
+		const caller = appendCaller(program, leaf.function);
+		const unrelated = appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const edit = CoreEditor.open(program, leaf.function);
+		edit.replaceInstruction(leaf.valueInstruction, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		edit.commit();
+		manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const other = CoreEditor.open(program, unrelated.function);
+		other.replaceInstruction(unrelated.valueInstruction, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		other.commit();
+		manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const delayed = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
+		expect(delayed.summary(caller.function).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+		const fresh = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		for (const id of program.functionIds())
+			expect(delayed.summary(id)).toEqual(fresh.summary(id));
+	});
+
+	it("retains indirect target changes across skipped kind queries", () => {
+		const program = analysisProgram();
+		const base = programAnalysisContext();
+		const context = { ...base, data: { ...base.data, singleAssignmentGlobalSlots: [0] } };
+		const writer = new CoreFunctionBuilder(program);
+		const entry = writer.createBlock();
+		const [target] = writer.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		const create = writer.bodyInstructionIds(entry)[0]!;
+		writer.appendInstruction(entry, "storeGlobal", [target!], {
+			attributes: { index: 0 },
+		});
+		writer.setTerminator(entry, { kind: "return", value: target! });
+		const writerId = writer.finish(entry).function;
+		const reader = new CoreFunctionBuilder(program);
+		const readEntry = reader.createBlock();
+		const [loaded] = reader.appendInstruction(readEntry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [nil] = reader.appendInstruction(readEntry, "createUndefined", []);
+		const [result] = reader.appendInstruction(readEntry, "call", [loaded!, nil!]);
+		reader.setTerminator(readEntry, { kind: "return", value: result! });
+		const readerId = reader.finish(readEntry).function;
+		appendLeaf(program);
+		const replacement = appendLeaf(program);
+		const body = CoreEditor.open(program, replacement.function);
+		body.replaceInstruction(replacement.valueInstruction, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		body.commit();
+		const unrelated = appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const edit = CoreEditor.open(program, writerId);
+		edit.replaceInstruction(create, "createFunction", [], {
+			attributes: { functionIndex: replacement.function },
+		});
+		edit.commit();
+		manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const other = CoreEditor.open(program, unrelated.function);
+		other.replaceInstruction(unrelated.valueInstruction, "createNumber", [], {
+			attributes: { value: 3 },
+		});
+		other.commit();
+		manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const delayed = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
+		expect(delayed.summary(readerId).returnKind).toBe(COMPILER_VALUE_KIND_BOOLEAN);
+		const fresh = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		for (const id of program.functionIds())
+			expect(delayed.summary(id)).toEqual(fresh.summary(id));
+	});
+
 	it("is the only production owner of whole-program convergence", () => {
 		const owner = readFileSync(
 			new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
@@ -50,7 +170,6 @@ describe("Core program flow", () => {
 			expect(source).not.toMatch(/programFlow\.refresh/);
 		}
 		expect(owner.match(/programFlow\.refresh/g)).toHaveLength(1);
-		expect(owner.match(/programFlowView\(/g)).toHaveLength(4);
 		const reachability = readFileSync(
 			new URL("../src/compiler/core/core-ir-reachability.ts", import.meta.url),
 			"utf8",
@@ -155,6 +274,9 @@ describe("Core program flow", () => {
 		const report = new CoreOptimizationReportBuilder(program, "counters");
 		const manager = new CoreAnalysisManager(program, programAnalysisContext(), report);
 		const first = manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const firstKinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		}).kinds;
 		const editor = CoreEditor.open(program, leaf.function);
 		const proof = editor.addFact({
 			kind: "effect-only",
@@ -173,7 +295,9 @@ describe("Core program flow", () => {
 		const second = manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 
 		expect(second.targets).toBe(first.targets);
-		expect(second.valueKinds).toBe(first.valueKinds);
+		expect(
+			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds,
+		).toBe(firstKinds);
 		expect(second.reachability).toBe(first.reachability);
 		expect(second.summaries).not.toBe(first.summaries);
 	});
