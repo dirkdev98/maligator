@@ -345,7 +345,6 @@ export class CoreLocalOptimizer {
 	readonly #rules: ReadonlyArray<CoreLocalInstructionRule>;
 	readonly #blockRules: ReadonlyArray<CoreLocalBlockRule>;
 	readonly #dispatch: Uint32Array;
-	readonly #features: number;
 	readonly #maxWorkItems: number;
 	readonly #maxEdits: number;
 	readonly #budgetExhaustion: "stop" | "error";
@@ -393,12 +392,12 @@ export class CoreLocalOptimizer {
 		this.#rules = ruleRegistry.rules;
 		this.#blockRules = ruleRegistry.blockRules;
 		this.#dispatch = ruleRegistry.dispatch;
-		this.#features = scanCoreFunctionFeatures(this.#fn, this.#dispatch);
 	}
 
 	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
 		if (initialChanges === undefined) {
-			if ((this.#features & CORE_FUNCTION_HAS_CANDIDATE_OPCODES) !== 0) {
+			const features = scanCoreFunctionFeatures(this.#fn, this.#dispatch);
+			if ((features & CORE_FUNCTION_HAS_CANDIDATE_OPCODES) !== 0) {
 				for (let index = 0; index < this.#fn.instructionCapacity; index++) {
 					const instruction = coreInstructionId(index);
 					if (this.#fn.kernel.instructionLive(instruction) !== 0)
@@ -406,7 +405,7 @@ export class CoreLocalOptimizer {
 				}
 			}
 			if (
-				(this.#features &
+				(features &
 					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) !==
 				0
 			) {

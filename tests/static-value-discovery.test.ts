@@ -413,6 +413,24 @@ it("folds own-presence, descriptors, typeof and Array.isArray through shared fac
 	expect(inspected.structure.genericCalls).toBe(0);
 });
 
+it("folds an array brand after mutation and escape without folding its escaped contents", () => {
+	const inspected = inspectStaticValueFunction(
+		`function probe(escape) { const array=[1]; array[0]=2; escape(array); return Array.isArray(array) && array[0]; } globalThis.probe=probe;`,
+		"probe",
+	);
+	expect(
+		inspected.core.some(
+			(operation) => operation.attributes.operation === "Array.isArray",
+		),
+	).toBe(false);
+	expect(inspected.structure.genericCalls).toBe(1);
+	expect(
+		inspected.core.some((operation) =>
+			["loadProperty", "loadPropertyStatic"].includes(operation.opcode),
+		),
+	).toBe(true);
+});
+
 it.each(["Global", "Captured"] as const)(
 	"forwards a proved private %s cell without changing its allocation token",
 	(kind) => {

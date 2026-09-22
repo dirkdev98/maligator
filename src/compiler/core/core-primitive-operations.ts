@@ -404,23 +404,29 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 			) {
 				const start = fn.kernel.instructionOperandStart(instruction);
-				const left = analysis.queryAt(fn.kernel.operandAt(start), instruction),
-					right = analysis.queryAt(fn.kernel.operandAt(start + 1), instruction);
+				const left = analysis.queryAt(fn.kernel.operandAt(start), instruction);
 				if (
-					left.kind === "known" &&
+					left.kind !== "known" ||
+					(left.brand !== "symbol" &&
+						(left.brand !== "function" || left.identity?.kind !== "intrinsic")) ||
+					left.identity === undefined ||
+					!["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(
+						left.identity.kind,
+					)
+				)
+					continue;
+				const right = analysis.queryAt(fn.kernel.operandAt(start + 1), instruction);
+				if (
 					right.kind === "known" &&
 					((left.brand === "symbol" && right.brand === "symbol") ||
 						(left.brand === "function" &&
 							right.brand === "function" &&
-							left.identity?.kind === "intrinsic" &&
 							right.identity?.kind === "intrinsic"))
 				) {
 					const a = left.identity,
 						b = right.identity;
 					if (
-						a !== undefined &&
 						b !== undefined &&
-						["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(a.kind) &&
 						["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(b.kind)
 					) {
 						if (

@@ -121,6 +121,30 @@ function stringSplitProgram(): {
 	return { program, function: functionId, call };
 }
 
+function charCodeAtProgram() {
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [Array.from("charCodeAt", (char) => char.charCodeAt(0)), [97]],
+	});
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [receiver] = builder.appendInstruction(entry, "createString", [], {
+		attributes: { stringIndex: 1 },
+	});
+	const [property] = builder.appendInstruction(entry, "loadPropertyStatic", [receiver!], {
+		attributes: { stringIndex: 0 },
+	});
+	const [position] = builder.appendInstruction(entry, "createNumber", [], {
+		attributes: { value: 0 },
+	});
+	const [result] = builder.appendInstruction(entry, "call", [
+		property!,
+		receiver!,
+		position!,
+	]);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return { program, function: builder.finish(entry).function };
+}
+
 function numericProgram(
 	startOperator = "*",
 	finishOperator = "+",
@@ -592,6 +616,51 @@ describe("late Core specialization plan", () => {
 				new Set(["stack-object"]),
 			).candidates,
 		).toEqual([]);
+	});
+
+	it.each([0, 1])(
+		"pulls optional bounds only for admitted recipes with expansion limit %s",
+		(limit) => {
+			const { program, function: functionId } = charCodeAtProgram();
+			const context = programAnalysisContext();
+			const report = new CoreOptimizationReportBuilder(program, "full");
+			const analyses = new CoreAnalysisManager(program, context, report);
+			const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			const plan = buildCoreOptimizationPlan(program, analyses, summaries, [functionId], {
+				context,
+				perFunctionExpansions: limit,
+			});
+			expect(plan.statistics.considered).toBe(1);
+			expect(planSpecializations(plan).map(({ kind }) => kind)).toEqual(
+				limit === 0 ? [] : ["string-char-code-at-chain"],
+			);
+			expect(
+				report
+					.finish(program, plan)
+					.analyses.some(({ analysis }) => analysis === "loop-induction-and-path-ranges"),
+			).toBe(limit !== 0);
+			verifyCoreOptimizationPlan(program.seal(), plan);
+		},
+	);
+
+	it.each([false, true])("rejects stale optional bounds after cached=%s", (cached) => {
+		const { program, function: functionId } = charCodeAtProgram();
+		const candidate = discoverCoreLocalSpecializationCandidates(
+			program,
+			functionId,
+			new Set(["string-char-code-at-chain"]),
+		).candidates[0];
+		if (candidate?.kind !== "string-char-code-at-chain")
+			throw new Error("Expected charCodeAt candidate");
+		if (cached) expect(candidate.bounded).toBeUndefined();
+		const editor = CoreEditor.open(program, functionId);
+		editor.replaceInstruction(candidate.call, "createNumber", [], {
+			attributes: { value: 97 },
+		});
+		editor.commit();
+		expect(() => candidate.bounded).toThrow("Stale specialization detail analysis");
 	});
 
 	it("reports local discovery from the planner's single query", () => {

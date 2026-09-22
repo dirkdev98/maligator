@@ -474,7 +474,11 @@ export const foldStaticReflections: CoreFunctionPass = {
 				].includes(canonical)
 			)
 				continue;
-			const fact = analysis.queryAt(fn.kernel.operandAt(start + argument), instruction);
+			const receiver = fn.kernel.operandAt(start + argument);
+			const initial =
+				canonical === "Array.isArray" ? analysis.query(receiver) : undefined;
+			const fact =
+				initial?.kind === "known" ? initial : analysis.queryAt(receiver, instruction);
 			if (fact.kind !== "known") continue;
 			if (canonical === "Array.isArray") {
 				plans.push({

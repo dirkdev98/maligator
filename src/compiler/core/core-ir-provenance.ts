@@ -35,7 +35,6 @@ import type {
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreOpcodeAccess,
-	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
@@ -1627,7 +1626,6 @@ export interface CoreLocalFactIndex {
 	readonly statistics: {
 		readonly instructionVisits: number;
 		readonly operations: number;
-		readonly memoryOperations: number;
 	};
 	/** A negative block marks an instruction absent from this immutable snapshot. */
 	readonly locationBlocks: ArrayLike<number>;
@@ -1641,7 +1639,6 @@ export interface CoreLocalFactIndex {
 	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
 	readonly opcodes: ReadonlyArray<ReadonlyArray<CoreInstructionId>>;
 	readonly operations: ReadonlyArray<CoreInstructionId>;
-	readonly memoryOperations: ReadonlyArray<CoreInstructionId>;
 }
 
 function indexedOpcodeInstructions(
@@ -1657,17 +1654,10 @@ function decodeCoreString(program: CoreProgram, index: number): string | undefin
 	return units === undefined ? undefined : String.fromCodePoint(...units);
 }
 
-const MEMORY_OPCODE_FLAGS = new WeakMap<CoreOpcodeRegistry, Map<number, boolean>>();
-
 export function buildCoreLocalFactIndex(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreLocalFactIndex {
-	let memoryOpcodes = MEMORY_OPCODE_FLAGS.get(fn.registry);
-	if (memoryOpcodes === undefined) {
-		memoryOpcodes = new Map();
-		MEMORY_OPCODE_FLAGS.set(fn.registry, memoryOpcodes);
-	}
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const locationBlocks = new Int32Array(fn.instructionCapacity);
 	locationBlocks.fill(-1);
@@ -1682,7 +1672,6 @@ export function buildCoreLocalFactIndex(
 	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
 	const mutableOpcodes: Array<Array<CoreInstructionId> | undefined> = [];
 	const operations: Array<CoreInstructionId> = [];
-	const memoryOperations: Array<CoreInstructionId> = [];
 	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
 		const value = valueIndex as CoreValueId;
 		if (fn.kernel.valueLive(value) === 0) continue;
@@ -1711,19 +1700,6 @@ export function buildCoreLocalFactIndex(
 			instructions.push(instruction);
 			mutableOpcodes[opcode] = instructions;
 			operations.push(instruction);
-			let memoryOpcode = memoryOpcodes.get(opcode);
-			if (memoryOpcode === undefined) {
-				const descriptor = fn.registry.byId(opcode);
-				memoryOpcode =
-					(descriptor.accesses?.length ?? 0) > 0 ||
-					descriptor.effects.reads.length > 0 ||
-					descriptor.effects.writes.length > 0 ||
-					descriptor.effects.callsUserCode ||
-					descriptor.effects.maySuspend ||
-					descriptor.allocation !== undefined;
-				memoryOpcodes.set(opcode, memoryOpcode);
-			}
-			if (memoryOpcode) memoryOperations.push(instruction);
 			const operandCount = instructionOperandCount(fn, instruction);
 			for (let position = 0; position < operandCount; position++) {
 				const operand = instructionOperand(fn, instruction, position)!;
@@ -1761,7 +1737,6 @@ export function buildCoreLocalFactIndex(
 		statistics: Object.freeze({
 			instructionVisits,
 			operations: operations.length,
-			memoryOperations: memoryOperations.length,
 		}),
 		locationBlocks,
 		locationIndices,
@@ -1771,7 +1746,6 @@ export function buildCoreLocalFactIndex(
 		valuesByRoot,
 		opcodes,
 		operations: Object.freeze(operations),
-		memoryOperations: Object.freeze(memoryOperations),
 	});
 }
 
@@ -1927,11 +1901,48 @@ function exactStringSplitCallCandidate(
 	return exactPropertyCallCandidate(program, fn, control, roots, index, call, "split");
 }
 
+const SPECIALIZATION_FUNCTION_DEPENDENCIES = [
+	"body",
+	"cfg",
+	"exceptionFlow",
+	"memoryEffects",
+	"representations",
+	"specializationInputs",
+] as const;
+
+function lazySpecializationDetail<T>(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	compute: () => T,
+): () => T {
+	const generation = program.generation,
+		versions = fn.versions,
+		dataVersion = program.programVersion("data");
+	let resolved = false;
+	let value: T;
+	return () => {
+		if (
+			program.generation !== generation ||
+			program.function(fn.id) !== fn ||
+			program.programVersion("data") !== dataVersion ||
+			SPECIALIZATION_FUNCTION_DEPENDENCIES.some(
+				(domain) => fn.version(domain) !== versions[domain],
+			)
+		)
+			throw new Error("Stale specialization detail analysis");
+		if (!resolved) {
+			value = compute();
+			resolved = true;
+		}
+		return value;
+	};
+}
+
 function stringCharCodeAtCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
-	loops: CoreLoopInductionAnalysis,
+	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringCharCodeAtCandidate> {
@@ -1954,60 +1965,63 @@ function stringCharCodeAtCandidates(
 			"charCodeAt",
 		);
 		if (matched === undefined) continue;
-		const receiver = instructionOperand(fn, call, 1);
-		const position = instructionOperand(fn, call, 2);
-		let bounded: CoreStringCharCodeAtCandidate["bounded"];
-		if (receiver !== undefined && position !== undefined) {
-			for (const induction of loops.inductions) {
-				const comparison = induction.comparison;
-				if (
-					comparison?.operator !== "<" ||
-					induction.step !== 1 ||
-					literalArrayIndex(fn, root(induction.initial)) !== 0 ||
-					root(position) !== root(induction.value) ||
-					!induction.loop.blocks.has(fn.instructionBlock(call)) ||
-					!control.dominates(comparison.body, fn.instructionBlock(call)) ||
-					handlerBlock(fn, induction.loop.header) !== undefined ||
-					handlerBlock(fn, fn.instructionBlock(call)) !== undefined
-				)
-					continue;
-				const incoming = (control.predecessors[comparison.body] ?? []).filter(
-					({ kind }) => kind === "ordinary",
-				);
-				if (incoming.length !== 1 || incoming[0]!.from !== induction.loop.header)
-					continue;
-				const length = specializationDefinition(fn, roots, comparison.bound);
-				if (
-					length === undefined ||
-					!staticPropertyNamed(program, fn, length, "length") ||
-					instructionOperandCount(fn, length) !== 1 ||
-					root(instructionOperand(fn, length, 0)!) !== root(receiver) ||
-					!specializationInstructionDominates(
-						control,
-						index,
-						length,
-						comparison.instruction,
+		const getBounded = lazySpecializationDetail(program, fn, () => {
+			const receiver = instructionOperand(fn, call, 1);
+			const position = instructionOperand(fn, call, 2);
+			let bounded: CoreStringCharCodeAtCandidate["bounded"];
+			if (receiver !== undefined && position !== undefined) {
+				for (const induction of loops().inductions) {
+					const comparison = induction.comparison;
+					if (
+						comparison?.operator !== "<" ||
+						induction.step !== 1 ||
+						literalArrayIndex(fn, root(induction.initial)) !== 0 ||
+						root(position) !== root(induction.value) ||
+						!induction.loop.blocks.has(fn.instructionBlock(call)) ||
+						!control.dominates(comparison.body, fn.instructionBlock(call)) ||
+						handlerBlock(fn, induction.loop.header) !== undefined ||
+						handlerBlock(fn, fn.instructionBlock(call)) !== undefined
 					)
-				)
-					continue;
-				const updateBlock = index.locationBlocks[induction.updateInstruction]!;
-				const callBlock = index.locationBlocks[call]!;
-				if (
-					updateBlock < 0 ||
-					callBlock < 0 ||
-					(updateBlock === callBlock &&
-						index.locationIndices[call]! >=
-							index.locationIndices[induction.updateInstruction]!)
-				)
-					continue;
-				bounded = Object.freeze({
-					length,
-					comparison: comparison.instruction,
-					update: induction.updateInstruction,
-				});
-				break;
+						continue;
+					const incoming = (control.predecessors[comparison.body] ?? []).filter(
+						({ kind }) => kind === "ordinary",
+					);
+					if (incoming.length !== 1 || incoming[0]!.from !== induction.loop.header)
+						continue;
+					const length = specializationDefinition(fn, roots, comparison.bound);
+					if (
+						length === undefined ||
+						!staticPropertyNamed(program, fn, length, "length") ||
+						instructionOperandCount(fn, length) !== 1 ||
+						root(instructionOperand(fn, length, 0)!) !== root(receiver) ||
+						!specializationInstructionDominates(
+							control,
+							index,
+							length,
+							comparison.instruction,
+						)
+					)
+						continue;
+					const updateBlock = index.locationBlocks[induction.updateInstruction]!;
+					const callBlock = index.locationBlocks[call]!;
+					if (
+						updateBlock < 0 ||
+						callBlock < 0 ||
+						(updateBlock === callBlock &&
+							index.locationIndices[call]! >=
+								index.locationIndices[induction.updateInstruction]!)
+					)
+						continue;
+					bounded = Object.freeze({
+						length,
+						comparison: comparison.instruction,
+						update: induction.updateInstruction,
+					});
+					break;
+				}
 			}
-		}
+			return bounded;
+		});
 		const instructions = Object.freeze([matched.property, call]);
 		const key = `string-char-code-at-chain:${fn.id}:${call}`;
 		candidates.push(
@@ -2018,7 +2032,9 @@ function stringCharCodeAtCandidates(
 				root: call,
 				property: matched.property,
 				call,
-				...(bounded === undefined ? {} : { bounded }),
+				get bounded() {
+					return getBounded();
+				},
 				exceptionalBlocks: matched.exceptionalBlocks,
 				instructions,
 				fanOut: 1,
@@ -2097,11 +2113,18 @@ function stringSplitCursorCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
-	loops: CoreLoopInductionAnalysis,
+	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringSplitCursorCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
+	if (
+		indexedOpcodeInstructions(fn, index, "call").length === 0 ||
+		!indexedOpcodeInstructions(fn, index, "loadPropertyStatic").some((instruction) =>
+			staticPropertyNamed(program, fn, instruction, "trim"),
+		)
+	)
+		return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const exactUses = (
 		value: CoreValueId,
@@ -2140,7 +2163,7 @@ function stringSplitCursorCandidates(
 		return false;
 	};
 	const candidates: Array<CoreStringSplitCursorCandidate> = [];
-	for (const induction of loops.inductions) {
+	for (const induction of loops().inductions) {
 		const { loop, comparison } = induction;
 		if (
 			comparison?.operator !== "<" ||
@@ -2424,13 +2447,8 @@ function builtinCollectionCallCandidates(
 			operation.split(".").at(-1)!,
 		);
 		if (matched === undefined) continue;
-		const exactReceiver = exactFreshCollectionReceiver(
-			fn,
-			roots,
-			index,
-			matched.property,
-			call,
-			operation,
+		const getExactReceiver = lazySpecializationDetail(program, fn, () =>
+			exactFreshCollectionReceiver(fn, roots, index, matched.property, call, operation),
 		);
 		const instructions = Object.freeze([matched.property, call]);
 		const key = `builtin-collection-call-chain:${fn.id}:${call}:${operation}`;
@@ -2443,7 +2461,9 @@ function builtinCollectionCallCandidates(
 				property: matched.property,
 				call,
 				operation: operation as CoreCollectionBuiltinOperation,
-				...(exactReceiver === undefined ? {} : { exactReceiver }),
+				get exactReceiver() {
+					return getExactReceiver();
+				},
 				exceptionalBlocks: matched.exceptionalBlocks,
 				instructions,
 				fanOut: 1,
@@ -2534,7 +2554,7 @@ function indexedLengthLoopCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
-	loops: CoreLoopInductionAnalysis,
+	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
@@ -2665,30 +2685,32 @@ function indexedLengthLoopCandidates(
 		]);
 		// The target region has no exceptional exits; cleanup handlers require ordinary operations.
 		if (exceptionalBlocks.length !== 0) continue;
-		const loopInduction = loops.inductions.find(
-			(candidate) =>
-				candidate.loop.header === loop.header &&
-				candidate.comparison?.instruction === comparison &&
-				root(candidate.value) === root(induction),
-		);
-		const arrayIndexInduction =
-			loopInduction?.comparison?.operator === "<" &&
-			loopInduction.representation === "f64" &&
-			loopInduction.step === 1 &&
-			literalArrayIndex(fn, root(loopInduction.initial)) === 0
-				? loopInduction
-				: undefined;
-		const certifiedElements = Object.freeze(
-			elements.map((element) => ({
-				...element,
-				arrayIndexIsUint32:
-					arrayIndexInduction !== undefined &&
-					control.dominates(
-						arrayIndexInduction.comparison!.body,
-						fn.instructionBlock(element.instruction),
-					),
-			})),
-		);
+		const getElements = lazySpecializationDetail(program, fn, () => {
+			const loopInduction = loops().inductions.find(
+				(candidate) =>
+					candidate.loop.header === loop.header &&
+					candidate.comparison?.instruction === comparison &&
+					root(candidate.value) === root(induction),
+			);
+			const arrayIndexInduction =
+				loopInduction?.comparison?.operator === "<" &&
+				loopInduction.representation === "f64" &&
+				loopInduction.step === 1 &&
+				literalArrayIndex(fn, root(loopInduction.initial)) === 0
+					? loopInduction
+					: undefined;
+			return Object.freeze(
+				elements.map((element) => ({
+					...element,
+					arrayIndexIsUint32:
+						arrayIndexInduction !== undefined &&
+						control.dominates(
+							arrayIndexInduction.comparison!.body,
+							fn.instructionBlock(element.instruction),
+						),
+				})),
+			);
+		});
 
 		candidates.push(
 			Object.freeze({
@@ -2699,7 +2721,9 @@ function indexedLengthLoopCandidates(
 				load,
 				comparison,
 				lengthPosition,
-				elements: certifiedElements,
+				get elements() {
+					return getElements();
+				},
 				exceptionalBlocks,
 				instructions,
 				fanOut: 1 + elements.length,
@@ -4209,7 +4233,7 @@ function discoverCandidates(
 			? freshArrayLengthCandidates(program, fn, provenance(), control, roots, index)
 			: []),
 		...(requested("indexed-length-loop")
-			? indexedLengthLoopCandidates(program, fn, control, loops(), roots, index)
+			? indexedLengthLoopCandidates(program, fn, control, loops, roots, index)
 			: []),
 		...(requested("indexed-length-loop")
 			? reverseIndexedLengthLoopCandidates(program, fn, control, roots, index)
@@ -4230,13 +4254,13 @@ function discoverCandidates(
 			? iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("string-char-code-at-chain")
-			? stringCharCodeAtCandidates(program, fn, control, loops(), roots, index)
+			? stringCharCodeAtCandidates(program, fn, control, loops, roots, index)
 			: []),
 		...(requested("function-call-chain")
 			? functionCallChainCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("string-split-cursor")
-			? stringSplitCursorCandidates(program, fn, control, loops(), roots, index)
+			? stringSplitCursorCandidates(program, fn, control, loops, roots, index)
 			: []),
 		...(requested("builtin-collection-call-chain")
 			? builtinCollectionCallCandidates(program, fn, control, roots, index)
@@ -4349,14 +4373,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 	{
 		key: "local-specialization-candidates",
 		scope: "function",
-		functionDependencies: [
-			"body",
-			"cfg",
-			"exceptionFlow",
-			"memoryEffects",
-			"representations",
-			"specializationInputs",
-		],
+		functionDependencies: SPECIALIZATION_FUNCTION_DEPENDENCIES,
 		programDependencies: ["data"],
 		compute({ program, request, get }) {
 			if (request.scope !== "function")

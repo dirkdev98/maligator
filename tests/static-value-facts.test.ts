@@ -13,6 +13,98 @@ import {
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 describe("static descriptions and allocation identities", () => {
+	it("skips mutable contents for a constant query and observes later property mutations on demand", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock(),
+			after = builder.createBlock();
+		const [initial] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		const [updated] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, updated!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "jump", edge: { block: after, arguments: [] } });
+		builder.setTerminator(after, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function);
+		let controlQueries = 0;
+		const facts = new CoreStaticValueAnalysis(program, fn, () => {
+			controlQueries++;
+			return buildCoreControlFlow(program, fn.id);
+		});
+		const consumer = fn.blockTerminator(after);
+		expect(facts.constant(object!, consumer)).toBeUndefined();
+		expect(controlQueries).toBe(0);
+		const observed = facts.queryAt(object!, consumer);
+		if (observed.kind !== "known") throw new Error("Expected observed object");
+		const description = program.staticDescriptions.description(observed.description);
+		if (description.kind !== "object") throw new Error("Expected object description");
+		const property = description.properties[0];
+		if (
+			property?.descriptor.kind !== "data" ||
+			property.descriptor.value.kind !== "constant"
+		)
+			throw new Error("Expected constant data property");
+		expect(facts.descriptionConstant(property.descriptor.value.description)).toEqual({
+			kind: "number",
+			value: 9,
+		});
+		expect(controlQueries).toBeGreaterThan(0);
+	});
+
+	it.each(["typeof", "tostring", "void"])(
+		"does not spend constant-query budget on an unused %s operand",
+		(operator) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [result] = builder.appendInstruction(entry, "unary", [value!], {
+				attributes: { operator },
+			});
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			const fn = program.function(builder.finish(entry).function);
+			const facts = new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				2,
+			);
+			facts.query(result!);
+			expect(facts.statistics.visits).toBe(1);
+			expect(facts.constant(value!)).toEqual({ kind: "number", value: 7 });
+			expect(facts.statistics.budgetBailouts).toBe(0);
+		},
+	);
+
+	it("still infers a string addition result when its first operand is unknown", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [string] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [result] = builder.appendInstruction(entry, "binary", [parameter, string!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
+		expect(facts.query(result!)).toMatchObject({ kind: "known", brand: "string" });
+		expect(facts.constant(result!)).toBeUndefined();
+	});
+
 	it.each(["Global", "Local", "Captured"] as const)(
 		"does not build memory versions for an unwritten %s slot",
 		(family) => {

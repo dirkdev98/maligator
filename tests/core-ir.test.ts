@@ -513,9 +513,9 @@ describe("Core IR", () => {
 		memory.readHash(builder.bodyInstructionIds(entry).at(-1)!);
 		expect(index.statistics).toMatchObject({
 			operations: 2_001,
-			memoryOperations: 1,
 		});
 		expect(memory.statistics).toMatchObject({
+			indexedInstructions: 2_001,
 			accesses: 1,
 			touchedBlocks: 1,
 			stateRows: 1,

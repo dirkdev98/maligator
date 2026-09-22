@@ -942,11 +942,18 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-			const numericArrayLoads = corePrivateNumericArrayLoads(program, fn, cfg, context);
-			const operationResultMask = (instruction: CoreInstructionId) =>
-				numericArrayLoads.has(instruction)
+			let numericArrayLoads: ReadonlySet<CoreInstructionId> | undefined;
+			const operationResultMask = (instruction: CoreInstructionId) => {
+				if (fn.instructionOpcodeName(instruction) !== "loadProperty") return undefined;
+				return (numericArrayLoads ??= corePrivateNumericArrayLoads(
+					program,
+					fn,
+					cfg,
+					context,
+				)).has(instruction)
 					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
 					: undefined;
+			};
 			if (context.data.singleAssignmentGlobalSlots.length === 0) {
 				return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
 			}
@@ -969,63 +976,73 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 				return opcode === "move" && source !== undefined && emptyInitialization(source);
 			};
-			const storeGlobalOpcode = fn.registry.get("storeGlobal")?.id;
-			for (
-				let instructionIndex = 0;
-				storeGlobalOpcode !== undefined && instructionIndex < fn.instructionCapacity;
-				instructionIndex++
-			) {
-				const instruction = instructionIndex as CoreInstructionId;
-				if (
-					fn.kernel.instructionLive(instruction) === 0 ||
-					fn.kernel.instructionOpcode(instruction) !== storeGlobalOpcode
-				)
-					continue;
-				const index = fn.instructionAttributes(instruction).index;
-				const value =
-					fn.kernel.instructionOperandCount(instruction) === 0
-						? undefined
-						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-				if (
-					typeof index !== "number" ||
-					value === undefined ||
-					!closedGlobals.has(index) ||
-					emptyInitialization(value)
-				)
-					continue;
-				stores.set(index, stores.has(index) ? null : { instruction, value });
-			}
-			if (stores.size === 0)
-				return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
-			const instructionOrder = new Int32Array(fn.instructionCapacity);
-			instructionOrder.fill(-1);
-			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-				const block = blockIndex as CoreBlockId;
-				if (fn.kernel.blockLive(block) === 0) continue;
-				let order = 0;
+			let storesIndexed = false;
+			const indexStores = () => {
+				if (storesIndexed) return;
+				const storeGlobalOpcode = fn.registry.get("storeGlobal")?.id;
 				for (
-					let instructionIndex = fn.kernel.blockFirstInstruction(block);
-					instructionIndex >= 0;
-					instructionIndex = fn.kernel.instructionNext(
-						instructionIndex as CoreInstructionId,
-					)
+					let instructionIndex = 0;
+					storeGlobalOpcode !== undefined && instructionIndex < fn.instructionCapacity;
+					instructionIndex++
 				) {
-					instructionOrder[instructionIndex] = order++;
+					const instruction = instructionIndex as CoreInstructionId;
+					if (
+						fn.kernel.instructionLive(instruction) === 0 ||
+						fn.kernel.instructionOpcode(instruction) !== storeGlobalOpcode
+					)
+						continue;
+					const index = fn.instructionAttributes(instruction).index;
+					const value =
+						fn.kernel.instructionOperandCount(instruction) === 0
+							? undefined
+							: fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+					if (
+						typeof index !== "number" ||
+						value === undefined ||
+						!closedGlobals.has(index) ||
+						emptyInitialization(value)
+					)
+						continue;
+					stores.set(index, stores.has(index) ? null : { instruction, value });
 				}
-			}
+				storesIndexed = true;
+			};
+			let instructionOrder: Int32Array | undefined;
+			const getInstructionOrder = (): Int32Array => {
+				if (instructionOrder !== undefined) return instructionOrder;
+				const positions = new Int32Array(fn.instructionCapacity);
+				positions.fill(-1);
+				for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+					const block = blockIndex as CoreBlockId;
+					if (fn.kernel.blockLive(block) === 0) continue;
+					let order = 0;
+					for (
+						let instructionIndex = fn.kernel.blockFirstInstruction(block);
+						instructionIndex >= 0;
+						instructionIndex = fn.kernel.instructionNext(
+							instructionIndex as CoreInstructionId,
+						)
+					) {
+						positions[instructionIndex] = order++;
+					}
+				}
+				return (instructionOrder = positions);
+			};
 			const operationResultValue = (
 				instruction: CoreInstructionId,
 			): CoreValueId | undefined => {
 				if (fn.instructionOpcodeName(instruction) !== "loadGlobal") return undefined;
 				const index = fn.instructionAttributes(instruction).index;
-				if (typeof index !== "number") return undefined;
+				if (typeof index !== "number" || !closedGlobals.has(index)) return undefined;
+				indexStores();
 				const store = stores.get(index);
 				if (store === undefined || store === null) return undefined;
 				const storeBlock = fn.instructionBlock(store.instruction);
 				const loadBlock = fn.instructionBlock(instruction);
 				const dominates =
 					storeBlock === loadBlock
-						? instructionOrder[store.instruction]! < instructionOrder[instruction]!
+						? getInstructionOrder()[store.instruction]! <
+							getInstructionOrder()[instruction]!
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? store.value : undefined;
 			};

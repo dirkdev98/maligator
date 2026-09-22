@@ -1329,11 +1329,21 @@ export class CoreStaticValueAnalysis {
 			}
 		}
 
-		if (opcode === "binary" || opcode === "unary") {
-			const inputs = operands.map((input) => this.constant(input));
-			if (inputs.every((input): input is ConstantValue => input !== undefined)) {
-				const kind = inputs[0]?.kind;
-				if (kind === "number" || kind === "bigint") {
+		if (
+			opcode === "binary" ||
+			(opcode === "unary" &&
+				!["typeof", "tostring", "void"].includes(attributes.operator as string))
+		) {
+			const first = operands[0] === undefined ? undefined : this.constant(operands[0]);
+			if (first?.kind === "number" || first?.kind === "bigint") {
+				const kind = first.kind;
+				const inputs: Array<ConstantValue> = [first];
+				for (let index = 1; index < operands.length; index++) {
+					const input = this.constant(operands[index]!);
+					if (input === undefined) break;
+					inputs.push(input);
+				}
+				if (inputs.length === operands.length) {
 					const evaluated = evaluateConstantOperation(
 						`${kind}.${opcode}:${attributes.operator as string}`,
 						inputs,
@@ -2150,8 +2160,11 @@ export class CoreStaticValueAnalysis {
 	}
 
 	constant(value: CoreValueId, consumer?: CoreInstructionId): ConstantValue | undefined {
+		const initial = this.query(value);
 		const fact =
-			consumer === undefined ? this.query(value) : this.queryAt(value, consumer);
+			initial.kind === "unknown" && consumer !== undefined
+				? this.queryAt(value, consumer)
+				: initial;
 		if (fact.kind === "unknown") return undefined;
 		return this.descriptionConstant(fact.description);
 	}

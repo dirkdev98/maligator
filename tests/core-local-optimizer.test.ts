@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreLocalOptimizer } from "../src/compiler/core/core-local-optimizer.ts";
 import type { CoreLocalInstructionRule } from "../src/compiler/core/core-local-optimizer.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -27,6 +28,40 @@ function moveChainProgram(): CoreProgram {
 }
 
 describe("CoreLocalOptimizer", () => {
+	it("folds a changed branch from incremental edits", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const taken = builder.createBlock(),
+			skipped = builder.createBlock();
+		const [condition] = builder.appendInstruction(entry, "unary", [input], {
+			attributes: { operator: "!" },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: taken, arguments: [] },
+			alternate: { block: skipped, arguments: [] },
+		});
+		builder.setTerminator(taken, { kind: "return", value: input });
+		builder.setTerminator(skipped, { kind: "return", value: condition! });
+		const fn = program.function(builder.finish(entry).function);
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceInstruction(
+			coreInstructionId(fn.kernel.valueDefinitionOwner(condition!)),
+			"createBoolean",
+			[],
+			{ attributes: { value: true } },
+		);
+		const changes = editor.commit();
+		new CoreLocalOptimizer(program, fn.id).run([changes]);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "jump",
+			edge: { block: taken, arguments: [] },
+		});
+	});
+
 	it.each([true, false])(
 		"eliminates the conditional empty-spread source with locked=%s",
 		(locked) => {

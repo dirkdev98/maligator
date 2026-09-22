@@ -179,11 +179,14 @@ Runtime eval may remove source closure without invalidating authority closure.
       after matching inputs and dominance, and late target payloads are built only
       after selection. Memory events now belong to requested partitions, heap
       accesses resolve by allocation root, and layouts/escape proofs are lazy per
-      allocation. Slot-only queries avoid heap provenance entirely. Remaining
-      work: narrow shared instruction/root/use indexing and partition state to
-      requested reads, and defer candidate recognition while preserving exact
-      ranking and costs. Measure retained snapshot memory before extending these
-      caches.
+      allocation. Slot-only queries avoid heap provenance entirely. Optional loop
+      and receiver certificates now wait for recipe consumers; numeric-array and
+      closed-global indexes wait for eligible reads. Constant and array-brand
+      queries avoid replaying mutable contents. Remaining work: narrow shared
+      instruction/root/use indexing and partition state to requested reads, defer
+      candidate recognition while preserving exact ranking and costs, and separate
+      integer-range and allocation-containment proofs from kind/brand consumers.
+      Measure retained snapshot memory before extending these caches.
 
 - [ ] Repair indexed-length-loop region cost verification for the existing
       `core-primitive-numeric` Array.from length and holey-array checksum cases.
