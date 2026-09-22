@@ -7,6 +7,7 @@
  * deliberately outside this module.
  */
 
+import type { SourceFunctionOrigin } from "../frontend/source-function-origins.ts";
 import { EFFECT_DOMAINS, NO_EFFECT_SUMMARY } from "../shared/effect-summary.ts";
 import type { EffectDomain, EffectSummary } from "../shared/effect-summary.ts";
 
@@ -711,6 +712,7 @@ export interface CoreExceptionHandler {
 }
 
 export interface CoreFunctionMetadata {
+	readonly sourceOrigin?: SourceFunctionOrigin;
 	readonly sourcePath: string;
 	readonly sourceStrict: boolean;
 	readonly nameStringIndex: number;

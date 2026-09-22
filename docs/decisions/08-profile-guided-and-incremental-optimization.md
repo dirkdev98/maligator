@@ -474,3 +474,78 @@ Resolve these through the stages above and append the resulting decisions:
   versus cheaply restarting selected work from canonical Core.
 - Final CLI/configuration names and whether background upgrades are desirable.
   Initial operations are explicit; there is no automatic worker in this proposal.
+
+## D012 — 2026-09-22 — First function-origin checkpoint
+
+**Status:** Accepted and implemented for diagnostic profile publication.
+**Refines:** The function-origin portion of D002 and stage 0 in D009.
+**Supersedes:** None; original call-site identities and reusable-code contracts
+remain proposed.
+
+Capture function origins after module linking and before Core construction mutates
+the frontend. Carry immutable source snapshots, declaration paths, effective
+strictness, function kind, and symbolic external-binding owners through Core.
+The escaped metadata must not retain mutable AST, scope, or binding objects.
+Renumbering functions and creating optimized instances preserve the source origin.
+
+Separate a declaration's origin from its revision. The origin identifies the
+resolved module and named lexical declaration path. The revision also includes
+the exact function source, parsing context, and referenced external-binding
+descriptors. Moving a captured variable to another owner or retargeting a named
+ESM import changes the revision, even when the reader's text stays unchanged.
+Changing the imported implementation alone need not change the reader's revision:
+this is a source-profile identity, **not a certificate that cached proofs remain
+valid**. Persistent Core still needs the producer and consumed-dependency contracts
+specified in D005–D007.
+
+Collection is opt-in through the existing profile compilation path. Ordinary
+compilation neither traverses the source for origins nor hashes function bodies.
+Profile compilation captures descriptors before they can be lost, but defers body
+hashing until the sidecar is published. Only functions present in the runtime image
+are hashed, once per shared source record. A module's immutable source string is
+shared by its functions. This deliberately accepts source retention and a frontend
+scan during profiling; it does not claim the training build's overhead is measured
+or that overlapping nested bodies are each hashed only once.
+
+The existing profile sidecar now uses schema 4 and binds function identities into
+its capture checksum. Runtime function indices remain indices into that exact
+build's table. Published identities distinguish:
+
+- **Known:** one runtime function represents a mapped source origin.
+- **Shared:** several runtime functions represent the same source origin; this
+  does not provide separate original events or a unique cross-build instance match.
+- **Ambiguous:** source declarations collide; surviving optimization does not
+  retroactively make the source identity unique.
+- **Unknown:** no supported source identity is available, with an explicit reason.
+
+The report includes coverage for each state. Raw sampling/counter formats and
+MALW/MALC payloads are unchanged; source snapshots stay out of runtime artifacts.
+Existing diagnostic site identities remain heuristic post-optimization anchors.
+They must not be reinterpreted as original PGO call sites.
+
+Portable identities require an explicit map from physical files to unique resolved
+module keys. Duplicate or empty keys fail instead of merging package instances.
+The fallback uses physical paths and is labeled checkout-bound. A function with
+any external binding owned by a checkout-bound module is also checkout-bound.
+Automatic package/lockfile resolution keys and a public CLI surface remain open.
+
+For this checkpoint, anonymous owners, class contexts, synthetic functions, dynamic
+scope, and unresolved namespace/CommonJS import owners remain explicitly unknown.
+Named declarations under duplicate owners are ambiguous. Non-function block scope
+descriptors include a relative source offset, which can cause conservative misses
+after unrelated edits within an enclosing function. These coverage limits are
+preferable to inventing a match and must be visible when evaluating training input.
+
+Focused acceptance covers unrelated insertion with runtime renumbering, body and
+capture changes, named import retargeting, portable module keys, duplicate and
+unknown cases, shared instances, UTF-16 source spans, immutable snapshots, and the
+ordinary-build opt-out. It also checks that changing a function identity invalidates
+the capture checksum and that metadata-only Core edits reach publication. These are
+identity and diagnostic integration checks, not native PGO performance acceptance.
+
+Next, add stable original call-site records and complete the resolution/context
+descriptors needed by the selected training workloads. Then introduce the small VM
+entry/call-attempt capture from D003, keeping original events distinct from
+optimized instances. Only after attribution tests pass should Core use those
+counts to rank work. Persistent Core reuse can develop against the same identity
+foundation, but admission and proof validity remain separate requirements.

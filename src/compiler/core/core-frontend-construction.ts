@@ -39,6 +39,7 @@ export interface CoreInstructionEmitter {
 }
 
 export interface CoreConstructionFunction {
+	readonly sourceOrigin?: CoreFunctionMetadata["sourceOrigin"];
 	readonly semanticFile: SemanticFile;
 	readonly functionIndex: number;
 	readonly nameStringIndex: number;
@@ -602,6 +603,9 @@ export class DirectCoreFunctionConstruction {
 		const isClassConstructor = this.#fn.classContext?.isConstructor ?? false;
 		return {
 			sourcePath: this.#fn.semanticFile.path,
+			...(this.#fn.sourceOrigin === undefined
+				? {}
+				: { sourceOrigin: this.#fn.sourceOrigin }),
 			sourceStrict: this.#fn.semanticFile.strict,
 			nameStringIndex: this.#fn.nameStringIndex,
 			length: this.#fn.length,

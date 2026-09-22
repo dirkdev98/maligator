@@ -3,6 +3,7 @@ import type {
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
+import type { SourceFunctionOrigin } from "../frontend/source-function-origins.ts";
 import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { CompilerFactFlowReport } from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
@@ -676,6 +677,7 @@ export interface ProgramImage {
 	readonly runtime: RuntimeImage;
 	readonly native: NativePlan;
 	readonly diagnostics: {
+		profileFunctions?: ReadonlyArray<SourceFunctionOrigin | undefined>;
 		profileSites?: Array<ProfileSite>;
 		profileRemarks?: Array<CompilerRemark>;
 		factFlow?: CompilerFactFlowReport;
@@ -1604,7 +1606,12 @@ export function lowerVerifiedExecutionToProgramImage(
 		},
 		diagnostics: {},
 	};
-	if (profile) buildProfileMetadata(program.core, context, definition);
+	if (profile) {
+		definition.diagnostics.profileFunctions = program.functionMap.executionToCore.map(
+			(id) => program.core.function(id).metadata.sourceOrigin,
+		);
+		buildProfileMetadata(program.core, context, definition);
+	}
 	if (profile) {
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
 			context.facts,
@@ -1748,7 +1755,10 @@ function nativeInstructionPlanFromExecution(
 					};
 		case "createRestArguments":
 			return instruction.virtualPackedRest === true
-				? { kind: "virtual-packed-rest-array", startIndex: instruction.startIndex }
+				? {
+						kind: "virtual-packed-rest-array",
+						startIndex: instruction.startIndex,
+					}
 				: undefined;
 		default:
 			return undefined;

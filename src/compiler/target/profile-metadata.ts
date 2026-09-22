@@ -9,9 +9,9 @@ export interface ProfileSite {
 	/** Deliberately non-unique across structurally identical sites: consumers must
 	 * report ambiguity rather than silently joining the wrong locations. */
 	logicalId: string;
-	/** Stable syntactic operation before cloning/inlining. */
+	/** Heuristic residual-operation anchor; not a pre-optimization source identity. */
 	originId: string;
-	/** Exact optimized instance, including its inline caller chain. */
+	/** Heuristic optimized instance, including its inline caller chain. */
 	instanceId: string;
 	/** Source expression/statement region used for explicitly coarse attribution. */
 	regionId: string;

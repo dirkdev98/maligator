@@ -30,6 +30,7 @@ export interface CompileCoreOptions {
 	optimization?: "development" | "full";
 	/** Derive source-site identities and compiler remarks for a profiled image. */
 	profile?: boolean;
+	profileModuleKeys?: ReadonlyMap<string, string>;
 	/**
 	 * Core verification depth. Boundary verification is unconditional; `per-pass`
 	 * additionally attributes an invalid graph to the pass that produced it.
@@ -59,6 +60,8 @@ export function optimizeSemanticProgramToCore(
 ): CoreCompilation {
 	const core = lowerSemanticProgramToCore(semantic, {
 		...options.semanticLowering,
+		sourceOrigins:
+			options.profile === true ? { moduleKeys: options.profileModuleKeys } : undefined,
 		facts: {
 			...(options.facts ?? conservativeCompilerProgramFacts()),
 			compilationMode: options.optimization ?? "full",

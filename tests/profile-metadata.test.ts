@@ -391,11 +391,11 @@ test("profile reports retain applied transformations after an instruction disapp
 test("profile remarks classify closed direct calls as applied compiled calls", () => {
 	const definition = compile(`
 		function outer(value) {
-			function expensive(input) {
-				${Array.from({ length: 38 }, () => "input += input;").join("\n")}
-				return input;
+			function recursive(input) {
+				if (input <= 0) return 0;
+				return recursive(input - 1) + 1;
 			}
-			return ${Array.from({ length: 9 }, () => "expensive(value)").join(" + ")};
+			return recursive(value);
 		}
 		globalThis.keep = outer;
 	`);

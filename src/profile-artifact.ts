@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import * as path from "node:path";
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
+import type { SourceFunctionOrigin } from "./compiler/frontend/source-function-origins.ts";
 import type { CompilerFactFlowReport } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
@@ -72,13 +73,26 @@ const ALLOCATION_FAMILY_NAMES = [
 	"metadata",
 ];
 
+export type ProfileFunctionIdentity =
+	| {
+			readonly status: "known" | "shared";
+			readonly origin: string;
+			readonly revision: string;
+			readonly portability: "portable" | "checkout";
+	  }
+	| { readonly status: "unknown" | "ambiguous"; readonly reason: string };
+
 export interface PreparedProfile {
-	schema: 1 | 2 | 3;
+	schema: 4;
 	mode: "sampling" | "compiler";
 	buildId: string;
 	captureIdentity?: string;
 	entrypoint: string;
-	functions: Array<{ name: string; file: string }>;
+	functions: Array<{
+		name: string;
+		file: string;
+		identity: ProfileFunctionIdentity;
+	}>;
 	sites: Array<ProfileSite>;
 	remarks: Array<CompilerRemark>;
 	coreOptimizationReport?: CoreOptimizationReport;
@@ -174,7 +188,7 @@ export function profileCaptureIdentity(prepared: PreparedProfile): string {
 function validatedCaptureIdentity(prepared: PreparedProfile): string {
 	const identity = prepared.captureIdentity;
 	if (
-		prepared.schema !== 3 ||
+		prepared.schema !== 4 ||
 		identity === undefined ||
 		!/^[0-9a-f]{64}$/u.test(identity)
 	) {
@@ -259,6 +273,58 @@ function functionName(image: ProgramImage, index: number): string {
 	);
 }
 
+function profileFunctionIdentities(image: ProgramImage): Array<ProfileFunctionIdentity> {
+	const memo = new Map<SourceFunctionOrigin, ProfileFunctionIdentity>();
+	const counts = new Map<string, number>();
+	const identities = image.runtime.functions.map((_, index): ProfileFunctionIdentity => {
+		const source = image.diagnostics.profileFunctions?.[index];
+		if (source === undefined) return { status: "unknown", reason: "no-source-origin" };
+		let identity = memo.get(source);
+		if (identity === undefined) {
+			if (source.status !== "captured") {
+				identity = { status: source.status, reason: source.reason };
+			} else {
+				const declaration = {
+					version: 1,
+					module: source.source.moduleKey,
+					portability: source.source.portability,
+					declaration: source.declaration,
+				};
+				identity = {
+					status: "known",
+					origin: hash("sha256", canonicalJson(declaration), "hex"),
+					revision: hash(
+						"sha256",
+						canonicalJson({
+							...declaration,
+							goal: source.source.goal,
+							commonjs: source.source.commonjs,
+							strict: source.strict,
+							kind: source.kind,
+							async: source.async,
+							generator: source.generator,
+							bindings: source.bindings,
+							source: source.source.contents.slice(source.start, source.end),
+						}),
+						"hex",
+					),
+					portability: source.portability,
+				};
+			}
+			memo.set(source, identity);
+		}
+		if (identity.status === "known") {
+			counts.set(identity.origin, (counts.get(identity.origin) ?? 0) + 1);
+		}
+		return identity;
+	});
+	return identities.map((identity) =>
+		identity.status === "known" && counts.get(identity.origin)! > 1
+			? { ...identity, status: "shared" }
+			: identity,
+	);
+}
+
 /** Freeze the compiler-side half of a capture next to the exact linked binary. */
 export function prepareProfile(
 	binaryPath: string,
@@ -266,14 +332,16 @@ export function prepareProfile(
 	mode: PreparedProfile["mode"] = "sampling",
 	optimization: ProfileOptimizationSidecar = {},
 ): PreparedProfile {
+	const identities = profileFunctionIdentities(image);
 	const prepared: PreparedProfile = {
-		schema: 3,
+		schema: 4,
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
 		entrypoint: image.runtime.entrypointPath,
 		functions: image.runtime.functions.map((fn, index) => ({
 			name: functionName(image, index),
 			file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
+			identity: identities[index]!,
 		})),
 		sites: image.diagnostics.profileSites ?? [],
 		remarks: image.diagnostics.profileRemarks ?? [],
@@ -971,8 +1039,35 @@ export interface ProfilePhaseSummary {
 	timings: Array<ProfilePhaseTiming>;
 }
 
+interface FunctionIdentityCoverage {
+	known: number;
+	shared: number;
+	ambiguous: number;
+	unknown: number;
+	portable: number;
+	checkout: number;
+}
+
+function functionIdentityCoverage(prepared: PreparedProfile): FunctionIdentityCoverage {
+	const coverage: FunctionIdentityCoverage = {
+		known: 0,
+		shared: 0,
+		ambiguous: 0,
+		unknown: 0,
+		portable: 0,
+		checkout: 0,
+	};
+	for (const { identity } of prepared.functions) {
+		coverage[identity.status]++;
+		if (identity.status === "known" || identity.status === "shared")
+			coverage[identity.portability]++;
+	}
+	return coverage;
+}
+
 export interface ProfileManifest {
 	schema: 4;
+	functionIdentities: FunctionIdentityCoverage;
 	status: "complete";
 	command: string;
 	mode: PreparedProfile["mode"];
@@ -1445,6 +1540,7 @@ export function finalizeProfileCapture(
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
 	const manifest: ProfileManifest = {
 		schema: 4,
+		functionIdentities: functionIdentityCoverage(prepared),
 		status: "complete",
 		command,
 		mode: prepared.mode,
@@ -1761,6 +1857,7 @@ export function formatProfileReport(
 			? 0
 			: manifest.attribution.allocationSamples / manifest.allocationSamples;
 	const lines = [
+		`  Function origins ${manifest.functionIdentities.known} unique / ${manifest.functionIdentities.shared} shared / ${manifest.functionIdentities.ambiguous} ambiguous / ${manifest.functionIdentities.unknown} unknown (${manifest.functionIdentities.portable} portable, ${manifest.functionIdentities.checkout} checkout-bound)`,
 		`  Quality ${manifest.quality} · ${formatCount(manifest.cpuSamples)} CPU samples · ${formatCount(
 			manifest.allocationSamples,
 		)} allocation samples`,

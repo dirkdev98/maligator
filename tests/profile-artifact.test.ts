@@ -140,11 +140,13 @@ function legacyV2Capture(): Uint8Array {
 }
 
 const prepared: PreparedProfile = {
-	schema: 3,
+	schema: 4,
 	mode: "sampling",
 	buildId: "a".repeat(64),
 	entrypoint: "/project/app.js",
-	functions: [{ name: "hot", file: "app.js" }],
+	functions: [
+		{ name: "hot", file: "app.js", identity: { status: "unknown", reason: "fixture" } },
+	],
 	sites: [
 		{
 			id: 0,
@@ -287,6 +289,24 @@ test("profile finalization rejects a raw capture from another metadata or build 
 	expect(() => finalizeProfileCapture(directory, changedMetadata, "run")).toThrow(
 		"identity does not match its contents",
 	);
+	const changedFunctionIdentity: PreparedProfile = {
+		...prepared,
+		functions: prepared.functions.map((fn) => ({
+			...fn,
+			identity: {
+				status: "known",
+				origin: "c".repeat(64),
+				revision: "d".repeat(64),
+				portability: "portable",
+			},
+		})),
+	};
+	expect(profileCaptureIdentity(changedFunctionIdentity)).not.toBe(
+		prepared.captureIdentity,
+	);
+	expect(() => finalizeProfileCapture(directory, changedFunctionIdentity, "run")).toThrow(
+		"identity does not match its contents",
+	);
 });
 
 test("profile finalization rejects compiler counters from another capture", () => {
@@ -306,6 +326,14 @@ test("profile finalization publishes standard views and joins remarks by source 
 	writeFileSync(path.join(directory, "capture.bin.compiler"), compilerCapture());
 	const result = finalizeProfileCapture(directory, prepared, "run");
 
+	expect(result.manifest.functionIdentities).toEqual({
+		known: 0,
+		shared: 0,
+		ambiguous: 0,
+		unknown: 1,
+		portable: 0,
+		checkout: 0,
+	});
 	expect(result.findings[0]).toMatchObject({
 		cpuSamples: 1,
 		allocationSamples: 1,

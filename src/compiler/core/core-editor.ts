@@ -262,6 +262,7 @@ function sameFunctionMetadata(
 ): boolean {
 	return (
 		left.sourcePath === right.sourcePath &&
+		left.sourceOrigin === right.sourceOrigin &&
 		left.sourceStrict === right.sourceStrict &&
 		left.nameStringIndex === right.nameStringIndex &&
 		left.length === right.length &&

@@ -39,6 +39,12 @@ import type {
 	SemanticProgram,
 	StaticArgumentsAccess,
 } from "../frontend/semantic-analysis.ts";
+import { collectSourceFunctionOrigins } from "../frontend/source-function-origins.ts";
+import type {
+	SourceFunctionOrigin,
+	SourceFunctionOriginOptions,
+	SourceFunctionOrigins,
+} from "../frontend/source-function-origins.ts";
 import { SyntaxDiagnostic } from "../frontend/syntax-diagnostic.ts";
 import {
 	compilerFactIsWorldInvariant,
@@ -76,6 +82,7 @@ import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreProgram } from "./core-store.ts";
 
 interface CoreFrontendContext {
+	sourceOrigins?: SourceFunctionOrigins;
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -418,6 +425,7 @@ interface SemanticClassContext {
 }
 
 interface CoreFrontendFunction {
+	sourceOrigin?: SourceFunctionOrigin;
 	semanticFile: SemanticFile;
 	functionIndex: number;
 
@@ -786,6 +794,7 @@ function isCompilerBinaryOperator(operator: string): operator is CompilerBinaryO
 export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: {
+		sourceOrigins?: SourceFunctionOriginOptions;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
@@ -855,6 +864,9 @@ export function constructSemanticProgramCore(
 	// no-op for a single-module program). Must run before frontend lowering so
 	// identifier resolution sees the aliased bindings.
 	const linkage = linkModules(semantic);
+	if (options.sourceOrigins !== undefined) {
+		program.sourceOrigins = collectSourceFunctionOrigins(semantic, options.sourceOrigins);
+	}
 	for (const [path, binding] of linkage.moduleDefaultBinding) {
 		program.moduleDefaultBinding.set(path, binding);
 	}
@@ -2646,6 +2658,7 @@ function compileNewFunction(
 	const fnFile = foundFile ?? program.semantic.files[0]!;
 	const fn: CoreFrontendFunction = {
 		semanticFile: fnFile,
+		sourceOrigin: program.sourceOrigins?.get(fnFile, functionNode),
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
@@ -2716,6 +2729,7 @@ function compileNewFunctionExpression(
 
 	const compiledFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
+		sourceOrigin: program.sourceOrigins?.get(fn.semanticFile, functionNode),
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
