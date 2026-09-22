@@ -785,3 +785,59 @@ iterator operations and literal tables. Keep these boxed and relocate their type
 references before persisting any application-dependent proofs. After that, demonstrate
 an actual Meriyah hit across an application edit and measure both saved Core work and
 remaining backend cost before calling stage 4 complete.
+
+## D018 — 2026-09-22 — Reuse Meriyah through the conservative boxed boundary
+
+**Status:** Implemented; per-function demand loading and performance acceptance
+remain open. **Refines:** D016 and D017. **Supersedes:** The exclusion of classes,
+exception handlers, switches and literal tables from the reusable format.
+
+Schema 3 preserves class and derived-constructor metadata, boxed exception
+parameters, handler edges and switch cases. Generic object, property, constructor,
+spread and iterator operations have a closed attribute contract. Optional property
+flags retain their absence rather than receiving guessed defaults. Function owners,
+private globals, string keys and switch string constants relocate with the module.
+Synthetic loop environments, asynchronous functions and generators remain outside
+this boundary; synthetic owners need their own destination allocation contract.
+
+Literal templates carry their packed words and arbitrary-precision bigint constants
+use canonical decimal strings. Import validates template roots and embedded pool
+references, then relocates both embedded constants and instruction offsets. The
+frontend synchronizes all imported pools so later lowering cannot overwrite them.
+Ordinary instantiation retains fresh objects on each call. Corrupt artifacts fail
+before mutating destination Core.
+
+Decode special numeric tags only at numeric literal instructions and numeric switch
+cases. A general JSON reviver would visit every string code unit, packed template
+word and SSA index even though none admits a special number. Structural and Core
+verification still run; reducing that unused decoding work does not waive checks.
+
+This expands serialization, not proof authority. Mutable global lookups remain
+runtime lookups. Regex literals retain their RegExp intrinsic; replacing the global
+constructor still affects ordinary source calls. Proof-bearing attributes, effect
+refinements, guard facts and target representations remain rejected. The recipe is
+still the conservative local scalar pass: full standalone optimization would first
+require explicit exported-call roots and arbitrary external arguments.
+
+The import-free Meriyah dependency now fits the format, including its derived error
+class, large literal tables, captured environments, handlers and iterator paths.
+An application edit can reuse its completed scalar bodies while current-program
+analysis and backend emission remain active. This does not yet cache native objects
+or bypass the ordinary graph's parse and semantic analysis.
+
+Focused acceptance covers cache-off, cold and application-edit warm execution against
+Node, with Unicode, locations, comments/tokens, class/private/async parser input,
+invalid syntax, invalid regexes, throwing callbacks and mutable global RegExp.
+A dependency inserted before Meriyah shifts function, global, string, bigint and
+literal pools; the warm image also runs through the VM. Format tests cover string
+switches, handler relocation and malformed literal/constant references. Full gates
+and repeated representative performance acceptance remain separate work.
+
+The next loading boundary must avoid constructing Core twice while retaining
+validation before destination mutation. Current warm loading validates the optimized
+variant in scratch Core, then imports it into destination Core. Stage validated
+function storage for relocation and attachment rather than dropping verification.
+A small manifest with separately addressable variants should also keep canonical
+alternatives available without reading them on the ordinary warm path. Splitting
+payloads alone does not remove the duplicated Core construction. Function-level
+loading and further persisted recipes remain separate completion claims.

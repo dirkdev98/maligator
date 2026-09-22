@@ -253,16 +253,18 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
-- [ ] Finish ADR stage 4: extend the boxed artifact boundary for Meriyah's classes,
-      handlers, switches and heap operations; split manifests/bodies for function
-      demand loading and measure representative application-edit rebuilds. Current
+- [x] Extend the boxed artifact boundary for Meriyah's classes, handlers, switches,
+      heap operations and literal pools; reuse its Core after application edits.
+- [ ] Finish ADR stage 4: stage one validated Core import, split manifests/variants/
+      bodies for demand loading and
+      complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,
       semantic analysis and selected-module decoding remain current-build work.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
-      Start with dependency validation and Meriyah reuse across application edits;
-      preserve canonical alternatives and charge cached output growth.
+      Extend dependency validation beyond admitted leaves, preserve canonical
+      alternatives and charge cached output growth.
 
 - [ ] Establish a complete source-closed entry/escape set for native reduction,
       including exports, host callbacks, dynamic loading/eval policy, reflection,

@@ -18,7 +18,7 @@ import type { ModuleRecord } from "./compiler/frontend/module-graph.ts";
 import { parseModule } from "./compiler/frontend/parser.ts";
 import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 
-const BOUNDARY = "strict-esm-private-cells-boxed-local-v2";
+const BOUNDARY = "strict-esm-private-cells-boxed-local-v3";
 const RECIPE = "conservative-local-v1";
 export interface CoreModuleCacheOptions {
 	source: string;
@@ -73,24 +73,9 @@ function rejectUnsupportedSyntax(value: unknown): void {
 			"ImportExpression",
 			"ExportAllDeclaration",
 			"WithStatement",
-			"ClassDeclaration",
-			"ClassExpression",
 			"AwaitExpression",
 			"YieldExpression",
 			"TaggedTemplateExpression",
-			"TemplateLiteral",
-			"MemberExpression",
-			"ObjectExpression",
-			"ArrayExpression",
-			"NewExpression",
-			"TryStatement",
-			"SwitchStatement",
-			"SpreadElement",
-			"RestElement",
-			"ArrayPattern",
-			"ObjectPattern",
-			"ForOfStatement",
-			"ForInStatement",
 		].includes(String(node.type)) ||
 		node.async === true ||
 		node.generator === true ||

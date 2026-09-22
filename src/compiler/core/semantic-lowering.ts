@@ -1114,16 +1114,18 @@ function emitReusableModuleInit(
 	const imported = importCoreModule(program.core, reusable.artifact, modulePath);
 	program.nextFunctionIndex = program.core.functionCapacity;
 	program.nextGlobalIndex = program.core.globalCount;
-	program.stringConstants.push(
-		...program.core.stringConstants
-			.slice(program.stringConstants.length)
-			.map((units) => [...units]),
-	);
-	program.sourcePositions.push(
-		...program.core.sourcePositions
-			.slice(program.sourcePositions.length)
-			.map((position) => ({ ...position })),
-	);
+	for (const units of program.core.stringConstants.slice(program.stringConstants.length))
+		program.stringConstants.push([...units]);
+	for (const position of program.core.sourcePositions.slice(
+		program.sourcePositions.length,
+	))
+		program.sourcePositions.push({ ...position });
+	for (const value of program.core.bigintConstants.slice(program.bigintConstants.length))
+		program.bigintConstants.push(value);
+	for (const word of program.core.literalTemplateData.slice(
+		program.literalTemplateData.length,
+	))
+		program.literalTemplateData.push(word);
 	(program.reusedGlobalCandidates ??= []).push(...imported.singleAssignmentGlobalSlots);
 	(program.reusedCapturedCandidates ??= []).push(
 		...imported.singleAssignmentCapturedSlots,

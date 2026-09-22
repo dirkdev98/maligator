@@ -93,7 +93,7 @@ it("misses after source or recipe changes and repairs a corrupt entry before imp
 });
 it.each([
 	"import { x } from './missing.mjs'; export { x };",
-	"export function f() { return globalThis.value; }",
+	"export function* f() { yield 1; }",
 	"export function f() { for (let x = 0; x < 2; x++) (() => x)(); }",
 	"export async function f() { return 1; }",
 ])("declines unsupported boundaries: %s", (text) => {
@@ -104,10 +104,16 @@ it.each([
 it("preserves special numbers and rejects an invalid relocation before destination mutation", () => {
 	const result = loadOrCompileCoreModule({
 		...options(),
-		source: "export function negativeZero() { return -0; }",
+		source:
+			"export function negativeZero() { return -0; } export function numbers() { return [0/0, 1/0, -1/0]; }",
 	});
 	if (result.status !== "ready") throw new Error(result.reason);
 	const decoded = decodeCoreModule(encodeCoreModule(result.optimized));
+	expect(() =>
+		decodeCoreModule(
+			encodeCoreModule(result.optimized).replace('"$number":"-0"', '"$number":["-0"]'),
+		),
+	).toThrow();
 	expect(Reflect.set(decoded.exports[0]!, "slot", 1000)).toBe(false);
 	expect(Reflect.set(decoded.functions[0]!.metadata, "capturedCount", 1000)).toBe(false);
 	expect(
@@ -119,6 +125,12 @@ it("preserves special numbers and rejects an invalid relocation before destinati
 					Object.is(op.attributes.value, -0),
 			),
 	).toBe(true);
+	const numbers = decoded.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.operations))
+		.filter((op) => ["createNumber", "createF64"].includes(op.opcode))
+		.map((op) => op.attributes.value);
+	for (const number of [NaN, Infinity, -Infinity])
+		expect(numbers.some((value) => Object.is(value, number))).toBe(true);
 	const bad = structuredClone(decoded);
 	bad.exports = [{ name: "bad", slot: 1000 }];
 	const destination = new CoreProgram(coreOpcodeRegistry, { globalCount: 4 });
@@ -199,4 +211,121 @@ it("continues compilation when the optional cache cannot publish", () => {
 		status: "ready",
 		cache: "miss",
 	});
+});
+
+it("relocates literal pools, exception edges and string switches before importing boxed Core", () => {
+	const result = loadOrCompileCoreModule({
+		...options(),
+		source: `
+			export function literal() { return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, "nine", 10n, { key: -0 }]; }
+			export function choose(key, callback) {
+				try { switch (key) { case "a": return callback(1); case "b": return callback(2); default: return 3; } }
+				catch (error) { return key + error; }
+			}
+			export class Derived extends Error { constructor(text) { super(text); } get detail() { return literal(); } }
+		`,
+	});
+	if (result.status !== "ready") throw new Error(result.reason);
+	const artifact = decodeCoreModule(encodeCoreModule(result.optimized));
+	expect(artifact.literalTemplates.length).toBeGreaterThan(0);
+	expect(artifact.bigints).toContain("10");
+	expect(artifact.functions.some((fn) => fn.metadata.isDerivedConstructor)).toBe(true);
+	const blocks = artifact.functions.flatMap((fn) => fn.blocks);
+	expect(blocks.some((block) => block.handler !== undefined)).toBe(true);
+	expect(blocks.some((block) => block.terminator.kind === "switch")).toBe(true);
+	const numeric = structuredClone(artifact);
+	const switchBlock = numeric.functions
+		.flatMap((fn) => fn.blocks)
+		.find((block) => block.terminator.kind === "switch")!;
+	if (switchBlock.terminator.kind !== "switch") throw new Error("Missing switch");
+	const edge = switchBlock.terminator.cases[0]!.edge;
+	switchBlock.terminator = {
+		...switchBlock.terminator,
+		cases: [-0, NaN, Infinity, -Infinity].map((value) => ({
+			value: { kind: "number", value },
+			edge,
+		})),
+	};
+	const decodedSwitch = decodeCoreModule(encodeCoreModule(numeric))
+		.functions.flatMap((fn) => fn.blocks)
+		.find((block) => block.terminator.kind === "switch")!.terminator;
+	if (decodedSwitch.kind !== "switch") throw new Error("Missing decoded switch");
+	expect(decodedSwitch.cases.map((item) => item.value)).toEqual(
+		[-0, NaN, Infinity, -Infinity].map((value) => ({ kind: "number", value })),
+	);
+	const destination = new CoreProgram(coreOpcodeRegistry, {
+		globalCount: 3,
+		stringConstants: [[120]],
+		bigintConstants: [99n],
+		literalTemplateData: [8, 1, 6, 0],
+	});
+	appendLeaf(destination);
+	importCoreModule(destination, artifact, "/shifted.mjs");
+	importCoreModule(destination, artifact, "/second.mjs");
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	expect(destination.bigintConstants).toEqual([99n, 10n, 10n]);
+	const corruptions = [
+		(bad: typeof artifact) => {
+			bad.literalTemplates = [8, 2, 5, 0];
+		},
+		(bad: typeof artifact) => {
+			bad.literalTemplates = [5, bad.strings.length];
+		},
+		(bad: typeof artifact) => {
+			bad.bigints = ["01"];
+		},
+		(bad: typeof artifact) => {
+			const block = bad.functions
+				.flatMap((fn) => fn.blocks)
+				.find((b) => b.handler !== undefined)!;
+			block.handler = { block: 999_999 as typeof block.id, arguments: [] };
+		},
+		(bad: typeof artifact) => {
+			const block = bad.functions
+				.flatMap((fn) => fn.blocks)
+				.find((b) => b.terminator.kind === "switch")!;
+			const term = block.terminator;
+			if (term.kind === "switch")
+				block.terminator = {
+					...term,
+					cases: [
+						{ value: { kind: "string", index: bad.strings.length }, edge: term.default },
+					],
+				};
+		},
+		(bad: typeof artifact) => {
+			const op = bad.functions
+				.flatMap((fn) => fn.blocks.flatMap((block) => block.operations))
+				.find((op) => op.opcode === "instantiateLiteralTemplate")!;
+			op.attributes = { templateOffset: 1 };
+		},
+		(bad: typeof artifact) => {
+			const op = bad.functions
+				.flatMap((fn) => fn.blocks.flatMap((block) => block.operations))
+				.find((op) => op.opcode === "defineAccessor")!;
+			op.attributes = { kind: ["set"], enumerable: false };
+		},
+	];
+	for (const corrupt of corruptions) {
+		const bad = structuredClone(artifact);
+		corrupt(bad);
+		const functions = destination.functionCapacity;
+		const globals = destination.globalCount;
+		expect(() => importCoreModule(destination, bad, "/corrupt.mjs")).toThrow();
+		expect(destination.functionCapacity).toBe(functions);
+		expect(destination.globalCount).toBe(globals);
+	}
+});
+
+it("accepts long static property names and sparse argument reads without host argument limits", () => {
+	const key = "key".repeat(50_000);
+	const result = loadOrCompileCoreModule({
+		...options(),
+		source: `export function f(value) { return { ${JSON.stringify(key)}: value, missing: arguments[1000000] }; }`,
+	});
+	if (result.status !== "ready") throw new Error(result.reason);
+	const artifact = decodeCoreModule(encodeCoreModule(result.optimized));
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(destination, artifact, "/long-key.mjs");
+	verifyCoreProgram(destination, { stage: "pre-target" });
 });

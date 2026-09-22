@@ -110,7 +110,7 @@ it("remembers unsupported boundaries instead of reconstructing them after each a
 	const { write, options } = fixture();
 	write(
 		"lib.mjs",
-		"export const n = Math; export function bump() {} export function counter() { return () => 1; }",
+		"export const n = Math; export function bump() {} export function counter() { for (let i = 0; i < 2; i++) (() => i)(); return () => 1; }",
 	);
 	const cold = compileBuildFrontend(options);
 	expect(cold.coreModules).toMatchObject({ unsupported: 1 });

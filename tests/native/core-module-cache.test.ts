@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, expect, it } from "vitest";
@@ -126,6 +126,108 @@ it("executes relocated cold and warm modules with independent private state", ()
 	expect(result.stdout.trim()).toBe("9 9 9 25 9 9");
 }, 120_000);
 
+it("reuses Meriyah after an application edit with relocated pools and identical parser behavior", () => {
+	const write = (file: string, source: string) =>
+		writeFileSync(path.join(directory, file), source);
+	write(
+		"meriyah.mjs",
+		readFileSync(path.resolve("node_modules/meriyah/dist/meriyah.mjs"), "utf8"),
+	);
+	write(
+		"values.mjs",
+		`
+		export let effects = 0;
+		export function literal() { return [1,2,3,4,5,6,7,8,9,10,11,12,13,,"leaf",123n,{ key: -0 }]; }
+		export class Box extends Error { constructor() { super('box'); this.items = literal(); } get size() { return this.items.length; } }
+		export function choose(key, callback) {
+			try { try { switch (key) { case 'a': return callback(1); case 'a': return 91; case 'b': return callback(2); default: return 3; } }
+			catch (error) { return key + error; } } finally { effects++; }
+		}
+	`,
+	);
+	const entry = `
+		import { parseScript, parseModule, isParseError } from './meriyah.mjs';
+		import { literal, Box, choose, effects } from './values.mjs';
+		const box = new Box(), other = new Box(); box.items[0] = 99;
+		console.log(box instanceof Error, box.message, box.size, other.items[0], String(literal()[15]), 13 in literal(), 1 / literal()[16].key);
+		console.log(choose('a', x => x + 4), choose('b', x => { throw x; }), choose('z', () => 9), effects);
+		const comments = [], tokens = [];
+		const first = parseScript('// hello\\nconst café = "雪"; /a+/u;', { loc: true, ranges: true, onComment: comments, onToken: tokens });
+		console.log(JSON.stringify(first), comments.length, tokens.length);
+		console.log(JSON.stringify(parseModule('export class A { #x = 1; async f() { return this.#x; } }', { next: true, lexical: true })));
+		try { parseScript('const ='); } catch (error) { console.log(isParseError(error), error.name, error.message, JSON.stringify(error.start), JSON.stringify(error.end)); }
+		try { parseScript('/(/'); } catch (error) { console.log(isParseError(error), error.name); }
+		console.log(parseScript('/(/', { validateRegex: false }).body[0].expression.value);
+		try { parseScript('// throw\\n1;', { onComment() { throw 'callback'; } }); } catch (error) { console.log(error); }
+		first.body.length = 0;
+		console.log(parseScript('const café = "雪";').body.length);
+		const NativeRegExp = RegExp;
+		let calls = 0;
+		globalThis.RegExp = function(pattern, flags) { calls++; return new NativeRegExp(pattern, flags); };
+		console.log(parseScript('/ab+/u').body[0].expression.value.source, calls);
+		globalThis.RegExp = NativeRegExp;
+	`;
+	write("parser-entry.mjs", entry);
+	const node = spawnSync(process.execPath, [path.join(directory, "parser-entry.mjs")], {
+		encoding: "utf8",
+	});
+	expect(node.status).toBe(0);
+	const options = {
+		entrypoint: path.join(directory, "parser-entry.mjs"),
+		cacheDirectory: path.join(directory, "meriyah-cache"),
+		config: resolveBuildConfig({ engine: { primordials: "mutable" } }),
+		stripTypes: stripCompactTypes,
+		stripperIdentity: "native-meriyah-core-module",
+		coreModuleCache: true,
+	};
+	const execute = (
+		image: ReturnType<typeof compileBuildFrontend>["programImage"],
+		name: string,
+		compiled = true,
+	) => {
+		const binary = buildNativeProgramImage(image, {
+			name,
+			outDir: directory,
+			compiled,
+			evalEnabled: false,
+			realmsEnabled: false,
+			intlEnabled: false,
+			temporalEnabled: false,
+			regexpEnabled: true,
+			webPlatformEnabled: false,
+		});
+		const result = spawnSync(binary, [], { encoding: "utf8", timeout: 30_000 });
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(node.stdout);
+	};
+	const ordinary = compileBuildFrontend({ ...options, coreModuleCache: false });
+	execute(ordinary.programImage, "meriyah-ordinary");
+	const cold = compileBuildFrontend(options);
+	expect(cold.coreModules).toMatchObject({ misses: 2, hits: 0, unsupported: 0 });
+	expect(cold.coreModules!.constructedFunctions).toBeGreaterThan(200);
+	execute(cold.programImage, "meriyah-cold");
+	write(
+		"parser-prefix.mjs",
+		`
+		async function outsideBoundary() {}
+		function literal() { return [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,"prefix",99n]; }
+		const first = literal(); first[0] = 50;
+		if (literal()[0] !== 1 || first[16] !== 99n) throw 'bad prefix';
+	`,
+	);
+	write("parser-entry.mjs", `import './parser-prefix.mjs';\n${entry}`);
+	const warm = compileBuildFrontend(options);
+	expect(warm.coreModules).toMatchObject({
+		hits: 2,
+		misses: 0,
+		constructedFunctions: 0,
+		optimizedFunctions: 0,
+	});
+	execute(warm.programImage, "meriyah-warm");
+	execute(warm.programImage, "meriyah-warm-vm", false);
+}, 120_000);
+
 it("stops application initialization when a cached dependency throws", () => {
 	writeFileSync(path.join(directory, "throwing.mjs"), "throw 27;");
 	writeFileSync(
@@ -213,7 +315,7 @@ it("preserves initialization, live exports and independent closures across ordin
 	expect(execute(cold.programImage, "cold-modules")).toBe(expected);
 	write(
 		"prefix.mjs",
-		"const marker = {}; function earlier(x) { return () => x + 1; } marker.f = earlier(4); if (marker.f() !== 5) throw 91;",
+		"async function unused() {} const marker = {}; function earlier(x) { return () => x + 1; } marker.f = earlier(4); if (marker.f() !== 5) throw 91;",
 	);
 	write("entry.mjs", `import './prefix.mjs';\n${entry}`);
 	const warm = compileBuildFrontend(options);
