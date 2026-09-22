@@ -537,7 +537,8 @@ describe("late Core specialization plan", () => {
 			},
 		);
 		expect(planSpecializations(declined)).toEqual([]);
-		expect(declined.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
+		expect(declined.statistics.discovery.attempted).toBe(0);
+		expect(declined.statistics.discovery.skippedByReason["generated-code-cost"]).toBe(1);
 	});
 
 	it("reports local discovery from the planner's single query", () => {
@@ -554,6 +555,51 @@ describe("late Core specialization plan", () => {
 
 		expect(functions).toBe(1);
 		expect(candidates).toBeGreaterThan(0);
+	});
+
+	it("skips specialization proofs when generated-code budget is exhausted", () => {
+		const { program, function: functionId } = numericProgram();
+		const prepared = planning(program, [functionId]);
+		const report = new CoreOptimizationReportBuilder(program, "full");
+		const analyses = new CoreAnalysisManager(program, prepared.context, report);
+		const plan = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			prepared.summaries,
+			[functionId],
+			{
+				context: prepared.context,
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 0,
+					perCallerCompilerWork: 1000,
+					programGeneratedCode: 0,
+					programCompilerWork: 1000,
+				},
+			},
+		);
+		expect(plan.statistics.discovery.attempted).toBe(0);
+		expect(plan.statistics.discovery.compilerWork).toBe(0);
+		expect(
+			report
+				.finish(program, plan)
+				.analyses.some(({ analysis }) => analysis === "local-specialization-candidates"),
+		).toBe(false);
+		expect(planSpecializations(plan)).toEqual([]);
+		verifyCoreOptimizationPlan(program.seal(), plan);
+	});
+
+	it("charges discovery that proves no usable specialization", () => {
+		const { program, function: functionId } = numericProgram("===", "===");
+		const { plan } = planning(program, [functionId]);
+		expect(plan.statistics.discovery.attempted).toBe(1);
+		expect(plan.statistics.discovery.compilerWork).toBeGreaterThan(0);
+		expect(plan.statistics.compilerWorkConsumed).toBe(
+			plan.statistics.discovery.compilerWork,
+		);
+		expect(planSpecializations(plan)).toEqual([]);
+		verifyCoreOptimizationPlan(program.seal(), plan);
 	});
 
 	it("reuses current local planning inputs only in their compilation context", () => {
@@ -576,7 +622,11 @@ describe("late Core specialization plan", () => {
 		);
 
 		expect(current).toEqual(prepared.plan);
-		expect(currentReport.finish(program, current).analyses).toEqual([]);
+		expect(
+			currentReport
+				.finish(program, current)
+				.analyses.some(({ analysis }) => analysis === "local-specialization-candidates"),
+		).toBe(true);
 
 		const differentContext = programAnalysisContext();
 		const differentContextReport = new CoreOptimizationReportBuilder(program, "full");
@@ -970,6 +1020,13 @@ describe("late Core specialization plan", () => {
 			recipes: buildCoreSpecializationRecipeTable([]),
 			statistics: {
 				...plan.statistics,
+				discovery: {
+					opportunities: 0,
+					attempted: 0,
+					skipped: 0,
+					compilerWork: 0,
+					skippedByReason: {},
+				},
 				considered: 0,
 				applied: 0,
 				declined: 0,

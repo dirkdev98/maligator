@@ -2113,7 +2113,19 @@ export function verifyCoreOptimizationPlan(
 		plan.statistics.considered !== plan.statistics.applied + plan.statistics.declined ||
 		total(plan.statistics.discoveredByKind) !== plan.statistics.considered ||
 		plan.statistics.generatedCodeConsumed !== generatedCode ||
-		plan.statistics.compilerWorkConsumed !== compilerWork ||
+		plan.statistics.compilerWorkConsumed !==
+			compilerWork + plan.statistics.discovery.compilerWork ||
+		![
+			plan.statistics.discovery.opportunities,
+			plan.statistics.discovery.attempted,
+			plan.statistics.discovery.skipped,
+			plan.statistics.discovery.compilerWork,
+			...Object.values(plan.statistics.discovery.skippedByReason),
+		].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+		plan.statistics.discovery.opportunities !==
+			plan.statistics.discovery.attempted + plan.statistics.discovery.skipped ||
+		total(plan.statistics.discovery.skippedByReason) !==
+			plan.statistics.discovery.skipped ||
 		!Number.isFinite(plan.statistics.verificationMs) ||
 		plan.statistics.verificationMs < 0
 	) {

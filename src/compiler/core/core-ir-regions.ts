@@ -420,6 +420,13 @@ export type CorePlanDeclineReason =
 	| "target-support";
 
 export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStatistics {
+	readonly discovery: {
+		readonly opportunities: number;
+		readonly attempted: number;
+		readonly skipped: number;
+		readonly compilerWork: number;
+		readonly skippedByReason: Readonly<Record<string, number>>;
+	};
 	readonly admittedFunctions: number;
 	readonly discoveredByKind: Readonly<Record<string, number>>;
 	readonly selectedByKind: Readonly<Record<string, number>>;

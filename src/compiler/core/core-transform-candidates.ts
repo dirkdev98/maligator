@@ -55,6 +55,13 @@ export interface CoreTransformCandidate {
 	readonly unsupportedReason?: CoreTransformDeclineReason;
 }
 
+export interface CoreTransformDiscoveryCost {
+	readonly caller: CoreFunctionId;
+	// A lower bound for admission; discovery itself does not consume generated code.
+	readonly generatedCodeCost: number;
+	readonly compilerWorkCost: number;
+}
+
 export interface CoreTransformBudgetLimits {
 	readonly perSiteExpansions: number;
 	readonly perCallerExpansions: number;
@@ -344,6 +351,36 @@ export class CoreTransformCandidateService {
 		)
 			return "compiler-work-cost";
 		return undefined;
+	}
+
+	admitDiscovery(
+		cost: CoreTransformDiscoveryCost,
+	): CoreTransformDeclineReason | undefined {
+		const caller = this.#caller.get(cost.caller);
+		if (
+			(caller?.generatedCode ?? 0) + cost.generatedCodeCost >
+				this.#limits.perCallerGeneratedCode ||
+			this.#generatedCode + cost.generatedCodeCost > this.#limits.programGeneratedCode
+		)
+			return "generated-code-cost";
+		if (
+			(caller?.compilerWork ?? 0) + cost.compilerWorkCost >
+				this.#limits.perCallerCompilerWork ||
+			this.#compilerWork + cost.compilerWorkCost > this.#limits.programCompilerWork
+		)
+			return "compiler-work-cost";
+		return undefined;
+	}
+
+	recordDiscovery(cost: CoreTransformDiscoveryCost): void {
+		const caller = this.#caller.get(cost.caller) ?? {
+			expansions: 0,
+			generatedCode: 0,
+			compilerWork: 0,
+		};
+		caller.compilerWork += cost.compilerWorkCost;
+		this.#caller.set(cost.caller, caller);
+		this.#compilerWork += cost.compilerWorkCost;
 	}
 
 	recordApplied(candidate: CoreTransformCandidate): void {

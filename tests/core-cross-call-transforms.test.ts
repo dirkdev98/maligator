@@ -92,6 +92,31 @@ const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 };
 
 describe("bounded Core cross-call transforms", () => {
+	it("retains attempted discovery work across phases without consuming code budget", () => {
+		const service = new CoreTransformCandidateService({
+			perSiteExpansions: 1,
+			perCallerExpansions: 4,
+			perCallerGeneratedCode: 20,
+			perCallerCompilerWork: 5,
+			programGeneratedCode: 20,
+			programCompilerWork: 8,
+		});
+		const cost = {
+			caller: 0 as CoreTransformCandidate["caller"],
+			generatedCodeCost: 8,
+			compilerWorkCost: 4,
+		};
+		expect(service.admitDiscovery(cost)).toBeUndefined();
+		service.recordDiscovery(cost);
+		service.beginPhase();
+		expect(service.admitDiscovery(cost)).toBe("compiler-work-cost");
+		const other = { ...cost, caller: 1 as CoreTransformCandidate["caller"] };
+		expect(service.admitDiscovery(other)).toBeUndefined();
+		service.recordDiscovery(other);
+		expect(service.programBudgetExhaustionReason()).toBe("compiler-work-cost");
+		expect(service.statistics().generatedCodeConsumed).toBe(0);
+		expect(service.statistics().compilerWorkConsumed).toBe(8);
+	});
 	it("owns exactly two deliberate waves without driving pass stages", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),
@@ -1650,7 +1675,10 @@ describe("bounded Core cross-call transforms", () => {
 		expect(attributes.callReturnRepresentation).toBeUndefined();
 		expect(result.statistics.considered).toBe(0);
 		expect(result.statistics.declinedByReason["generated-code-cost"] ?? 0).toBe(0);
-		expect(result.plan.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
+		expect(result.plan.statistics.discovery.attempted).toBe(0);
+		expect(
+			result.plan.statistics.discovery.skippedByReason["generated-code-cost"],
+		).toBeGreaterThan(0);
 		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
 	});
 
@@ -1691,7 +1719,10 @@ describe("bounded Core cross-call transforms", () => {
 		expect(callInstructions(program, specializedCaller.function)).toHaveLength(1);
 		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
 		expect(result.statistics.generatedCodeConsumed).toBe(1);
-		expect(result.plan.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
+		expect(result.plan.statistics.discovery.attempted).toBe(0);
+		expect(
+			result.plan.statistics.discovery.skippedByReason["generated-code-cost"],
+		).toBeGreaterThan(0);
 	});
 
 	it("terminates a recursive inline candidate by identity", () => {

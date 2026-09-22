@@ -340,6 +340,13 @@ function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 		specializedOnlyFunctions: Object.freeze([]),
 		recipes: buildCoreSpecializationRecipeTable([]),
 		statistics: Object.freeze({
+			discovery: Object.freeze({
+				opportunities: 0,
+				attempted: 0,
+				skipped: 0,
+				compilerWork: 0,
+				skippedByReason: {},
+			}),
 			considered: discovered,
 			applied: 0,
 			declined: discovered,

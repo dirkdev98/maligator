@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
@@ -12,6 +12,8 @@ import {
 
 const fixture = "tests/local/direct-entry-abi.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-direct-entry-abi-"));
+
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("native direct-entry ABI", () => {
 	let expected: string;

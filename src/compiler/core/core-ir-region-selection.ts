@@ -96,6 +96,7 @@ import type {
 	CoreTransformBudgetLimits,
 	CoreTransformCandidate,
 	CoreTransformDeclineReason,
+	CoreTransformDiscoveryCost,
 } from "./core-transform-candidates.ts";
 
 export interface CorePendingOptimizationCandidate {
@@ -119,6 +120,12 @@ interface PendingDirectEntry {
 
 type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
 
+interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
+	readonly kind: "local" | "direct-entry" | "guarded-call";
+	readonly priorityScore: number;
+	readonly resolve: () => ReadonlyArray<PendingCandidate>;
+}
+
 export interface CoreLocalCandidateSummary {
 	readonly kind: CoreLocalSpecializationCandidate["kind"];
 	readonly fanOut: number;
@@ -127,9 +134,9 @@ export interface CoreLocalCandidateSummary {
 export interface CoreLocalOptimizationPlanInput {
 	readonly function: CoreFunctionId;
 	readonly context: CoreCompilationContext | undefined;
-	readonly scanned: boolean;
-	readonly candidateSummaries: ReadonlyArray<CoreLocalCandidateSummary>;
-	readonly pending: ReadonlyArray<CorePendingOptimizationCandidate>;
+	readonly discovery:
+		| { readonly priorityScore: number; readonly compilerWorkCost: number }
+		| undefined;
 	readonly operatorInputs: ReadonlyArray<CoreOperatorInputPlan>;
 	readonly builtinInputs: ReadonlyArray<CoreBuiltinInputPlan>;
 	readonly privateNumericArrayElements: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
@@ -1035,24 +1042,41 @@ export function buildCoreLocalOptimizationPlanInput(
 	const fn = program.function(functionId);
 	const scanned =
 		discoverCandidates && hasLocalSpecializationFeatures(features, functionId);
-	const candidates = scanned
-		? analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
-				scope: "function",
-				function: functionId,
-			}).candidates
-		: Object.freeze([]);
 	const cfg = analyses
 		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 			scope: "function",
 			function: functionId,
 		})
 		.exceptional();
-	const pending: Array<CorePendingOptimizationCandidate> = [];
-	if (candidates.length > 0) {
-		const costModel = coreGeneratedCodeCostModel(fn, cfg);
-		for (const candidate of candidates) {
-			const planned = pendingLocalCandidate(program, candidate, cfg, costModel, context);
-			if (planned !== undefined) pending.push(planned);
+	let priorityScore = 0;
+	let operationCount = 0;
+	if (scanned) {
+		// This only orders function scans; proved candidates still use the full cost model.
+		const loopWeights = new Uint8Array(fn.blockCapacity);
+		for (const loop of cfg.loops) {
+			for (const block of loop.blocks)
+				loopWeights[block] = Math.max(loopWeights[block]!, 4 ** Math.min(3, loop.depth));
+		}
+		for (const instruction of fn.instructionIds()) {
+			operationCount++;
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			const benefit =
+				opcode === "iteratorStep" || opcode === "getIterator"
+					? 24
+					: opcode === "createObject" ||
+						  opcode === "createObjectShaped" ||
+						  opcode === "createArray"
+						? 12
+						: opcode === "call" || opcode === "callKnown"
+							? 8
+							: opcode === "binary"
+								? 2
+								: 0;
+			priorityScore = Math.min(
+				priorityScore,
+				-benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!),
+			);
 		}
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
@@ -1061,11 +1085,10 @@ export function buildCoreLocalOptimizationPlanInput(
 	return Object.freeze({
 		function: functionId,
 		context,
-		scanned,
-		candidateSummaries: Object.freeze(
-			candidates.map(({ kind, fanOut }) => Object.freeze({ kind, fanOut })),
-		),
-		pending: Object.freeze(pending),
+		discovery:
+			scanned && priorityScore < 0
+				? Object.freeze({ priorityScore, compilerWorkCost: operationCount })
+				: undefined,
 		operatorInputs: coreOperatorInputPlans(program, analyses, [functionId]),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, [functionId]),
 		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
@@ -1102,13 +1125,13 @@ function localOptimizationPlanInputIsCurrent(
 	);
 }
 
-function guardedCallCandidates(
+function guardedCallOpportunities(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
-): ReadonlyArray<CorePendingOptimizationCandidate> {
-	const candidates: Array<CorePendingOptimizationCandidate> = [];
+): ReadonlyArray<CorePlanningOpportunity> {
+	const candidates: Array<CorePlanningOpportunity> = [];
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
@@ -1160,47 +1183,60 @@ function guardedCallCandidates(
 			) {
 				continue;
 			}
-			const selection: CorePlanSpecialization = Object.freeze({
-				id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
-				kind: "guarded-direct-call",
-				function: caller,
-				anchors: Object.freeze([site.instruction]),
-				claimedInstructions: Object.freeze([site.instruction]),
-				ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
-				exceptionalBlocks: Object.freeze([]),
-				representation:
-					!site.open && targetFunctions.length === 1
-						? "exact-function"
-						: "finite-function-set",
-				requiredRepresentations: Object.freeze([]),
-				target: "native",
-				fallback: "canonical-core",
-				semanticProtectors: Object.freeze([]),
-				targetFunctions,
-				admission: Object.freeze({
-					anchor: site.instruction,
-					mode: "per-use" as const,
-				}),
-				composition: "overlay",
-				cost: Object.freeze({
-					generatedCode: targetFunctions.length,
-					compilerWork: 1,
-					runtimeBenefit: 8,
-				}),
-			});
 			candidates.push({
-				selection,
-				budget: {
-					kind: "guarded-direct-call",
-					caller,
-					site: site.instruction,
-					revision: 0,
-					priorityClass: 1,
-					priorityScore: 0,
-					targets: targetFunctions,
-					generatedCodeCost: selection.cost.generatedCode,
-					compilerWorkCost: selection.cost.compilerWork,
-					expansive: false,
+				kind: "guarded-call",
+				caller,
+				generatedCodeCost: targetFunctions.length,
+				compilerWorkCost: 1,
+				priorityScore:
+					-(loopBlocks.has(fn.instructionBlock(site.instruction)) ? 32 : 8) /
+					targetFunctions.length,
+				resolve: () => {
+					const selection: CorePlanSpecialization = Object.freeze({
+						id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
+						kind: "guarded-direct-call",
+						function: caller,
+						anchors: Object.freeze([site.instruction]),
+						claimedInstructions: Object.freeze([site.instruction]),
+						ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
+						exceptionalBlocks: Object.freeze([]),
+						representation:
+							!site.open && targetFunctions.length === 1
+								? "exact-function"
+								: "finite-function-set",
+						requiredRepresentations: Object.freeze([]),
+						target: "native",
+						fallback: "canonical-core",
+						semanticProtectors: Object.freeze([]),
+						targetFunctions,
+						admission: Object.freeze({
+							anchor: site.instruction,
+							mode: "per-use" as const,
+						}),
+						composition: "overlay",
+						cost: Object.freeze({
+							generatedCode: targetFunctions.length,
+							compilerWork: 1,
+							runtimeBenefit: 8,
+						}),
+					});
+					return [
+						{
+							selection,
+							budget: {
+								kind: "guarded-direct-call",
+								caller,
+								site: site.instruction,
+								revision: 0,
+								priorityClass: 1,
+								priorityScore: 0,
+								targets: targetFunctions,
+								generatedCodeCost: selection.cost.generatedCode,
+								compilerWorkCost: selection.cost.compilerWork,
+								expansive: false,
+							},
+						},
+					];
 				},
 			});
 		}
@@ -1208,47 +1244,15 @@ function guardedCallCandidates(
 	return candidates;
 }
 
-function directEntryCandidates(
+function directEntryOpportunities(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	live: ReadonlySet<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
-	localInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>,
-): ReadonlyArray<PendingDirectEntry> {
-	const inBoundsRestElements = new Map<CoreFunctionId, Set<CoreInstructionId>>();
-	const exactRestLengths = new Map<CoreFunctionId, Set<CoreInstructionId>>();
-	for (const input of localInputs) {
-		for (const candidate of input.pending) {
-			if (candidate.selection.kind !== "indexed-length-loop") continue;
-			const fn = program.function(input.function);
-			const length = candidate.selection.indexedLengthLoop.load;
-			const lengthReceiver = fn.kernel.operandAt(
-				fn.kernel.instructionOperandStart(length),
-			);
-			if (fn.kernel.valueDefinitionKind(lengthReceiver) === 1) {
-				const allocation = coreInstructionId(
-					fn.kernel.valueDefinitionOwner(lengthReceiver),
-				);
-				if (fn.instructionOpcodeName(allocation) === "createRestArguments") {
-					const lengths = exactRestLengths.get(input.function) ?? new Set();
-					lengths.add(length);
-					exactRestLengths.set(input.function, lengths);
-				}
-			}
-			for (const element of candidate.selection.indexedLengthLoop.elements) {
-				if (element.kind !== "load" || !element.arrayIndexIsUint32) continue;
-				const receiver = fn.kernel.operandAt(
-					fn.kernel.instructionOperandStart(element.instruction),
-				);
-				if (fn.kernel.valueDefinitionKind(receiver) !== 1) continue;
-				const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
-				if (fn.instructionOpcodeName(allocation) !== "createRestArguments") continue;
-				const elements = inBoundsRestElements.get(input.function) ?? new Set();
-				elements.add(element.instruction);
-				inBoundsRestElements.set(input.function, elements);
-			}
-		}
-	}
+	localCandidates: (
+		functionId: CoreFunctionId,
+	) => ReadonlyArray<CorePendingOptimizationCandidate>,
+): ReadonlyArray<CorePlanningOpportunity> {
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
 		const caller = program.function(site.caller);
@@ -1399,237 +1403,294 @@ function directEntryCandidates(
 			}
 		}
 	}
-	const candidates: Array<PendingDirectEntry> = [];
+	const candidates: Array<CorePlanningOpportunity> = [];
 	for (const [target, callSites] of [...callsByTarget].sort(
 		([left], [right]) => left - right,
 	)) {
 		const fn = program.function(target);
-		const summary = summaries.summary(target);
-		let resultRepresentation = planRepresentation(
-			summary?.returnRepresentation ?? "none",
-		);
-		const observation = coreArgumentObservation(fn);
-		if (
-			fn.isGenerator ||
-			fn.isAsync ||
-			fn.metadata.isClassConstructor ||
-			fn.metadata.isDerivedConstructor ||
-			observation.kind === "general"
-		)
-			continue;
-		const needsArity =
-			observation.readsCount ||
-			observation.indices.length > 0 ||
-			observation.restStarts.length > 0;
-		let parameterRepresentations: ReadonlyArray<CorePlanRepresentation> = Array.from(
-			{ length: fn.parameterCount },
-			() => "boxed",
-		);
-		let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
-		let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
-		let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
-		let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
-		let selectedCalls = callSites.filter(
-			(call) =>
-				call.numericSortCallback !== undefined ||
-				summaries.targets.site(call.caller, call.instruction)?.targets.functions
-					.length === 1,
-		);
-		let fieldParameters: CoreDirectEntryPlan["fieldParameters"];
-		if (!needsArity && fn.parameterCount === 1) {
-			const cfg = analyses
-				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
-				.exceptional();
-			const fields = coreReadOnlyNumericParameterFields(fn, cfg);
-			if (fields !== undefined) {
-				const fieldCalls = callSites.flatMap((call) => {
-					const site = summaries.targets.site(call.caller, call.instruction);
-					if (site?.arguments?.length !== 1) return [];
-					const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
-						scope: "function",
-						function: call.caller,
-					});
-					const fieldObject = coreNumericFieldArgument(
-						program.function(call.caller),
-						facts,
-						call.instruction,
-						site.arguments[0]!,
-						fields,
-					);
-					return fieldObject === undefined
-						? []
-						: [Object.freeze({ ...call, fieldObject })];
-				});
-				if (fieldCalls.length > 0) {
-					const variant = analyzeCoreNativeEntry(
-						fn,
-						cfg,
-						parameterRepresentations,
-						undefined,
-						fieldCalls,
-						fields,
-					);
-					if (
-						coreFieldEntryHasNumericComputations(
-							fn,
-							variant.valueRepresentations,
-							variant.operatorInputs,
+		const generatedCodeCost = Math.max(8, [...fn.instructionIds()].length);
+		candidates.push({
+			kind: "direct-entry",
+			caller: target,
+			generatedCodeCost,
+			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
+			priorityScore:
+				(-callSites.reduce((sum, site) => sum + callWeight(site), 0) * 8) /
+				generatedCodeCost,
+			resolve: () => {
+				const fn = program.function(target);
+				const summary = summaries.summary(target);
+				let resultRepresentation = planRepresentation(
+					summary?.returnRepresentation ?? "none",
+				);
+				const observation = coreArgumentObservation(fn);
+				if (
+					fn.isGenerator ||
+					fn.isAsync ||
+					fn.metadata.isClassConstructor ||
+					fn.metadata.isDerivedConstructor ||
+					observation.kind === "general"
+				)
+					return [];
+				const inBoundsRestElements = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+				const exactRestLengths = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+				if (observation.restStarts.length > 0) {
+					for (const candidate of localCandidates(target)) {
+						if (candidate.selection.kind !== "indexed-length-loop") continue;
+						const fn = program.function(target);
+						const length = candidate.selection.indexedLengthLoop.load;
+						const lengthReceiver = fn.kernel.operandAt(
+							fn.kernel.instructionOperandStart(length),
+						);
+						if (fn.kernel.valueDefinitionKind(lengthReceiver) === 1) {
+							const allocation = coreInstructionId(
+								fn.kernel.valueDefinitionOwner(lengthReceiver),
+							);
+							if (fn.instructionOpcodeName(allocation) === "createRestArguments") {
+								const lengths = exactRestLengths.get(target) ?? new Set();
+								lengths.add(length);
+								exactRestLengths.set(target, lengths);
+							}
+						}
+						for (const element of candidate.selection.indexedLengthLoop.elements) {
+							if (element.kind !== "load" || !element.arrayIndexIsUint32) continue;
+							const receiver = fn.kernel.operandAt(
+								fn.kernel.instructionOperandStart(element.instruction),
+							);
+							if (fn.kernel.valueDefinitionKind(receiver) !== 1) continue;
+							const allocation = coreInstructionId(
+								fn.kernel.valueDefinitionOwner(receiver),
+							);
+							if (fn.instructionOpcodeName(allocation) !== "createRestArguments")
+								continue;
+							const elements = inBoundsRestElements.get(target) ?? new Set();
+							elements.add(element.instruction);
+							inBoundsRestElements.set(target, elements);
+						}
+					}
+				}
+				const needsArity =
+					observation.readsCount ||
+					observation.indices.length > 0 ||
+					observation.restStarts.length > 0;
+				let parameterRepresentations: ReadonlyArray<CorePlanRepresentation> = Array.from(
+					{ length: fn.parameterCount },
+					() => "boxed",
+				);
+				let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
+				let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
+				let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
+				let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+				let selectedCalls = callSites.filter(
+					(call) =>
+						call.numericSortCallback !== undefined ||
+						summaries.targets.site(call.caller, call.instruction)?.targets.functions
+							.length === 1,
+				);
+				let fieldParameters: CoreDirectEntryPlan["fieldParameters"];
+				if (!needsArity && fn.parameterCount === 1) {
+					const cfg = analyses
+						.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+							scope: "function",
+							function: target,
+						})
+						.exceptional();
+					const fields = coreReadOnlyNumericParameterFields(fn, cfg);
+					if (fields !== undefined) {
+						const fieldCalls = callSites.flatMap((call) => {
+							const site = summaries.targets.site(call.caller, call.instruction);
+							if (site?.arguments?.length !== 1) return [];
+							const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: call.caller,
+							});
+							const fieldObject = coreNumericFieldArgument(
+								program.function(call.caller),
+								facts,
+								call.instruction,
+								site.arguments[0]!,
+								fields,
+							);
+							return fieldObject === undefined
+								? []
+								: [Object.freeze({ ...call, fieldObject })];
+						});
+						if (fieldCalls.length > 0) {
+							const variant = analyzeCoreNativeEntry(
+								fn,
+								cfg,
+								parameterRepresentations,
+								undefined,
+								fieldCalls,
+								fields,
+							);
+							if (
+								coreFieldEntryHasNumericComputations(
+									fn,
+									variant.valueRepresentations,
+									variant.operatorInputs,
+								)
+							) {
+								fieldParameters = fields;
+								selectedCalls = fieldCalls;
+								valueRepresentations = variant.valueRepresentations;
+								operatorInputs = variant.operatorInputs;
+								resultRepresentation = variant.resultRepresentation;
+							}
+						}
+					}
+				}
+				if (
+					fieldParameters === undefined &&
+					(fn.parameterCount > 0 || needsArity) &&
+					[...fn.instructionIds()].length <= 512
+				) {
+					const signatures = new Map<
+						string,
+						{
+							representations: Array<CorePlanRepresentation>;
+							calls: Array<CoreDirectEntryCallSite>;
+							scalars: number;
+							weight: number;
+						}
+					>();
+					for (const call of selectedCalls) {
+						const site = summaries.targets.site(call.caller, call.instruction);
+						if (
+							needsArity &&
+							(site?.arguments === undefined ||
+								site.arguments.length > 16 ||
+								observation.indices.some((index) => index >= site.arguments!.length) ||
+								observation.restStarts.some((index) => index > site.arguments!.length))
 						)
-					) {
-						fieldParameters = fields;
-						selectedCalls = fieldCalls;
+							continue;
+						const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+							scope: "function",
+							function: call.caller,
+						});
+						const representations = Array.from(
+							{ length: needsArity ? site!.arguments!.length : fn.parameterCount },
+							(_, index): CorePlanRepresentation => {
+								if (call.numericSortCallback !== undefined) return "f64";
+								const argument = site?.arguments?.[index];
+								const scalar =
+									argument === undefined ? undefined : kinds.exactScalar(argument);
+								return scalar === "int32" || scalar === "number"
+									? "f64"
+									: (scalar ?? "boxed");
+							},
+						);
+						const key = representations.join(",");
+						const signature = signatures.get(key) ?? {
+							representations,
+							calls: [],
+							weight: 0,
+							scalars:
+								representations.filter((representation) => representation !== "boxed")
+									.length + (needsArity ? 1 : 0),
+						};
+						signature.calls.push(call);
+						signature.weight += callWeight(call);
+						signatures.set(key, signature);
+					}
+					const signature = [...signatures.values()]
+						.filter(({ scalars }) => scalars > 0)
+						.sort(
+							(left, right) => right.weight * right.scalars - left.weight * left.scalars,
+						)[0];
+					if (signature !== undefined) {
+						argumentRepresentations = needsArity ? signature.representations : undefined;
+						parameterRepresentations = Array.from(
+							{ length: fn.parameterCount },
+							(_, index) => signature.representations[index] ?? "boxed",
+						);
+						selectedCalls = signature.calls;
+						const cfg = analyses
+							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: target,
+							})
+							.exceptional();
+						const exactOperationResultMasks = new Map<CoreInstructionId, number>();
+						for (const instruction of exactRestLengths.get(target) ?? []) {
+							exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
+						}
+						for (const instruction of inBoundsRestElements.get(target) ?? []) {
+							const receiver = fn.kernel.operandAt(
+								fn.kernel.instructionOperandStart(instruction),
+							);
+							const allocation = coreInstructionId(
+								fn.kernel.valueDefinitionOwner(receiver),
+							);
+							const startIndex = fn.instructionAttributes(allocation).startIndex;
+							if (
+								typeof startIndex === "number" &&
+								startIndex < signature.representations.length &&
+								signature.representations
+									.slice(startIndex)
+									.every((representation) => representation === "f64")
+							)
+								exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
+						}
+						const variant = analyzeCoreNativeEntry(
+							fn,
+							cfg,
+							parameterRepresentations,
+							argumentRepresentations,
+							selectedCalls,
+							undefined,
+							exactOperationResultMasks,
+						);
 						valueRepresentations = variant.valueRepresentations;
 						operatorInputs = variant.operatorInputs;
+						constantBooleans = variant.constantBooleans;
 						resultRepresentation = variant.resultRepresentation;
 					}
 				}
-			}
-		}
-		if (
-			fieldParameters === undefined &&
-			(fn.parameterCount > 0 || needsArity) &&
-			[...fn.instructionIds()].length <= 512
-		) {
-			const signatures = new Map<
-				string,
-				{
-					representations: Array<CorePlanRepresentation>;
-					calls: Array<CoreDirectEntryCallSite>;
-					scalars: number;
-					weight: number;
-				}
-			>();
-			for (const call of selectedCalls) {
-				const site = summaries.targets.site(call.caller, call.instruction);
 				if (
-					needsArity &&
-					(site?.arguments === undefined ||
-						site.arguments.length > 16 ||
-						observation.indices.some((index) => index >= site.arguments!.length) ||
-						observation.restStarts.some((index) => index > site.arguments!.length))
+					selectedCalls.length === 0 ||
+					(selectedCalls.some((call) => call.numericSortCallback !== undefined) &&
+						resultRepresentation !== "f64") ||
+					(needsArity && argumentRepresentations === undefined) ||
+					resultRepresentation === undefined ||
+					(resultRepresentation === "boxed" && valueRepresentations === undefined)
 				)
-					continue;
-				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-					scope: "function",
-					function: call.caller,
-				});
-				const representations = Array.from(
-					{ length: needsArity ? site!.arguments!.length : fn.parameterCount },
-					(_, index): CorePlanRepresentation => {
-						if (call.numericSortCallback !== undefined) return "f64";
-						const argument = site?.arguments?.[index];
-						const scalar =
-							argument === undefined ? undefined : kinds.exactScalar(argument);
-						return scalar === "int32" || scalar === "number"
-							? "f64"
-							: (scalar ?? "boxed");
-					},
-				);
-				const key = representations.join(",");
-				const signature = signatures.get(key) ?? {
-					representations,
-					calls: [],
-					weight: 0,
-					scalars:
-						representations.filter((representation) => representation !== "boxed")
-							.length + (needsArity ? 1 : 0),
-				};
-				signature.calls.push(call);
-				signature.weight += callWeight(call);
-				signatures.set(key, signature);
-			}
-			const signature = [...signatures.values()]
-				.filter(({ scalars }) => scalars > 0)
-				.sort(
-					(left, right) => right.weight * right.scalars - left.weight * left.scalars,
-				)[0];
-			if (signature !== undefined) {
-				argumentRepresentations = needsArity ? signature.representations : undefined;
-				parameterRepresentations = Array.from(
-					{ length: fn.parameterCount },
-					(_, index) => signature.representations[index] ?? "boxed",
-				);
-				selectedCalls = signature.calls;
-				const cfg = analyses
-					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-						scope: "function",
+					return [];
+				const generatedCode = Math.max(8, [...fn.instructionIds()].length);
+				const compilerWork = generatedCode + fn.valueCapacity;
+				const runtimeBenefit =
+					selectedCalls.reduce((sum, site) => sum + callWeight(site), 0) * 8;
+				return [
+					{
 						function: target,
-					})
-					.exceptional();
-				const exactOperationResultMasks = new Map<CoreInstructionId, number>();
-				for (const instruction of exactRestLengths.get(target) ?? []) {
-					exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
-				}
-				for (const instruction of inBoundsRestElements.get(target) ?? []) {
-					const receiver = fn.kernel.operandAt(
-						fn.kernel.instructionOperandStart(instruction),
-					);
-					const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
-					const startIndex = fn.instructionAttributes(allocation).startIndex;
-					if (
-						typeof startIndex === "number" &&
-						startIndex < signature.representations.length &&
-						signature.representations
-							.slice(startIndex)
-							.every((representation) => representation === "f64")
-					)
-						exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
-				}
-				const variant = analyzeCoreNativeEntry(
-					fn,
-					cfg,
-					parameterRepresentations,
-					argumentRepresentations,
-					selectedCalls,
-					undefined,
-					exactOperationResultMasks,
-				);
-				valueRepresentations = variant.valueRepresentations;
-				operatorInputs = variant.operatorInputs;
-				constantBooleans = variant.constantBooleans;
-				resultRepresentation = variant.resultRepresentation;
-			}
-		}
-		if (
-			selectedCalls.length === 0 ||
-			(selectedCalls.some((call) => call.numericSortCallback !== undefined) &&
-				resultRepresentation !== "f64") ||
-			(needsArity && argumentRepresentations === undefined) ||
-			resultRepresentation === undefined ||
-			(resultRepresentation === "boxed" && valueRepresentations === undefined)
-		)
-			continue;
-		const generatedCode = Math.max(8, [...fn.instructionIds()].length);
-		const compilerWork = generatedCode + fn.valueCapacity;
-		const runtimeBenefit =
-			selectedCalls.reduce((sum, site) => sum + callWeight(site), 0) * 8;
-		candidates.push({
-			function: target,
-			runtimeBenefit,
-			callSites: Object.freeze(
-				selectedCalls.sort(
-					(left, right) =>
-						left.caller - right.caller || left.instruction - right.instruction,
-				),
-			),
-			parameterRepresentations,
-			resultRepresentation,
-			...(valueRepresentations === undefined ? {} : { valueRepresentations }),
-			...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
-			...(constantBooleans === undefined ? {} : { constantBooleans }),
-			...(operatorInputs === undefined ? {} : { operatorInputs }),
-			...(fieldParameters === undefined ? {} : { fieldParameters }),
-			budget: {
-				kind: "direct-entry",
-				caller: target,
-				site: callSites[0]!.instruction,
-				revision: 0,
-				priorityClass: 2,
-				priorityScore: -runtimeBenefit,
-				targets: Object.freeze([target]),
-				generatedCodeCost: generatedCode,
-				compilerWorkCost: compilerWork,
-				expansive: true,
+						runtimeBenefit,
+						callSites: Object.freeze(
+							selectedCalls.sort(
+								(left, right) =>
+									left.caller - right.caller || left.instruction - right.instruction,
+							),
+						),
+						parameterRepresentations,
+						resultRepresentation,
+						...(valueRepresentations === undefined ? {} : { valueRepresentations }),
+						...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
+						...(constantBooleans === undefined ? {} : { constantBooleans }),
+						...(operatorInputs === undefined ? {} : { operatorInputs }),
+						...(fieldParameters === undefined ? {} : { fieldParameters }),
+						budget: {
+							kind: "direct-entry",
+							caller: target,
+							site: callSites[0]!.instruction,
+							revision: 0,
+							priorityClass: 2,
+							priorityScore: -runtimeBenefit,
+							targets: Object.freeze([target]),
+							generatedCodeCost: generatedCode,
+							compilerWorkCost: compilerWork,
+							expansive: true,
+						},
+					},
+				];
 			},
 		});
 	}
@@ -1703,7 +1764,7 @@ export function buildCoreOptimizationPlan(
 ): CoreOptimizationPlan {
 	const discoveryStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const live = new Set(liveFunctions);
-	const pending: Array<PendingCandidate> = [];
+	const opportunities: Array<CorePlanningOpportunity> = [];
 	const localInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	for (const input of options.localInputs ?? []) {
 		if (localInputs.has(input.function)) {
@@ -1730,18 +1791,66 @@ export function buildCoreOptimizationPlan(
 						options.discoverCandidates !== false,
 					);
 		resolvedLocalInputs.push(input);
-		if (input.scanned) options.onLocalCandidates?.(functionId, input.candidateSummaries);
-		if (options.discoverCandidates !== false) pending.push(...input.pending);
 	}
+	const provenLocal = new Map<
+		CoreFunctionId,
+		ReadonlyArray<CorePendingOptimizationCandidate>
+	>();
+	const resolveLocal = (
+		functionId: CoreFunctionId,
+	): ReadonlyArray<CorePendingOptimizationCandidate> => {
+		const known = provenLocal.get(functionId);
+		if (known !== undefined) return known;
+		const candidates = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		}).candidates;
+		options.onLocalCandidates?.(functionId, candidates);
+		const fn = program.function(functionId);
+		const cfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: functionId })
+			.exceptional();
+		const costModel = coreGeneratedCodeCostModel(fn, cfg);
+		const pending: Array<CorePendingOptimizationCandidate> = [];
+		for (const candidate of candidates) {
+			const planned = pendingLocalCandidate(
+				program,
+				candidate,
+				cfg,
+				costModel,
+				options.context,
+			);
+			if (planned !== undefined) pending.push(planned);
+		}
+		provenLocal.set(functionId, pending);
+		return pending;
+	};
 	if (options.discoverCandidates !== false) {
-		pending.push(...guardedCallCandidates(program, summaries, liveFunctions, analyses));
-		pending.push(
-			...directEntryCandidates(program, summaries, live, analyses, resolvedLocalInputs),
+		for (const input of resolvedLocalInputs) {
+			if (input.discovery === undefined) continue;
+			opportunities.push({
+				kind: "local",
+				caller: input.function,
+				generatedCodeCost: 1,
+				...input.discovery,
+				resolve: () => resolveLocal(input.function),
+			});
+		}
+		opportunities.push(
+			...guardedCallOpportunities(program, summaries, liveFunctions, analyses),
+		);
+		opportunities.push(
+			...directEntryOpportunities(program, summaries, live, analyses, resolveLocal),
 		);
 	}
+	opportunities.sort(
+		(left, right) =>
+			left.priorityScore - right.priorityScore ||
+			left.caller - right.caller ||
+			left.kind.localeCompare(right.kind),
+	);
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
-
 	const service =
 		options.candidateService ??
 		new CoreTransformCandidateService(
@@ -1751,10 +1860,14 @@ export function buildCoreOptimizationPlan(
 	const budgetBaseline = service.statistics();
 	const byBudget = new WeakMap<CoreTransformCandidate, PendingCandidate>();
 	const discoveredByKind: Record<string, number> = {};
-	for (const candidate of pending) {
-		increment(discoveredByKind, candidate.budget.kind);
-		if (service.offer(candidate.budget)) byBudget.set(candidate.budget, candidate);
-	}
+	const discovery = {
+		opportunities: opportunities.length,
+		attempted: 0,
+		skipped: 0,
+		compilerWork: 0,
+		skippedByReason: {} as Record<string, number>,
+	};
+
 	const selectedByKind: Record<string, number> = {};
 	const declinedByPlanReason: Record<string, number> = {};
 	const selectedExpansionsByFunction = new Map<CoreFunctionId, number>();
@@ -1765,85 +1878,107 @@ export function buildCoreOptimizationPlan(
 	const claimed = new Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>();
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
-	for (let budget = service.next(); budget !== undefined; budget = service.next()) {
-		const exhausted = service.programBudgetExhaustionReason();
-		if (exhausted !== undefined) {
-			service.recordDeclined(exhausted);
-			const discarded = service.discardPending(exhausted) + 1;
-			declinedByPlanReason[exhausted] =
-				(declinedByPlanReason[exhausted] ?? 0) + discarded;
-			break;
-		}
-		const candidate = byBudget.get(budget)!;
-		let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
-		if (
-			reason === undefined &&
-			budget.expansive &&
-			(selectedExpansionsByFunction.get(budget.caller) ?? 0) >= perFunctionExpansions
-		) {
-			reason = "expansion-limit";
-		}
-		if (
-			reason === undefined &&
-			!isPendingDirectEntry(candidate) &&
-			conflicts(candidate.selection, claimed)
-		) {
-			reason = "overlap";
-		}
+	for (const opportunity of opportunities) {
+		const cost =
+			opportunity.kind === "local" && provenLocal.has(opportunity.caller)
+				? { ...opportunity, compilerWorkCost: 0 }
+				: opportunity;
+		const reason =
+			service.programBudgetExhaustionReason() ?? service.admitDiscovery(cost);
 		if (reason !== undefined) {
-			service.recordDeclined(reason);
-			increment(declinedByPlanReason, reason);
+			discovery.skipped++;
+			increment(discovery.skippedByReason, reason);
 			continue;
 		}
-		service.recordApplied(budget);
-		if (budget.expansive) {
-			selectedExpansionsByFunction.set(
-				budget.caller,
-				(selectedExpansionsByFunction.get(budget.caller) ?? 0) + 1,
-			);
+		service.recordDiscovery(cost);
+		discovery.attempted++;
+		discovery.compilerWork += cost.compilerWorkCost;
+		for (const candidate of opportunity.resolve()) {
+			increment(discoveredByKind, candidate.budget.kind);
+			const budget = candidate.budget;
+			if (service.offer(budget)) byBudget.set(budget, candidate);
 		}
-		increment(selectedByKind, budget.kind);
-		if (isPendingDirectEntry(candidate)) {
-			const entries = directEntriesByFunction.get(candidate.function) ?? [];
-			if (entries.length >= 4) {
-				increment(declinedByPlanReason, "expansion-limit");
+
+		for (let budget = service.next(); budget !== undefined; budget = service.next()) {
+			const exhausted = service.programBudgetExhaustionReason();
+			if (exhausted !== undefined) {
+				service.recordDeclined(exhausted);
+				const discarded = service.discardPending(exhausted) + 1;
+				declinedByPlanReason[exhausted] =
+					(declinedByPlanReason[exhausted] ?? 0) + discarded;
+				break;
+			}
+			const candidate = byBudget.get(budget)!;
+			let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
+			if (
+				reason === undefined &&
+				budget.expansive &&
+				(selectedExpansionsByFunction.get(budget.caller) ?? 0) >= perFunctionExpansions
+			) {
+				reason = "expansion-limit";
+			}
+			if (
+				reason === undefined &&
+				!isPendingDirectEntry(candidate) &&
+				conflicts(candidate.selection, claimed)
+			) {
+				reason = "overlap";
+			}
+			if (reason !== undefined) {
+				service.recordDeclined(reason);
+				increment(declinedByPlanReason, reason);
 				continue;
 			}
-			entries.push(
-				Object.freeze({
-					id: entries.length,
-					function: candidate.function,
-					callSites: candidate.callSites,
-					parameterRepresentations: candidate.parameterRepresentations,
-					...(candidate.fieldParameters === undefined
-						? {}
-						: { fieldParameters: candidate.fieldParameters }),
-					resultRepresentation: candidate.resultRepresentation,
-					...(candidate.valueRepresentations === undefined
-						? {}
-						: { valueRepresentations: candidate.valueRepresentations }),
-					...(candidate.argumentRepresentations === undefined
-						? {}
-						: { argumentRepresentations: candidate.argumentRepresentations }),
-					...(candidate.constantBooleans === undefined
-						? {}
-						: { constantBooleans: candidate.constantBooleans }),
-					...(candidate.operatorInputs === undefined
-						? {}
-						: { operatorInputs: candidate.operatorInputs }),
-					target: "native",
-					fallback: "canonical-core",
-					cost: Object.freeze({
-						generatedCode: budget.generatedCodeCost,
-						compilerWork: budget.compilerWorkCost,
-						runtimeBenefit: candidate.runtimeBenefit,
+			service.recordApplied(budget);
+			if (budget.expansive) {
+				selectedExpansionsByFunction.set(
+					budget.caller,
+					(selectedExpansionsByFunction.get(budget.caller) ?? 0) + 1,
+				);
+			}
+			increment(selectedByKind, budget.kind);
+			if (isPendingDirectEntry(candidate)) {
+				const entries = directEntriesByFunction.get(candidate.function) ?? [];
+				if (entries.length >= 4) {
+					increment(declinedByPlanReason, "expansion-limit");
+					continue;
+				}
+				entries.push(
+					Object.freeze({
+						id: entries.length,
+						function: candidate.function,
+						callSites: candidate.callSites,
+						parameterRepresentations: candidate.parameterRepresentations,
+						...(candidate.fieldParameters === undefined
+							? {}
+							: { fieldParameters: candidate.fieldParameters }),
+						resultRepresentation: candidate.resultRepresentation,
+						...(candidate.valueRepresentations === undefined
+							? {}
+							: { valueRepresentations: candidate.valueRepresentations }),
+						...(candidate.argumentRepresentations === undefined
+							? {}
+							: { argumentRepresentations: candidate.argumentRepresentations }),
+						...(candidate.constantBooleans === undefined
+							? {}
+							: { constantBooleans: candidate.constantBooleans }),
+						...(candidate.operatorInputs === undefined
+							? {}
+							: { operatorInputs: candidate.operatorInputs }),
+						target: "native",
+						fallback: "canonical-core",
+						cost: Object.freeze({
+							generatedCode: budget.generatedCodeCost,
+							compilerWork: budget.compilerWorkCost,
+							runtimeBenefit: candidate.runtimeBenefit,
+						}),
 					}),
-				}),
-			);
-			directEntriesByFunction.set(candidate.function, entries);
-		} else {
-			claim(candidate.selection, claimed);
-			specializations.push(candidate.selection);
+				);
+				directEntriesByFunction.set(candidate.function, entries);
+			} else {
+				claim(candidate.selection, claimed);
+				specializations.push(candidate.selection);
+			}
 		}
 	}
 	const directEntries = [...directEntriesByFunction]
@@ -1852,6 +1987,10 @@ export function buildCoreOptimizationPlan(
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,
+		discovery: Object.freeze({
+			...discovery,
+			skippedByReason: Object.freeze(discovery.skippedByReason),
+		}),
 		admittedFunctions: new Set([
 			...specializations.map(({ function: functionId }) => functionId),
 			...directEntries.map(({ function: functionId }) => functionId),

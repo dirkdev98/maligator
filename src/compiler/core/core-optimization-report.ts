@@ -165,6 +165,7 @@ export interface CoreCompilerWorkCounters {
 }
 
 export interface CorePlanWorkReport {
+	readonly discovery: CoreOptimizationPlanStatistics["discovery"];
 	readonly admittedFunctions: number;
 	readonly discovered: number;
 	readonly selected: number;
@@ -551,6 +552,13 @@ export class CoreOptimizationReportBuilder {
 		wildcardReverseCallerVisits: 0,
 	});
 	#planWork: CorePlanWorkReport = Object.freeze({
+		discovery: Object.freeze({
+			opportunities: 0,
+			attempted: 0,
+			skipped: 0,
+			compilerWork: 0,
+			skippedByReason: {},
+		}),
 		admittedFunctions: 0,
 		discovered: 0,
 		selected: 0,
@@ -1027,6 +1035,7 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		this.increment("specializationCandidatesSelected", report.applied);
 		this.#planWork = Object.freeze({
+			discovery: report.discovery,
 			admittedFunctions: report.admittedFunctions,
 			discovered: Object.values(report.discoveredByKind).reduce(
 				(sum, count) => sum + count,
@@ -1349,7 +1358,7 @@ export function formatCoreOptimizationReport(
 					.filter(([, count]) => count > 0)
 					.map(([reason, count]) => `${reason}=${count}`)
 					.join(", ") || "none"
-			}; generated ${report.plan.generatedCodeConsumed}, compiler work ${report.plan.compilerWorkConsumed}, verified ${report.plan.verificationMs.toFixed(1)}ms`,
+			}; discovery ${report.plan.discovery.attempted}/${report.plan.discovery.opportunities} attempted, ${report.plan.discovery.skipped} skipped, work ${report.plan.discovery.compilerWork}; generated ${report.plan.generatedCodeConsumed}, compiler work ${report.plan.compilerWorkConsumed}, verified ${report.plan.verificationMs.toFixed(1)}ms`,
 		},
 		{
 			label: "Core optimizer queue",
