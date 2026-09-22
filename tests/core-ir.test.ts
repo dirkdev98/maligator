@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -286,11 +287,89 @@ describe("Core IR", () => {
 
 		const memory = analyzeCoreMemoryVersions(program, functionId);
 
+		expect(memory.statistics).toMatchObject({ accesses: 0, solvedPartitions: 0 });
+		for (const instruction of builder.bodyInstructionIds(entry))
+			memory.readHash(instruction);
 		expect(memory.statistics.partitions).toBe(
 			CORE_EFFECT_DOMAINS.length + exactReadCount,
 		);
 		expect(memory.statistics.stateEntries).toBe(exactReadCount * 2);
 	});
+
+	it("solves only queried exact locations and keeps answers stable after other queries", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 32 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		for (let index = 0; index < 32; index++) {
+			builder.appendInstruction(entry, "storeGlobal", [stored!], {
+				attributes: { index },
+			});
+			builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index } });
+		}
+		const [last] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: last! });
+		const { function: id } = builder.finish(entry);
+		const fn = program.function(id);
+		const reads = [...fn.bodyInstructionIds(entry)].filter(
+			(i) => fn.instructionOpcodeName(i) === "loadGlobal",
+		);
+		const memory = analyzeCoreMemoryVersions(program, id);
+		expect(memory.statistics.accesses).toBe(0);
+		expect(memory.valueForRead(reads[0]!, { kind: "global-slot", slot: 0 })).toBe(stored);
+		expect(memory.statistics.solvedPartitions).toBe(2);
+		const hash = memory.readHash(reads[0]!);
+		expect(memory.readsEquivalent(reads[0]!, reads.at(-1)!)).toBe(true);
+		expect(memory.statistics.solvedPartitions).toBe(2);
+		expect(memory.valueForRead(reads[1]!, { kind: "global-slot", slot: 1 })).toBe(stored);
+		expect(memory.statistics.solvedPartitions).toBe(3);
+		expect(memory.readHash(reads[0]!)).toBe(hash);
+		const reversed = analyzeCoreMemoryVersions(program, id);
+		expect(reversed.valueForRead(reads[1]!, { kind: "global-slot", slot: 1 })).toBe(
+			stored,
+		);
+		expect(reversed.readsEquivalent(reads[0]!, reads.at(-1)!)).toBe(true);
+		expect(reversed.valueForRead(reads[0]!, { kind: "global-slot", slot: 0 })).toBe(
+			stored,
+		);
+	});
+
+	it.each(
+		[false, true].flatMap((prepared) =>
+			["body", "data"].map((change) => ({ prepared, change })),
+		),
+	)(
+		"rejects stale memory queries after $change edits, prepared=$prepared",
+		({ prepared, change }) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			const { function: id } = builder.finish(entry);
+			const read = builder.bodyInstructionIds(entry)[0]!;
+			const memory = analyzeCoreMemoryVersions(program, id);
+			if (prepared) memory.readHash(read);
+			const editor = CoreEditor.open(program, id);
+			if (change === "body")
+				editor.replaceInstruction(read, "loadGlobal", [], { attributes: { index: 1 } });
+			else editor.appendStringConstants([[120]]);
+			editor.commit();
+			expect(() => memory.readHash(read)).toThrow("Stale memory-version analysis");
+			expect(() => memory.readsEquivalent(read, read)).toThrow(
+				"Stale memory-version analysis",
+			);
+			expect(() => memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toThrow(
+				"Stale memory-version analysis",
+			);
+		},
+	);
 
 	it("does not materialize write-only memory events", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
@@ -309,6 +388,7 @@ describe("Core IR", () => {
 
 		const memory = analyzeCoreMemoryVersions(program, functionId);
 
+		memory.readHash(builder.bodyInstructionIds(entry)[0]!);
 		expect(memory.statistics).toMatchObject({
 			accesses: 32,
 			touchedBlocks: 0,
@@ -339,6 +419,7 @@ describe("Core IR", () => {
 		const index = buildCoreLocalFactIndex(fn, roots);
 		const memory = analyzeCoreMemoryVersions(program, functionId);
 
+		memory.readHash(builder.bodyInstructionIds(entry).at(-1)!);
 		expect(index.statistics).toMatchObject({
 			operations: 2_001,
 			memoryOperations: 1,
@@ -372,6 +453,8 @@ describe("Core IR", () => {
 
 		const memory = analyzeCoreMemoryVersions(program, functionId);
 
+		const read = builder.bodyInstructionIds(entry).at(-1)!;
+		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
 		expect(memory.statistics.familyWidenings).toBe(1);
 	});
 

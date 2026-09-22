@@ -15,7 +15,10 @@ import {
 	coreValueControlFlowUseMask,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
+import {
+	coreInstructionInputsEqual,
+	coreInstructionInputsHash,
+} from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
@@ -129,35 +132,34 @@ function instructionResultAt(
 	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction) + offset);
 }
 
+function isReusableMemoryRead(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		!effectsPermitRemoval(fn, instruction) ||
+		coreInstructionEffects(fn, instruction).reads.length === 0
+	)
+		return false;
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (
+		!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
+		opcode !== "loadProperty" &&
+		opcode !== "loadPropertyStatic" &&
+		opcode !== "loadPropertyStaticShapeCase"
+	)
+		return false;
+	return true;
+}
+
 function hasExactMemoryLoadForwardingOpportunity(fn: CoreFunctionStore): boolean {
 	const candidatesByInputs = new Map<number, Array<CoreInstructionId>>();
 	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			!effectsPermitRemoval(fn, instruction) ||
-			coreInstructionEffects(fn, instruction).reads.length === 0
-		)
-			continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (
-			!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
-			opcode !== "loadProperty" &&
-			opcode !== "loadPropertyStatic" &&
-			opcode !== "loadPropertyStaticShapeCase"
-		)
-			continue;
+		if (!isReusableMemoryRead(fn, instruction)) continue;
 		const result = instructionResultAt(fn, instruction, 0);
 		if (result === undefined) continue;
-		const operandStart = fn.kernel.instructionOperandStart(instruction);
-		const operandCount = fn.kernel.instructionOperandCount(instruction);
-		let inputHash = Math.imul(fn.instructionOpcode(instruction) + 1, 16_777_619);
-		for (let index = 0; index < operandCount; index++) {
-			inputHash = Math.imul(
-				inputHash ^ (fn.kernel.operandAt(operandStart + index) + 1),
-				16_777_619,
-			);
-		}
-		inputHash = Math.imul(inputHash ^ operandCount, 16_777_619);
+		const inputHash = coreInstructionInputsHash(fn, instruction);
 		const candidates = candidatesByInputs.get(inputHash) ?? [];
 		if (
 			candidates.some((candidate) => {
@@ -923,42 +925,72 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).ordinary();
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
-		const available = new Map<
-			number,
-			Array<{ readonly instruction: CoreInstructionId; readonly value: CoreValueId }>
-		>();
+		interface AvailableRead {
+			readonly instruction: CoreInstructionId;
+			readonly value: CoreValueId;
+		}
+		interface InputGroup {
+			readonly example: AvailableRead;
+			readonly candidates: Array<AvailableRead>;
+			readonly byMemory: Map<number, Array<AvailableRead>>;
+			indexedCount: number;
+		}
+		const available = new Map<number, Array<InputGroup>>();
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removed: Array<CoreInstructionId> = [];
 		let estimatedEdits = 0;
 		for (const block of control.reversePostorder) {
 			for (const instruction of fn.bodyInstructionIds(block)) {
-				if (
-					fn.instructionKind(instruction) !== "operation" ||
-					!effectsPermitRemoval(fn, instruction)
-				)
-					continue;
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (
-					!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
-					opcode !== "loadProperty" &&
-					opcode !== "loadPropertyStatic" &&
-					opcode !== "loadPropertyStaticShapeCase"
-				)
-					continue;
+				if (!isReusableMemoryRead(fn, instruction)) continue;
 				const result = instructionResultAt(fn, instruction, 0);
-				const readHash = memory.readHash(instruction);
-				if (result === undefined || readHash === undefined) continue;
-				const prior = (available.get(readHash) ?? []).findLast(
-					(candidate) =>
-						fn.valueRepresentation(candidate.value) === fn.valueRepresentation(result) &&
-						memory.readsEquivalent(candidate.instruction, instruction) &&
-						coreInstructionInputsEqual(fn, candidate.instruction, instruction) &&
-						(fn.instructionBlock(candidate.instruction) === block ||
-							control.instructionDominatesBlock(
-								fn.instructionBlock(candidate.instruction),
-								block,
-							)),
+				if (result === undefined) continue;
+				const inputHash = coreInstructionInputsHash(fn, instruction);
+				const groups = available.get(inputHash) ?? [];
+				let group = groups.find(
+					({ example }) =>
+						fn.valueRepresentation(example.value) === fn.valueRepresentation(result) &&
+						coreInstructionInputsEqual(fn, example.instruction, instruction),
 				);
+				if (group === undefined) {
+					const example = { instruction, value: result };
+					group = {
+						example,
+						candidates: [example],
+						byMemory: new Map(),
+						indexedCount: 0,
+					};
+					groups.push(group);
+					available.set(inputHash, groups);
+					continue;
+				}
+				const dominates = (candidate: AvailableRead): boolean =>
+					fn.instructionBlock(candidate.instruction) === block ||
+					control.instructionDominatesBlock(
+						fn.instructionBlock(candidate.instruction),
+						block,
+					);
+				let prior: AvailableRead | undefined;
+				if (group.candidates.findLast(dominates) !== undefined) {
+					const readHash = memory.readHash(instruction);
+					if (readHash !== undefined) {
+						// Index prior states once so intervening clobbers cannot cause quadratic proof scans.
+						while (group.indexedCount < group.candidates.length) {
+							const candidate = group.candidates[group.indexedCount++]!;
+							const hash = memory.readHash(candidate.instruction);
+							if (hash === undefined) continue;
+							const sameMemory = group.byMemory.get(hash) ?? [];
+							sameMemory.push(candidate);
+							group.byMemory.set(hash, sameMemory);
+						}
+						prior = group.byMemory
+							.get(readHash)
+							?.findLast(
+								(candidate) =>
+									dominates(candidate) &&
+									memory.readsEquivalent(candidate.instruction, instruction),
+							);
+					}
+				}
 				if (prior !== undefined) {
 					const edits =
 						fn.kernel.valueUseCount(result) +
@@ -972,9 +1004,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 					removed.push(instruction);
 					continue;
 				}
-				const candidates = available.get(readHash) ?? [];
-				candidates.push({ instruction, value: result });
-				available.set(readHash, candidates);
+				group.candidates.push({ instruction, value: result });
 			}
 		}
 		if (removed.length === 0) return undefined;

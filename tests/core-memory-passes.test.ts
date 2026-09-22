@@ -20,6 +20,11 @@ import {
 	analyzeCoreProvenance,
 	discoverCoreLocalSpecializationCandidates,
 } from "../src/compiler/core/core-ir-provenance.ts";
+import {
+	CORE_NO_EFFECTS,
+	CoreOpcodeRegistry,
+	coreArity,
+} from "../src/compiler/core/core-ir.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
@@ -92,6 +97,111 @@ describe("Core local memory, provenance, and escape optimization", () => {
 				.finish(core, { directEntries: [], specializations: [] })
 				.analyses.some(({ analysis }) => analysis === "local-memory-versions"),
 		).toBe(false);
+	});
+
+	it("solves only the repeated slot among many unrelated reads", () => {
+		const core = new CoreProgram(coreOpcodeRegistry, { globalCount: 300 });
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const values = Array.from(
+			{ length: 300 },
+			(_, index) =>
+				builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index } })[0]!,
+		);
+		const [repeated] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: repeated! });
+		const fn = core.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+		new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+			optionalMaxRunsPerWorkItem: 1,
+		}).runComponent("memory", [forwarding]);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "return",
+			value: values[0],
+		});
+		const result = report.finish(core, { directEntries: [], specializations: [] });
+		expect(result.counters.memoryPartitionsSolved).toBe(2);
+		expect(result.counters.memoryAccesses).toBe(301);
+	});
+
+	it("counts lazy memory work once even when the same proof is queried repeatedly", () => {
+		const core = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = core.function(builder.finish(entry).function);
+		const read = builder.bodyInstructionIds(entry)[0]!;
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const memory = analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, {
+			scope: "function",
+			function: fn.id,
+		});
+		expect(memory.statistics.accesses).toBe(0);
+		expect(memory.readHash(read)).toBeDefined();
+		const before = memory.statistics;
+		expect(memory.readsEquivalent(read, read)).toBe(true);
+		memory.valueForRead(read, { kind: "global-slot", slot: 0 });
+		expect(memory.statistics).toEqual(before);
+		const result = report.finish(core, { directEntries: [], specializations: [] });
+		expect(result.counters.memoryPartitionsSolved).toBe(before.solvedPartitions);
+		expect(result.counters.memoryStateEntries).toBe(before.stateEntries);
+		expect(result.counters.memoryAccesses).toBe(1);
+	});
+
+	it("keeps reads with no modeled memory location across a clobber", () => {
+		const registry = new CoreOpcodeRegistry();
+		registry.define({
+			opcode: "unmodeledRead",
+			inputs: coreArity(0),
+			outputs: coreArity(1),
+			effects: { ...CORE_NO_EFFECTS, reads: ["object-property"] },
+			discardable: true,
+			attributeRelocations: [],
+		});
+		registry.define({
+			opcode: "clobber",
+			discardable: false,
+			inputs: coreArity(0),
+			outputs: coreArity(0),
+			effects: { ...CORE_NO_EFFECTS, writes: ["object-property"] },
+			attributeRelocations: [],
+		});
+		const core = new CoreProgram(registry);
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		builder.appendInstruction(entry, "unmodeledRead", []);
+		builder.appendInstruction(entry, "clobber", []);
+		const [loaded] = builder.appendInstruction(entry, "unmodeledRead", []);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = core.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(core, "full");
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+		new CoreFunctionPassScheduler(core, context, analyses, report, fn.id).runComponent(
+			"memory",
+			[forwarding],
+		);
+		expect(
+			[...fn.bodyInstructionIds(entry)].filter(
+				(i) => fn.instructionOpcodeName(i) === "unmodeledRead",
+			),
+		).toHaveLength(2);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "return",
+			value: loaded,
+		});
 	});
 
 	it("batches repeated reads while preserving a load after a clobber", () => {

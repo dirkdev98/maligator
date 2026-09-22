@@ -4038,9 +4038,9 @@ function discoverCandidates(
 	let stackControlUses: CoreStackObjectControlUses | undefined;
 	const getStackControlUses = () =>
 		(stackControlUses ??= stackObjectControlUses(fn, control, roots));
-	for (const layout of requested("stack-object") || requested("dense-array")
-		? provenance().layouts
-		: []) {
+	const layouts =
+		requested("stack-object") || requested("dense-array") ? provenance().layouts : [];
+	for (const layout of layouts) {
 		if (layout.kind === "named-slots") {
 			if (!requested("stack-object")) continue;
 			const candidate = stackObjectCandidate(
@@ -4133,9 +4133,10 @@ function discoverCandidates(
 	]) {
 		addCandidate(candidate);
 	}
-	for (const instruction of requested("numeric-fusion")
+	const numericInstructions = requested("numeric-fusion")
 		? indexedOpcodeInstructions(fn, index, "binary")
-		: []) {
+		: [];
+	for (const instruction of numericInstructions) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
 			!coreTargetSupportsNumericFusionOperator(

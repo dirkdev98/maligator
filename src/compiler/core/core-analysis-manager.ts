@@ -33,6 +33,8 @@ export interface CoreAnalysisComputation {
 	readonly programFlow: CoreProgramFlowEngine;
 	readonly scratch: CoreAnalysisScratchPool;
 	readonly runOwner: CoreOptimizationOwnerRunner;
+	// Lazy results report deltas; the manager already records their initial statistics.
+	readonly recordResult?: (value: unknown) => void;
 	readonly get: <Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
@@ -160,6 +162,12 @@ export class CoreAnalysisManager {
 						return this.#report.measureOwner(owner, run);
 					},
 					get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
+					...(this.#report.collectsCounters
+						? {
+								recordResult: (result: unknown) =>
+									this.#report.recordAnalysisResult(definition.key, result),
+							}
+						: {}),
 					...(cached === undefined ? {} : { previous: cached.value }),
 				});
 			value =

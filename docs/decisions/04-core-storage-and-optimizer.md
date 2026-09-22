@@ -137,6 +137,25 @@ Cheap local analyses may recompute for a changed function. Whole-program analysi
 requires an explicit program dependency. The manager records queries, hits,
 recomputations, invalidations, and elapsed time for every analysis.
 
+Demand-driven products stay within that versioned lifetime. Structural CFG queries
+need no dominators; dominance products are computed on the first dominance query.
+Packed-rest consumers request value kinds and CFG only after finding a relevant
+access. A memory-version handle initially builds no graph: its first proof query
+extracts shared events and provenance, and only the requested partitions are solved.
+Each partition is finalized once, including phi aliases and family-kill state at
+both reads and reaching stores. Later queries cannot change an earlier answer.
+Memory queries reject stale function or program-data versions before using either
+cached results or lazy dependencies.
+
+Repeated-load consumers first match opcode, operands, attributes, representation,
+and dominance. Only then do they request complete memory equivalence. Candidate
+read states are indexed after this first demand so intervening stores do not turn
+proof lookup into a quadratic scan. Shared event extraction and all readers of a
+requested partition remain function-wide; this is not yet per-read slicing.
+Instrumentation records preparation and solve deltas as work happens. Analysis
+handle creation is not a memory solve, and retaining old graphs for final reporting
+is unnecessary.
+
 ### Pass scheduling
 
 Each `CoreFunctionOptimizationSession` owns a function-only pass scheduler, local
@@ -189,6 +208,13 @@ allowance. Larger programs receive the same allowance per 32,768 instructions; c
 introduced by expansion cannot increase it. Per-site and per-function limits remain
 fixed, and development-mode budgets remain fixed. Discovery is admitted before
 expensive proofs and charged even when no usable candidate is found.
+
+Candidate claim headers and exact costs participate in ranking and admission before
+target payloads are materialized. Rejected candidates do not receive target blocks,
+anchors, representations, or admission payloads. Plan verification rediscovers only
+selected source families and still checks every selected recipe and proof. Candidate
+recognition itself remains eager within an admitted family; delaying it must not
+change profitability ordering or overlap decisions.
 
 The generic semantic path remains in canonical Core and stays valid if the plan is
 ignored. Target lowering receives the sealed program and plan, not the analysis

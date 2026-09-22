@@ -5,6 +5,7 @@ import {
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
 	scanCoreFunctionFeatures,
 } from "./core-function-features.ts";
+import { coreAttributeValueHash } from "./core-ir-equality.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -191,8 +192,6 @@ const VALUE_NUMBERING_RULE: CoreLocalBlockRule = {
 	},
 };
 
-const NUMBER_HASH_VIEW = new DataView(new ArrayBuffer(8));
-
 function mixHash(hash: number, value: number): number {
 	return Math.imul(hash ^ value, 0x0100_0193) >>> 0;
 }
@@ -209,32 +208,6 @@ function isAttributeArray(
 	value: CoreAttributeValue,
 ): value is ReadonlyArray<CoreAttributeValue> {
 	return Array.isArray(value);
-}
-
-function hashAttribute(hash: number, value: CoreAttributeValue): number {
-	if (value === undefined) return mixHash(hash, 1);
-	if (value === null) return mixHash(hash, 2);
-	if (typeof value === "boolean") return mixHash(hash, value ? 4 : 3);
-	if (typeof value === "number") {
-		NUMBER_HASH_VIEW.setFloat64(0, value);
-		return mixHash(
-			mixHash(mixHash(hash, 5), NUMBER_HASH_VIEW.getUint32(0)),
-			NUMBER_HASH_VIEW.getUint32(4),
-		);
-	}
-	if (typeof value === "string") return hashString(mixHash(hash, 6), value);
-	if (isAttributeArray(value)) {
-		let result = mixHash(mixHash(hash, 7), value.length);
-		for (const entry of value) result = hashAttribute(result, entry);
-		return result;
-	}
-	const object = value;
-	const keys = Object.keys(object).sort();
-	let result = mixHash(mixHash(hash, 8), keys.length);
-	for (const key of keys) {
-		result = hashAttribute(hashString(result, key), object[key]);
-	}
-	return result;
 }
 
 function attributesEqual(left: CoreAttributeValue, right: CoreAttributeValue): boolean {
@@ -822,7 +795,7 @@ export class CoreLocalOptimizer {
 					this.#fn.kernel.resultAt(this.#fn.kernel.instructionResultStart(instruction)),
 				),
 			);
-			hash = hashAttribute(hash, this.#fn.instructionAttributes(instruction));
+			hash = coreAttributeValueHash(hash, this.#fn.instructionAttributes(instruction));
 			const bucket = available.get(hash);
 			const existing = Array.isArray(bucket)
 				? bucket.find((candidate) => this.#sameValueNumber(candidate, instruction))

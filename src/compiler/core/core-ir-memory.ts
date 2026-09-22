@@ -34,7 +34,11 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 export type CoreMemoryLocation =
 	| { readonly kind: "global-slot"; readonly slot: number }
 	| { readonly kind: "local-slot"; readonly slot: number }
-	| { readonly kind: "captured-slot"; readonly owner: number; readonly index: number }
+	| {
+			readonly kind: "captured-slot";
+			readonly owner: number;
+			readonly index: number;
+	  }
 	| { readonly kind: "activation-this" }
 	| {
 			readonly kind: "object-slot";
@@ -316,6 +320,7 @@ export interface CoreMemoryVersions {
 		readonly accesses: number;
 		readonly partitions: number;
 		readonly exactPartitions: number;
+		readonly solvedPartitions: number;
 		readonly touchedBlocks: number;
 		readonly stateRows: number;
 		readonly stateEntries: number;
@@ -351,12 +356,13 @@ function resolutionFor(provenance: CoreProvenance): CoreMemoryResolution {
 	return Object.freeze(resolution);
 }
 
-function memoryVersions(
+function prepareMemoryVersions(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	provenance: CoreProvenance,
-	memoryInstructions?: ReadonlyArray<CoreInstructionId>,
-	runOwner: CoreOptimizationOwnerRunner = runWithoutOwner,
+	memoryInstructions: ReadonlyArray<CoreInstructionId> | undefined,
+	runOwner: CoreOptimizationOwnerRunner,
+	recordResult: ((value: unknown) => void) | undefined,
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
 	const accessesByInstruction = new Map<
@@ -442,14 +448,7 @@ function memoryVersions(
 	): number => definitions.get(slot) ?? nextVersion++;
 	const exceptionIdentity = (block: CoreBlockId, slot: number): number =>
 		internVersion(exceptionVersions, block, slot);
-	interface ReadStateRow {
-		readonly start: number;
-		readonly count: number;
-	}
-	const readStateRows = new Map<CoreInstructionId, ReadStateRow>();
-	const readStateSlots: Array<number> = [];
-	const readStateVersions: Array<number> = [];
-	const pendingReadVersions = new Map<CoreInstructionId, Map<number, number>>();
+	const readSlotsByInstruction = new Map<CoreInstructionId, ReadonlySet<number>>();
 	const valueByVersion = new Map<number, CoreValueId>();
 	const readersBySlot = Array.from(
 		{ length: slotCount },
@@ -630,6 +629,7 @@ function memoryVersions(
 			definedInBlock.add(slot);
 			definitionBlocksBySlot[slot]!.add(block);
 		}
+		if (reads.size > 0) readSlotsByInstruction.set(instruction, reads);
 		events.push(
 			Object.freeze({
 				instruction,
@@ -642,96 +642,66 @@ function memoryVersions(
 	}
 	for (const [block, events] of mutableEventsByBlock)
 		eventsByBlock.set(block, Object.freeze(events));
-	const dominatorChildren = new Map<CoreBlockId, Array<CoreBlockId>>();
-	for (const block of cfg.reversePostorder) {
-		const parent = cfg.immediateDominators[block];
-		if (parent === null || parent === undefined) continue;
-		const children = dominatorChildren.get(parent) ?? [];
-		children.push(block);
-		dominatorChildren.set(parent, children);
-	}
-	const dominanceOrder: Array<CoreBlockId> = [];
-	const dominancePending = [fn.entry];
-	while (dominancePending.length > 0) {
-		const block = dominancePending.pop()!;
-		dominanceOrder.push(block);
-		const children = dominatorChildren.get(block) ?? [];
-		for (let index = children.length - 1; index >= 0; index--)
-			dominancePending.push(children[index]!);
-	}
-	const phiOperands = new Map<number, Array<number>>();
-	let transfers = 0;
-	const recordReadVersion = (
-		instruction: CoreInstructionId,
-		slot: number,
-		version: number,
-	): void => {
-		const versions = pendingReadVersions.get(instruction) ?? new Map<number, number>();
-		versions.set(slot, version);
-		pendingReadVersions.set(instruction, versions);
+
+	const statistics = {
+		accesses: accessCount,
+		partitions: locationSlotCount,
+		exactPartitions: locationSlotCount - CORE_EFFECT_DOMAINS.length,
+		solvedPartitions: 0,
+		touchedBlocks: eventsByBlock.size,
+		stateRows: 0,
+		stateEntries: 0,
+		phis: 0,
+		transfers: 0,
+		familyWidenings,
+		blockUpdates: 0,
 	};
+	const hasExceptionalEdges = cfg.reversePostorder.some((block) =>
+		(cfg.successors[block] ?? []).some((edge) => edge.kind === "exceptional"),
+	);
 	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
 		if (block === fn.entry) return true;
-		const incoming = (cfg.predecessors[block] ?? []).filter(({ from }) =>
-			cfg.reachable.has(from),
+		const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
+			cfg.reachable.has(edge.from),
 		);
 		return incoming.length === 1 && incoming[0]!.kind === "ordinary";
 	});
-	if (hasSinglePredecessorFlow) {
-		const versions = new Map<number, number>();
-		type Frame =
-			| { readonly kind: "enter"; readonly block: CoreBlockId }
-			| {
-					readonly kind: "exit";
-					readonly changes: ReadonlyArray<{
-						readonly slot: number;
-						readonly previous: number | undefined;
-					}>;
-			  };
-		const pending: Array<Frame> = [{ kind: "enter", block: fn.entry }];
-		while (pending.length > 0) {
-			const frame = pending.pop()!;
-			if (frame.kind === "exit") {
-				for (let index = frame.changes.length - 1; index >= 0; index--) {
-					const { slot, previous } = frame.changes[index]!;
-					if (previous === undefined) versions.delete(slot);
-					else versions.set(slot, previous);
-				}
-				continue;
-			}
-			const changes: Array<{
-				readonly slot: number;
-				readonly previous: number | undefined;
-			}> = [];
-			const changed = new Set<number>();
-			for (const event of eventsByBlock.get(frame.block) ?? []) {
-				for (const slot of event.reads)
-					recordReadVersion(
-						event.instruction,
-						slot,
-						versions.get(slot) ?? entryIdentity(slot),
-					);
-				for (const [slot, version] of event.definitions) {
-					if (!changed.has(slot)) {
-						changed.add(slot);
-						changes.push({ slot, previous: versions.get(slot) });
-					}
-					versions.set(slot, version);
-				}
-			}
-			transfers++;
-			pending.push({ kind: "exit", changes });
-			const children = dominatorChildren.get(frame.block) ?? [];
-			for (let index = children.length - 1; index >= 0; index--)
-				pending.push({ kind: "enter", block: children[index]! });
+	let dominance:
+		| {
+				readonly dominancePosition: ReadonlyMap<CoreBlockId, number>;
+				readonly dominanceFrontiers: ReadonlyMap<CoreBlockId, ReadonlySet<CoreBlockId>>;
+		  }
+		| undefined;
+	const getDominance = () => {
+		if (dominance !== undefined) return dominance;
+		const dominatorChildren = new Map<CoreBlockId, Array<CoreBlockId>>();
+		for (const block of cfg.reversePostorder) {
+			const parent = cfg.immediateDominators[block];
+			if (parent === null || parent === undefined) continue;
+			const children = dominatorChildren.get(parent) ?? [];
+			children.push(block);
+			dominatorChildren.set(parent, children);
 		}
-	} else {
+		const dominanceOrder: Array<CoreBlockId> = [];
+		const dominancePending = [fn.entry];
+		while (dominancePending.length > 0) {
+			const block = dominancePending.pop()!;
+			dominanceOrder.push(block);
+			const children = dominatorChildren.get(block) ?? [];
+			for (let index = children.length - 1; index >= 0; index--)
+				dominancePending.push(children[index]!);
+		}
+
 		const dominancePosition = new Map<CoreBlockId, number>();
 		for (const [position, block] of dominanceOrder.entries())
 			dominancePosition.set(block, position);
 		const dominanceFrontiers = new Map<CoreBlockId, Set<CoreBlockId>>();
 		for (const block of dominanceOrder) dominanceFrontiers.set(block, new Set());
-		for (let index = dominanceOrder.length - 1; index >= 0; index--) {
+		for (
+			let index = hasSinglePredecessorFlow ? -1 : dominanceOrder.length - 1;
+			index >= 0;
+			index--
+		) {
 			const block = dominanceOrder[index]!;
 			for (const edge of cfg.successors[block] ?? []) {
 				if (cfg.immediateDominators[edge.to] !== block)
@@ -744,251 +714,326 @@ function memoryVersions(
 				}
 			}
 		}
-		const hasExceptionalEdges = cfg.reversePostorder.some((block) =>
-			(cfg.successors[block] ?? []).some(({ kind }) => kind === "exceptional"),
-		);
-		for (let slot = 0; slot < slotCount; slot++) {
+
+		return (dominance = { dominancePosition, dominanceFrontiers });
+	};
+	const solved = new Array<ReadonlyMap<CoreInstructionId, number> | undefined>(slotCount);
+	const solvedReads = new Set<CoreInstructionId>();
+	const solveSlot = (slot: number): ReadonlyMap<CoreInstructionId, number> => {
+		const known = solved[slot];
+		if (known !== undefined) return known;
+		return runOwner(CORE_OPTIMIZATION_OWNER.memoryVersions, () => {
+			const readVersions = new Map<CoreInstructionId, number>();
+			const phiOperands = new Map<number, Array<number>>();
+			let transfers = 0;
 			const readBlocks = readBlocksBySlot[slot]!;
-			if (readBlocks.size === 0) continue;
 			const definitions = definitionBlocksBySlot[slot]!;
 			if (definitions.size === 0 && !hasExceptionalEdges) {
 				for (const instruction of readersBySlot[slot]!)
-					recordReadVersion(instruction, slot, entryIdentity(slot));
-				transfers += readBlocks.size;
-				continue;
-			}
-			const liveIn = new Set<CoreBlockId>();
-			const livePending = [...upwardExposedReadBlocksBySlot[slot]!];
-			while (livePending.length > 0) {
-				const block = livePending.pop()!;
-				if (liveIn.has(block)) continue;
-				liveIn.add(block);
-				for (const edge of cfg.predecessors[block] ?? []) {
-					if (edge.kind === "exceptional" || definitions.has(edge.from)) continue;
-					livePending.push(edge.from);
-				}
-			}
-			const phiBlocks = new Set<CoreBlockId>();
-			const phiPending = [...definitions];
-			for (const block of liveIn) {
-				if ((cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional")) {
-					phiBlocks.add(block);
-					phiPending.push(block);
-				}
-			}
-			for (let next = 0; next < phiPending.length; next++) {
-				for (const frontier of dominanceFrontiers.get(phiPending[next]!) ?? []) {
-					if (!liveIn.has(frontier) || phiBlocks.has(frontier)) continue;
-					phiBlocks.add(frontier);
-					if (!definitions.has(frontier)) phiPending.push(frontier);
-				}
-			}
-			const relevantBlocks = new Set<CoreBlockId>([
-				...readBlocks,
-				...definitions,
-				...phiBlocks,
-			]);
-			for (const block of phiBlocks) {
-				const phi = phiIdentity(block, slot);
-				phiOperands.set(phi, []);
-				for (const edge of cfg.predecessors[block] ?? []) relevantBlocks.add(edge.from);
-			}
-			const orderedBlocks = [...relevantBlocks]
-				.filter((block) => dominancePosition.has(block))
-				.sort(
-					(left, right) => dominancePosition.get(left)! - dominancePosition.get(right)!,
-				);
-			const active: Array<{ readonly block: CoreBlockId; readonly version: number }> = [];
-			for (const block of orderedBlocks) {
-				while (active.length > 0 && !cfg.dominates(active.at(-1)!.block, block))
-					active.pop();
-				let version = active.at(-1)?.version ?? entryIdentity(slot);
-				if (phiBlocks.has(block)) version = phiIdentity(block, slot);
-				for (const event of eventsByBlock.get(block) ?? []) {
-					if (event.reads.has(slot)) {
-						recordReadVersion(event.instruction, slot, version);
+					readVersions.set(instruction, entryIdentity(slot));
+				transfers = readBlocks.size;
+			} else if (readBlocks.size > 0) {
+				const { dominancePosition, dominanceFrontiers } = getDominance();
+				const phiBlocks = new Set<CoreBlockId>();
+				if (!hasSinglePredecessorFlow) {
+					const liveIn = new Set<CoreBlockId>();
+					const livePending = [...upwardExposedReadBlocksBySlot[slot]!];
+					while (livePending.length > 0) {
+						const block = livePending.pop()!;
+						if (liveIn.has(block)) continue;
+						liveIn.add(block);
+						for (const edge of cfg.predecessors[block] ?? []) {
+							if (edge.kind === "exceptional" || definitions.has(edge.from)) continue;
+							livePending.push(edge.from);
+						}
 					}
-					version = event.definitions.get(slot) ?? version;
+					const phiPending = [...definitions];
+					for (const block of liveIn) {
+						if (
+							(cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional")
+						) {
+							phiBlocks.add(block);
+							phiPending.push(block);
+						}
+					}
+					for (let next = 0; next < phiPending.length; next++) {
+						for (const frontier of dominanceFrontiers.get(phiPending[next]!) ?? []) {
+							if (!liveIn.has(frontier) || phiBlocks.has(frontier)) continue;
+							phiBlocks.add(frontier);
+							if (!definitions.has(frontier)) phiPending.push(frontier);
+						}
+					}
 				}
-				for (const edge of cfg.successors[block] ?? []) {
-					if (!phiBlocks.has(edge.to)) continue;
-					phiOperands
-						.get(phiIdentity(edge.to, slot))!
-						.push(edge.kind === "exceptional" ? exceptionIdentity(block, slot) : version);
+				const relevantBlocks = new Set<CoreBlockId>([
+					...readBlocks,
+					...definitions,
+					...phiBlocks,
+				]);
+				for (const block of phiBlocks) {
+					const phi = phiIdentity(block, slot);
+					phiOperands.set(phi, []);
+					for (const edge of cfg.predecessors[block] ?? []) relevantBlocks.add(edge.from);
 				}
-				active.push({ block, version });
-				transfers++;
+				const orderedBlocks = [...relevantBlocks]
+					.filter((block) => dominancePosition.has(block))
+					.sort(
+						(left, right) => dominancePosition.get(left)! - dominancePosition.get(right)!,
+					);
+				const active: Array<{
+					readonly block: CoreBlockId;
+					readonly version: number;
+				}> = [];
+				for (const block of orderedBlocks) {
+					while (active.length > 0 && !cfg.dominates(active.at(-1)!.block, block))
+						active.pop();
+					let version = active.at(-1)?.version ?? entryIdentity(slot);
+					if (phiBlocks.has(block)) version = phiIdentity(block, slot);
+					for (const event of eventsByBlock.get(block) ?? []) {
+						if (event.reads.has(slot)) {
+							readVersions.set(event.instruction, version);
+						}
+						version = event.definitions.get(slot) ?? version;
+					}
+					for (const edge of cfg.successors[block] ?? []) {
+						if (!phiBlocks.has(edge.to)) continue;
+						phiOperands
+							.get(phiIdentity(edge.to, slot))!
+							.push(
+								edge.kind === "exceptional" ? exceptionIdentity(block, slot) : version,
+							);
+					}
+					active.push({ block, version });
+					transfers++;
+				}
 			}
-		}
-	}
-	const aliases = new Map<number, number>();
-	const resolveVersion = (version: number): number => {
-		let resolved = version;
-		while (aliases.has(resolved)) resolved = aliases.get(resolved)!;
-		let current = version;
-		while (aliases.has(current) && aliases.get(current) !== resolved) {
-			const next = aliases.get(current)!;
-			aliases.set(current, resolved);
-			current = next;
-		}
-		return resolved;
-	};
-	const dependentPhis = new Map<number, Set<number>>();
-	for (const [phi, operands] of phiOperands) {
-		for (const operand of operands) {
-			const dependents = dependentPhis.get(operand) ?? new Set<number>();
-			dependents.add(phi);
-			dependentPhis.set(operand, dependents);
-		}
-	}
-	const trivialPhiPending = [...phiOperands.keys()];
-	for (let next = 0; next < trivialPhiPending.length; next++) {
-		const phi = trivialPhiPending[next]!;
-		if (aliases.has(phi)) continue;
-		let replacement: number | undefined;
-		let conflicting = false;
-		for (const operand of phiOperands.get(phi)!) {
-			const resolved = resolveVersion(operand);
-			if (resolved === phi) continue;
-			if (replacement === undefined) replacement = resolved;
-			else if (replacement !== resolved) {
-				conflicting = true;
-				break;
+			const aliases = new Map<number, number>();
+			const resolveVersion = (version: number): number => {
+				let resolved = version;
+				while (aliases.has(resolved)) resolved = aliases.get(resolved)!;
+				let current = version;
+				while (aliases.has(current) && aliases.get(current) !== resolved) {
+					const next = aliases.get(current)!;
+					aliases.set(current, resolved);
+					current = next;
+				}
+				return resolved;
+			};
+			const dependentPhis = new Map<number, Set<number>>();
+			for (const [phi, operands] of phiOperands) {
+				for (const operand of operands) {
+					const dependents = dependentPhis.get(operand) ?? new Set<number>();
+					dependents.add(phi);
+					dependentPhis.set(operand, dependents);
+				}
 			}
-		}
-		if (replacement === undefined || conflicting) continue;
-		aliases.set(phi, replacement);
-		trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
-	}
-	for (const [instruction, versions] of pendingReadVersions) {
-		if (versions.size === 0) continue;
-		readStateRows.set(instruction, {
-			start: readStateSlots.length,
-			count: versions.size,
+			const trivialPhiPending = [...phiOperands.keys()];
+			for (let next = 0; next < trivialPhiPending.length; next++) {
+				const phi = trivialPhiPending[next]!;
+				if (aliases.has(phi)) continue;
+				let replacement: number | undefined;
+				let conflicting = false;
+				for (const operand of phiOperands.get(phi)!) {
+					const resolved = resolveVersion(operand);
+					if (resolved === phi) continue;
+					if (replacement === undefined) replacement = resolved;
+					else if (replacement !== resolved) {
+						conflicting = true;
+						break;
+					}
+				}
+				if (replacement === undefined || conflicting) continue;
+				aliases.set(phi, replacement);
+				trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
+			}
+
+			const previousRows = solvedReads.size;
+			for (const [instruction, version] of readVersions) {
+				readVersions.set(instruction, resolveVersion(version));
+				solvedReads.add(instruction);
+			}
+			const delta = {
+				solvedPartitions: 1,
+				stateRows: solvedReads.size - previousRows + phiOperands.size,
+				stateEntries:
+					readVersions.size +
+					[...phiOperands.values()].reduce(
+						(total, operands) => total + operands.length,
+						0,
+					),
+				phis: phiOperands.size - aliases.size,
+				transfers,
+				blockUpdates: phiOperands.size,
+			};
+			statistics.solvedPartitions++;
+			statistics.stateRows += delta.stateRows;
+			statistics.stateEntries += delta.stateEntries;
+			statistics.phis += delta.phis;
+			statistics.transfers += delta.transfers;
+			statistics.blockUpdates += delta.blockUpdates;
+			solved[slot] = readVersions;
+			recordResult?.({ statistics: delta });
+			return readVersions;
 		});
-		for (const [slot, version] of versions) {
-			readStateSlots.push(slot);
-			readStateVersions.push(resolveVersion(version));
-		}
-	}
-	const stateEntries =
-		readStateVersions.length +
-		[...phiOperands.values()].reduce((total, operands) => total + operands.length, 0);
-	const readStateVersion = (
+	};
+	const readVersions = new Map<CoreInstructionId, ReadonlySet<number>>();
+	const versionsForRead = (
 		instruction: CoreInstructionId,
-		slot: number,
-	): number | undefined => {
-		const row = readStateRows.get(instruction);
-		if (row === undefined) return undefined;
-		const end = row.start + row.count;
-		for (let index = row.start; index < end; index++) {
-			if (readStateSlots[index] === slot) return readStateVersions[index];
-		}
-		return undefined;
-	};
-	const phis = phiOperands.size - aliases.size;
-	const blockUpdates = phiOperands.size;
-	const readHashes = new Map<CoreInstructionId, number>();
-	const readVersionHash = (instruction: CoreInstructionId): number | undefined => {
-		const cached = readHashes.get(instruction);
-		if (cached !== undefined) return cached;
-		const row = readStateRows.get(instruction);
-		if (row === undefined) return undefined;
-		const end = row.start + row.count;
+	): ReadonlySet<number> | undefined => {
+		const known = readVersions.get(instruction);
+		if (known !== undefined) return known;
+		const slots = readSlotsByInstruction.get(instruction);
+		if (slots === undefined) return undefined;
 		const versions = new Set<number>();
-		let sum = 0;
-		let xor = 0;
-		for (let index = row.start; index < end; index++) {
-			const version = readStateVersions[index]!;
-			if (versions.has(version)) continue;
-			versions.add(version);
-			const mixed = Math.imul(version ^ 2_166_136_261, 16_777_619) >>> 0;
-			sum = (sum + mixed) >>> 0;
-			xor ^= mixed;
+		for (const slot of slots) {
+			const version = solveSlot(slot).get(instruction);
+			if (version !== undefined) versions.add(version);
 		}
-		if (versions.size === 0) return undefined;
-		const hash = Math.imul(sum ^ xor ^ versions.size, 16_777_619) >>> 0;
-		readHashes.set(instruction, hash);
-		return hash;
+		readVersions.set(instruction, versions);
+		return versions;
 	};
-	const readContainsVersion = (
-		row: { readonly start: number; readonly count: number },
-		version: number,
-	): boolean => {
-		const end = row.start + row.count;
-		for (let index = row.start; index < end; index++) {
-			if (readStateVersions[index] === version) return true;
-		}
-		return false;
-	};
-	const equivalentReadVersions = (
-		left: CoreInstructionId,
-		right: CoreInstructionId,
-	): boolean => {
-		const leftRow = readStateRows.get(left);
-		const rightRow = readStateRows.get(right);
-		if (leftRow === undefined || rightRow === undefined) return leftRow === rightRow;
-		const leftEnd = leftRow.start + leftRow.count;
-		for (let index = leftRow.start; index < leftEnd; index++) {
-			if (!readContainsVersion(rightRow, readStateVersions[index]!)) return false;
-		}
-		const rightEnd = rightRow.start + rightRow.count;
-		for (let index = rightRow.start; index < rightEnd; index++) {
-			if (!readContainsVersion(leftRow, readStateVersions[index]!)) return false;
-		}
-		return true;
-	};
-	const result: CoreMemoryVersions = {
+	const readHashes = new Map<CoreInstructionId, number>();
+	return Object.freeze({
 		function: fn.id,
-		statistics: Object.freeze({
-			accesses: accessCount,
-			partitions: locationSlotCount,
-			exactPartitions: locationSlotCount - CORE_EFFECT_DOMAINS.length,
-			touchedBlocks: eventsByBlock.size,
-			stateRows: readStateRows.size + phiOperands.size,
-			stateEntries,
-			phis,
-			transfers,
-			familyWidenings,
-			blockUpdates,
-		}),
-		readHash(instruction) {
-			return readVersionHash(instruction);
+		get statistics() {
+			return Object.freeze({ ...statistics });
 		},
-		readsEquivalent(left, right) {
-			return equivalentReadVersions(left, right);
+		readHash(instruction: CoreInstructionId) {
+			const cached = readHashes.get(instruction);
+			if (cached !== undefined) return cached;
+			const versions = versionsForRead(instruction);
+			if (versions === undefined || versions.size === 0) return undefined;
+			let sum = 0,
+				xor = 0;
+			for (const version of versions) {
+				const mixed = Math.imul(version ^ 2_166_136_261, 16_777_619) >>> 0;
+				sum = (sum + mixed) >>> 0;
+				xor ^= mixed;
+			}
+			const hash = Math.imul(sum ^ xor ^ versions.size, 16_777_619) >>> 0;
+			readHashes.set(instruction, hash);
+			return hash;
 		},
-		valueForRead(instruction, location) {
+		readsEquivalent(left: CoreInstructionId, right: CoreInstructionId) {
+			const leftVersions = versionsForRead(left),
+				rightVersions = versionsForRead(right);
+			if (leftVersions === undefined || rightVersions === undefined)
+				return leftVersions === rightVersions;
+			return (
+				leftVersions.size === rightVersions.size &&
+				[...leftVersions].every((version) => rightVersions.has(version))
+			);
+		},
+		valueForRead(instruction: CoreInstructionId, location: CoreExactMemoryLocation) {
 			const slot = slotByLocation.get(locationTable.id(location));
-			const version =
-				slot === undefined ? undefined : readStateVersion(instruction, slot);
+			if (slot === undefined || !readSlotsByInstruction.get(instruction)?.has(slot))
+				return undefined;
+			const version = solveSlot(slot).get(instruction);
 			if (version === undefined) return undefined;
 			const requirement = exactWriteKillRequirements.get(version);
-			if (
-				requirement !== undefined &&
-				readStateVersion(instruction, requirement.slot) !==
-					readStateVersion(requirement.instruction, requirement.slot)
-			)
-				return undefined;
+			if (requirement !== undefined) {
+				const kills = solveSlot(requirement.slot);
+				if (kills.get(instruction) !== kills.get(requirement.instruction))
+					return undefined;
+			}
 			return valueByVersion.get(version);
 		},
+	});
+}
+
+const MEMORY_FUNCTION_DEPENDENCIES = [
+	"body",
+	"cfg",
+	"exceptionFlow",
+	"memoryEffects",
+] as const;
+const EMPTY_MEMORY_STATISTICS: CoreMemoryVersions["statistics"] = Object.freeze({
+	accesses: 0,
+	partitions: 0,
+	exactPartitions: 0,
+	solvedPartitions: 0,
+	touchedBlocks: 0,
+	stateRows: 0,
+	stateEntries: 0,
+	phis: 0,
+	transfers: 0,
+	familyWidenings: 0,
+	blockUpdates: 0,
+});
+
+function memoryVersions(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+	dependencies: () => {
+		readonly control: CoreControlFlow;
+		readonly provenance: CoreProvenance;
+		readonly memoryInstructions: ReadonlyArray<CoreInstructionId>;
+	},
+	runOwner: CoreOptimizationOwnerRunner = runWithoutOwner,
+	recordResult?: (value: unknown) => void,
+): CoreMemoryVersions {
+	const fn = program.function(functionId),
+		generation = program.generation,
+		versions = fn.versions,
+		dataVersion = program.programVersion("data");
+	let prepared: CoreMemoryVersions | undefined;
+	const current = () => {
+		if (
+			program.generation !== generation ||
+			program.function(functionId) !== fn ||
+			!MEMORY_FUNCTION_DEPENDENCIES.every(
+				(domain) => versions[domain] === fn.version(domain),
+			) ||
+			program.programVersion("data") !== dataVersion
+		)
+			throw new Error("Stale memory-version analysis");
+		if (prepared === undefined) {
+			prepared = runOwner(CORE_OPTIMIZATION_OWNER.memoryVersions, () => {
+				const { control, provenance, memoryInstructions } = dependencies();
+				return prepareMemoryVersions(
+					fn,
+					control,
+					provenance,
+					memoryInstructions,
+					runOwner,
+					recordResult,
+				);
+			});
+			recordResult?.({ statistics: prepared.statistics });
+		}
+		return prepared;
 	};
-	return Object.freeze(result);
+	return Object.freeze({
+		function: functionId,
+		get statistics() {
+			return prepared?.statistics ?? EMPTY_MEMORY_STATISTICS;
+		},
+		readHash(instruction: CoreInstructionId) {
+			return current().readHash(instruction);
+		},
+		readsEquivalent(left: CoreInstructionId, right: CoreInstructionId) {
+			return current().readsEquivalent(left, right);
+		},
+		valueForRead(instruction: CoreInstructionId, location: CoreExactMemoryLocation) {
+			return current().valueForRead(instruction, location);
+		},
+	});
 }
 
 export function analyzeCoreMemoryVersions(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 ): CoreMemoryVersions {
-	const fn = program.function(functionId);
-	const control = buildCoreControlFlow(program, functionId);
-	const roots = coreCanonicalValueRoots(fn, control);
-	const index = buildCoreLocalFactIndex(fn, roots);
-	const provenance = buildCoreProvenance(program, fn, control, {
-		canonicalRoots: roots,
-		index,
+	return memoryVersions(program, functionId, () => {
+		const fn = program.function(functionId);
+		const control = buildCoreControlFlow(program, functionId);
+		const roots = coreCanonicalValueRoots(fn, control);
+		const index = buildCoreLocalFactIndex(fn, roots);
+		const provenance = buildCoreProvenance(program, fn, control, {
+			canonicalRoots: roots,
+			index,
+		});
+		return { control, provenance, memoryInstructions: index.memoryOperations };
 	});
-	return memoryVersions(fn, control, provenance, index.memoryOperations);
 }
 
 export const coreMemoryVersions = analyzeCoreMemoryVersions;
@@ -998,18 +1043,24 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 		key: "local-memory-versions",
 		scope: "function",
 		owner: CORE_OPTIMIZATION_OWNER.memoryVersions,
-		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+		functionDependencies: MEMORY_FUNCTION_DEPENDENCIES,
 		programDependencies: ["data"],
-		compute({ program, request, get, runOwner }) {
+		compute({ program, request, get, runOwner, recordResult }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
-			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
 			return memoryVersions(
-				program.function(request.function),
-				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
-				bundle.provenance,
-				bundle.index.memoryOperations,
+				program,
+				request.function,
+				() => {
+					const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
+					return {
+						control: get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
+						provenance: bundle.provenance,
+						memoryInstructions: bundle.index.memoryOperations,
+					};
+				},
 				runOwner,
+				recordResult,
 			);
 		},
 	};

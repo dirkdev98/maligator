@@ -149,6 +149,7 @@ export interface CoreCompilerWorkCounters {
 	readonly provenanceRebuilds: number;
 	readonly memoryAccesses: number;
 	readonly memoryLocations: number;
+	readonly memoryPartitionsSolved: number;
 	readonly memoryTouchedBlocks: number;
 	readonly memoryStateRows: number;
 	readonly memoryStateEntries: number;
@@ -295,6 +296,7 @@ const COUNTER_KEYS = [
 	"provenanceRebuilds",
 	"memoryAccesses",
 	"memoryLocations",
+	"memoryPartitionsSolved",
 	"memoryTouchedBlocks",
 	"memoryStateRows",
 	"memoryStateEntries",
@@ -862,6 +864,7 @@ export class CoreOptimizationReportBuilder {
 				readonly statistics?: {
 					readonly accesses?: number;
 					readonly partitions?: number;
+					readonly solvedPartitions?: number;
 					readonly touchedBlocks?: number;
 					readonly stateRows?: number;
 					readonly stateEntries?: number;
@@ -873,6 +876,7 @@ export class CoreOptimizationReportBuilder {
 		).statistics;
 		this.increment("memoryAccesses", statistics?.accesses ?? 0);
 		this.increment("memoryLocations", statistics?.partitions ?? 0);
+		this.increment("memoryPartitionsSolved", statistics?.solvedPartitions ?? 0);
 		this.increment("memoryTouchedBlocks", statistics?.touchedBlocks ?? 0);
 		this.increment("memoryStateRows", statistics?.stateRows ?? 0);
 		this.increment("memoryStateEntries", statistics?.stateEntries ?? 0);

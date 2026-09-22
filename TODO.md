@@ -175,9 +175,18 @@ Runtime eval may remove source closure without invalidating authority closure.
       instruction visits, transfer/summary builds, cache reuse, and peak retained
       data in opt-in diagnostics. Do not trade a cheap emitter for hidden planning
       scans, uncontrolled cache growth, or a new unconditional whole-program pass.
-      After memory-source admission, build memory state for requested reads and
-      locations instead of every read in the function. Likewise, admit individual
-      late local candidates before materializing their complete target plans.
+      Memory versions now solve requested partitions, repeated-load proofs start
+      after matching inputs and dominance, and late target payloads are built only
+      after selection. Remaining work: slice shared memory event/provenance
+      extraction and partition state to the requested reads, and defer candidate
+      recognition while preserving exact ranking and costs. Measure retained
+      snapshot memory before extending these caches.
+
+- [ ] Repair indexed-length-loop region cost verification for the existing
+      `core-primitive-numeric` Array.from length and holey-array checksum cases.
+      Both fail the instruction/cost contract in VM lowering on `0f39d688`, before
+      demand-driven analysis changes. Preserve the region checks and numeric
+      semantics when reconciling discovery, selection, and lowering costs.
 
 - [ ] Add representative small, medium, and large compiler-scaling cases to the
       existing measurement workflow. Alternate Node and rebuilt self-hosted
@@ -244,6 +253,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       runtime, startup, binary-size, and correctness evidence before adoption.
 
 ## Compiler infrastructure
+
+- [ ] Preserve conditional iterable expressions in compact type stripping.
+      `for (const item of condition ? items : [])` currently loses the ternary's
+      colon and following code during compiler-source baking. Cover this syntax
+      at the stripper boundary; the demand-driven discovery loops use named
+      iterable locals in the meantime.
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
       schemas, lowering completeness, effects, representation constraints, safepoint

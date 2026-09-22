@@ -62,3 +62,62 @@ export function coreInstructionInputsEqual(
 		fn.instructionAttributes(right),
 	);
 }
+
+const NUMBER_HASH_VIEW = new DataView(new ArrayBuffer(8));
+
+function mixHash(hash: number, value: number): number {
+	return Math.imul(hash ^ value, 0x0100_0193) >>> 0;
+}
+function hashString(hash: number, value: string): number {
+	let result = mixHash(hash, value.length);
+	for (let index = 0; index < value.length; index++)
+		result = mixHash(result, value.charCodeAt(index));
+	return result;
+}
+function isAttributeArray(
+	value: CoreAttributeValue,
+): value is ReadonlyArray<CoreAttributeValue> {
+	return Array.isArray(value);
+}
+
+export function coreAttributeValueHash(hash: number, value: CoreAttributeValue): number {
+	if (value === undefined) return mixHash(hash, 1);
+	if (value === null) return mixHash(hash, 2);
+	if (typeof value === "boolean") return mixHash(hash, value ? 4 : 3);
+	if (typeof value === "number") {
+		if (Number.isNaN(value)) return mixHash(hash, 9);
+		NUMBER_HASH_VIEW.setFloat64(0, value);
+		return mixHash(
+			mixHash(mixHash(hash, 5), NUMBER_HASH_VIEW.getUint32(0)),
+			NUMBER_HASH_VIEW.getUint32(4),
+		);
+	}
+	if (typeof value === "string") return hashString(mixHash(hash, 6), value);
+	if (isAttributeArray(value)) {
+		let result = mixHash(mixHash(hash, 7), value.length);
+		for (const entry of value) result = coreAttributeValueHash(result, entry);
+		return result;
+	}
+	const object = value;
+	const keys = Object.keys(object).sort();
+	let result = mixHash(mixHash(hash, 8), keys.length);
+	for (const key of keys) {
+		result = coreAttributeValueHash(hashString(result, key), object[key]);
+	}
+	return result;
+}
+
+export function coreInstructionInputsHash(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): number {
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const count = fn.kernel.instructionOperandCount(instruction);
+	let hash = mixHash(2_166_136_261, fn.instructionOpcode(instruction));
+	for (let index = 0; index < count; index++)
+		hash = mixHash(hash, fn.kernel.operandAt(start + index));
+	return coreAttributeValueHash(
+		mixHash(hash, count),
+		fn.instructionAttributes(instruction),
+	);
+}
