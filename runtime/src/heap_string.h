@@ -130,6 +130,7 @@ static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
         return mal_string_code_units(string)[index];
     }
 
+    usize root_index = index;
     MalString *child = string->left;
     if (index >= child->length) {
         index -= child->length;
@@ -138,7 +139,7 @@ static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
     if (child->storage != MAL_STRING_STORAGE_CONS) {
         return mal_string_code_units(child)[index];
     }
-    return mal_string_code_units(string)[index];
+    return mal_string_code_units(string)[root_index];
 }
 
 /** Copy a valid range without flattening a lazy concatenation; destination holds length units. */

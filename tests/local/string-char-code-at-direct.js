@@ -76,6 +76,12 @@ const splitSurrogate = concatenate("split-\ud83d", "\ude00-pair");
 ok("split surrogate left unit", splitSurrogate.charCodeAt(6) === 0xd83d);
 ok("split surrogate right unit", splitSurrogate.charCodeAt(7) === 0xde00);
 
+const nestedRight = concatenate("LEFT", concatenate("right-", "nested"));
+ok(
+	"nested right child keeps root index on flatten",
+	nestedRight.charCodeAt(nestedRight.length - 1) === 100,
+);
+
 const coerciveRope = concatenate("coercive-", "rope");
 ok(
 	"coercion GC keeps cons children",
@@ -124,5 +130,5 @@ function mutateWhileEvaluatingPosition(value) {
 ok("method captured before argument mutation", mutateWhileEvaluatingPosition("A") === 65);
 String.prototype.charCodeAt = original;
 
-ok("checks ran", passed === 25);
+ok("checks ran", passed === 26);
 console.log("string-char-code-at-direct PASS");
