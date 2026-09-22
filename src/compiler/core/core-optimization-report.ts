@@ -155,6 +155,7 @@ export interface CoreCompilerWorkCounters {
 	readonly memoryInstructionsIndexed: number;
 	readonly memoryHeapAccessesResolved: number;
 	readonly memoryEvents: number;
+	readonly memoryCompactedEvents: number;
 	readonly memoryLocations: number;
 	readonly memoryPartitionsSolved: number;
 	readonly memoryTouchedBlocks: number;
@@ -309,6 +310,7 @@ const COUNTER_KEYS = [
 	"memoryInstructionsIndexed",
 	"memoryHeapAccessesResolved",
 	"memoryEvents",
+	"memoryCompactedEvents",
 	"memoryLocations",
 	"memoryPartitionsSolved",
 	"memoryTouchedBlocks",
@@ -895,6 +897,7 @@ export class CoreOptimizationReportBuilder {
 					readonly indexedInstructions?: number;
 					readonly heapAccessesResolved?: number;
 					readonly events?: number;
+					readonly compactedEvents?: number;
 					readonly partitions?: number;
 					readonly solvedPartitions?: number;
 					readonly touchedBlocks?: number;
@@ -910,6 +913,7 @@ export class CoreOptimizationReportBuilder {
 		this.increment("memoryInstructionsIndexed", statistics?.indexedInstructions ?? 0);
 		this.increment("memoryHeapAccessesResolved", statistics?.heapAccessesResolved ?? 0);
 		this.increment("memoryEvents", statistics?.events ?? 0);
+		this.increment("memoryCompactedEvents", statistics?.compactedEvents ?? 0);
 		this.increment("memoryLocations", statistics?.partitions ?? 0);
 		this.increment("memoryPartitionsSolved", statistics?.solvedPartitions ?? 0);
 		this.increment("memoryTouchedBlocks", statistics?.touchedBlocks ?? 0);

@@ -320,6 +320,7 @@ export interface CoreMemoryVersions {
 		readonly indexedInstructions: number;
 		readonly heapAccessesResolved: number;
 		readonly events: number;
+		readonly compactedEvents: number;
 		readonly partitions: number;
 		readonly exactPartitions: number;
 		readonly solvedPartitions: number;
@@ -371,6 +372,7 @@ function prepareMemoryVersions(
 		indexedInstructions: 0,
 		heapAccessesResolved: 0,
 		events: 0,
+		compactedEvents: 0,
 		partitions: 0,
 		exactPartitions: 0,
 		solvedPartitions: 0,
@@ -396,6 +398,7 @@ function prepareMemoryVersions(
 	const familyCheckpoints = new Map<CoreMemoryFamily, Set<CoreInstructionId>>();
 	const domainReaders = new Map<CoreEffectDomain, Set<CoreInstructionId>>();
 	const domainWriters = new Map<CoreEffectDomain, Set<CoreInstructionId>>();
+	const universalWriters = new Set<CoreInstructionId>();
 	const heapInstructions = new Set<CoreInstructionId>();
 	const heapByRoot = new Map<CoreValueId, Set<CoreInstructionId>>();
 	let indexed = false,
@@ -459,11 +462,11 @@ function prepareMemoryVersions(
 						if (access.mode === "write" && family === "object-slot")
 							addTo(domainWriters, "array-element", instruction);
 					}
-					const domains =
-						effects.callsUserCode || effects.maySuspend
-							? CORE_EFFECT_DOMAINS
-							: effects.writes;
-					for (const domain of domains) addTo(domainWriters, domain, instruction);
+					if (effects.callsUserCode || effects.maySuspend)
+						universalWriters.add(instruction);
+					else
+						for (const domain of effects.writes)
+							addTo(domainWriters, domain, instruction);
 				}
 			}
 			indexed = true;
@@ -582,7 +585,7 @@ function prepareMemoryVersions(
 		return slots;
 	};
 	interface MemoryEvent {
-		readonly instruction: CoreInstructionId;
+		instruction: CoreInstructionId;
 		readonly reads: boolean;
 		readonly definition?: number;
 	}
@@ -627,12 +630,15 @@ function prepareMemoryVersions(
 					for (const instruction of domainWriters.get(domain) ?? [])
 						instructions.add(instruction);
 			}
+			if (partition.kind !== "exact")
+				for (const instruction of universalWriters) instructions.add(instruction);
 			const eventsByBlock = new Map<CoreBlockId, Array<MemoryEvent>>();
 			const readers: Array<CoreInstructionId> = [];
 			const readBlocks = new Set<CoreBlockId>(),
 				definitions = new Set<CoreBlockId>(),
 				upwardExposedReadBlocks = new Set<CoreBlockId>();
 			let events = 0,
+				compactedEvents = 0,
 				familyWidenings = 0;
 			const ordered = [...instructions].sort(
 				(left, right) => instructionOrder.get(left)! - instructionOrder.get(right)!,
@@ -720,23 +726,41 @@ function prepareMemoryVersions(
 					readBlocks.add(block);
 					if (!definitions.has(block)) upwardExposedReadBlocks.add(block);
 				}
-				const definition = defines ? nextVersion++ : undefined;
+				const previous = blockEvents.at(-1);
+				const replace =
+					defines &&
+					!reads &&
+					previous?.reads === false &&
+					previous.definition !== undefined;
+				const definition = defines
+					? replace
+						? previous.definition
+						: nextVersion++
+					: undefined;
 				if (definition !== undefined) {
 					definitions.add(block);
 					if (value !== undefined) valueByVersion.set(definition, value);
+					else if (replace) valueByVersion.delete(definition);
 					if (partition.kind === "exact" && !heapLocation(partition.location))
 						exactWriteKillRequirements.set(definition, {
 							instruction,
 							slot: killSlotByFamily.get(coreMemoryLocationFamily(partition.location))!,
 						});
 				}
-				blockEvents.push({ instruction, reads, definition });
+				// No reader can observe an overwritten definition within this block and partition.
+				if (replace) {
+					previous.instruction = instruction;
+					compactedEvents++;
+				} else {
+					blockEvents.push({ instruction, reads, definition });
+					events++;
+				}
 				eventsByBlock.set(block, blockEvents);
 				touchedBlocks.add(block);
-				events++;
 			}
 			addStatistics({
 				events,
+				compactedEvents,
 				partitions: partition.kind === "kill" ? 0 : 1,
 				exactPartitions: partition.kind === "exact" ? 1 : 0,
 				familyWidenings,
@@ -1039,6 +1063,7 @@ const EMPTY_MEMORY_STATISTICS: CoreMemoryVersions["statistics"] = Object.freeze(
 	indexedInstructions: 0,
 	heapAccessesResolved: 0,
 	events: 0,
+	compactedEvents: 0,
 	partitions: 0,
 	exactPartitions: 0,
 	solvedPartitions: 0,

@@ -400,6 +400,228 @@ describe("Core IR", () => {
 		).toBeUndefined();
 	});
 
+	it.each(["call", "suspend"] as const)(
+		"compacts %s clobbers without losing slot checkpoints",
+		(clobber) => {
+			const opcodes = new CoreOpcodeRegistry();
+			for (const opcode of CORE_OPCODES)
+				opcodes.define(coreOpcodeRegistry.require(opcode));
+			opcodes.define({
+				opcode: "suspend",
+				inputs: coreArity(0),
+				outputs: coreArity(0),
+				effects: { ...CORE_NO_EFFECTS, maySuspend: true },
+				discardable: false,
+				attributeRelocations: [],
+			});
+			opcodes.define({
+				opcode: "readGlobals",
+				inputs: coreArity(0),
+				outputs: coreArity(1),
+				effects: { ...CORE_NO_EFFECTS, reads: ["global-slot"] },
+				discardable: true,
+				attributeRelocations: [],
+				accesses: [{ family: "global-slot", mode: "read" }],
+			});
+			const program = new CoreProgram(opcodes, { globalCount: 2 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const read = (opcode: string, attributes = {}) => {
+				builder.appendInstruction(entry, opcode, [], { attributes });
+				return builder.bodyInstructionIds(entry).at(-1)!;
+			};
+			const clobberMany = () => {
+				for (let i = 0; i < 12; i++)
+					builder.appendInstruction(
+						entry,
+						clobber,
+						clobber === "call" ? [stored!, stored!] : [],
+					);
+			};
+			builder.appendInstruction(entry, "storeGlobal", [stored!], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(entry, "storeCaptured", [stored!], {
+				attributes: { functionIndex: 0, index: 0 },
+			});
+			const before = read("loadGlobal", { index: 0 });
+			const capturedBefore = read("loadCaptured", { functionIndex: 0, index: 0 });
+			const domainBefore = read("readGlobals");
+			clobberMany();
+			builder.appendInstruction(entry, "storeGlobal", [stored!], {
+				attributes: { index: 1 },
+			});
+			const restored = read("loadGlobal", { index: 1 });
+			clobberMany();
+			const after = read("loadGlobal", { index: 0 });
+			const otherAfter = read("loadGlobal", { index: 1 });
+			const capturedAfter = read("loadCaptured", { functionIndex: 0, index: 0 });
+			const domainAfter = read("readGlobals");
+			builder.setTerminator(entry, { kind: "return", value: stored! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			expect(memory.valueForRead(before, { kind: "global-slot", slot: 0 })).toBe(stored);
+			const hash = memory.readHash(before);
+			expect(
+				memory.valueForRead(after, { kind: "global-slot", slot: 0 }),
+			).toBeUndefined();
+			expect(memory.valueForRead(restored, { kind: "global-slot", slot: 1 })).toBe(
+				stored,
+			);
+			expect(
+				memory.valueForRead(otherAfter, { kind: "global-slot", slot: 1 }),
+			).toBeUndefined();
+			expect(
+				memory.valueForRead(capturedBefore, {
+					kind: "captured-slot",
+					owner: 0,
+					index: 0,
+				}),
+			).toBe(stored);
+			expect(
+				memory.valueForRead(capturedAfter, { kind: "captured-slot", owner: 0, index: 0 }),
+			).toBeUndefined();
+			expect(memory.readsEquivalent(domainBefore, domainAfter)).toBe(false);
+			expect(memory.readHash(before)).toBe(hash);
+			expect(memory.statistics.compactedEvents).toBeGreaterThanOrEqual(22);
+		},
+	);
+
+	it.each([false, true])(
+		"keeps read/write checkpoints before an unknown exact writer=%s",
+		(unknown) => {
+			const opcodes = new CoreOpcodeRegistry();
+			for (const opcode of CORE_OPCODES)
+				opcodes.define(coreOpcodeRegistry.require(opcode));
+			opcodes.define({
+				opcode: "exchangeGlobal",
+				inputs: coreArity(1),
+				outputs: coreArity(1),
+				effects: { ...CORE_NO_EFFECTS, reads: ["global-slot"], writes: ["global-slot"] },
+				discardable: false,
+				attributeRelocations: [],
+				accesses: [
+					{ family: "global-slot", mode: "read", attributes: ["index"] },
+					{
+						family: "global-slot",
+						mode: "write",
+						attributes: ["index"],
+						valueOperand: 0,
+					},
+				],
+			});
+			opcodes.define({
+				opcode: "unknownGlobal",
+				inputs: coreArity(0),
+				outputs: coreArity(0),
+				effects: { ...CORE_NO_EFFECTS, writes: ["global-slot"] },
+				discardable: false,
+				attributeRelocations: [],
+				accesses: [{ family: "global-slot", mode: "write", attributes: ["index"] }],
+			});
+			const program = new CoreProgram(opcodes, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [first] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [second] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 2 },
+			});
+			for (const value of [first!, second!])
+				builder.appendInstruction(entry, "storeGlobal", [value], {
+					attributes: { index: 0 },
+				});
+			builder.appendInstruction(entry, "exchangeGlobal", [first!], {
+				attributes: { index: 0 },
+			});
+			const exchange = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index: 0 } });
+			const afterExchange = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.appendInstruction(entry, "storeGlobal", [second!], {
+				attributes: { index: 0 },
+			});
+			if (unknown)
+				builder.appendInstruction(entry, "unknownGlobal", [], {
+					attributes: { index: 0 },
+				});
+			builder.appendInstruction(entry, "loadGlobal", [], { attributes: { index: 0 } });
+			const final = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: first! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			const location = { kind: "global-slot", slot: 0 } as const;
+			expect(memory.valueForRead(exchange, location)).toBe(second);
+			expect(memory.valueForRead(afterExchange, location)).toBe(first);
+			expect(memory.valueForRead(final, location)).toBe(unknown ? undefined : second);
+			expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
+		},
+	);
+
+	it.each(["loop", "handler"] as const)(
+		"preserves reaching writes across a %s with compacted clobbers",
+		(flow) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const body = builder.createBlock(),
+				exit = builder.createBlock(
+					flow === "handler" ? [{ role: "exception", representation: "boxed" }] : [],
+				);
+			const [initial] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 2 },
+			});
+			builder.appendInstruction(entry, "storeGlobal", [initial!], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: body, arguments: [] },
+			});
+			builder.appendInstruction(body, "loadGlobal", [], { attributes: { index: 0 } });
+			const before = builder.bodyInstructionIds(body).at(-1)!;
+			for (let i = 0; i < 3; i++)
+				builder.appendInstruction(body, "call", [initial!, initial!]);
+			builder.appendInstruction(body, "storeGlobal", [replacement!], {
+				attributes: { index: 0 },
+			});
+			const [after] = builder.appendInstruction(body, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const afterInstruction = builder.bodyInstructionIds(body).at(-1)!;
+			if (flow === "loop")
+				builder.setTerminator(body, {
+					kind: "branch",
+					condition: builder.blockParameterValue(entry, 0),
+					consequent: { block: body, arguments: [] },
+					alternate: { block: exit, arguments: [] },
+				});
+			else {
+				builder.setHandler(body, exit, []);
+				builder.setTerminator(body, { kind: "return", value: after! });
+			}
+			const [loaded] = builder.appendInstruction(exit, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const final = builder.bodyInstructionIds(exit).at(-1)!;
+			builder.setTerminator(exit, { kind: "return", value: loaded! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			const location = { kind: "global-slot", slot: 0 } as const;
+			expect(memory.valueForRead(before, location)).toBe(
+				flow === "loop" ? undefined : initial,
+			);
+			expect(memory.valueForRead(afterInstruction, location)).toBe(replacement);
+			expect(memory.valueForRead(final, location)).toBe(
+				flow === "loop" ? replacement : undefined,
+			);
+			expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
+		},
+	);
+
 	it("includes refined element writes when the array domain is queried first", () => {
 		const registry = new CoreOpcodeRegistry();
 		for (const opcode of CORE_OPCODES) {
