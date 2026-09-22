@@ -26,7 +26,10 @@ import {
 	corePrimitiveOperatorEffectRefinement,
 	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
-import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
+import type {
+	CoreExactScalarKind,
+	CoreValueKindAnalysis,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -812,17 +815,20 @@ function scalarProducerInputsSupportRepresentation(
 function scalarCandidate(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
-	kind: CoreExactScalarKind | undefined,
+	kinds: CoreValueKindAnalysis,
 	edgeUses: Uint8Array,
 ): CoreRepresentation | undefined {
-	if (kind === undefined || fn.valueRepresentation(value) !== "boxed") return undefined;
-	const representation = scalarRepresentation(kind);
+	if (fn.valueRepresentation(value) !== "boxed" || kinds.scalarKind(value) === undefined)
+		return undefined;
 	if (
 		fn.kernel.valueDefinitionKind(value) !== 1 ||
 		!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) ||
 		!scalarConsumersOnly(fn, value, edgeUses)
 	)
 		return undefined;
+	const kind = kinds.exactScalar(value);
+	if (kind === undefined) return undefined;
+	const representation = scalarRepresentation(kind);
 	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 	if (!scalarProducerInputsSupportRepresentation(fn, definition, representation))
 		return undefined;
@@ -871,12 +877,7 @@ const materializeLocalScalars: CoreFunctionPass = {
 		for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
 			const value = coreValueId(valueIndex);
 			if (!fn.isValueLive(value)) continue;
-			const representation = scalarCandidate(
-				fn,
-				value,
-				kinds.exactScalar(value),
-				edgeUses,
-			);
+			const representation = scalarCandidate(fn, value, kinds, edgeUses);
 			if (representation !== undefined) candidates.push({ value, representation });
 		}
 		if (candidates.length === 0) return undefined;
@@ -1031,10 +1032,9 @@ const materializeFlowScalars: CoreFunctionPass = {
 				if (!scalarConsumer(fn, instruction)) continue;
 				const byFamily: Array<Array<CoreValueId> | undefined> = [];
 				const includeValue = (value: CoreValueId): void => {
-					const scalar = kinds.exactScalar(value);
+					const scalar = kinds.scalarKind(value);
 					if (scalar === undefined) return;
-					const family =
-						scalar === "int32" || scalar === "number" ? 0 : scalar === "boolean" ? 1 : 2;
+					const family = scalar === "number" ? 0 : scalar === "boolean" ? 1 : 2;
 					const values = byFamily[family] ?? [];
 					values.push(value);
 					byFamily[family] = values;
@@ -1072,44 +1072,54 @@ const materializeFlowScalars: CoreFunctionPass = {
 				component.push(value);
 				pending.push(...(neighbors.get(value) ?? []));
 			}
-			const exact = component.map((value) => kinds.exactScalar(value));
-			if (exact.some((kind) => kind === undefined)) continue;
-			const representation = flowScalarRepresentation(
-				exact as ReadonlyArray<CoreExactScalarKind>,
+			const candidates = component.filter(
+				(value) => fn.valueRepresentation(value) === "boxed",
 			);
-			if (representation === undefined) continue;
-			const componentValues = new Set(component);
+			if (
+				candidates.length === 0 ||
+				component.some((value) => kinds.scalarKind(value) === undefined)
+			)
+				continue;
 			const rejected = component.some((value) => {
-				const definitionKind = fn.kernel.valueDefinitionKind(value);
-				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-				if (definitionKind === 1 && !scalarProducer(fn, definition)) return true;
 				if (
-					definitionKind === 1 &&
-					!scalarProducerInputsSupportRepresentation(
-						fn,
-						definition,
-						representation,
-						componentValues,
-					)
+					fn.kernel.valueDefinitionKind(value) === 1 &&
+					!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value)))
 				)
 					return true;
-				let use = fn.kernel.valueFirstUse(value);
-				while (use >= 0) {
+				for (
+					let use = fn.kernel.valueFirstUse(value);
+					use >= 0;
+					use = fn.kernel.useNext(use)
+				) {
 					const instruction = fn.kernel.useInstruction(use);
 					if (
 						fn.instructionKind(instruction) === "operation" &&
 						!scalarConsumer(fn, instruction)
 					)
 						return true;
-					use = fn.kernel.useNext(use);
 				}
 				return false;
 			});
 			if (rejected) continue;
-			const candidates = component.filter(
-				(value) => fn.valueRepresentation(value) === "boxed",
+			const exact = component.map((value) => kinds.exactScalar(value));
+			const representation = flowScalarRepresentation(
+				exact as ReadonlyArray<CoreExactScalarKind>,
 			);
-			if (candidates.length === 0) continue;
+			if (representation === undefined) continue;
+			const componentValues = new Set(component);
+			if (
+				component.some(
+					(value) =>
+						fn.kernel.valueDefinitionKind(value) === 1 &&
+						!scalarProducerInputsSupportRepresentation(
+							fn,
+							coreInstructionId(fn.kernel.valueDefinitionOwner(value)),
+							representation,
+							componentValues,
+						),
+				)
+			)
+				continue;
 			conversions.push({ values: candidates, representation });
 			conversionCount += candidates.length;
 			// A flow component must change representation atomically.

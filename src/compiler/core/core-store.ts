@@ -746,6 +746,10 @@ export class CoreFunctionStore {
 		return { ...this.#versions };
 	}
 
+	get hasActiveEditor(): boolean {
+		return this.#activeEditor;
+	}
+
 	version(domain: CoreChangeDomain): number {
 		return this.#versions[domain];
 	}

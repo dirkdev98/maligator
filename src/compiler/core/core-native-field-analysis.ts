@@ -120,10 +120,8 @@ export function coreNumericFieldArgument(
 		fields.keys.some((key) => !layout.keys.includes(key)) ||
 		fields.keys.some(
 			(key) =>
-				!["number", "int32"].includes(
-					facts.valueKinds.exactScalar(layout.initialValues[layout.keys.indexOf(key)]!) ??
-						"",
-				),
+				facts.valueKinds.scalarKind(layout.initialValues[layout.keys.indexOf(key)]!) !==
+				"number",
 		)
 	)
 		return undefined;

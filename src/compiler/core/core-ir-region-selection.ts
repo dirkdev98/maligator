@@ -1601,10 +1601,8 @@ function directEntryOpportunities(
 								if (call.numericSortCallback !== undefined) return "f64";
 								const argument = site?.arguments?.[index];
 								const scalar =
-									argument === undefined ? undefined : kinds.exactScalar(argument);
-								return scalar === "int32" || scalar === "number"
-									? "f64"
-									: (scalar ?? "boxed");
+									argument === undefined ? undefined : kinds.scalarKind(argument);
+								return scalar === "number" ? "f64" : (scalar ?? "boxed");
 							},
 						);
 						const key = representations.join(",");

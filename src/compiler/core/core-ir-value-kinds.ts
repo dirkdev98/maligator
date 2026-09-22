@@ -38,6 +38,7 @@ import type {
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
+import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowValueKinds,
@@ -65,12 +66,20 @@ export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
 
 export interface CoreValueKindAnalysis {
+	readonly statistics: {
+		readonly integerQueries: number;
+		readonly integerValues: number;
+		readonly integerSnapshotBytes: number;
+	};
 	kindMask(value: CoreValueId): CompilerValueKindMask;
 	latticeMask(value: CoreValueId): CompilerValueKindMask;
+	scalarKind(value: CoreValueId): Exclude<CoreExactScalarKind, "int32"> | undefined;
 	exactScalar(value: CoreValueId): CoreExactScalarKind | undefined;
 }
 
 export interface CoreValueKindInputs {
+	readonly runOwner?: CoreOptimizationOwnerRunner;
+	readonly onIntegerWork?: (values: number) => void;
 	readonly parameterMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly receiverMask?: CompilerValueKindMask;
 	readonly operationResultValue?: (
@@ -679,12 +688,113 @@ function addOperationTransfer(
 	masks[output] = COMPILER_VALUE_KIND_TOP;
 }
 
+const INTEGER_PROOF_EXACT = -1;
+const INTEGER_PROOF_VISITING = -2;
+
+function valueKindSnapshot(
+	masks: Uint16Array,
+	integerRecipes: Int32Array,
+	joinInputs: Uint32Array,
+	runOwner?: CoreOptimizationOwnerRunner,
+	onIntegerWork?: (values: number) => void,
+): CoreValueKindAnalysis {
+	let integerQueries = 0,
+		integerValues = 0;
+	const mask = (value: CoreValueId) => masks[value] ?? 0;
+	const scalarKind = (
+		value: CoreValueId,
+	): Exclude<CoreExactScalarKind, "int32"> | undefined => {
+		const kind = mask(value);
+		if (kind === COMPILER_VALUE_KIND_NUMBER) return "number";
+		if (kind === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
+		if (kind === COMPILER_VALUE_KIND_STRING) return "string";
+		return undefined;
+	};
+	const proveInteger = (value: CoreValueId): boolean => {
+		const stack: Array<{
+			value: CoreValueId;
+			recipe: number;
+			next: number;
+			end: number;
+		}> = [];
+		const push = (value: CoreValueId) => {
+			const recipe = integerRecipes[value]!;
+			// Positive recipes forward one value; negative offsets address packed [count, ...inputs].
+			const offset = recipe > 0 ? 0 : -recipe - 3;
+			stack.push({
+				value,
+				recipe,
+				next: recipe > 0 ? 0 : offset + 1,
+				end: recipe > 0 ? 1 : offset + 1 + joinInputs[offset]!,
+			});
+			integerRecipes[value] = INTEGER_PROOF_VISITING;
+			integerValues++;
+		};
+		push(value);
+		while (stack.length > 0) {
+			const current = stack[stack.length - 1]!;
+			if (current.next === current.end) {
+				integerRecipes[current.value] = INTEGER_PROOF_EXACT;
+				stack.pop();
+				continue;
+			}
+			const input = (
+				current.recipe > 0 ? current.recipe - 1 : joinInputs[current.next]!
+			) as CoreValueId;
+			const recipe = integerRecipes[input] ?? 0;
+			if (recipe === INTEGER_PROOF_EXACT) {
+				current.next++;
+			} else if (recipe === 0 || recipe === INTEGER_PROOF_VISITING) {
+				// An unseeded cycle stays false in the least fixed point, even with integer entry edges.
+				integerRecipes[current.value] = 0;
+				stack.pop();
+			} else {
+				push(input);
+			}
+		}
+		return integerRecipes[value] === INTEGER_PROOF_EXACT;
+	};
+	return Object.freeze({
+		statistics: Object.freeze({
+			get integerQueries() {
+				return integerQueries;
+			},
+			get integerValues() {
+				return integerValues;
+			},
+			integerSnapshotBytes: integerRecipes.byteLength + joinInputs.byteLength,
+		}),
+		kindMask(value: CoreValueId) {
+			return mask(value) || COMPILER_VALUE_KIND_TOP;
+		},
+		latticeMask: mask,
+		scalarKind,
+		exactScalar(value: CoreValueId) {
+			const kind = scalarKind(value);
+			if (kind !== "number") return kind;
+			integerQueries++;
+			const recipe = integerRecipes[value]!;
+			if (recipe === INTEGER_PROOF_EXACT) return "int32";
+			if (recipe === 0) return "number";
+			const before = integerValues;
+			const exact =
+				runOwner === undefined
+					? proveInteger(value)
+					: runOwner(CORE_OPTIMIZATION_OWNER.localValueKinds, () => proveInteger(value));
+			onIntegerWork?.(integerValues - before);
+			return exact ? "int32" : "number";
+		},
+	});
+}
+
 export function analyzeCoreValueKinds(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	inputs?: CoreValueKindInputs,
 ): CoreValueKindAnalysis {
 	const masks = new Uint16Array(fn.valueCapacity);
+	const integerRecipes = new Int32Array(fn.valueCapacity);
+	const numericIntegerSeeds: Array<CoreValueId> = [];
 	const transfers: KindTransferBuffer = {
 		kinds: [],
 		outputs: [],
@@ -708,6 +818,8 @@ export function analyzeCoreValueKinds(
 			const row = parameterStart + index;
 			const parameter = fn.kernel.blockParameterValue(row);
 			const representation = representationKind(fn, parameter);
+			if (fn.valueRepresentation(parameter) === "i32")
+				integerRecipes[parameter] = INTEGER_PROOF_EXACT;
 			const formalIndex = formalParameters[parameter]!;
 			if (
 				representation !== undefined ||
@@ -742,6 +854,22 @@ export function analyzeCoreValueKinds(
 			for (let index = 0; index < resultCount; index++) {
 				const output = fn.kernel.resultAt(resultStart + index);
 				addOperationTransfer(transfers, masks, fn, instruction, output, inputs);
+				const opcode = fn.instructionOpcodeName(instruction);
+				const operator = fn.instructionAttributes(instruction).operator;
+				if (
+					fn.valueRepresentation(output) === "i32" ||
+					((opcode === "createNumber" || opcode === "createF64") &&
+						numberIsExactInt32(fn.instructionAttributes(instruction).value))
+				) {
+					integerRecipes[output] = INTEGER_PROOF_EXACT;
+				} else if (
+					(opcode === "unary" && operator === "~") ||
+					(opcode === "binary" &&
+						typeof operator === "string" &&
+						SIGNED_INT32_BINARY_OPERATORS.has(operator))
+				) {
+					numericIntegerSeeds.push(output);
+				}
 			}
 		}
 	}
@@ -836,99 +964,54 @@ export function analyzeCoreValueKinds(
 		masks[output] = next;
 		wakeDependents(output, queued, queue);
 	}
-	const exactInt32 = new Uint8Array(fn.valueCapacity);
-	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
-		const value = valueIndex as CoreValueId;
-		if (fn.kernel.valueLive(value) === 0) continue;
-		if (fn.valueRepresentation(value) === "i32") exactInt32[value] = 1;
-		if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
-		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (fn.instructionKind(definition) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(definition);
-		if (
-			(opcode === "createNumber" || opcode === "createF64") &&
-			numberIsExactInt32(fn.instructionAttributes(definition).value)
-		)
-			exactInt32[value] = 1;
-		const operator = fn.instructionAttributes(definition).operator;
-		if (
-			masks[value] === COMPILER_VALUE_KIND_NUMBER &&
-			((opcode === "unary" && operator === "~") ||
-				(opcode === "binary" &&
-					typeof operator === "string" &&
-					SIGNED_INT32_BINARY_OPERATORS.has(operator)))
-		)
-			exactInt32[value] = 1;
-	}
-	const exactQueue: Array<number> = [];
-	const exactQueued = new Uint8Array(transferOutputs.length);
+	const joinInputs: Array<number> = [];
+	for (const value of numericIntegerSeeds)
+		if (masks[value] === COMPILER_VALUE_KIND_NUMBER)
+			integerRecipes[value] = INTEGER_PROOF_EXACT;
 	for (let index = 0; index < transferOutputs.length; index++) {
-		const kind = transferKinds[index]!;
-		if (kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY) continue;
-		exactQueue.push(index);
-		exactQueued[index] = 1;
-	}
-	let exactCursor = 0;
-	while (exactCursor < exactQueue.length) {
-		const index = exactQueue[exactCursor++]!;
-		exactQueued[index] = 0;
 		const output = transferOutputs[index]! as CoreValueId;
-		const inputStart = transferInputStarts[index]!;
-		const inputCount = transferInputCounts[index]!;
-		let allInputsExact = inputCount > 0;
-		for (let offset = 0; offset < inputCount; offset++) {
-			const input = transferInputs[inputStart + offset]! as CoreValueId;
-			if (exactInt32[input] !== 0) continue;
-			allInputsExact = false;
-			break;
-		}
+		const kind = transferKinds[index]!;
 		if (
-			exactInt32[output] !== 0 ||
 			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
-			!allInputsExact
+			integerRecipes[output] === INTEGER_PROOF_EXACT ||
+			(kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY)
 		)
 			continue;
 		const definitionKind = fn.kernel.valueDefinitionKind(output);
-		const forwardsInteger =
-			definitionKind === 0 ||
-			(definitionKind === 1 &&
+		if (
+			definitionKind !== 0 &&
+			(definitionKind !== 1 ||
 				fn.instructionOpcodeName(
 					coreInstructionId(fn.kernel.valueDefinitionOwner(output)),
-				) === "move");
-		if (!forwardsInteger) continue;
-		exactInt32[output] = 1;
-		for (let dependency = dependentHeads[output]!; dependency >= 0; ) {
-			const transfer = dependentTransfers[dependency]!;
-			dependency = dependentNext[dependency]!;
-			const kind = transferKinds[transfer]!;
-			if (
-				exactQueued[transfer] !== 0 ||
-				(kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY)
-			)
-				continue;
-			exactQueued[transfer] = 1;
-			exactQueue.push(transfer);
+				) !== "move")
+		)
+			continue;
+		const start = transferInputStarts[index]!,
+			count = transferInputCounts[index]!;
+		if (count === 1) integerRecipes[output] = transferInputs[start]! + 1;
+		else if (count > 1) {
+			integerRecipes[output] = -joinInputs.length - 3;
+			joinInputs.push(count);
+			for (let offset = 0; offset < count; offset++)
+				joinInputs.push(transferInputs[start + offset]!);
 		}
 	}
-	const result: CoreValueKindAnalysis = {
-		kindMask(value) {
-			const valueMask = mask(value);
-			return valueMask === 0 ? COMPILER_VALUE_KIND_TOP : valueMask;
-		},
-		latticeMask(value) {
-			return mask(value);
-		},
-		exactScalar(value) {
-			const valueMask = mask(value) || COMPILER_VALUE_KIND_TOP;
-			if (valueMask === COMPILER_VALUE_KIND_NUMBER) {
-				return exactInt32[value] === 1 ? "int32" : "number";
-			}
-			if (valueMask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
-			if (valueMask === COMPILER_VALUE_KIND_STRING) return "string";
-			return undefined;
-		},
-	};
-	return Object.freeze(result);
+	// The returned snapshot retains no function, CFG, general transfers, or solver worklists.
+	return valueKindSnapshot(
+		masks,
+		integerRecipes,
+		Uint32Array.from(joinInputs),
+		inputs?.runOwner,
+		inputs?.onIntegerWork,
+	);
+}
+
+function integerWorkRecorder(
+	recordResult: ((result: unknown) => void) | undefined,
+): ((values: number) => void) | undefined {
+	return recordResult === undefined
+		? undefined
+		: (values) => recordResult({ integerValues: values });
 }
 
 export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKindAnalysis> =
@@ -938,7 +1021,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
 		functionDependencies: ["body", "cfg", "representations"],
 		contextIdentity: (context) => context,
-		compute({ program, context, request, get }) {
+		compute({ program, context, request, get, runOwner, recordResult }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
@@ -955,7 +1038,11 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					: undefined;
 			};
 			if (context.data.singleAssignmentGlobalSlots.length === 0) {
-				return analyzeCoreValueKinds(fn, cfg, { operationResultMask });
+				return analyzeCoreValueKinds(fn, cfg, {
+					operationResultMask,
+					runOwner,
+					onIntegerWork: integerWorkRecorder(recordResult),
+				});
 			}
 			const closedGlobals = coreClosedGlobalSlotMembership(context);
 			const stores = new Map<
@@ -1049,6 +1136,8 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			return analyzeCoreValueKinds(fn, cfg, {
 				operationResultMask,
 				operationResultValue,
+				runOwner,
+				onIntegerWork: integerWorkRecorder(recordResult),
 			});
 		},
 	};

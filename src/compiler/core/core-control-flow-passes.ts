@@ -1149,8 +1149,8 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 		);
 		const numeric = (value: CoreValueId): boolean => {
 			if (inductionValues.has(value)) return true;
-			const scalar = kinds.exactScalar(value);
-			return scalar === "number" || scalar === "int32";
+			const scalar = kinds.scalarKind(value);
+			return scalar === "number";
 		};
 		const neighbors = Array.from(
 			{ length: fn.valueCapacity },

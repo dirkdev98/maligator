@@ -149,6 +149,8 @@ export interface CoreCompilerWorkCounters {
 	readonly provenanceRebuilds: number;
 	readonly provenanceLayoutsMaterialized: number;
 	readonly provenanceEscapeChecks: number;
+	readonly integerProofValues: number;
+	readonly valueClassContainmentChecks: number;
 	readonly memoryAccesses: number;
 	readonly memoryInstructionsIndexed: number;
 	readonly memoryHeapAccessesResolved: number;
@@ -301,6 +303,8 @@ const COUNTER_KEYS = [
 	"provenanceRebuilds",
 	"provenanceLayoutsMaterialized",
 	"provenanceEscapeChecks",
+	"integerProofValues",
+	"valueClassContainmentChecks",
 	"memoryAccesses",
 	"memoryInstructionsIndexed",
 	"memoryHeapAccessesResolved",
@@ -872,6 +876,15 @@ export class CoreOptimizationReportBuilder {
 			const kind = (value as { readonly provenanceWork?: string }).provenanceWork;
 			if (kind === "layout") this.increment("provenanceLayoutsMaterialized");
 			else if (kind === "escape") this.increment("provenanceEscapeChecks");
+			if ((value as { readonly valueClassContainment?: boolean }).valueClassContainment)
+				this.increment("valueClassContainmentChecks");
+			return;
+		}
+		if (analysis === "local-value-kinds") {
+			this.increment(
+				"integerProofValues",
+				(value as { readonly integerValues?: number }).integerValues ?? 0,
+			);
 			return;
 		}
 		if (analysis !== "local-memory-versions") return;

@@ -20,6 +20,7 @@ import {
 	coreInstructionInputsHash,
 } from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
 	CoreMemoryValueSources,
@@ -50,6 +51,7 @@ import {
 	coreCollectionReceiverBrandForOperation,
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
+import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
@@ -58,6 +60,7 @@ import type {
 	CoreEdge,
 	CoreFactId,
 	CoreInstructionEffects,
+	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreRepresentation,
 	CoreTerminatorPayload,
@@ -824,7 +827,7 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 			if (mode === "write") {
 				kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 				const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
-					provenance.cannotBeHeldWeakly(value) || kinds!.exactScalar(value) !== undefined;
+					provenance.cannotBeHeldWeakly(value) || kinds!.scalarKind(value) !== undefined;
 				const initial =
 					exact.layout.kind === "named-slots"
 						? exact.layout.initialValues[exact.slot]
@@ -1035,7 +1038,12 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
-		let editor: CoreEditor | undefined;
+		const plans: Array<{
+			instruction: CoreInstructionId;
+			operation: string;
+			exact: CoreExactCollectionBrand;
+			effects: CoreInstructionEffects;
+		}> = [];
 		for (const instruction of fn.instructionIds()) {
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
@@ -1057,7 +1065,11 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 			if (exact === undefined || exact !== expected) continue;
 			const effects = coreExactCollectionBuiltinEffects(fn, instruction, exact);
 			if (effects === undefined) continue;
-			editor ??= CoreEditor.open(program, item.function);
+			plans.push({ instruction, operation, exact, effects });
+		}
+		if (plans.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		for (const { instruction, operation, exact, effects } of plans) {
 			const proof = editor.addFact({
 				kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 				value: operation,
@@ -1084,7 +1096,7 @@ const refineExactCollectionAccesses: CoreFunctionPass = {
 				},
 			);
 		}
-		return editor?.commit();
+		return editor.commit();
 	},
 };
 
@@ -1111,8 +1123,13 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const classes = facts.valueClasses;
-		const loops = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
-		let editor: CoreEditor | undefined;
+		let loops: CoreLoopInductionAnalysis | undefined;
+		const plans: Array<{
+			instruction: CoreInstructionId;
+			opcode: string;
+			attributes: CoreInstructionAttributes;
+			inBounds: boolean;
+		}> = [];
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
@@ -1141,7 +1158,13 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 			if (exact === undefined && !containedLength) continue;
 			const inBounds =
 				containedAccess !== undefined &&
-				coreContainedTypedArrayIndexInBounds(program, fn, facts, loops, instruction);
+				coreContainedTypedArrayIndexInBounds(
+					program,
+					fn,
+					facts,
+					(loops ??= context.analysis(CORE_LOOP_INDUCTION_ANALYSIS)),
+					instruction,
+				);
 			if (
 				inBounds === (attributes.containedFixedTypedArrayInBounds === true) &&
 				exact === attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE] &&
@@ -1150,27 +1173,36 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 					(attributes[CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE] === true)
 			)
 				continue;
-			editor ??= CoreEditor.open(program, item.function);
+			plans.push({
+				instruction,
+				opcode,
+				inBounds,
+				attributes: {
+					...attributes,
+					containedFixedTypedArrayInBounds: inBounds,
+					...(exact === undefined
+						? {}
+						: { [CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact }),
+					...(containedAccess === undefined
+						? {}
+						: {
+								[CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE]: containedAccess,
+							}),
+					...(containedLength
+						? { [CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE]: true }
+						: {}),
+				},
+			});
+		}
+		if (plans.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		for (const { instruction, opcode, inBounds, attributes } of plans) {
 			editor.replaceInstruction(
 				instruction,
 				opcode,
 				materializeInstructionOperands(fn, instruction),
 				{
-					attributes: {
-						...attributes,
-						containedFixedTypedArrayInBounds: inBounds,
-						...(exact === undefined
-							? {}
-							: { [CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]: exact }),
-						...(containedAccess === undefined
-							? {}
-							: {
-									[CORE_CONTAINED_FIXED_TYPED_ARRAY_KIND_ATTRIBUTE]: containedAccess,
-								}),
-						...(containedLength
-							? { [CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE]: true }
-							: {}),
-					},
+					attributes,
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
@@ -1178,7 +1210,7 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 			if (inBounds && opcode === "loadProperty")
 				editor.setValueRepresentation(instructionResultAt(fn, instruction, 0)!, "f64");
 		}
-		return editor?.commit();
+		return editor.commit();
 	},
 };
 
@@ -2175,17 +2207,17 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 					if (receiver.kind !== "known" || receiver.brand !== "undefined") continue;
 					scalarStart = 1;
 				}
-				const payload = kinds.exactScalar(fn.kernel.operandAt(operandStart + 1));
+				const payload = kinds.scalarKind(fn.kernel.operandAt(operandStart + 1));
 				if (
 					payload === undefined ||
-					(operation === "Number" && payload !== "number" && payload !== "int32") ||
+					(operation === "Number" && payload !== "number") ||
 					(operation === "String" && payload !== "string")
 				)
 					continue;
 			}
 			// Keeping object or symbol fields live longer can change weak-reference observations.
 			for (let index = scalarStart; index < operandCount; index++) {
-				if (kinds.exactScalar(fn.kernel.operandAt(operandStart + index)) === undefined) {
+				if (kinds.scalarKind(fn.kernel.operandAt(operandStart + index)) === undefined) {
 					eligible = false;
 					break;
 				}
@@ -2241,9 +2273,8 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		const lifetimeIndependent = (value: CoreValueId): boolean => {
 			if (
 				provenance().cannotBeHeldWeakly(value) ||
-				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
-					value,
-				) !== undefined
+				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(value) !==
+					undefined
 			)
 				return true;
 			const root = facts().roots.get(value) ?? value;

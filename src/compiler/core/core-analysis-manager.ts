@@ -85,6 +85,22 @@ function sortedFunctions(
 	return [...new Set(functions)].sort((left, right) => left - right);
 }
 
+// Deferred results must not retain the manager's analysis cache through instrumentation callbacks.
+function analysisInstrumentation(
+	report: CoreOptimizationReportBuilder,
+	key: string,
+): Pick<CoreAnalysisComputation, "runOwner" | "recordResult"> {
+	return {
+		runOwner: (owner, run) => {
+			report.recordOwnerWork(owner, 1);
+			return report.measureOwner(owner, run);
+		},
+		...(report.collectsCounters
+			? { recordResult: (result: unknown) => report.recordAnalysisResult(key, result) }
+			: {}),
+	};
+}
+
 export class CoreAnalysisManager {
 	readonly #program: CoreProgram;
 	readonly #generation: number;
@@ -157,17 +173,8 @@ export class CoreAnalysisManager {
 					request,
 					programFlow: this.#programFlow,
 					scratch: this.#scratch,
-					runOwner: (owner, run) => {
-						this.#report.recordOwnerWork(owner, 1);
-						return this.#report.measureOwner(owner, run);
-					},
+					...analysisInstrumentation(this.#report, definition.key),
 					get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
-					...(this.#report.collectsCounters
-						? {
-								recordResult: (result: unknown) =>
-									this.#report.recordAnalysisResult(definition.key, result),
-							}
-						: {}),
 					...(cached === undefined ? {} : { previous: cached.value }),
 				});
 			value =

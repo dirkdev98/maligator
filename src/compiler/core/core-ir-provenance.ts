@@ -801,8 +801,20 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 					return (valueClassAnalysis ??= runOwner(
 						CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
 						() =>
-							analyzeCoreValueClasses(program, functionId, context, roots, index(), () =>
-								get(CORE_LOOP_INDUCTION_ANALYSIS, request),
+							analyzeCoreValueClasses(
+								program,
+								functionId,
+								context,
+								roots,
+								index,
+								() => get(CORE_LOOP_INDUCTION_ANALYSIS, request),
+								{
+									runOwner,
+									onContainment:
+										recordResult === undefined
+											? undefined
+											: () => recordResult({ valueClassContainment: true }),
+								},
 							),
 					));
 				},

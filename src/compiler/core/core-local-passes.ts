@@ -771,14 +771,14 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			if (edgeUses[value] !== 0) return false;
 			const scalar = (kinds ??= context.analysis(
 				CORE_LOCAL_VALUE_KIND_ANALYSIS,
-			)).exactScalar(value);
+			)).scalarKind(value);
 			const definition = definingInstruction(fn, value);
 			const operation =
 				definition === undefined
 					? undefined
 					: fn.instructionAttributes(definition).operation;
 			return (
-				(scalar === "int32" || scalar === "number") &&
+				scalar === "number" &&
 				definition !== undefined &&
 				(["createNumber", "createF64"].includes(fn.instructionOpcodeName(definition)) ||
 					(fn.instructionOpcodeName(definition) === "unary" &&
@@ -831,7 +831,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						definition !== undefined &&
 						fn.instructionOpcodeName(definition) === "binary" &&
 						fn.instructionAttributes(definition).operator === "+" &&
-						(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
+						(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(
 							receiver,
 						) === "string"
 					) {
@@ -973,7 +973,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 							(candidate) => !globalCall || candidate.owner === "globalThis",
 						);
 			const booleanReceiver = () =>
-				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).exactScalar(
+				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(
 					receiverRoot,
 				) === "boolean";
 			const ownerMatches = candidates.filter((candidate) => {
@@ -1444,8 +1444,8 @@ const rewriteNumericIdentities: CoreFunctionPass = {
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const numeric = (value: CoreValueId): boolean => {
-			const kind = kinds.exactScalar(value);
-			return kind === "number" || kind === "int32";
+			const kind = kinds.scalarKind(value);
+			return kind === "number";
 		};
 		let editor: CoreEditor | undefined;
 		const instructionCapacity = fn.instructionCapacity;

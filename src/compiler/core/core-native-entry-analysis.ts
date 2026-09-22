@@ -106,8 +106,8 @@ export function analyzeCoreNativeEntry(
 		Array.from({ length: fn.valueCapacity }, (_, index): CorePlanRepresentation => {
 			const value = index as CoreValueId;
 			if (fn.kernel.valueLive(value) === 0) return "boxed";
-			const scalar = kinds.exactScalar(value);
-			return scalar === "int32" || scalar === "number" ? "f64" : (scalar ?? "boxed");
+			const scalar = kinds.scalarKind(value);
+			return scalar === "number" ? "f64" : (scalar ?? "boxed");
 		}),
 	);
 	const returns = [...fn.blockIds()].flatMap((block) => {
