@@ -265,6 +265,18 @@ iterator cursor is not, by itself, permission to delete its language object.
       retaining verification of missing, cyclic and non-dominating uses.
 - [x] Persist completed scalar/structural cleanup with strict budget completion and
       version witnesses; skip unchanged imports' initial construction cleanup.
+- [ ] Make cross-call value-kind propagation consumer-driven: collect foldable
+      observations first and request global types only when their unresolved inputs
+      depend on call results, parameters or receivers. Preserve local folds and
+      conservative fallback through moves, block parameters and later edits.
+- [ ] Transfer already-dense function storage across construction generations without
+      copying its columns. Preserve retired-handle and iterator failures, kernel
+      ownership, version accounting and compaction for functions with holes.
+- [ ] Design and measure explicit optimized-only cold-cache capture, skipping unused
+      canonical capture, validation and encoding. Preserve D020/D023's current
+      canonical publication and load-only access contracts until an append-only
+      decision defines variant identities and reconstruction from pinned inputs.
+      Keep reconstruction explicit and measure cold cost separately from warm reuse.
 - [ ] Finish ADR stage 4: split function bodies for demand loading and
       complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,

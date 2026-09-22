@@ -996,3 +996,34 @@ Moving cleanup before serialization reduces the selected artifact and avoids its
 repeated initial scans. It increases cold recipe work; cold and warm results must be
 reported separately. The earlier recipes remain historical decisions only, with
 their identities invalidated rather than maintained as parallel readers.
+
+## D024 — 2026-09-22 — Discover type-proof consumers before solving global types
+
+**Status:** Planned; not implemented or accepted as a performance improvement.
+**Refines:** Demand-driven analysis admission in stages 2–4.
+
+Cross-call folding currently requests program value kinds before discovering which
+instructions can consume them, and can refresh them only to decide whether another
+wave should run. Split observation discovery from proof evaluation. Discover eligible
+`typeof`, boolean-negation and strict-equality observations without first solving
+global value kinds. Preserve folds already justified by function-local information.
+
+For unresolved observations, trace value dependencies through moves, block parameters
+and relevant operations. Request global propagation when a dependency reaches an
+input that it can refine: formal parameters, receivers or script-call results.
+Fixed-result operations and opaque loads do not become global proof demands merely
+because they occur in a function with calls. Unclassified dependencies retain the
+existing conservative path. The first implementation should gate the existing full
+solver; narrowing its transfer set is a separate change with a separate contract.
+
+Demand must be reconsidered after edits that introduce or change observations or
+their dependencies. Use the existing function-version and analysis invalidation
+mechanisms. A continuation check must not request global value kinds when no pending
+consumer needs them. Profile heat and remaining budget can select work, but neither
+supplies a semantic fact or permits dropping a useful local fold.
+
+Acceptance covers no-observation functions, locally decidable observations, opaque
+loads, and global folds through parameters, receivers, calls, moves and block
+parameters. Edits that introduce demand must match a fresh analysis run. Measure
+actual avoided solver evaluations and matched output alongside end-to-end compile
+time; time attributed to the current solver is an upper bound, not a promised gain.
