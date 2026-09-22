@@ -17,6 +17,7 @@ import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
+import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
@@ -33,7 +34,15 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
+import {
+	analyzeCoreNativeEntry,
+	coreArgumentObservation,
+} from "./core-native-entry-analysis.ts";
+import {
+	coreFieldEntryHasNumericComputations,
+	coreNumericFieldArgument,
+	coreReadOnlyNumericParameterFields,
+} from "./core-native-field-analysis.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
@@ -1021,6 +1030,90 @@ function guardedConstructorConsumerDuplication(
 				(plan.method === undefined ? 0 : 3);
 }
 
+function nativeFieldEntryMethodEligible(fn: CoreFunctionStore, name: number): boolean {
+	return (
+		fn.parameterCount === 1 &&
+		!fn.metadata.hasPrototype &&
+		!fn.metadata.isClassConstructor &&
+		!fn.metadata.isDerivedConstructor &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		fn.metadata.nameStringIndex === name
+	);
+}
+
+function prefersNumericFieldEntryDispatch(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	callerId: CoreFunctionId,
+	call: CoreInstructionId,
+	callee: CoreValueId,
+	arguments_: ReadonlyArray<CoreValueId> | undefined,
+	targets: ReadonlyArray<CoreFunctionId>,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
+): boolean {
+	if (
+		arguments_?.length !== 1 ||
+		program.function(callerId).kernel.valueDefinitionKind(callee) !== 1
+	)
+		return false;
+	const caller = program.function(callerId);
+	const load = coreInstructionId(caller.kernel.valueDefinitionOwner(callee));
+	if (caller.instructionOpcodeName(load) !== "loadPropertyStatic") return false;
+	const name = caller.instructionAttributes(load).stringIndex;
+	if (typeof name !== "number") return false;
+	let nominees = 0;
+	for (const functionId of liveFunctions) {
+		if (nativeFieldEntryMethodEligible(program.function(functionId), name)) nominees++;
+	}
+	if (nominees === 0 || nominees > 4) return false;
+	const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+		scope: "function",
+		function: callerId,
+	});
+	return targets.some((target) => {
+		const targetFn = program.function(target);
+		if (!nativeFieldEntryMethodEligible(targetFn, name)) return false;
+		const observation = coreArgumentObservation(targetFn);
+		if (
+			observation.kind === "general" ||
+			observation.readsCount ||
+			observation.indices.length > 0 ||
+			observation.restStarts.length > 0
+		)
+			return false;
+		const cfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: target,
+			})
+			.exceptional();
+		const fields = coreReadOnlyNumericParameterFields(targetFn, cfg);
+		if (fields === undefined) return false;
+		const fieldObject = coreNumericFieldArgument(
+			caller,
+			facts,
+			call,
+			arguments_[0]!,
+			fields,
+		);
+		if (fieldObject === undefined) return false;
+		const variant = analyzeCoreNativeEntry(
+			targetFn,
+			cfg,
+			["boxed"],
+			undefined,
+			[{ caller: callerId, instruction: call, guarded: true, fieldObject }],
+			fields,
+		);
+		return coreFieldEntryHasNumericComputations(
+			targetFn,
+			variant.valueRepresentations,
+			variant.operatorInputs,
+		);
+	});
+}
+
 function offerFunctionCandidates(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -1028,6 +1121,7 @@ function offerFunctionCandidates(
 	service: CoreTransformCandidateService,
 	functionId: CoreFunctionId,
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1066,18 +1160,29 @@ function offerFunctionCandidates(
 			site.targets.functions.length > 1
 				? site.targets.functions
 				: undefined;
-		const openHintTargets =
+		const hintedTargets =
 			invocation === "call" &&
 			inLoop &&
 			site.targets.functions.length === 0 &&
 			coreCalleeTargetsAreOpen(site.targets)
 				? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
 				: undefined;
-		const finiteTargets =
-			closedFiniteTargets ??
-			(openHintTargets !== undefined && openHintTargets.length > 1
-				? openHintTargets
-				: undefined);
+		const openHintTargets =
+			hintedTargets !== undefined &&
+			hintedTargets.length > 1 &&
+			!prefersNumericFieldEntryDispatch(
+				program,
+				analyses,
+				functionId,
+				site.instruction,
+				site.callee,
+				site.arguments,
+				hintedTargets,
+				liveFunctions,
+			)
+				? hintedTargets
+				: undefined;
+		const finiteTargets = closedFiniteTargets ?? openHintTargets;
 		if (finiteTargets !== undefined) {
 			const targetSetKind = closedFiniteTargets === undefined ? "open-hints" : "closed";
 			const inlines = finiteTargets.map((target) =>
@@ -1231,6 +1336,7 @@ export function discoverCoreCrossCallCandidates(
 	analyses: CoreAnalysisManager,
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
@@ -1242,6 +1348,7 @@ export function discoverCoreCrossCallCandidates(
 			service,
 			functionId,
 			instanceMethodHints,
+			liveFunctions,
 		);
 	}
 }
@@ -2223,7 +2330,13 @@ export function runCoreCrossCallTransforms(
 			!(wave === 0 && specialized.length > 0)
 		)
 			break;
-		discoverCoreCrossCallCandidates(program, analyses, summaries, service);
+		discoverCoreCrossCallCandidates(
+			program,
+			analyses,
+			summaries,
+			service,
+			new Set(flow.reachability.liveFunctions),
+		);
 		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);

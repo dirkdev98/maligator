@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -64,8 +63,15 @@ describe("numeric own-field native entry contracts", () => {
 		const image = compactProgramImageConstants(
 			compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(
-					readFileSync("bench/javascript.mjs", "utf8"),
-					"field-benchmark.mjs",
+					`
+					class StandardPricing { quote(order) { return order.net + 7; } }
+					class VolumePricing { quote(order) { return order.net - Math.floor(order.net / 12); } }
+					class PriorityPricing { quote(order) { return order.net + Math.max(15, order.quantity * 3); } }
+					const rules = [new StandardPricing(), new VolumePricing(), new PriorityPricing()];
+					for (let index = 0; index < 9; index++)
+						globalThis.result = rules[index % rules.length].quote({ net: (index * 47) % 800, quantity: (index % 9) + 1 });
+				`,
+					"field-entry-contract.js",
 				),
 				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 			),
@@ -78,6 +84,9 @@ describe("numeric own-field native entry contracts", () => {
 		expect(caller.fieldCalls).toHaveLength(1);
 		const call = caller.fieldCalls![0]!;
 		expect(call.entries).toHaveLength(3);
+		expect(
+			decoded.runtime.functions[caller.functionIndex]!.instructions[call.allocationIp],
+		).toMatchObject({ opcode: "CREATE_OBJECT_SHAPED", count: 2 });
 		const entries = new Map(
 			call.entries.map((selected) => [
 				directCompiledEntryKey(selected.functionIndex, selected.entryId),
@@ -150,5 +159,26 @@ describe("numeric own-field native entry contracts", () => {
 			},
 		};
 		expect(() => serializeCompilerArtifact(malformed)).toThrow(/field/);
+	});
+
+	it("retains eligible arithmetic entries when mutable Math methods stay generic", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Standard { quote(order) { return order.net + 7; } }
+				class Volume { quote(order) { return order.net - Math.floor(order.net / 12); } }
+				const rules = [new Standard(), new Volume()];
+				for (let index = 0; index < 8; index++)
+					globalThis.result = rules[index & 1].quote({ net: index * 7 });`,
+				"mutable-partial-field-entry.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials: "mutable" } }),
+				),
+			},
+		);
+		const calls = image.native.functions.flatMap((fn) => fn.fieldCalls ?? []);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.entries).toHaveLength(1);
 	});
 });

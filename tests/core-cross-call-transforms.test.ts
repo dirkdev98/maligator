@@ -1339,6 +1339,73 @@ describe("bounded Core cross-call transforms", () => {
 		expect(cold.some(({ opcode }) => opcode === "call")).toBe(true);
 	});
 
+	it.each([
+		[
+			"a reused record",
+			"total += rules[index % rules.length].quote(order); total += order.net;",
+			"",
+			"",
+		],
+		[
+			"a representation-ineligible target",
+			"total += rules[index % rules.length].quote(order);",
+			"",
+			"return Math.abs(order.net > 0);",
+		],
+		[
+			"more than four live same-name methods",
+			"total += rules[index % rules.length].quote(order);",
+			"globalThis.extraQuotes = [{ quote(order) { return order.net + 4; } }, { quote(order) { return order.net + 5; } }];",
+			"",
+		],
+	] as const)(
+		"retains bounded open-hint dispatch for %s",
+		(_name, loopBody, extra, methodBody) => {
+			let optimized: CoreProgram | undefined;
+			const body = methodBody || "return order.net + 1;";
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`class First { quote(order) { ${body} } }
+					class Second { quote(order) { ${body} } }
+					class Third { quote(order) { ${body} } }
+					${extra}
+					function run(rules, count) {
+						let total = 0;
+						for (let index = 0; index < count; index++) {
+							const order = { net: index + 1, quantity: index + 2 };
+							${loopBody}
+						}
+						return total;
+					}
+					run([new First(), new Second(), new Third()], 9);`,
+					"core-open-hint-field-entry-control.js",
+				),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({
+							engine: { primordials: "locked", realms: false },
+						}),
+					),
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				},
+			);
+
+			const operations = coreOperations(coreFunctionNamed(optimized!, "run")!);
+			expect(
+				operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+			).toHaveLength(3);
+			expect(
+				operations.some(
+					({ opcode, attributes }) =>
+						opcode === "call" &&
+						attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+				),
+			).toBe(true);
+		},
+	);
+
 	it("plans every finite target installed through a nested closure", () => {
 		let optimized: CoreProgram | undefined;
 		let plan: CoreOptimizationPlan | undefined;
