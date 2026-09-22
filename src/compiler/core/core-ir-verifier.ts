@@ -421,6 +421,15 @@ function verifyInstructionRows(
 			}
 			const attributes = fn.instructionAttributes(instruction);
 			if (
+				attributes.exactArrayLength !== undefined &&
+				(descriptor.opcode !== "loadPropertyStatic" ||
+					attributes.exactArrayLength !== true ||
+					String.fromCharCode(
+						...(program.stringConstants[attributes.stringIndex as number] ?? []),
+					) !== "length")
+			)
+				fail("Invalid exact Array length hint");
+			if (
 				attributes.primitiveStringLength !== undefined &&
 				(descriptor.opcode !== "loadPropertyStatic" ||
 					attributes.primitiveStringLength !== true ||

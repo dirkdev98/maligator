@@ -628,12 +628,19 @@ const hoistLoopInvariants: CoreFunctionPass = {
 				array.lengthLoads.map((instruction) => [instruction, array] as const),
 			),
 		);
+		const lengthProofs = [...privateArrayByLengthLoad.keys()]
+			.filter(
+				(instruction) => fn.instructionAttributes(instruction).exactArrayLength !== true,
+			)
+			.slice(0, context.remainingEdits);
+		const moveBudget = context.remainingEdits - lengthProofs.length;
 		const moves: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly preheader: CoreBlockId;
 		}> = [];
 		const selected = new Set<CoreInstructionId>();
 		for (const loop of [...cfg.loops].sort((left, right) => right.depth - left.depth)) {
+			if (moves.length >= moveBudget) break;
 			if (!loop.canonical || loop.preheader === undefined) continue;
 			const loopWrites = summarizeLoopWrites(fn, loop.blocks);
 			for (const block of loop.blocks) {
@@ -685,14 +692,29 @@ const hoistLoopInvariants: CoreFunctionPass = {
 						continue;
 					moves.push({ instruction, preheader: loop.preheader });
 					selected.add(instruction);
-					if (moves.length >= context.remainingEdits) break;
+					if (moves.length >= moveBudget) break;
 				}
-				if (moves.length >= context.remainingEdits) break;
+				if (moves.length >= moveBudget) break;
 			}
-			if (moves.length >= context.remainingEdits) break;
+			if (moves.length >= moveBudget) break;
 		}
-		if (moves.length === 0) return undefined;
+		if (moves.length === 0 && lengthProofs.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
+		for (const instruction of lengthProofs) {
+			editor.replaceInstruction(
+				instruction,
+				"loadPropertyStatic",
+				[instructionOperand(fn, instruction, 0)!],
+				{
+					attributes: {
+						...fn.instructionAttributes(instruction),
+						exactArrayLength: true,
+					},
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: fn.instructionEffectRefinement(instruction),
+				},
+			);
+		}
 		for (const { instruction, preheader } of moves) {
 			editor.moveInstruction(instruction, preheader);
 		}

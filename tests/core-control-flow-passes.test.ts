@@ -13,6 +13,7 @@ import { coreCanonicalValueRoots } from "../src/compiler/core/core-ir-control-fl
 import { analyzeCoreLocalExceptionFlows } from "../src/compiler/core/core-ir-exception-flow.ts";
 import { analyzeCoreLoopInductions } from "../src/compiler/core/core-ir-loops.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { analyzeCoreValueKinds } from "../src/compiler/core/core-ir-value-kinds.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -31,6 +32,9 @@ import {
 	compilerProgramFactsFromConfig,
 	conservativeCompilerProgramFacts,
 } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreInstructionResults,
@@ -1101,10 +1105,13 @@ describe("Core control-flow analyses and passes", () => {
 		expect(loop!.blocks.has(entry)).toBe(false);
 	});
 
-	it("hoists the stable length of a private exact Array.from result", () => {
-		const program = optimizeSource(`
+	it.each(["", 'values[0] = "x";', "values[0] = { value: 3 };"])(
+		"hoists a private Array.from length independently of stored element types: %s",
+		(store) => {
+			const program = optimizeSource(`
 			function denseFactoryTraversal(scale) {
 				const values = Array.from({ length: 64 }, (_, index) => ({ value: index }));
+				${store}
 				let checksum = 0;
 				for (let round = 0; round < scale; round++) {
 					for (let index = 0; index < values.length; index++) checksum += values[index].value;
@@ -1113,10 +1120,11 @@ describe("Core control-flow analyses and passes", () => {
 			}
 			globalThis.result = denseFactoryTraversal(2);
 		`);
-		const { fn, load } = sourceLengthLoad(program, "denseFactoryTraversal");
-		const cfg = buildCoreControlFlow(program, fn.id);
-		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
-	});
+			const { fn, load } = sourceLengthLoad(program, "denseFactoryTraversal");
+			const cfg = buildCoreControlFlow(program, fn.id);
+			expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
+		},
+	);
 
 	it("hoists the stable length of a private array through a same-root alias", () => {
 		const program = optimizeSource(`
@@ -1132,6 +1140,43 @@ describe("Core control-flow analyses and passes", () => {
 		const { fn, load } = sourceLengthLoad(program, "arrayTraversal");
 		const cfg = buildCoreControlFlow(program, fn.id);
 		expect(cfg.loops.every((loop) => !loop.blocks.has(load.block))).toBe(true);
+	});
+
+	it("carries a proven array length through numeric analysis and native lowering", () => {
+		const { compilation } = optimizeCore(
+			lowerSemanticProgramToCore(
+				analyzeSourceAndRunSemanticAnalysis(
+					`
+					function arrayLength(scale) {
+						const values = Array.from({ length: 64 }, (_, index) => index);
+						values[0] = "x";
+						let checksum = 0;
+						for (let round = 0; round < scale; round++) {
+							for (let index = 0; index < values.length; index++) checksum += index;
+						}
+						return checksum;
+					}
+					globalThis.result = arrayLength(globalThis.scale);
+				`,
+					"array-length-proof.js",
+				),
+				{ facts: lockedArrayContext.facts },
+			),
+			{ verification: "per-pass" },
+		);
+		const { fn, load } = sourceLengthLoad(compilation.program, "arrayLength");
+		const cfg = buildCoreControlFlow(compilation.program, fn.id);
+		expect(analyzeCoreValueKinds(fn, cfg).kindMask(load.outputs[0]!)).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+		const image = lowerExecutionToProgramImage(
+			lowerCoreCompilationToExecution(compilation),
+		);
+		expect(
+			image.native.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((plan) => plan?.kind === "exact-array-length"),
+		).toHaveLength(1);
 	});
 
 	it("retains a private array length load when a mixed-root alias can shrink it", () => {

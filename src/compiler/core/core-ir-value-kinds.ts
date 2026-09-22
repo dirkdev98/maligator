@@ -260,8 +260,13 @@ function privateArrayUses(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	seeds: ReadonlyArray<CorePrivateArraySeed>,
-	numberValue: (value: CoreValueId) => boolean = (value) => isNumberValue(fn, value),
+	options: {
+		readonly numberValue?: (value: CoreValueId) => boolean;
+		readonly contents?: "numeric" | "unknown";
+	} = {},
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
+	if (seeds.length === 0) return [];
+	const numberValue = options.numberValue ?? ((value) => isNumberValue(fn, value));
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const candidates = new Map<
@@ -353,7 +358,8 @@ function privateArrayUses(
 				opcode === "storeProperty" &&
 				operandCount === 3 &&
 				numberValue(fn.kernel.operandAt(operandStart + 1)) &&
-				numberValue(fn.kernel.operandAt(operandStart + 2))
+				(options.contents === "unknown" ||
+					numberValue(fn.kernel.operandAt(operandStart + 2)))
 			) {
 				candidate.elementStores.push(instruction);
 				continue;
@@ -463,10 +469,16 @@ export function corePrivateArrayLengthCandidates(
 	context: CoreCompilationContext,
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	if (!privateArrayPolicyIsLocked(context)) return [];
-	return privateArrayUses(program, fn, cfg, [
-		...privateNumericArraySeeds(fn),
-		...privateArrayFromSeeds(program, fn, cfg, context),
-	]);
+	return privateArrayUses(
+		program,
+		fn,
+		cfg,
+		[
+			...privateNumericArraySeeds(fn),
+			...privateArrayFromSeeds(program, fn, cfg, context),
+		],
+		{ contents: "unknown" },
+	);
 }
 
 export function corePrivateNumericArrayLoads(
@@ -504,13 +516,9 @@ export function corePrivatePackedRestArrays(
 	numberValue: (value: CoreValueId) => boolean,
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	if (!privateArrayPolicyIsLocked(context)) return [];
-	return privateArrayUses(
-		program,
-		fn,
-		cfg,
-		privatePackedRestArraySeeds(fn),
+	return privateArrayUses(program, fn, cfg, privatePackedRestArraySeeds(fn), {
 		numberValue,
-	).filter((array) => array.elementStores.length === 0);
+	}).filter((array) => array.elementStores.length === 0);
 }
 
 interface KindTransferBuffer {
@@ -584,6 +592,13 @@ function addOperationTransfer(
 			(kind === "index-of" || kind === "last-index-of"
 				? COMPILER_VALUE_KIND_NUMBER
 				: COMPILER_VALUE_KIND_BOOLEAN);
+		return;
+	}
+	if (
+		opcode === "loadPropertyStatic" &&
+		fn.instructionAttributes(instruction).exactArrayLength === true
+	) {
+		masks[output] = masks[output]! | COMPILER_VALUE_KIND_NUMBER;
 		return;
 	}
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {
