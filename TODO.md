@@ -275,9 +275,9 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Transfer already-dense function storage across construction generations without
       copying its columns. Preserve retired-handle and iterator failures, kernel
       ownership, version accounting and compaction for functions with holes.
-- [ ] Investigate repeated execution-register liveness in lowering, verification and
-      runtime-image emission. Reuse valid work across consumers with different
-      safepoint sets while preserving body-change invalidation and exact GC roots.
+- [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
+      bookkeeping. Sharing across verification or frame-exit consumers requires an
+      explicit body-ownership contract; mutable function identity is insufficient.
 - [ ] Design and measure explicit optimized-only cold-cache capture, skipping unused
       canonical capture, validation and encoding. Preserve D020/D023's current
       canonical publication and load-only access contracts until an append-only
@@ -455,6 +455,11 @@ only reproducible input.
       memory, synchronization, cleanup, and harness failure reporting first.
 
 ## Active correctness clusters
+
+- [ ] Fix native direct-entry operator metadata rejected while serializing
+      `tests/local/direct-entry-abi.js` through `compileBuildFrontend`. It raises
+      `Invalid native operator input kinds` before backend execution; trace the
+      producer and preserve the artifact validator's exact-semantics requirement.
 
 - [ ] Apply computed object-literal accessor names at runtime. For
       `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's

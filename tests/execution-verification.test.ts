@@ -4,6 +4,7 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
+import { executionSafepointRootRegisters } from "../src/compiler/target/execution-liveness.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -107,6 +108,20 @@ const ARGUMENTS_SOURCE = `
 		return arguments.length + arguments[0] + first;
 	}
 	sum(1, 2);
+`;
+
+const TYPED_ENTRY_SOURCE = `
+	(function () {
+		const add = function (left, right, text) {
+			let result = left;
+			for (let index = 0; index < 16; index++) result = result + right;
+			globalThis.observe(text);
+			return result;
+		};
+		const external = [add];
+		globalThis.result = add(3, 7, "kept");
+		globalThis.mixed = external[0]("left", "right", "also kept");
+	})();
 `;
 
 function optimizedCore(source: string, path: string): CoreCompilation {
@@ -256,6 +271,54 @@ describe("Core target construction", () => {
 		expect(program.functions.flatMap(({ gc }) => gc.safepoints).length).toBeGreaterThan(
 			0,
 		);
+	});
+
+	it("projects direct-entry roots exactly and still rejects a missing variant root", () => {
+		const program = optimizedTarget(TYPED_ENTRY_SOURCE, "verified-entry-roots.js");
+		let removedRoots = 0;
+		let retainedStringRoots = 0;
+		let checkedEntries = 0;
+		for (const fn of program.functions) {
+			for (const entry of fn.directEntries) {
+				const exact = executionSafepointRootRegisters(
+					{ ...fn, registerRepresentations: entry.registerRepresentations },
+					new Set(entry.gc.safepoints.map(({ instruction }) => instruction)),
+				);
+				for (const [index, point] of entry.gc.safepoints.entries()) {
+					expect(point.rootRegisters).toEqual(exact.get(point.instruction));
+					retainedStringRoots += point.rootRegisters.filter(
+						(register) => entry.registerRepresentations[register] === "string",
+					).length;
+					removedRoots +=
+						fn.gc.safepoints[index]!.rootRegisters.length - point.rootRegisters.length;
+				}
+				checkedEntries++;
+			}
+		}
+		expect(checkedEntries).toBeGreaterThan(0);
+		expect(removedRoots).toBeGreaterThan(0);
+		expect(retainedStringRoots).toBeGreaterThan(0);
+		const functionIndex = program.functions.findIndex((fn) =>
+			fn.directEntries.some((entry) =>
+				entry.gc.safepoints.some(({ rootRegisters }) => rootRegisters.length > 0),
+			),
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const fn = program.functions[functionIndex]!;
+		const directEntries = fn.directEntries.map((entry) => ({
+			...entry,
+			gc: {
+				safepoints: entry.gc.safepoints.map((point) => ({
+					...point,
+					rootRegisters: point.rootRegisters.slice(1),
+				})),
+			},
+		}));
+		expect(() =>
+			verifyNativeExecutionProgram(
+				withFunction(program, functionIndex, { directEntries }),
+			),
+		).toThrow("GC safepoint roots do not match exact execution liveness");
 	});
 
 	it("models every resumable native register as a traced MalValue", () => {

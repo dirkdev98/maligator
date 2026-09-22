@@ -2568,14 +2568,6 @@ function lowerFunctionToTarget(
 				}
 			}
 		}
-		const variant = {
-			...analysisFunction,
-			registerRepresentations: representations,
-		};
-		const variantRoots = executionSafepointRootRegisters(
-			variant,
-			new Set(safepoints.map(({ instruction }) => instruction)),
-		);
 		return {
 			id: entry.id,
 			...(entry.operatorInputs === undefined
@@ -2620,7 +2612,12 @@ function lowerFunctionToTarget(
 			gc: {
 				safepoints: safepoints.map((safepoint) => ({
 					...safepoint,
-					rootRegisters: variantRoots.get(safepoint.instruction) ?? [],
+					// Entries share the body and only refine boxed registers; liveness is per register.
+					rootRegisters: safepoint.rootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
 				})),
 			},
 		};

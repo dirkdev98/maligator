@@ -1072,3 +1072,34 @@ unused SSA chains becoming consumed after edits, old snapshot stability, local i
 proofs and long UTF-16 constants. Exact matched MALW and generated-C comparisons
 accompany work and timing measurements; function-evaluation counts alone do not measure
 the reduction in values and transfers.
+
+## D026 — 2026-09-22 — Project GC roots for representation-only direct entries
+
+**Status:** Implemented with focused verification; no established end-to-end speedup.
+**Refines:** Reuse of analysis results during selected-entry lowering.
+
+Direct entries share the base function's physical registers, instructions, control
+flow and safepoint locations. Their representation assignment changes only registers
+whose base representation is boxed. Edge-copy repair may restore those registers to
+boxed, but never widens a base scalar register into a traced one. String registers
+remain traced.
+
+Physical-register liveness equations are independent for each register. Lowering
+therefore derives each entry's roots by filtering the already computed base roots to
+the entry's boxed and string registers. This replaces a complete liveness solve for
+every direct entry with filtering the consumed root lists. The derived arrays remain
+independently owned. Any future entry transformation that changes instructions,
+control flow, safepoints or widens base scalar representations must recompute roots
+instead of applying this projection.
+
+Verification continues to reconstruct expected roots from the supplied body and
+representations. It does not trust the emitted root lists. Execution objects remain
+mutable at runtime, so a cache keyed only by function or block identity cannot safely
+replace that reconstruction. Generator and async frame-exit roots retain their
+separate portable demand and existing handler and trailing-root-use semantics.
+
+Focused acceptance compares real lowered entries with fresh reconstruction, checks
+that numeric roots disappear while string roots remain, rejects forged entry maps,
+and exercises native and portable execution under GC stress. Matched MALW and C
+parity covers both portable roots and native entry masks. Removed solves establish
+the work reduction; end-to-end performance acceptance remains separate.
