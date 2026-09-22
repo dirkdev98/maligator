@@ -243,12 +243,15 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## P2: source closure and generated-code profitability
 
-- [ ] Add VM training feedback for Core optimization priority: assign function and
-      call-site identities before optimization, preserve them through lowering,
-      and export execution counts with source/configuration identity. Collect only
-      counters consumed by the optimizer. Use matching counts in inline scoring
-      and before expensive lazy discovery; retain static estimates for unmatched
-      sites. Training observations must not replace proofs or remove fallbacks.
+- [ ] Implement VM training feedback and Core priority selection through stages
+      0–2 of [the PGO decision log](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
+      Keep exact profile origins, unknown-site handling, and lazy proof admission
+      separate from semantic eligibility.
+
+- [ ] Implement reusable optimized Core modules, then stable native products and
+      bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
+      Start with dependency validation and Meriyah reuse across application edits;
+      preserve canonical alternatives and charge cached output growth.
 
 - [ ] Establish a complete source-closed entry/escape set for native reduction,
       including exports, host callbacks, dynamic loading/eval policy, reflection,
