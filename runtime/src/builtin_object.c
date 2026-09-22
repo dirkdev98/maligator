@@ -889,6 +889,24 @@ static bool mal_builtin_object_collect_plain_keys(
     bool enumerable_only =
         iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
     u32 count = 0;
+    if (!mal_object_has_public_overflow(object)) {
+        MalShape *shape = object->shape;
+        for (u32 i = 0; i < shape->inline_count; i++) {
+            const MalShapeProp *prop = &shape->props[i];
+            if (!mal_value_is_string(prop->key) ||
+                (enumerable_only && !(prop->attrs & MAL_PROPERTY_ENUMERABLE))) {
+                continue;
+            }
+            if (reserved) {
+                mal_array_object_fresh_dense_append_reserved(result, prop->key);
+            } else {
+                mal_array_object_store(result, mal_key_index(count), prop->key);
+            }
+            count++;
+        }
+        return true;
+    }
+
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     MalKey key;

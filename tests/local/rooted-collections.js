@@ -81,6 +81,45 @@ check(
 	"proxy descriptor policy remains caller-owned",
 );
 
+const shapedDynamicKey = "shaped-dynamic-" + "k".repeat(96);
+const shapedKeySource = {
+	alpha: 1,
+	[shapedDynamicKey]: 2,
+	omega: 3,
+};
+const shapedKeysFirst = Object.keys(shapedKeySource);
+const shapedKeysSecond = Object.keys(shapedKeySource);
+collect();
+check(
+	shapedKeysFirst.join(",") === `alpha,${shapedDynamicKey},omega` &&
+		shapedKeysSecond.join(",") === shapedKeysFirst.join(",") &&
+		shapedKeysFirst !== shapedKeysSecond,
+	"Object.keys retains shaped dynamic keys in fresh arrays",
+);
+
+const nullPrototypeKeys = Object.create(null);
+nullPrototypeKeys.first = 1;
+nullPrototypeKeys.second = 2;
+check(
+	Object.keys(Object.freeze(nullPrototypeKeys)).join(",") === "first,second",
+	"Object.keys handles frozen null-prototype shapes",
+);
+
+class PrivateKeySource {
+	#hidden = 1;
+	visible = 2;
+	read() {
+		return this.#hidden;
+	}
+}
+const privateKeySource = new PrivateKeySource();
+check(
+	Object.keys(privateKeySource).join(",") === "visible" &&
+		Object.getOwnPropertyNames(privateKeySource).join(",") === "visible" &&
+		privateKeySource.read() === 1,
+	"Object key collection excludes private fields from shaped receivers",
+);
+
 const visibilitySource = {};
 Object.defineProperty(visibilitySource, "first", {
 	enumerable: true,
