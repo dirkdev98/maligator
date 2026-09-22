@@ -1092,8 +1092,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     // Has/Get/CreateDataProperty round trip per element.
     if (direct_array_copy && plain_mode) {
         MalArrayObject *source_array = mal_builtin_array_clean_dense(vm, source);
-        MalArrayObject *result_array = mal_builtin_array_dense_builder(a, 0);
-        if (source_array != nullptr && result_array != nullptr &&
+        MalArrayObject *result_array = mal_value_to_array_object(a);
+        if (source_array != nullptr &&
             source_array->length == length &&
             mal_array_object_dense_build_range(
                 result_array, 0, source_array, 0, length, false, true)) {
@@ -4126,9 +4126,7 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
 
     MalArrayObject *source_array =
         mal_builtin_array_clean_dense(vm, this_value);
-    MalArrayObject *result_array =
-        mal_builtin_array_dense_builder(result_value, 0);
-    if (source_array != nullptr && result_array != nullptr &&
+    if (source_array != nullptr &&
         source_array->length == (u32) length &&
         (f64) (u32) start == start &&
         (f64) (u32) skip_count == skip_count) {
@@ -4136,13 +4134,13 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
         u32 suffix_start = prefix_count + (u32) skip_count;
         u32 suffix_count = (u32) length - suffix_start;
         if (mal_array_object_dense_build_range(
-                result_array, 0, source_array, 0, prefix_count,
+                result, 0, source_array, 0, prefix_count,
                 false, true) &&
             mal_array_object_dense_build_values(
-                result_array, prefix_count,
+                result, prefix_count,
                 insert_count == 0 ? nullptr : args + 2, insert_count) &&
             mal_array_object_dense_build_range(
-                result_array, prefix_count + insert_count,
+                result, prefix_count + insert_count,
                 source_array, suffix_start, suffix_count,
                 false, true)) {
             ret = result_value;

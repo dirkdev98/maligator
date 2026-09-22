@@ -4701,6 +4701,45 @@
 			"sourceSeam": "runtime/src/builtin_array.c",
 			"controls": ["short-flatmap-indexed-16-mixed"],
 			"fixture": "cases/short-flatmap-flatmap-16-mixed.mjs"
+		},
+		{
+			"id": "dense-copy-slice-32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "dense Array copy via slice",
+			"category": "api-builtins",
+			"mechanisms": ["array-copy"],
+			"inputShape": "32 dense elements, selected receiver, slice",
+			"unit": "32-element copy",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"controls": [],
+			"fixture": "cases/dense-copy-slice-32.mjs"
+		},
+		{
+			"id": "dense-copy-array-from-32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "dense Array copy via array-from",
+			"category": "api-builtins",
+			"mechanisms": ["array-copy"],
+			"inputShape": "32 dense elements, selected receiver, array-from",
+			"unit": "32-element copy",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"controls": ["dense-copy-slice-32"],
+			"fixture": "cases/dense-copy-array-from-32.mjs"
+		},
+		{
+			"id": "dense-copy-to-spliced-32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "dense Array copy via to-spliced",
+			"category": "api-builtins",
+			"mechanisms": ["array-copy"],
+			"inputShape": "32 dense elements, selected receiver, to-spliced",
+			"unit": "32-element copy",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"controls": ["dense-copy-slice-32"],
+			"fixture": "cases/dense-copy-to-spliced-32.mjs"
 		}
 	]
 }
