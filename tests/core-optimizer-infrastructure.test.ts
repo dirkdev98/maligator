@@ -130,6 +130,53 @@ function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
 }
 
 describe("Core optimizer infrastructure", () => {
+	it("skips a completed scalar seed but folds new work after a later edit", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.blockParameterValue(entry, 0);
+		const one = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		})[0]!;
+		const addition = builder.editor.appendInstruction(entry, "binary", [parameter, one], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: addition.outputs[0]! });
+		builder.finish(entry);
+		const report = new CoreOptimizationReportBuilder(program, "full");
+		const analyses = new CoreAnalysisManager(program, context(), report);
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			builder.functionId,
+			{ localOptimization: true, localOptimizationCompleted: true },
+		);
+		const runs: Array<number> = [];
+		scheduler.runComponent("canonicalize", [noOpPass("eligible-after-import", runs)]);
+		expect(runs).toEqual([1]);
+		const before = report.finish(program, { directEntries: [], specializations: [] });
+		expect(before.passes.some(({ pass }) => pass === "fused-local-optimizer")).toBe(
+			false,
+		);
+		const editor = CoreEditor.open(program, builder.functionId);
+		editor.replaceOperands(addition.instruction, [one, one]);
+		scheduler.runComponent("canonicalize", [], [editor.commit()]);
+		const fn = program.function(builder.functionId);
+		const operations = [...fn.instructionIds()].filter(
+			(id) => fn.instructionKind(id) === "operation",
+		);
+		expect(operations.some((id) => fn.instructionOpcodeName(id) === "binary")).toBe(
+			false,
+		);
+		expect(operations.some((id) => fn.instructionAttributes(id).value === 2)).toBe(true);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).counters
+				.localRulesConsidered,
+		).toBeGreaterThan(before.counters.localRulesConsidered);
+	});
+
 	it("charges nested owner scopes exclusively", () => {
 		const { program } = programWithTwoFunctions();
 		const allocatedBytes = vi

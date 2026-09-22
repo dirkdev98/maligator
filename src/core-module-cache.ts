@@ -9,14 +9,16 @@ import {
 	decodeCoreModule,
 	encodeCoreModule,
 	UnsupportedCoreModuleError,
+	CORE_MODULE_MAX_ENCODED_LENGTH,
 } from "./compiler/core/core-module-artifact.ts";
 import type { CoreModuleArtifact } from "./compiler/core/core-module-artifact.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import type { ModuleRecord } from "./compiler/frontend/module-graph.ts";
 import { parseModule } from "./compiler/frontend/parser.ts";
 import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 
-const BOUNDARY = "strict-esm-private-globals-boxed-local-v1";
+const BOUNDARY = "strict-esm-private-cells-boxed-local-v2";
 const RECIPE = "conservative-local-v1";
 export interface CoreModuleCacheOptions {
 	source: string;
@@ -26,6 +28,8 @@ export interface CoreModuleCacheOptions {
 	maxWorkItems?: number;
 	maxEdits?: number;
 	onWork?: (phase: "construct" | "optimize", functions: number) => void;
+	/** The parsed tree must correspond to source under this stripping/transform producer. */
+	parsed?: { result: ModuleRecord["parsed"]; producer: string };
 }
 export type CoreModuleCacheResult =
 	| {
@@ -37,7 +41,7 @@ export type CoreModuleCacheResult =
 			key: string;
 			work: { constructedFunctions: number; optimizedFunctions: number };
 	  }
-	| { status: "unsupported"; reason: string };
+	| { status: "unsupported" | "budget-limited"; reason: string };
 interface ModuleReceipt {
 	schema: 1;
 	key: string;
@@ -46,6 +50,13 @@ interface ModuleReceipt {
 	canonicalDigest: string;
 	optimizedDigest: string;
 }
+interface UnsupportedReceipt {
+	schema: 1;
+	key: string;
+	unsupported: string;
+	status: "unsupported" | "budget-limited";
+}
+class CoreModuleBudgetError extends Error {}
 function digest(text: string) {
 	return hash("sha256", text, "hex");
 }
@@ -68,6 +79,18 @@ function rejectUnsupportedSyntax(value: unknown): void {
 			"YieldExpression",
 			"TaggedTemplateExpression",
 			"TemplateLiteral",
+			"MemberExpression",
+			"ObjectExpression",
+			"ArrayExpression",
+			"NewExpression",
+			"TryStatement",
+			"SwitchStatement",
+			"SpreadElement",
+			"RestElement",
+			"ArrayPattern",
+			"ObjectPattern",
+			"ForOfStatement",
+			"ForInStatement",
 		].includes(String(node.type)) ||
 		node.async === true ||
 		node.generator === true ||
@@ -76,9 +99,27 @@ function rejectUnsupportedSyntax(value: unknown): void {
 			node.source !== undefined)
 	)
 		throw new UnsupportedCoreModuleError(
-			"Reusable Core pilot excludes imports, classes, suspension, templates and dynamic scopes",
+			`Unsupported reusable Core syntax: ${String(node.type)}`,
 		);
 	for (const child of Object.values(node)) rejectUnsupportedSyntax(child);
+}
+
+function publishReceipt(file: string, receipt: ModuleReceipt | UnsupportedReceipt): void {
+	const temporary = `${file}.tmp-${randomUUID()}`;
+	try {
+		mkdirSync(path.dirname(file), { recursive: true });
+		writeFileSync(temporary, JSON.stringify(receipt), { flag: "wx" });
+		renameSync(temporary, file);
+	} catch (error) {
+		// Optional persistence must not turn a valid build into a cache-permission failure.
+		if (!(error instanceof Error) || !("code" in error)) throw error;
+	} finally {
+		try {
+			rmSync(temporary, { force: true });
+		} catch {
+			/* A failed publication may leave no writable directory. */
+		}
+	}
 }
 
 /** Callers import the selected variant and invoke its initializer before reading live exports. */
@@ -97,12 +138,26 @@ export function loadOrCompileCoreModule(
 			source: digest(JSON.stringify(options.source)),
 			maxWorkItems,
 			maxEdits,
+			parser: options.parsed?.producer,
 		}),
 	);
 	const file = path.join(options.cacheDirectory, `${key}.json`);
 	try {
-		const receipt = JSON.parse(readFileSync(file, "utf8")) as ModuleReceipt;
+		const receipt = JSON.parse(readFileSync(file, "utf8")) as
+			| ModuleReceipt
+			| UnsupportedReceipt;
 		if (
+			receipt.schema === 1 &&
+			receipt.key === key &&
+			"unsupported" in receipt &&
+			typeof receipt.unsupported === "string"
+		)
+			return {
+				status: receipt.status === "budget-limited" ? "budget-limited" : "unsupported",
+				reason: receipt.unsupported,
+			};
+		if (
+			!("unsupported" in receipt) &&
 			receipt.schema === 1 &&
 			receipt.key === key &&
 			digest(receipt.canonical) === receipt.canonicalDigest &&
@@ -125,12 +180,33 @@ export function loadOrCompileCoreModule(
 		/* An unusable cache entry is a miss; destination Core has not been touched. */
 	}
 	try {
-		const parsed = parseModule(options.source);
+		const parsed = options.parsed?.result ?? parseModule(options.source);
 		rejectUnsupportedSyntax(parsed.ast);
-		const graph = buildModuleGraph(options.sourcePath, {
-			entrySource: options.source,
-			entryGoal: "module",
-		});
+		const graph =
+			options.parsed === undefined
+				? buildModuleGraph(options.sourcePath, {
+						entrySource: options.source,
+						entryGoal: "module",
+						stripTypes: (source) => source,
+					})
+				: {
+						entry: options.sourcePath,
+						nodeEnabled: false,
+						modules: new Map([
+							[
+								options.sourcePath,
+								{
+									path: options.sourcePath,
+									goal: "module" as const,
+									source: options.source,
+									parsed,
+									dependencies: [],
+								},
+							],
+						]),
+						evaluationOrder: [options.sourcePath],
+						cycles: [],
+					};
 		if (
 			graph.modules.size !== 1 ||
 			[...graph.modules.values()].some((module) => module.dependencies.length !== 0)
@@ -148,17 +224,39 @@ export function loadOrCompileCoreModule(
 			name,
 			slot,
 		}));
-		const canonical = captureCoreModule(core.program, exports, functions[0]!);
-		for (const fn of functions)
-			new CoreLocalOptimizer(core.program, fn, {
+		const canonical = captureCoreModule(
+			core.program,
+			exports,
+			functions[0]!,
+			core.context.data,
+		);
+		for (const fn of functions) {
+			options.onWork?.("optimize", 1);
+			const result = new CoreLocalOptimizer(core.program, fn, {
 				maxWorkItems,
 				maxEdits,
-				budgetExhaustion: "error",
+				budgetExhaustion: "stop",
 			}).run();
-		options.onWork?.("optimize", functions.length);
-		const optimized = captureCoreModule(core.program, exports, functions[0]!);
+			if (result.statistics.workBudgetExhausted || result.statistics.editBudgetExhausted)
+				throw new CoreModuleBudgetError(
+					"Reusable Core scalar recipe exceeded its work budget",
+				);
+		}
+		const optimized = captureCoreModule(
+			core.program,
+			exports,
+			functions[0]!,
+			core.context.data,
+		);
 		const canonicalBytes = encodeCoreModule(canonical);
 		const optimizedBytes = encodeCoreModule(optimized);
+		if (
+			canonicalBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH ||
+			optimizedBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH
+		)
+			throw new UnsupportedCoreModuleError(
+				"Reusable Core exceeds the artifact size limit",
+			);
 		const receipt: ModuleReceipt = {
 			schema: 1,
 			key,
@@ -167,14 +265,7 @@ export function loadOrCompileCoreModule(
 			canonicalDigest: digest(canonicalBytes),
 			optimizedDigest: digest(optimizedBytes),
 		};
-		mkdirSync(options.cacheDirectory, { recursive: true });
-		const temporary = `${file}.tmp-${randomUUID()}`;
-		try {
-			writeFileSync(temporary, JSON.stringify(receipt), { flag: "wx" });
-			renameSync(temporary, file);
-		} finally {
-			rmSync(temporary, { force: true });
-		}
+		publishReceipt(file, receipt);
 		return {
 			status: "ready",
 			cache: "miss",
@@ -188,8 +279,15 @@ export function loadOrCompileCoreModule(
 			},
 		};
 	} catch (error) {
-		if (error instanceof UnsupportedCoreModuleError)
-			return { status: "unsupported", reason: error.message };
+		if (
+			error instanceof UnsupportedCoreModuleError ||
+			error instanceof CoreModuleBudgetError
+		) {
+			const status =
+				error instanceof CoreModuleBudgetError ? "budget-limited" : "unsupported";
+			publishReceipt(file, { schema: 1, key, unsupported: error.message, status });
+			return { status, reason: error.message };
+		}
 		throw error;
 	}
 }

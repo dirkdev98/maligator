@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
+import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
 import { CoreAnalysisManager } from "../../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../../src/compiler/core/core-builder.ts";
 import { coreOpcodeRegistry } from "../../src/compiler/core/core-ir-opcodes.ts";
@@ -13,6 +15,7 @@ import { importCoreModule } from "../../src/compiler/core/core-module-artifact.t
 import { CoreOptimizationReportBuilder } from "../../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../../src/compiler/core/core-program-flow-analysis.ts";
 import { CoreProgram } from "../../src/compiler/core/core-store.ts";
+import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { lowerCoreCompilationToExecution } from "../../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../../src/compiler/target/lower-native-program-image.ts";
 import { loadOrCompileCoreModule } from "../../src/core-module-cache.ts";
@@ -121,4 +124,111 @@ it("executes relocated cold and warm modules with independent private state", ()
 	expect(result.stderr).toBe("");
 	expect(result.status).toBe(0);
 	expect(result.stdout.trim()).toBe("9 9 9 25 9 9");
+}, 120_000);
+
+it("stops application initialization when a cached dependency throws", () => {
+	writeFileSync(path.join(directory, "throwing.mjs"), "throw 27;");
+	writeFileSync(
+		path.join(directory, "after-throw.mjs"),
+		"import './throwing.mjs'; console.log('must not run');",
+	);
+	const options = {
+		entrypoint: path.join(directory, "after-throw.mjs"),
+		cacheDirectory: path.join(directory, "throw-cache"),
+		config: resolveBuildConfig({}),
+		stripTypes: stripCompactTypes,
+		stripperIdentity: "native-core-module",
+		coreModuleCache: true,
+	};
+	compileBuildFrontend(options);
+	const warm = compileBuildFrontend({ ...options, forceCompile: true });
+	expect(warm.coreModules).toMatchObject({ hits: 1, constructedFunctions: 0 });
+	const binary = buildNativeProgramImage(warm.programImage, {
+		name: "throwing-cached-module",
+		outDir: directory,
+		compiled: true,
+		evalEnabled: false,
+		realmsEnabled: false,
+		intlEnabled: false,
+		temporalEnabled: false,
+		regexpEnabled: false,
+		webPlatformEnabled: false,
+	});
+	const result = spawnSync(binary, [], { encoding: "utf8" });
+	expect(result.status).not.toBe(0);
+	expect(result.stdout).toBe("");
+	expect(result.stderr).toContain("27");
+}, 120_000);
+
+it("preserves initialization, live exports and independent closures across ordinary dependency cache hits", () => {
+	const write = (file: string, source: string) =>
+		writeFileSync(path.join(directory, file), source);
+	const source =
+		"export let n = 1; export { n as default }; const twice = x => x * 2; export function bump() { n = twice(n) + 1; } export function counter(start) { return () => ++start; } export function nested(start) { return () => () => ++start; }";
+	write("lib.mjs", source);
+	write("other.mjs", source);
+	write("first.mjs", "import { bump } from './lib.mjs'; bump();");
+	write(
+		"second.mjs",
+		"import { n } from './lib.mjs'; export const snapshot = n; export { default as live } from './lib.mjs';",
+	);
+	const entry =
+		"import './first.mjs'; import { snapshot, live } from './second.mjs'; import * as lib from './lib.mjs'; import * as other from './other.mjs'; const a = lib.counter(1), b = lib.counter(10), deep = lib.nested(30)() ; console.log(snapshot, live, lib.n, other.n, a(), b(), a(), deep(), deep()); lib.bump(); console.log(live, lib.n, other.n);";
+	write("entry.mjs", entry);
+	const options = {
+		entrypoint: path.join(directory, "entry.mjs"),
+		cacheDirectory: path.join(directory, "build-cache"),
+		config: resolveBuildConfig({}),
+		stripTypes: stripCompactTypes,
+		stripperIdentity: "native-core-module",
+		coreVerification: "per-pass" as const,
+		coreModuleCache: true,
+	};
+	const execute = (
+		image: ReturnType<typeof compileBuildFrontend>["programImage"],
+		name: string,
+		compiled = true,
+	) => {
+		const binary = buildNativeProgramImage(image, {
+			name,
+			outDir: directory,
+			compiled,
+			evalEnabled: false,
+			realmsEnabled: false,
+			intlEnabled: false,
+			temporalEnabled: false,
+			regexpEnabled: false,
+			webPlatformEnabled: false,
+		});
+		const result = spawnSync(binary, [], { encoding: "utf8" });
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		return result.stdout.trim();
+	};
+	const expected = "3 3 3 1 2 11 3 31 32\n7 7 1";
+	const ordinary = compileBuildFrontend({ ...options, coreModuleCache: false });
+	expect(execute(ordinary.programImage, "ordinary-modules")).toBe(expected);
+	const cold = compileBuildFrontend(options);
+	expect(cold.coreModules).toMatchObject({ hits: 0, misses: 2, unsupported: 0 });
+	expect(execute(cold.programImage, "cold-modules")).toBe(expected);
+	write(
+		"prefix.mjs",
+		"const marker = {}; function earlier(x) { return () => x + 1; } marker.f = earlier(4); if (marker.f() !== 5) throw 91;",
+	);
+	write("entry.mjs", `import './prefix.mjs';\n${entry}`);
+	const warm = compileBuildFrontend(options);
+	expect(warm.coreModules).toMatchObject({
+		hits: 2,
+		misses: 0,
+		constructedFunctions: 0,
+		optimizedFunctions: 0,
+	});
+	expect(execute(warm.programImage, "warm-modules")).toBe(expected);
+	expect(execute(warm.programImage, "warm-modules-vm", false)).toBe(expected);
+	write("lib.mjs", source.replace("n = 1", "n = 2"));
+	const changed = compileBuildFrontend(options);
+	expect(changed.coreModules).toMatchObject({ hits: 1, misses: 1 });
+	expect(execute(changed.programImage, "changed-modules")).toBe(
+		"5 5 5 1 2 11 3 31 32\n11 11 1",
+	);
 }, 120_000);

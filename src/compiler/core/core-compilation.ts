@@ -77,6 +77,8 @@ export function coreClosedGlobalSlotMembership(
 export interface ConstructedCoreCompilation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
+	/** Imported bodies completed the scalar recipe; other passes remain eligible. */
+	readonly reusedFunctions?: ReadonlySet<number>;
 }
 
 /** Product compiler boundary: sealed Core SSA plus its explicit lowering plan. */

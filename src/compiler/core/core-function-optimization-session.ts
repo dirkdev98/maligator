@@ -42,6 +42,7 @@ export type CoreFunctionOptimizationPhaseRunner = <Result>(
 ) => Result;
 
 export interface CoreFunctionOptimizationSessionOptions {
+	readonly localOptimizationCompleted?: boolean;
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly crossCallWave?: number;
@@ -146,6 +147,7 @@ export class CoreFunctionOptimizationSession {
 				verification: options.verification,
 				optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
 				localOptimization: true,
+				localOptimizationCompleted: options.localOptimizationCompleted,
 				localOptimizationReportName: ablateLocalOptimization
 					? "mandatory-local-cleanup"
 					: undefined,

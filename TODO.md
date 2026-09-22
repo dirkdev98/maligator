@@ -250,9 +250,14 @@ iterator cursor is not, by itself, permission to delete its language object.
       cache invalidation, relocation, and independent module state.
 - [ ] Complete representative PGO training and performance acceptance; tune the
       measured/unknown allowances and make remaining cross-call proof discovery lazy.
-- [ ] Integrate the persistent Core pilot into ordinary dependency builds (ADR stage 4),
-      including Meriyah selection, dependency invalidation and initialization/closure
-      contracts. The explicit pilot API does not yet accelerate normal module builds.
+- [x] Integrate opt-in persistent Core reuse into ordinary production builds for
+      admitted static ESM leaves. Preserve live exports, initializer order, captured
+      cells and source-immutable facts; skip only the completed scalar seed.
+- [ ] Finish ADR stage 4: extend the boxed artifact boundary for Meriyah's classes,
+      handlers, switches and heap operations; split manifests/bodies for function
+      demand loading and measure representative application-edit rebuilds. Current
+      `build --production --core-cache` reuses supported leaves, while graph parsing,
+      semantic analysis and selected-module decoding remain current-build work.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

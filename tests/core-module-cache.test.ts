@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -94,7 +94,7 @@ it("misses after source or recipe changes and repairs a corrupt entry before imp
 it.each([
 	"import { x } from './missing.mjs'; export { x };",
 	"export function f() { return globalThis.value; }",
-	"export function f() { let x = 1; return () => x; }",
+	"export function f() { for (let x = 0; x < 2; x++) (() => x)(); }",
 	"export async function f() { return 1; }",
 ])("declines unsupported boundaries: %s", (text) => {
 	expect(loadOrCompileCoreModule({ ...options(), source: text })).toMatchObject({
@@ -108,6 +108,8 @@ it("preserves special numbers and rejects an invalid relocation before destinati
 	});
 	if (result.status !== "ready") throw new Error(result.reason);
 	const decoded = decodeCoreModule(encodeCoreModule(result.optimized));
+	expect(Reflect.set(decoded.exports[0]!, "slot", 1000)).toBe(false);
+	expect(Reflect.set(decoded.functions[0]!.metadata, "capturedCount", 1000)).toBe(false);
 	expect(
 		decoded.functions
 			.flatMap((fn) => fn.blocks.flatMap((block) => block.operations))
@@ -140,4 +142,61 @@ it("does not alias distinct UTF-16 sources in persistent identities", () => {
 	expect(second).toMatchObject({ status: "ready", cache: "miss" });
 	if (first.status === "ready" && second.status === "ready")
 		expect(first.key).not.toBe(second.key);
+});
+
+it("retains independent captured owners and rejects synthetic loop environments before import", () => {
+	const input = options();
+	const result = loadOrCompileCoreModule({
+		...input,
+		source:
+			"const helper = x => x + 1; export function make(x) { const y = helper(x); return () => y; }",
+	});
+	if (result.status !== "ready") throw new Error(result.reason);
+	expect(result.optimized.singleAssignmentGlobalSlots.length).toBeGreaterThan(0);
+	expect(result.optimized.singleAssignmentCapturedSlots.length).toBeGreaterThan(0);
+	const destination = new CoreProgram(coreOpcodeRegistry, { globalCount: 5 });
+	appendLeaf(destination);
+	const imported = importCoreModule(destination, result.optimized, "/moved.mjs");
+	expect(imported.singleAssignmentCapturedSlots.every((slot) => slot.owner > 0)).toBe(
+		true,
+	);
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	expect(
+		loadOrCompileCoreModule({
+			...input,
+			source:
+				"export function make() { let f; for(let i=0;i<1;i++){ const n=i; f=()=>n; } return f; }",
+		}),
+	).toMatchObject({ status: "unsupported" });
+});
+
+it("records budget-limited attempts without publishing completed bodies and retries a larger recipe", () => {
+	const input = options();
+	expect(loadOrCompileCoreModule({ ...input, maxWorkItems: 1 })).toMatchObject({
+		status: "budget-limited",
+	});
+	expect(readdirSync(input.cacheDirectory)).toHaveLength(1);
+	expect(
+		loadOrCompileCoreModule({
+			...input,
+			maxWorkItems: 1,
+			onWork() {
+				throw new Error("Repeated incomplete recipe");
+			},
+		}),
+	).toMatchObject({ status: "budget-limited" });
+	expect(loadOrCompileCoreModule(input)).toMatchObject({
+		status: "ready",
+		cache: "miss",
+	});
+});
+
+it("continues compilation when the optional cache cannot publish", () => {
+	const input = options();
+	const file = path.join(input.cacheDirectory, "not-a-directory");
+	writeFileSync(file, "occupied");
+	expect(loadOrCompileCoreModule({ ...input, cacheDirectory: file })).toMatchObject({
+		status: "ready",
+		cache: "miss",
+	});
 });

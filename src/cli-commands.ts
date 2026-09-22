@@ -526,6 +526,7 @@ function compileAndBuild(
 					profile: command.profile,
 					pgoTraining: command.pgoTrain,
 					pgo,
+					coreModuleCache: command.kind === "build" && command.coreCache,
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
@@ -557,6 +558,15 @@ function compileAndBuild(
 		(result) => `frontend cache ${result.cache}`,
 	);
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
+	if (frontend.coreModules !== undefined) {
+		const modules = frontend.coreModules;
+		reporter.detail(
+			"Core modules",
+			modules.fallback ??
+				`${modules.hits} reused, ${modules.misses} compiled, ${modules.unsupported} unsupported, ${modules.budgetLimited} budget limited; ` +
+					`${modules.constructedFunctions} functions constructed, ${modules.optimizedFunctions} scalar recipes run`,
+		);
+	}
 	for (const diagnostic of frontend.diagnostics) {
 		reporter.warning(
 			`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +

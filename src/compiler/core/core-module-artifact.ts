@@ -1,4 +1,5 @@
 import { CoreFunctionBuilder } from "./core-builder.ts";
+import type { CoreProgramData } from "./core-compilation.ts";
 import {
 	coreBlockHandler,
 	coreBlockParameters,
@@ -33,9 +34,12 @@ const ATTRIBUTES: Readonly<Record<string, ReadonlyArray<string>>> = {
 	createFunction: ["functionIndex"],
 	loadGlobal: ["index"],
 	storeGlobal: ["index"],
+	loadCaptured: ["functionIndex", "index"],
+	storeCaptured: ["functionIndex", "index"],
 	throwIfTdz: ["nameStringIndex"],
 	binary: ["operator"],
 	unary: ["operator"],
+	typeofCompare: ["expected", "negated"],
 	move: [],
 	call: [],
 	loadThis: [],
@@ -66,13 +70,27 @@ interface ModuleFunction {
 	blocks: ReadonlyArray<ModuleBlock>;
 }
 export interface CoreModuleArtifact {
-	schema: 1;
+	schema: 2;
 	globals: number;
 	strings: ReadonlyArray<ReadonlyArray<number>>;
 	positions: ReadonlyArray<CoreSourcePosition>;
 	functions: ReadonlyArray<ModuleFunction>;
 	initializer: number;
 	exports: ReadonlyArray<{ name: string; slot: number }>;
+	singleAssignmentGlobalSlots: ReadonlyArray<number>;
+	singleAssignmentCapturedSlots: ReadonlyArray<{ owner: number; index: number }>;
+}
+export interface CompletedCoreModule {
+	artifact: CoreModuleArtifact;
+	completedRecipe: "conservative-local-v1";
+}
+export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
+const immutableDecodedModules = new WeakSet<CoreModuleArtifact>();
+
+function freezeDecodedValue(value: unknown): void {
+	if (value === null || typeof value !== "object") return;
+	for (const child of Object.values(value)) freezeDecodedValue(child);
+	Object.freeze(value);
 }
 export class UnsupportedCoreModuleError extends Error {}
 function unsupported(message: string): never {
@@ -103,6 +121,34 @@ function attributes(
 	if (Object.keys(op.attributes).length !== allowed.length)
 		throw new Error("Incomplete Core module attributes");
 	switch (op.opcode) {
+		case "typeofCompare":
+			if (
+				typeof op.attributes.negated !== "boolean" ||
+				typeof op.attributes.expected !== "string" ||
+				![
+					"undefined",
+					"object",
+					"boolean",
+					"number",
+					"string",
+					"symbol",
+					"bigint",
+					"function",
+				].includes(op.attributes.expected)
+			)
+				throw new Error("Invalid typeof comparison");
+			break;
+		case "loadCaptured":
+		case "storeCaptured": {
+			const owner = index(op.attributes.functionIndex, functions.length);
+			return {
+				functionIndex: functions[owner]!,
+				index: index(
+					op.attributes.index,
+					artifact.functions[owner]!.metadata.capturedCount,
+				),
+			};
+		}
 		case "createFunction":
 			return {
 				functionIndex: functions[index(op.attributes.functionIndex, functions.length)]!,
@@ -186,10 +232,28 @@ export function captureCoreModule(
 	program: CoreProgram,
 	exports: CoreModuleArtifact["exports"],
 	initializer: CoreFunctionId,
+	candidates?: Pick<
+		CoreProgramData,
+		"singleAssignmentGlobalSlots" | "singleAssignmentCapturedSlots"
+	>,
 ): CoreModuleArtifact {
 	if (program.bigintConstants.length !== 0 || program.literalTemplateData.length !== 0)
 		unsupported("Reusable Core pilot excludes bigint and literal templates");
 	const ids = [...program.functionIds()];
+	if (ids.length > 100_000 || program.globalCount > 100_000)
+		unsupported("Reusable Core exceeds the module size limit");
+	const functionOrdinal = (value: unknown) => {
+		const ordinal = ids.indexOf(value as CoreFunctionId);
+		if (ordinal < 0)
+			unsupported("Reusable Core excludes external or synthetic function owners");
+		return ordinal;
+	};
+	if (
+		candidates?.singleAssignmentCapturedSlots.some(
+			(slot) => !ids.includes(slot.owner as CoreFunctionId),
+		)
+	)
+		unsupported("Reusable Core excludes synthetic captured environments");
 	const positions = program.sourcePositions;
 	if (
 		positions.some(
@@ -198,20 +262,32 @@ export function captureCoreModule(
 	)
 		unsupported("Reusable Core pilot excludes inlined source chains");
 	const artifact: CoreModuleArtifact = {
-		schema: 1,
+		schema: 2,
 		globals: program.globalCount,
 		strings: program.stringConstants,
 		positions,
 		initializer: ids.indexOf(initializer),
 		exports,
+		singleAssignmentGlobalSlots: candidates?.singleAssignmentGlobalSlots ?? [],
+		singleAssignmentCapturedSlots: (candidates?.singleAssignmentCapturedSlots ?? []).map(
+			(slot) => ({
+				owner: ids.indexOf(slot.owner as CoreFunctionId),
+				index: slot.index,
+			}),
+		),
 		functions: ids.map((id) => {
 			const fn = program.function(id);
+			if (
+				fn.blockCapacity > 1_000_000 ||
+				fn.valueCapacity > 1_000_000 ||
+				fn.parameterCount > 100_000
+			)
+				unsupported("Reusable Core exceeds the function size limit");
 			const { sourcePath: _path, sourceOrigin, ...metadata } = fn.metadata;
 			if (
 				sourceOrigin !== undefined ||
 				fn.isAsync ||
 				fn.isGenerator ||
-				metadata.capturedCount !== 0 ||
 				metadata.isClassConstructor ||
 				metadata.isDerivedConstructor ||
 				metadata.mappedArguments ||
@@ -219,7 +295,7 @@ export function captureCoreModule(
 				[...fn.factIds()].length !== 0
 			)
 				unsupported(
-					"Reusable Core pilot requires strict functions without captures, profiles, classes or facts",
+					"Reusable Core requires strict functions without profiles, classes or facts",
 				);
 			return {
 				metadata,
@@ -254,10 +330,12 @@ export function captureCoreModule(
 								inputs: coreInstructionOperands(fn, instruction),
 								outputs,
 								attributes:
-									opcode === "createFunction"
+									opcode === "createFunction" ||
+									opcode === "loadCaptured" ||
+									opcode === "storeCaptured"
 										? {
 												...attrs,
-												functionIndex: ids.indexOf(attrs.functionIndex as CoreFunctionId),
+												functionIndex: functionOrdinal(attrs.functionIndex),
 											}
 										: attrs,
 								position: fn.instructionSourcePosition(instruction),
@@ -286,7 +364,7 @@ export function importCoreModule(
 	if (program.registry !== coreOpcodeRegistry || sourcePath.length === 0)
 		throw new Error("Unsupported Core module destination");
 	// Core editors have no rollback; reject malformed artifacts before reserving destination IDs.
-	validateCoreModule(artifact);
+	if (!immutableDecodedModules.has(artifact)) validateCoreModule(artifact);
 	return importValidatedCoreModule(program, artifact, sourcePath);
 }
 
@@ -296,7 +374,7 @@ function importValidatedCoreModule(
 	sourcePath: string,
 ) {
 	if (
-		artifact.schema !== 1 ||
+		artifact.schema !== 2 ||
 		!Number.isSafeInteger(artifact.globals) ||
 		artifact.globals < 0 ||
 		artifact.globals > 100_000 ||
@@ -305,6 +383,11 @@ function importValidatedCoreModule(
 	)
 		throw new Error("Invalid Core module header");
 	index(artifact.initializer, artifact.functions.length);
+	for (const slot of artifact.singleAssignmentGlobalSlots) index(slot, artifact.globals);
+	for (const slot of artifact.singleAssignmentCapturedSlots) {
+		const owner = index(slot.owner, artifact.functions.length);
+		index(slot.index, artifact.functions[owner]!.metadata.capturedCount);
+	}
 	for (const units of artifact.strings) for (const unit of units) index(unit, 65536);
 	for (const position of artifact.positions) {
 		if (
@@ -338,7 +421,9 @@ function importValidatedCoreModule(
 		if (
 			!m.strict ||
 			!m.sourceStrict ||
-			m.capturedCount !== 0 ||
+			!Number.isSafeInteger(m.capturedCount) ||
+			m.capturedCount < 0 ||
+			m.capturedCount > 100_000 ||
 			m.mappedArguments ||
 			m.mappedArgumentSlots.length !== 0 ||
 			m.isClassConstructor ||
@@ -476,6 +561,13 @@ function importValidatedCoreModule(
 		functions,
 		exports: new Map(artifact.exports.map((item) => [item.name, globalBase + item.slot])),
 		globals: artifact.globals,
+		singleAssignmentGlobalSlots: artifact.singleAssignmentGlobalSlots.map(
+			(slot) => globalBase + slot,
+		),
+		singleAssignmentCapturedSlots: artifact.singleAssignmentCapturedSlots.map((slot) => ({
+			owner: functions[slot.owner]!,
+			index: slot.index,
+		})),
 	};
 }
 
@@ -487,7 +579,7 @@ export function encodeCoreModule(artifact: CoreModuleArtifact): string {
 	);
 }
 export function decodeCoreModule(encoded: string): CoreModuleArtifact {
-	if (encoded.length > 32 * 1024 * 1024)
+	if (encoded.length > CORE_MODULE_MAX_ENCODED_LENGTH)
 		throw new Error("Core module exceeds pilot size limit");
 	const artifact = JSON.parse(encoded, (_key, value: unknown) => {
 		if (value !== null && typeof value === "object" && "$number" in value) {
@@ -501,5 +593,8 @@ export function decodeCoreModule(encoded: string): CoreModuleArtifact {
 		return value;
 	}) as CoreModuleArtifact;
 	validateCoreModule(artifact);
+	// Only freshly decoded, recursively immutable objects can reuse structural validation.
+	freezeDecodedValue(artifact);
+	immutableDecodedModules.add(artifact);
 	return artifact;
 }

@@ -708,3 +708,80 @@ This is a persistent Core pilot, not automatic Meriyah or dependency-graph reuse
 Stage 4 must integrate module selection, dependency contracts, initializers and
 closure boundaries into ordinary builds, then measure reuse on representative
 applications before widening this boundary.
+
+## D017 — 2026-09-22 — Ordinary-build leaf reuse and mutation-driven follow-up work
+
+**Status:** Implemented for the admitted leaf boundary; stage 4 remains incomplete
+for Meriyah and per-function loading. **Refines:** D005, D006, D009 and D016.
+**Supersedes:** D016's exclusion of ordinary captured function environments.
+
+`maligator build app.mjs --production --core-cache` explicitly selects conservative
+module reuse in the normal native pipeline. The existing whole-image cache remains
+first. On a miss, a static acyclic ESM graph can select import-free dependencies as
+their initializers become necessary. The application entry remains fresh. Host,
+CommonJS, dynamic/deferred import and direct-eval graphs use ordinary lowering;
+profile/training builds cannot select this mode. An unrelated async application
+function or top-level await does not expand the synchronous cached-leaf boundary.
+This is opt-in until representative rebuild and runtime measurements justify a
+default policy; small fixture work counts are not that evidence.
+
+Each resolved module instance owns its relocated private globals and functions.
+Linker exporter bindings point directly at the imported slots, including aliases,
+re-exports and namespaces. The normal evaluation order calls each initializer once,
+and a throw prevents subsequent initialization. Imports are declined before mutation
+if earlier lowering has already allocated their export slots. The frontend's tables
+and allocation counters remain synchronized with the imported Core tables.
+
+Schema 2 adds ordinary captured cells and source-declared single-assignment
+candidates. Function owners, captured slots and private global candidates relocate
+with the body. This preserves facts for later call-target, value and memory queries;
+it does not persist a solver conclusion. Synthetic loop environments remain outside
+the boundary. The completed-module interface names `conservative-local-v1` explicitly,
+so importing canonical Core alone cannot assert recipe completion.
+
+A completed scalar recipe suppresses only the initial whole-body scalar queue in
+construction cleanup and primary optimization. Annotation, CFG, type/range,
+representation, memory, program-flow and specialization passes remain eligible.
+Edits from those passes wake incremental scalar work, and selected cross-call edits
+receive normal cleanup. Current output budgets still admit additional expansions;
+cache reuse does not supply proof authority or bypass output planning. Skipping the
+entire primary session would discard optimizations the persisted recipe never ran.
+
+Source content, resolved module identity, stripping producer, artifact/recipe policy
+and transitive compiler producer determine reuse. A dependency edit or changed
+resolution selects a different artifact; an application-only edit can reuse the
+existing dependency. Misses use the graph's parsed tree, including stripped
+TypeScript, rather than reparsing it. Unsupported syntax is rejected before Core
+construction where possible. Unsupported and budget-limited receipts avoid repeating
+failed optional work under the same input and recipe; increasing the recipe budget
+changes the key. An incomplete recipe never publishes completed bodies. Producer and
+decoder size limits agree, and optional persistence failures leave compilation usable.
+The `core-modules` family participates in existing cache accounting and pruning.
+
+Decoded artifacts are recursively frozen after structural validation. A private
+identity set lets their importer reuse that validation instead of constructing the
+same scratch Core twice. Mutable caller-produced artifacts still validate before
+each import; a copied or changed object cannot inherit the decoded object's receipt.
+
+Focused checks cover source/stripper/resolution invalidation, negative receipts,
+recipe exhaustion, unavailable publication, source candidates and mutation-triggered
+scalar work. Native acceptance compares uncached, cold and warm builds with a diamond
+import, mutable aliased exports, two resolved module instances, independent counters
+and a grandchild closure. An earlier application dependency shifts imported function
+IDs on a warm hit. The warm image also executes in the VM. These checks retain
+whole-program verification and do not replace the deferred full gate.
+
+The work avoided is precise: a warm leaf performs zero standalone Core construction
+and zero executions of its persisted scalar recipe. It still participates in ordinary
+graph parsing, semantic analysis, import validation/relocation, current-application
+analysis and backend emission. One selected artifact currently decodes all its
+functions; this is module selection, not per-function demand loading. Native objects
+are not yet reused through a stable module ABI.
+
+Meriyah's current single-file ESM bundle is import-free but exceeds this boundary.
+The next codec work is generic support for class/derived-constructor metadata,
+exception handlers and parameters, switch edges/constants, heap/property/constructor/
+iterator operations and literal tables. Keep these boxed and relocate their typed
+references before persisting any application-dependent proofs. After that, demonstrate
+an actual Meriyah hit across an application edit and measure both saved Core work and
+remaining backend cost before calling stage 4 complete.

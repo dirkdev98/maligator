@@ -186,6 +186,7 @@ export function optimizeCore(
 						verification: options.verification,
 						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 						localOptimization: true,
+						localOptimizationCompleted: compilation.reusedFunctions?.has(functionId),
 						localOptimizationReportName: ablateLocalOptimization
 							? "mandatory-local-cleanup"
 							: undefined,
@@ -268,6 +269,7 @@ export function optimizeCore(
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 					benchmarkAblation: ablatedFamily,
+					localOptimizationCompleted: compilation.reusedFunctions?.has(functionId),
 				},
 			).optimizePrimary(runFunctionPhase),
 		);

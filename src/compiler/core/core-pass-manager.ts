@@ -33,6 +33,8 @@ interface PassConsumption {
 }
 
 export interface CoreFunctionPassSchedulerOptions {
+	/** A completed scalar recipe skips the initial seed; edits still wake work. */
+	readonly localOptimizationCompleted?: boolean;
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly localOptimization?: boolean;
@@ -102,6 +104,7 @@ export class CoreFunctionPassScheduler {
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
+		this.#localSeeded = options.localOptimizationCompleted === true;
 		this.#localOptimizationReportName =
 			options.localOptimizationReportName ?? "fused-local-optimizer";
 		this.#localRules = this.#localOptimization

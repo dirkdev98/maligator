@@ -3,9 +3,11 @@ import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { SourceFunctionOriginOptions } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
+import type { CompletedCoreModule } from "./core-module-artifact.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {
+	readonly reusableModule?: (sourcePath: string) => CompletedCoreModule | undefined;
 	readonly pgoTraining?: boolean;
 	readonly captureModuleExports?: boolean;
 	readonly sourceOrigins?: SourceFunctionOriginOptions;
@@ -27,6 +29,7 @@ export function lowerSemanticProgramToCore(
 		options.runPhase ?? (<T>(_phase: "construct core ir", run: () => T): T => run());
 	return runPhase("construct core ir", () =>
 		constructSemanticProgramCore(semantic, {
+			reusableModule: options.reusableModule,
 			pgoTraining: options.pgoTraining,
 			captureModuleExports: options.captureModuleExports,
 			sourceOrigins: options.sourceOrigins,

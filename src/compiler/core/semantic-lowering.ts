@@ -79,9 +79,15 @@ import type {
 } from "./core-frontend-construction.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import { importCoreModule } from "./core-module-artifact.ts";
+import type { CompletedCoreModule } from "./core-module-artifact.ts";
 import { CoreProgram } from "./core-store.ts";
 
 interface CoreFrontendContext {
+	reusableModule?: (sourcePath: string) => CompletedCoreModule | undefined;
+	reusedFunctions?: Set<number>;
+	reusedGlobalCandidates?: Array<number>;
+	reusedCapturedCandidates?: Array<CoreCapturedSlotRef>;
 	pgoTraining: boolean;
 	captureModuleExports: boolean;
 	sourceOrigins?: SourceFunctionOrigins;
@@ -796,6 +802,7 @@ function isCompilerBinaryOperator(operator: string): operator is CompilerBinaryO
 export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: {
+		reusableModule?: (sourcePath: string) => CompletedCoreModule | undefined;
 		pgoTraining?: boolean;
 		captureModuleExports?: boolean;
 		sourceOrigins?: SourceFunctionOriginOptions;
@@ -807,6 +814,7 @@ export function constructSemanticProgramCore(
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
+		reusableModule: options.reusableModule,
 		pgoTraining: options.pgoTraining === true,
 		captureModuleExports: options.captureModuleExports === true,
 		semantic,
@@ -941,6 +949,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	const candidates = coreSingleAssignmentCellCandidates(program);
 	return {
 		program: program.core,
+		reusedFunctions: program.reusedFunctions,
 		context: {
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
@@ -1002,8 +1011,13 @@ function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	singleAssignmentGlobalSlots: Array<number>;
 	singleAssignmentCapturedSlots: Array<CoreCapturedSlotRef>;
 } {
-	const globals = new Set<number>();
-	const captured = new Map<string, CoreCapturedSlotRef>();
+	const globals = new Set(program.reusedGlobalCandidates);
+	const captured = new Map(
+		program.reusedCapturedCandidates?.map((slot) => [
+			`${slot.owner}:${slot.index}`,
+			slot,
+		]),
+	);
 	for (const [binding, location] of program.bindingToStorage) {
 		const sourceImmutable =
 			binding.kind === "const" || binding.immutableSelfReference === true;
@@ -1073,14 +1087,74 @@ function registerCoreFunction(
 	program.nextFunctionIndex++;
 }
 
-/**
- * Build the program entry for a multi-module ES program: a single merged init
- * function (index 0) whose body is every module's top-level code, concatenated
- * in evaluation order (dependencies first, entry last). This is scope hoisting
- * — module bindings are already shared global slots and imports are aliased to
- * their exporters, so the merged top-levels realize the cross-module data flow
- * with live bindings, and there is no per-module init function or orchestrator.
- */
+function emitReusableModuleInit(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	modulePath: string,
+	tail: CoreFrontendBlock | null,
+): CoreFrontendBlock | undefined {
+	if (program.reusableModule === undefined) return undefined;
+	const exports = program.moduleNamespaces.get(modulePath) ?? [];
+	const reusable = exports.some(({ exporter }) => program.bindingToStorage.has(exporter))
+		? undefined
+		: program.reusableModule?.(modulePath);
+	if (reusable === undefined) return undefined;
+	if (reusable.completedRecipe !== "conservative-local-v1")
+		throw new Error("Unknown reusable Core recipe");
+	const exportNames = new Set(reusable.artifact.exports.map((item) => item.name));
+	if (exports.some(({ name }) => !exportNames.has(name)))
+		throw new Error("Reusable Core exports do not match uninitialized module bindings");
+	CoreEditor.configureProgram(program.core, {
+		stringConstants: program.stringConstants,
+		sourcePositions: program.sourcePositions,
+		bigintConstants: program.bigintConstants,
+		literalTemplateData: program.literalTemplateData,
+		globalCount: program.nextGlobalIndex,
+	});
+	const imported = importCoreModule(program.core, reusable.artifact, modulePath);
+	program.nextFunctionIndex = program.core.functionCapacity;
+	program.nextGlobalIndex = program.core.globalCount;
+	program.stringConstants.push(
+		...program.core.stringConstants
+			.slice(program.stringConstants.length)
+			.map((units) => [...units]),
+	);
+	program.sourcePositions.push(
+		...program.core.sourcePositions
+			.slice(program.sourcePositions.length)
+			.map((position) => ({ ...position })),
+	);
+	(program.reusedGlobalCandidates ??= []).push(...imported.singleAssignmentGlobalSlots);
+	(program.reusedCapturedCandidates ??= []).push(
+		...imported.singleAssignmentCapturedSlots,
+	);
+	for (const id of imported.functions) (program.reusedFunctions ??= new Set()).add(id);
+	for (const { name, exporter } of exports)
+		program.bindingToStorage.set(exporter, {
+			type: "global",
+			index: imported.exports.get(name)!,
+		});
+	program.compiledModuleInitForPaths.set(modulePath, imported.initializer);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const blockIndex = fn.blocks.push(block) - 1;
+	if (tail) tail.emitter.emit({ type: "jump", blocks: [blockIndex] });
+	const callee = nextCoreVariable(fn);
+	const receiver = nextCoreVariable(fn);
+	emitModuleEvaluationState(program, fn, block, modulePath, 1);
+	block.emitter.emit(
+		{
+			type: "createFunction",
+			registers: [callee],
+			functionIndex: imported.initializer,
+		},
+		{ type: "createUndefined", registers: [receiver] },
+		{ type: "call", registers: [nextCoreVariable(fn), callee, receiver] },
+	);
+	emitModuleEvaluationState(program, fn, block, modulePath, 2);
+	return block;
+}
+
+// Imported modules keep initializers; fresh modules share a body and live binding slots.
 function compileMergedModuleInit(
 	program: CoreFrontendContext,
 	evaluationOrder: Array<string>,
@@ -1162,6 +1236,11 @@ function compileMergedModuleInit(
 			continue;
 		}
 		fn.semanticFile = file;
+		const reused = emitReusableModuleInit(program, fn, modulePath, tail);
+		if (reused !== undefined) {
+			tail = reused;
+			continue;
+		}
 		if (
 			program.semantic.graph?.modules.get(modulePath)?.platform?.evaluation ===
 			"side-effect-free"
