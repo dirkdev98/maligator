@@ -149,18 +149,19 @@ export function corePrivatePackedRestArrayElementPlans(
 	const plans: Array<CorePrivatePackedRestArrayElementPlan> = [];
 	for (const functionId of functions) {
 		const fn = program.function(functionId);
-		const cfg = analyses
-			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-				scope: "function",
-				function: functionId,
-			})
-			.exceptional();
-		const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
-		for (const array of corePrivatePackedRestArrays(program, fn, cfg, context, (value) =>
-			packedRestKeyIsNumber(fn, kinds, value),
+		const request = { scope: "function" as const, function: functionId };
+		let kinds: CoreValueKindAnalysis | undefined;
+		for (const array of corePrivatePackedRestArrays(
+			program,
+			fn,
+			() => analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
+			context,
+			(value) =>
+				packedRestKeyIsNumber(
+					fn,
+					(kinds ??= analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request)),
+					value,
+				),
 		)) {
 			const startIndex = fn.instructionAttributes(array.allocation).startIndex;
 			if (typeof startIndex !== "number") continue;

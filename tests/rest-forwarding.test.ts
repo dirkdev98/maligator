@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { corePrivatePackedRestArrayElementPlans } from "../src/compiler/core/core-native-numeric-analysis.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
@@ -15,6 +19,10 @@ import {
 	serializeRuntimeImage,
 } from "../src/compiler/target/program-image-codec.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import {
+	analysisProgram,
+	programAnalysisContext,
+} from "./helpers/core-program-analysis.ts";
 
 function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 	const source = `globalThis.forward = ${body};`;
@@ -36,6 +44,42 @@ function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 }
 
 describe("rest forwarding allocation contract", () => {
+	it.each([
+		{ rest: false, primordials: "locked" as const },
+		{ rest: true, primordials: "mutable" as const },
+	])(
+		"does not analyze packed rest dependencies for $primordials policy and rest=$rest",
+		({ rest, primordials }) => {
+			const program = analysisProgram();
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(
+				entry,
+				rest ? "createRestArguments" : "createUndefined",
+				[],
+				{
+					attributes: rest ? { startIndex: 0 } : {},
+				},
+			);
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			const functionId = builder.finish(entry).function;
+			const context = {
+				...programAnalysisContext(),
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
+			};
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			expect(
+				corePrivatePackedRestArrayElementPlans(program, analyses, [functionId], context),
+			).toEqual([]);
+			expect(
+				report.finish(program, { directEntries: [], specializations: [] }).analyses,
+			).toEqual([]);
+		},
+	);
+
 	it("scalarizes locked static element reads into argument snapshots", () => {
 		const image = compile(
 			"function read(first, ...rest) { return arguments[3] + rest[2] + rest[0] + rest[2]; }",

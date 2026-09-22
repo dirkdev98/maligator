@@ -385,6 +385,9 @@ export function optimizeCore(
 				reportBuilder.increment("specializationFunctionsScanned");
 				reportBuilder.recordCandidateDiscovery(candidates);
 			},
+			onMaterialize() {
+				reportBuilder.increment("specializationPayloadsMaterialized");
+			},
 		},
 	);
 	reportBuilder.recordCheckpoint("before-sealing", compilation.program);

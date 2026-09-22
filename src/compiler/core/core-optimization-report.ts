@@ -158,6 +158,7 @@ export interface CoreCompilerWorkCounters {
 	readonly specializationFunctionsScanned: number;
 	readonly specializationCandidatesDiscovered: number;
 	readonly specializationCandidatesSelected: number;
+	readonly specializationPayloadsMaterialized: number;
 	readonly liveUseVisits: number;
 	readonly deadUseSkips: number;
 	readonly abandonedOperandStorage: number;
@@ -303,6 +304,7 @@ const COUNTER_KEYS = [
 	"specializationFunctionsScanned",
 	"specializationCandidatesDiscovered",
 	"specializationCandidatesSelected",
+	"specializationPayloadsMaterialized",
 	"liveUseVisits",
 	"deadUseSkips",
 	"abandonedOperandStorage",

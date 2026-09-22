@@ -668,12 +668,18 @@ function buildFromStructural(
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreControlFlow {
 	const { successors, predecessors, reachable, reversePostorder } = structural;
-	const parents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-		immediateDominators(fn.entry, reversePostorder, predecessors, successors, scratch),
-	);
-	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	// Deferred dominance must use this structural snapshot after the function changes.
 	const entry = fn.entry;
+	let parents: ReadonlyArray<CoreBlockId | null> | undefined;
+	const getParents = () =>
+		(parents ??= Object.freeze(
+			runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
+				immediateDominators(entry, reversePostorder, predecessors, successors, scratch),
+			),
+		));
+	let predicate: ReturnType<typeof dominatorPredicate> | undefined;
+	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean =>
+		(predicate ??= dominatorPredicate(entry, reachable, getParents()))(dominator, block);
 	let instructionDominatesBlock:
 		| ((dominator: CoreBlockId, block: CoreBlockId) => boolean)
 		| undefined;
@@ -785,7 +791,9 @@ function buildFromStructural(
 		predecessors,
 		reachable: Object.freeze(reachable),
 		reversePostorder: Object.freeze(reversePostorder),
-		immediateDominators: Object.freeze(parents),
+		get immediateDominators() {
+			return getParents();
+		},
 		get loops() {
 			return loopsAndCycles().loops;
 		},

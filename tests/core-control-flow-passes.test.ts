@@ -105,6 +105,36 @@ function sourceLengthLoad(program: CoreProgram, functionName: string) {
 }
 
 describe("Core control-flow analyses and passes", () => {
+	it("builds dominators only for a dominance consumer and reuses them", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const functionId = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const control = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			})
+			.exceptional();
+		const work = () =>
+			report.finish(program, { directEntries: [], specializations: [] }).owners[
+				CORE_OPTIMIZATION_OWNER.immediateDominators
+			]!.workUnits;
+		expect(control.reversePostorder).toEqual([entry]);
+		expect(control.reachable.has(entry)).toBe(true);
+		expect(work()).toBe(0);
+		expect(control.dominates(entry, entry)).toBe(true);
+		expect(work()).toBe(1);
+		expect(control.immediateDominators[entry]).toBe(null);
+		expect(control.instructionDominatesBlock(entry, entry)).toBe(true);
+		expect(control.dominates(entry, entry)).toBe(true);
+		expect(work()).toBe(1);
+	});
+
 	it("defers loop products until a consumer requests them", () => {
 		const ownerWork = (readLoops: boolean) => {
 			const program = new CoreProgram(coreOpcodeRegistry);
@@ -327,6 +357,8 @@ describe("Core control-flow analyses and passes", () => {
 		expect(refinedExceptional).not.toBe(exceptional);
 		expect(refinedExceptional.successors[entry]).toHaveLength(1);
 		expect(refinedExceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
+		expect(exceptional.dominates(entry, handler)).toBe(true);
+		expect(refinedExceptional.dominates(entry, handler)).toBe(false);
 		expect(exceptional.instructionDominatesBlock(entry, normal)).toBe(false);
 		expect(refinedExceptional.instructionDominatesBlock(entry, normal)).toBe(true);
 	});

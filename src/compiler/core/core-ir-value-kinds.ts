@@ -502,7 +502,7 @@ export function corePrivatePackedRestArrayLoads(
 	numberValue: (value: CoreValueId) => boolean,
 ): ReadonlySet<CoreInstructionId> {
 	return new Set(
-		corePrivatePackedRestArrays(program, fn, cfg, context, numberValue).flatMap(
+		corePrivatePackedRestArrays(program, fn, () => cfg, context, numberValue).flatMap(
 			(array) => array.elementLoads,
 		),
 	);
@@ -511,12 +511,14 @@ export function corePrivatePackedRestArrayLoads(
 export function corePrivatePackedRestArrays(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
-	cfg: CoreControlFlow,
+	control: () => CoreControlFlow,
 	context: CoreCompilationContext,
 	numberValue: (value: CoreValueId) => boolean,
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	if (!privateArrayPolicyIsLocked(context)) return [];
-	return privateArrayUses(program, fn, cfg, privatePackedRestArraySeeds(fn), {
+	const seeds = privatePackedRestArraySeeds(fn);
+	if (seeds.length === 0) return [];
+	return privateArrayUses(program, fn, control(), seeds, {
 		numberValue,
 	}).filter((array) => array.elementStores.length === 0);
 }

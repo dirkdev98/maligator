@@ -3992,16 +3992,20 @@ function regexpIteratorProjectionCandidates(
 function discoverCandidates(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
-	provenanceAnalysis: CoreProvenance,
+	provenance: () => CoreProvenance,
 	control: CoreControlFlow,
-	loops: CoreLoopInductionAnalysis,
+	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
+	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
+	const requested = (kind: CoreLocalSpecializationCandidate["kind"]): boolean =>
+		kinds === undefined || kinds.has(kind);
 	const candidates: Array<CoreLocalSpecializationCandidate> = [];
 	const candidateBuckets = new Map<number, Array<CoreLocalSpecializationCandidate>>();
 	const addCandidate = (candidate: CoreLocalSpecializationCandidate): void => {
+		if (!requested(candidate.kind)) return;
 		let hash = 2_166_136_261;
 		for (let index = 0; index < candidate.key.length; index++) {
 			hash ^= candidate.key.charCodeAt(index);
@@ -4034,8 +4038,11 @@ function discoverCandidates(
 	let stackControlUses: CoreStackObjectControlUses | undefined;
 	const getStackControlUses = () =>
 		(stackControlUses ??= stackObjectControlUses(fn, control, roots));
-	for (const layout of provenanceAnalysis.layouts) {
+	for (const layout of requested("stack-object") || requested("dense-array")
+		? provenance().layouts
+		: []) {
 		if (layout.kind === "named-slots") {
+			if (!requested("stack-object")) continue;
 			const candidate = stackObjectCandidate(
 				fn,
 				layout,
@@ -4046,14 +4053,12 @@ function discoverCandidates(
 			);
 			if (candidate !== undefined) addCandidate(candidate);
 		} else {
+			if (!requested("dense-array")) continue;
 			const dense = denseArrayCandidates(fn, layout, control, roots);
 			for (const candidate of dense) {
 				addCandidate(candidate);
 			}
-			if (
-				dense.length === 0 &&
-				provenanceAnalysis.escape(layout.instruction) === "contained"
-			) {
+			if (dense.length === 0 && provenance().escape(layout.instruction) === "contained") {
 				const useInstructions = (
 					index.uses.get(roots.get(layout.result) ?? layout.result) ?? []
 				).map(({ instruction }) => instruction);
@@ -4077,24 +4082,60 @@ function discoverCandidates(
 		}
 	}
 	for (const candidate of [
-		...freshArrayLengthCandidates(program, fn, provenanceAnalysis, control, roots, index),
-		...indexedLengthLoopCandidates(program, fn, control, loops, roots, index),
-		...reverseIndexedLengthLoopCandidates(program, fn, control, roots, index),
-		...iteratorCursorCandidates(fn, control, roots, index),
-		...iteratorResultVirtualizationCandidates(fn, control, index),
-		...iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index),
-		...stringCharCodeAtCandidates(program, fn, control, loops, roots, index),
-		...functionCallChainCandidates(program, fn, control, roots, index),
-		...stringSplitCursorCandidates(program, fn, control, loops, roots, index),
-		...builtinCollectionCallCandidates(program, fn, control, roots, index),
-		...stringSplitProjectionCandidates(program, fn, control, roots, index),
-		...stringSliceNumberCandidates(program, fn, control, roots, index),
-		...regexpExecProjectionCandidates(program, fn, control, roots, index),
-		...regexpIteratorProjectionCandidates(fn, control, roots, index),
+		...(requested("fresh-array-length")
+			? freshArrayLengthCandidates(program, fn, provenance(), control, roots, index)
+			: []),
+		...(requested("indexed-length-loop")
+			? indexedLengthLoopCandidates(program, fn, control, loops(), roots, index)
+			: []),
+		...(requested("indexed-length-loop")
+			? reverseIndexedLengthLoopCandidates(program, fn, control, roots, index)
+			: []),
+		...([
+			"array-values-iterator-cursor",
+			"string-iterator-cursor",
+			"typed-array-iterator-cursor",
+			"map-iterator-cursor",
+			"set-iterator-cursor",
+		].some((kind) => requested(kind as CoreLocalSpecializationCandidate["kind"]))
+			? iteratorCursorCandidates(fn, control, roots, index)
+			: []),
+		...(requested("iterator-result-virtualization")
+			? iteratorResultVirtualizationCandidates(fn, control, index)
+			: []),
+		...(requested("iterator-entry-pair-virtualization")
+			? iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("string-char-code-at-chain")
+			? stringCharCodeAtCandidates(program, fn, control, loops(), roots, index)
+			: []),
+		...(requested("function-call-chain")
+			? functionCallChainCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("string-split-cursor")
+			? stringSplitCursorCandidates(program, fn, control, loops(), roots, index)
+			: []),
+		...(requested("builtin-collection-call-chain")
+			? builtinCollectionCallCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("string-split-projection")
+			? stringSplitProjectionCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("string-slice-number")
+			? stringSliceNumberCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("regexp-exec-projection")
+			? regexpExecProjectionCandidates(program, fn, control, roots, index)
+			: []),
+		...(requested("regexp-iterator-projection")
+			? regexpIteratorProjectionCandidates(fn, control, roots, index)
+			: []),
 	]) {
 		addCandidate(candidate);
 	}
-	for (const instruction of indexedOpcodeInstructions(fn, index, "binary")) {
+	for (const instruction of requested("numeric-fusion")
+		? indexedOpcodeInstructions(fn, index, "binary")
+		: []) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
 			!coreTargetSupportsNumericFusionOperator(
@@ -4150,22 +4191,33 @@ function discoverCandidates(
 export function discoverCoreLocalSpecializationCandidates(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
+	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
 	const control = buildCoreControlFlow(program, functionId, { exceptions: true });
 	const roots = coreCanonicalValueRoots(fn, control);
 	const index = buildCoreLocalFactIndex(fn, roots);
-	const valueKinds = analyzeCoreValueKinds(fn, control);
+	let provenance: CoreProvenance | undefined;
+	let loops: CoreLoopInductionAnalysis | undefined;
 	return discoverCandidates(
 		program,
 		functionId,
-		buildCoreProvenance(program, fn, control, { canonicalRoots: roots, index }),
+		() =>
+			(provenance ??= buildCoreProvenance(program, fn, control, {
+				canonicalRoots: roots,
+				index,
+			})),
 		control,
-		analyzeCoreLoopInductions(fn, control, roots, (value) =>
-			valueKinds.exactScalar(value),
-		),
+		() => {
+			if (loops !== undefined) return loops;
+			const valueKinds = analyzeCoreValueKinds(fn, control);
+			return (loops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
+				valueKinds.exactScalar(value),
+			));
+		},
 		roots,
 		index,
+		kinds,
 	);
 }
 
@@ -4189,9 +4241,9 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 			return discoverCandidates(
 				program,
 				request.function,
-				bundle.provenance,
+				() => bundle.provenance,
 				bundle.control,
-				get(CORE_LOOP_INDUCTION_ANALYSIS, request),
+				() => get(CORE_LOOP_INDUCTION_ANALYSIS, request),
 				bundle.roots,
 				bundle.index,
 			);

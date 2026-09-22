@@ -99,9 +99,16 @@ import type {
 	CoreTransformDiscoveryCost,
 } from "./core-transform-candidates.ts";
 
+type CorePendingClaims = Pick<
+	CorePlanSpecialization,
+	"function" | "kind" | "composition" | "claimedInstructions"
+>;
+
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
-	readonly selection: CorePlanSpecialization;
+	readonly claims: CorePendingClaims;
+	readonly source?: CoreLocalSpecializationCandidate;
+	readonly materialize: () => CorePlanSpecialization;
 }
 
 interface PendingDirectEntry {
@@ -547,477 +554,493 @@ function pendingLocalCandidate(
 			? { materializationPaths: 1 }
 			: {}),
 	});
-	const blocks = Object.freeze(
-		[
-			...new Set(
-				instructions
-					.filter((instruction) => fn.isInstructionLive(instruction))
-					.map((instruction) => fn.instructionBlock(instruction)),
-			),
-		].sort((left, right) => left - right),
-	);
-	const anchors =
-		candidate.kind === "fresh-array-length"
-			? Object.freeze([candidate.load])
-			: candidate.kind === "indexed-length-loop"
-				? Object.freeze([candidate.load, candidate.comparison])
-				: isIteratorCursorCandidate(candidate)
-					? Object.freeze([candidate.initialize, candidate.steps[0]!])
-					: candidate.kind === "iterator-result-virtualization"
-						? Object.freeze([candidate.steps[0]!])
-						: candidate.kind === "iterator-entry-pair-virtualization"
-							? Object.freeze([candidate.outerStep, candidate.innerInitialize])
-							: candidate.kind === "string-split-cursor"
-								? Object.freeze([
-										candidate.call,
-										candidate.branch,
-										candidate.length,
-										candidate.backedge,
-									])
-								: candidate.kind === "string-split-projection"
-									? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
-									: candidate.kind === "string-slice-number"
-										? Object.freeze([candidate.sliceCall, candidate.numberCall])
-										: candidate.kind === "regexp-exec-projection"
-											? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
-											: candidate.kind === "regexp-iterator-projection"
-												? Object.freeze([
-														candidate.step,
-														candidate.doneBranch,
-														candidate.loads[0]!.instruction,
-													])
-												: candidate.kind === "string-char-code-at-chain" ||
-													  candidate.kind === "builtin-collection-call-chain" ||
-													  candidate.kind === "function-call-chain"
-													? Object.freeze([candidate.property, candidate.call])
-													: Object.freeze([candidate.root]);
-	const exceptionalBlocks =
-		candidate.kind === "fresh-array-length" ||
-		candidate.kind === "indexed-length-loop" ||
-		isIteratorCursorCandidate(candidate) ||
-		candidate.kind === "iterator-result-virtualization" ||
-		candidate.kind === "iterator-entry-pair-virtualization" ||
-		candidate.kind === "string-split-cursor" ||
-		candidate.kind === "string-slice-number" ||
-		candidate.kind === "regexp-iterator-projection" ||
-		candidate.kind === "string-char-code-at-chain" ||
-		candidate.kind === "builtin-collection-call-chain" ||
-		candidate.kind === "function-call-chain"
-			? candidate.exceptionalBlocks
-			: Object.freeze([]);
-	const admissionAnchor =
-		candidate.kind === "string-split-cursor" ||
-		candidate.kind === "string-split-projection"
-			? (candidate.property ?? candidate.call)
-			: candidate.kind === "string-slice-number"
-				? (candidate.property ?? candidate.sliceCall)
-				: candidate.kind === "regexp-exec-projection"
-					? (candidate.property ?? candidate.call)
-					: candidate.kind === "string-char-code-at-chain" ||
-						  candidate.kind === "builtin-collection-call-chain" ||
-						  candidate.kind === "function-call-chain"
-						? candidate.property
-						: anchors[0]!;
-	const admissionDependencies =
-		candidate.kind === "string-split-cursor"
-			? mergePlanGuards(splitCursorProofs!.split!.guard, splitCursorProofs!.trim!.guard)
-					.dependencies
-			: candidate.kind === "regexp-iterator-projection" ||
-				  candidate.kind === "iterator-entry-pair-virtualization"
-				? protector!.guard.dependencies
-				: candidate.kind === "string-split-projection" ||
-					  candidate.kind === "string-slice-number" ||
-					  candidate.kind === "regexp-exec-projection" ||
-					  candidate.kind === "string-char-code-at-chain" ||
-					  candidate.kind === "builtin-collection-call-chain"
-					? builtin!.guard.dependencies
-					: Object.freeze([]);
-	const admission = Object.freeze({
-		anchor: admissionAnchor,
-		mode:
+	const materialize = (): CorePlanSpecialization => {
+		const blocks = Object.freeze(
+			[
+				...new Set(
+					instructions
+						.filter((instruction) => fn.isInstructionLive(instruction))
+						.map((instruction) => fn.instructionBlock(instruction)),
+				),
+			].sort((left, right) => left - right),
+		);
+		const anchors =
+			candidate.kind === "fresh-array-length"
+				? Object.freeze([candidate.load])
+				: candidate.kind === "indexed-length-loop"
+					? Object.freeze([candidate.load, candidate.comparison])
+					: isIteratorCursorCandidate(candidate)
+						? Object.freeze([candidate.initialize, candidate.steps[0]!])
+						: candidate.kind === "iterator-result-virtualization"
+							? Object.freeze([candidate.steps[0]!])
+							: candidate.kind === "iterator-entry-pair-virtualization"
+								? Object.freeze([candidate.outerStep, candidate.innerInitialize])
+								: candidate.kind === "string-split-cursor"
+									? Object.freeze([
+											candidate.call,
+											candidate.branch,
+											candidate.length,
+											candidate.backedge,
+										])
+									: candidate.kind === "string-split-projection"
+										? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
+										: candidate.kind === "string-slice-number"
+											? Object.freeze([candidate.sliceCall, candidate.numberCall])
+											: candidate.kind === "regexp-exec-projection"
+												? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
+												: candidate.kind === "regexp-iterator-projection"
+													? Object.freeze([
+															candidate.step,
+															candidate.doneBranch,
+															candidate.loads[0]!.instruction,
+														])
+													: candidate.kind === "string-char-code-at-chain" ||
+														  candidate.kind === "builtin-collection-call-chain" ||
+														  candidate.kind === "function-call-chain"
+														? Object.freeze([candidate.property, candidate.call])
+														: Object.freeze([candidate.root]);
+		const exceptionalBlocks =
+			candidate.kind === "fresh-array-length" ||
+			candidate.kind === "indexed-length-loop" ||
+			isIteratorCursorCandidate(candidate) ||
+			candidate.kind === "iterator-result-virtualization" ||
+			candidate.kind === "iterator-entry-pair-virtualization" ||
+			candidate.kind === "string-split-cursor" ||
+			candidate.kind === "string-slice-number" ||
+			candidate.kind === "regexp-iterator-projection" ||
 			candidate.kind === "string-char-code-at-chain" ||
 			candidate.kind === "builtin-collection-call-chain" ||
-			candidate.kind === "iterator-entry-pair-virtualization" ||
 			candidate.kind === "function-call-chain"
-				? ("capture" as const)
-				: corePlanAdmissionMode(fn, cfg, {
-						anchor: admissionAnchor,
-						dependencies: admissionDependencies,
-						claimedInstructions: instructions,
-						ordinaryBlocks: blocks,
-						exceptionalBlocks,
-					}),
-	});
-	const common = {
-		id: candidate.key,
-		function: candidate.function,
-		anchors,
-		claimedInstructions: instructions,
-		ordinaryBlocks: blocks,
-		exceptionalBlocks,
-		requiredRepresentations: localRequirements(program, candidate, instructions),
-		target: "native",
-		fallback: "canonical-core",
-		semanticProtectors: Object.freeze([]),
-		targetFunctions: Object.freeze(
-			candidate.kind === "function-call-chain" && candidate.targetFunction !== undefined
-				? [candidate.targetFunction]
-				: [],
-		),
-		admission,
-		cost: Object.freeze({
-			generatedCode: cost.estimatedCStatements,
-			compilerWork: cost.compileScore,
-			runtimeBenefit: cost.runtimeScore + candidate.fanOut,
-		}),
-	} as const;
-	const propertyPlacement = (
-		property: CoreInstructionId | undefined,
-		call: CoreInstructionId,
-	) =>
-		property !== undefined &&
-		builtin?.identity === "authority-invariant" &&
-		fn.instructionBlock(property) === fn.instructionBlock(call)
-			? ("call-fallback" as const)
-			: ("in-place" as const);
-	const selection: CorePlanSpecialization = Object.freeze(
-		candidate.kind === "fresh-array-length"
-			? {
-					...common,
-					kind: "fresh-array-length",
-					representation: "exact-array-length",
-					composition: "exclusive",
-					freshArrayLength: Object.freeze({
-						allocation: candidate.allocation,
-						load: candidate.load,
-						length: candidate.length,
-					}),
-				}
-			: candidate.kind === "indexed-length-loop"
+				? candidate.exceptionalBlocks
+				: Object.freeze([]);
+		const admissionAnchor =
+			candidate.kind === "string-split-cursor" ||
+			candidate.kind === "string-split-projection"
+				? (candidate.property ?? candidate.call)
+				: candidate.kind === "string-slice-number"
+					? (candidate.property ?? candidate.sliceCall)
+					: candidate.kind === "regexp-exec-projection"
+						? (candidate.property ?? candidate.call)
+						: candidate.kind === "string-char-code-at-chain" ||
+							  candidate.kind === "builtin-collection-call-chain" ||
+							  candidate.kind === "function-call-chain"
+							? candidate.property
+							: anchors[0]!;
+		const admissionDependencies =
+			candidate.kind === "string-split-cursor"
+				? mergePlanGuards(splitCursorProofs!.split!.guard, splitCursorProofs!.trim!.guard)
+						.dependencies
+				: candidate.kind === "regexp-iterator-projection" ||
+					  candidate.kind === "iterator-entry-pair-virtualization"
+					? protector!.guard.dependencies
+					: candidate.kind === "string-split-projection" ||
+						  candidate.kind === "string-slice-number" ||
+						  candidate.kind === "regexp-exec-projection" ||
+						  candidate.kind === "string-char-code-at-chain" ||
+						  candidate.kind === "builtin-collection-call-chain"
+						? builtin!.guard.dependencies
+						: Object.freeze([]);
+		const admission = Object.freeze({
+			anchor: admissionAnchor,
+			mode:
+				candidate.kind === "string-char-code-at-chain" ||
+				candidate.kind === "builtin-collection-call-chain" ||
+				candidate.kind === "iterator-entry-pair-virtualization" ||
+				candidate.kind === "function-call-chain"
+					? ("capture" as const)
+					: corePlanAdmissionMode(fn, cfg, {
+							anchor: admissionAnchor,
+							dependencies: admissionDependencies,
+							claimedInstructions: instructions,
+							ordinaryBlocks: blocks,
+							exceptionalBlocks,
+						}),
+		});
+		const common = {
+			id: candidate.key,
+			function: candidate.function,
+			anchors,
+			claimedInstructions: instructions,
+			ordinaryBlocks: blocks,
+			exceptionalBlocks,
+			requiredRepresentations: localRequirements(program, candidate, instructions),
+			target: "native",
+			fallback: "canonical-core",
+			semanticProtectors: Object.freeze([]),
+			targetFunctions: Object.freeze(
+				candidate.kind === "function-call-chain" && candidate.targetFunction !== undefined
+					? [candidate.targetFunction]
+					: [],
+			),
+			admission,
+			cost: Object.freeze({
+				generatedCode: cost.estimatedCStatements,
+				compilerWork: cost.compileScore,
+				runtimeBenefit: cost.runtimeScore + candidate.fanOut,
+			}),
+		} as const;
+		const propertyPlacement = (
+			property: CoreInstructionId | undefined,
+			call: CoreInstructionId,
+		) =>
+			property !== undefined &&
+			builtin?.identity === "authority-invariant" &&
+			fn.instructionBlock(property) === fn.instructionBlock(call)
+				? ("call-fallback" as const)
+				: ("in-place" as const);
+		const selection: CorePlanSpecialization = Object.freeze(
+			candidate.kind === "fresh-array-length"
 				? {
 						...common,
-						kind: "indexed-length-loop",
-						representation: "live-indexed-length-loops",
+						kind: "fresh-array-length",
+						representation: "exact-array-length",
 						composition: "exclusive",
-						indexedLengthLoop: Object.freeze({
+						freshArrayLength: Object.freeze({
+							allocation: candidate.allocation,
 							load: candidate.load,
-							comparison: candidate.comparison,
-							lengthPosition: candidate.lengthPosition,
-							...(candidate.reverseInduction === undefined
-								? {}
-								: { reverseInduction: candidate.reverseInduction }),
-							elements: candidate.elements,
+							length: candidate.length,
 						}),
 					}
-				: isIteratorCursorCandidate(candidate)
+				: candidate.kind === "indexed-length-loop"
 					? {
 							...common,
-							kind: candidate.kind,
-							representation: {
-								"array-values-iterator-cursor": "array-values-authoritative-cursor",
-								"string-iterator-cursor": "string-authoritative-cursor",
-								"typed-array-iterator-cursor": "typed-array-authoritative-cursor",
-								"map-iterator-cursor": "map-authoritative-cursor",
-								"set-iterator-cursor": "set-authoritative-cursor",
-							}[candidate.kind],
+							kind: "indexed-length-loop",
+							representation: "live-indexed-length-loops",
 							composition: "exclusive",
-							iteratorCursor: Object.freeze({
-								initialize: candidate.initialize,
-								steps: candidate.steps,
-								protocol: candidate.protocol,
+							indexedLengthLoop: Object.freeze({
+								load: candidate.load,
+								comparison: candidate.comparison,
+								lengthPosition: candidate.lengthPosition,
+								...(candidate.reverseInduction === undefined
+									? {}
+									: { reverseInduction: candidate.reverseInduction }),
+								elements: candidate.elements,
 							}),
 						}
-					: candidate.kind === "iterator-result-virtualization"
+					: isIteratorCursorCandidate(candidate)
 						? {
 								...common,
-								kind: "iterator-result-virtualization",
-								representation: "virtual-iterator-result",
-								composition: "overlay",
-								iteratorResultVirtualization: Object.freeze({
-									guard: structuralMaterializationGuard(
-										"iterator-result-virtualization",
-										candidate.function,
-										candidate.steps[0]!,
-									),
+								kind: candidate.kind,
+								representation: {
+									"array-values-iterator-cursor": "array-values-authoritative-cursor",
+									"string-iterator-cursor": "string-authoritative-cursor",
+									"typed-array-iterator-cursor": "typed-array-authoritative-cursor",
+									"map-iterator-cursor": "map-authoritative-cursor",
+									"set-iterator-cursor": "set-authoritative-cursor",
+								}[candidate.kind],
+								composition: "exclusive",
+								iteratorCursor: Object.freeze({
+									initialize: candidate.initialize,
 									steps: candidate.steps,
+									protocol: candidate.protocol,
 								}),
 							}
-						: candidate.kind === "iterator-entry-pair-virtualization"
+						: candidate.kind === "iterator-result-virtualization"
 							? {
 									...common,
-									kind: "iterator-entry-pair-virtualization",
-									representation: "virtual-iterator-entry-pair",
+									kind: "iterator-result-virtualization",
+									representation: "virtual-iterator-result",
 									composition: "overlay",
-									iteratorEntryPairVirtualization: Object.freeze({
-										guard: protector!.guard,
-										cursorInitialize: candidate.cursorInitialize,
-										outerStep: candidate.outerStep,
-										innerInitialize: candidate.innerInitialize,
-										innerSteps: candidate.innerSteps,
-										innerCloses: candidate.innerCloses,
+									iteratorResultVirtualization: Object.freeze({
+										guard: structuralMaterializationGuard(
+											"iterator-result-virtualization",
+											candidate.function,
+											candidate.steps[0]!,
+										),
+										steps: candidate.steps,
 									}),
 								}
-							: candidate.kind === "stack-object"
+							: candidate.kind === "iterator-entry-pair-virtualization"
 								? {
 										...common,
-										kind: "stack-object-plan",
-										representation: "activation-local-fixed-shape-objects",
-										composition: "exclusive",
-										stackObject: Object.freeze({
-											allocation: candidate.allocation,
-											mode: candidate.mode,
-											slotCount: candidate.slotCount,
-											accesses: candidate.accesses,
-											materializations: candidate.materializations,
+										kind: "iterator-entry-pair-virtualization",
+										representation: "virtual-iterator-entry-pair",
+										composition: "overlay",
+										iteratorEntryPairVirtualization: Object.freeze({
+											guard: protector!.guard,
+											cursorInitialize: candidate.cursorInitialize,
+											outerStep: candidate.outerStep,
+											innerInitialize: candidate.innerInitialize,
+											innerSteps: candidate.innerSteps,
+											innerCloses: candidate.innerCloses,
 										}),
 									}
-								: candidate.kind === "dense-array"
+								: candidate.kind === "stack-object"
 									? {
 											...common,
-											kind: "dense-array-plan",
-											representation: "fresh-dense-indexed-fill",
+											kind: "stack-object-plan",
+											representation: "activation-local-fixed-shape-objects",
 											composition: "exclusive",
-											denseArray: Object.freeze({
+											stackObject: Object.freeze({
 												allocation: candidate.allocation,
-												store: candidate.store,
-												loopHeader: candidate.loopHeader,
-												length: candidate.length,
+												mode: candidate.mode,
+												slotCount: candidate.slotCount,
+												accesses: candidate.accesses,
+												materializations: candidate.materializations,
 											}),
 										}
-									: candidate.kind === "numeric-fusion"
+									: candidate.kind === "dense-array"
 										? {
 												...common,
-												kind: "numeric-fusion",
-												representation: "binary-pairs-f64",
-												composition: "overlay",
+												kind: "dense-array-plan",
+												representation: "fresh-dense-indexed-fill",
+												composition: "exclusive",
+												denseArray: Object.freeze({
+													allocation: candidate.allocation,
+													store: candidate.store,
+													loopHeader: candidate.loopHeader,
+													length: candidate.length,
+												}),
 											}
-										: candidate.kind === "string-split-cursor"
+										: candidate.kind === "numeric-fusion"
 											? {
 													...common,
-													kind: "string-split-cursor",
-													representation: "split-cursor-spans",
-													composition: "exclusive",
-													stringSplitCursor: Object.freeze({
-														guard: mergePlanGuards(
-															splitCursorProofs!.split!.guard,
-															splitCursorProofs!.trim!.guard,
-														),
-														splitBuiltinCall: splitCursorProofs!.split!.builtinCall,
-														trimBuiltinCall: splitCursorProofs!.trim!.builtinCall,
-														...(candidate.property === undefined
-															? {}
-															: { property: candidate.property }),
-														propertyPlacement:
-															candidate.property !== undefined &&
-															splitCursorProofs!.split!.identity ===
-																"authority-invariant" &&
-															fn.instructionBlock(candidate.property) ===
-																fn.instructionBlock(candidate.call)
-																? "call-fallback"
-																: "in-place",
-														splitIdentity: splitCursorProofs!.split!.identity,
-														trimIdentity: splitCursorProofs!.trim!.identity,
-														call: candidate.call,
-														length: candidate.length,
-														compare: candidate.compare,
-														branch: candidate.branch,
-														element: candidate.element,
-														trimProperty: candidate.trimProperty,
-														trimCall: candidate.trimCall,
-														...(candidate.advance === undefined
-															? {}
-															: { advance: candidate.advance }),
-														increment: candidate.increment,
-														backedge: candidate.backedge,
-														resultValues: candidate.resultValues,
-														primitiveStringLengths: candidate.primitiveStringLengths,
-														exitBlock: candidate.exitBlock,
-													}),
+													kind: "numeric-fusion",
+													representation: "binary-pairs-f64",
+													composition: "overlay",
 												}
-											: candidate.kind === "string-split-projection"
+											: candidate.kind === "string-split-cursor"
 												? {
 														...common,
-														kind: "string-split-projection",
-														representation: "projected-elements",
+														kind: "string-split-cursor",
+														representation: "split-cursor-spans",
 														composition: "exclusive",
-														stringSplitProjection: Object.freeze({
-															guard: builtin!.guard,
-															builtinCall: builtin!.builtinCall,
+														stringSplitCursor: Object.freeze({
+															guard: mergePlanGuards(
+																splitCursorProofs!.split!.guard,
+																splitCursorProofs!.trim!.guard,
+															),
+															splitBuiltinCall: splitCursorProofs!.split!.builtinCall,
+															trimBuiltinCall: splitCursorProofs!.trim!.builtinCall,
 															...(candidate.property === undefined
 																? {}
 																: { property: candidate.property }),
-															propertyPlacement: propertyPlacement(
-																candidate.property,
-																candidate.call,
-															),
-															splitIdentity: builtin!.identity,
+															propertyPlacement:
+																candidate.property !== undefined &&
+																splitCursorProofs!.split!.identity ===
+																	"authority-invariant" &&
+																fn.instructionBlock(candidate.property) ===
+																	fn.instructionBlock(candidate.call)
+																	? "call-fallback"
+																	: "in-place",
+															splitIdentity: splitCursorProofs!.split!.identity,
+															trimIdentity: splitCursorProofs!.trim!.identity,
 															call: candidate.call,
-															separator: candidate.separator,
-															separatorStringIndex: candidate.separatorStringIndex,
+															length: candidate.length,
+															compare: candidate.compare,
+															branch: candidate.branch,
+															element: candidate.element,
+															trimProperty: candidate.trimProperty,
+															trimCall: candidate.trimCall,
+															...(candidate.advance === undefined
+																? {}
+																: { advance: candidate.advance }),
+															increment: candidate.increment,
+															backedge: candidate.backedge,
 															resultValues: candidate.resultValues,
-															loads: candidate.loads,
+															primitiveStringLengths: candidate.primitiveStringLengths,
+															exitBlock: candidate.exitBlock,
 														}),
 													}
-												: candidate.kind === "string-slice-number"
+												: candidate.kind === "string-split-projection"
 													? {
 															...common,
-															kind: "string-slice-number",
-															representation: "primitive-string-span-number",
+															kind: "string-split-projection",
+															representation: "projected-elements",
 															composition: "exclusive",
-															stringSliceNumber: Object.freeze({
+															stringSplitProjection: Object.freeze({
 																guard: builtin!.guard,
 																builtinCall: builtin!.builtinCall,
-																property: candidate.property,
+																...(candidate.property === undefined
+																	? {}
+																	: { property: candidate.property }),
 																propertyPlacement: propertyPlacement(
 																	candidate.property,
-																	candidate.sliceCall,
+																	candidate.call,
 																),
-																builtinIdentities: builtin!.identity,
-																sliceCall: candidate.sliceCall,
-																sliceStartInstruction: candidate.sliceStartInstruction,
-																numberIntrinsic: candidate.numberIntrinsic,
-																numberCall: candidate.numberCall,
-																sliceStart: candidate.sliceStart,
+																splitIdentity: builtin!.identity,
+																call: candidate.call,
+																separator: candidate.separator,
+																separatorStringIndex: candidate.separatorStringIndex,
+																resultValues: candidate.resultValues,
+																loads: candidate.loads,
 															}),
 														}
-													: candidate.kind === "regexp-exec-projection"
+													: candidate.kind === "string-slice-number"
 														? {
 																...common,
-																kind: "regexp-exec-projection",
-																representation: "regexp-capture-spans",
+																kind: "string-slice-number",
+																representation: "primitive-string-span-number",
 																composition: "exclusive",
-																regexpExecProjection: Object.freeze({
+																stringSliceNumber: Object.freeze({
 																	guard: builtin!.guard,
 																	builtinCall: builtin!.builtinCall,
 																	property: candidate.property,
-																	propertyPlacement:
-																		lockedLiteral !== undefined &&
-																		candidate.property !== undefined &&
-																		fn.instructionBlock(candidate.property) ===
-																			fn.instructionBlock(candidate.call)
-																			? "call-fallback"
-																			: "in-place",
-																	call: candidate.call,
-																	resultValues: candidate.resultValues,
-																	nullChecks: candidate.nullChecks,
-																	...(lockedLiteral === undefined
-																		? {}
-																		: { lockedLiteral }),
-																	loads: Object.freeze(
-																		candidate.loads.map((load) => {
-																			const base = {
-																				instruction: load.instruction,
-																				key: load.key,
-																				captureIndex: load.captureIndex,
-																			};
-																			const consumer = load.consumer;
-																			if (consumer === undefined) return base;
-																			if (consumer.kind === "length") {
-																				return {
-																					...base,
-																					consumer: { ...consumer },
-																				};
-																			}
-																			if (consumer.kind === "number") {
-																				return {
-																					...base,
-																					consumer: { ...consumer },
-																				};
-																			}
-																			return {
-																				...base,
-																				consumer: {
-																					...consumer,
-																					methodIdentity: builtin!.identity,
-																				},
-																			};
-																		}),
+																	propertyPlacement: propertyPlacement(
+																		candidate.property,
+																		candidate.sliceCall,
 																	),
+																	builtinIdentities: builtin!.identity,
+																	sliceCall: candidate.sliceCall,
+																	sliceStartInstruction: candidate.sliceStartInstruction,
+																	numberIntrinsic: candidate.numberIntrinsic,
+																	numberCall: candidate.numberCall,
+																	sliceStart: candidate.sliceStart,
 																}),
 															}
-														: candidate.kind === "regexp-iterator-projection"
+														: candidate.kind === "regexp-exec-projection"
 															? {
 																	...common,
-																	kind: "regexp-iterator-projection",
-																	representation: "regexp-iterator-capture-spans",
+																	kind: "regexp-exec-projection",
+																	representation: "regexp-capture-spans",
 																	composition: "exclusive",
-																	regexpIteratorProjection: Object.freeze({
-																		guard: protector!.guard,
-																		step: candidate.step,
-																		doneBranch: candidate.doneBranch,
-																		exitBlock: candidate.exitBlock,
+																	regexpExecProjection: Object.freeze({
+																		guard: builtin!.guard,
+																		builtinCall: builtin!.builtinCall,
+																		property: candidate.property,
+																		propertyPlacement:
+																			lockedLiteral !== undefined &&
+																			candidate.property !== undefined &&
+																			fn.instructionBlock(candidate.property) ===
+																				fn.instructionBlock(candidate.call)
+																				? "call-fallback"
+																				: "in-place",
+																		call: candidate.call,
 																		resultValues: candidate.resultValues,
-																		loads: candidate.loads,
+																		nullChecks: candidate.nullChecks,
+																		...(lockedLiteral === undefined
+																			? {}
+																			: { lockedLiteral }),
+																		loads: Object.freeze(
+																			candidate.loads.map((load) => {
+																				const base = {
+																					instruction: load.instruction,
+																					key: load.key,
+																					captureIndex: load.captureIndex,
+																				};
+																				const consumer = load.consumer;
+																				if (consumer === undefined) return base;
+																				if (consumer.kind === "length") {
+																					return {
+																						...base,
+																						consumer: { ...consumer },
+																					};
+																				}
+																				if (consumer.kind === "number") {
+																					return {
+																						...base,
+																						consumer: { ...consumer },
+																					};
+																				}
+																				return {
+																					...base,
+																					consumer: {
+																						...consumer,
+																						methodIdentity: builtin!.identity,
+																					},
+																				};
+																			}),
+																		),
 																	}),
 																}
-															: candidate.kind === "string-char-code-at-chain"
+															: candidate.kind === "regexp-iterator-projection"
 																? {
 																		...common,
-																		kind: "string-char-code-at-chain",
-																		representation: "primitive-string-code-unit",
+																		kind: "regexp-iterator-projection",
+																		representation: "regexp-iterator-capture-spans",
 																		composition: "exclusive",
-																		stringCharCodeAt: Object.freeze({
-																			guard: builtin!.guard,
-																			builtinCall: builtin!.builtinCall,
-																			property: candidate.property,
-																			call: candidate.call,
-																			methodIdentity: builtin!.identity,
-																			...(candidate.bounded === undefined
-																				? {}
-																				: { bounded: candidate.bounded }),
+																		regexpIteratorProjection: Object.freeze({
+																			guard: protector!.guard,
+																			step: candidate.step,
+																			doneBranch: candidate.doneBranch,
+																			exitBlock: candidate.exitBlock,
+																			resultValues: candidate.resultValues,
+																			loads: candidate.loads,
 																		}),
 																	}
-																: candidate.kind === "function-call-chain"
+																: candidate.kind === "string-char-code-at-chain"
 																	? {
 																			...common,
-																			kind: "function-call-chain",
-																			representation: "guarded-function-call-flattening",
+																			kind: "string-char-code-at-chain",
+																			representation: "primitive-string-code-unit",
 																			composition: "exclusive",
-																			functionCall: Object.freeze({
-																				property: candidate.property,
-																				call: candidate.call,
-																				...(candidate.targetFunction === undefined
-																					? {}
-																					: {
-																							targetFunction: candidate.targetFunction,
-																						}),
-																			}),
-																		}
-																	: {
-																			...common,
-																			kind: "builtin-collection-call-chain",
-																			representation: "captured-collection-method",
-																			composition: "exclusive",
-																			builtinCollectionCall: Object.freeze({
+																			stringCharCodeAt: Object.freeze({
 																				guard: builtin!.guard,
 																				builtinCall: builtin!.builtinCall,
 																				property: candidate.property,
 																				call: candidate.call,
-																				operation: candidate.operation,
-																				...(candidate.exactReceiver === undefined
+																				methodIdentity: builtin!.identity,
+																				...(candidate.bounded === undefined
 																					? {}
-																					: {
-																							exactReceiver: candidate.exactReceiver,
-																						}),
+																					: { bounded: candidate.bounded }),
 																			}),
-																		},
-	);
+																		}
+																	: candidate.kind === "function-call-chain"
+																		? {
+																				...common,
+																				kind: "function-call-chain",
+																				representation:
+																					"guarded-function-call-flattening",
+																				composition: "exclusive",
+																				functionCall: Object.freeze({
+																					property: candidate.property,
+																					call: candidate.call,
+																					...(candidate.targetFunction === undefined
+																						? {}
+																						: {
+																								targetFunction: candidate.targetFunction,
+																							}),
+																				}),
+																			}
+																		: {
+																				...common,
+																				kind: "builtin-collection-call-chain",
+																				representation: "captured-collection-method",
+																				composition: "exclusive",
+																				builtinCollectionCall: Object.freeze({
+																					guard: builtin!.guard,
+																					builtinCall: builtin!.builtinCall,
+																					property: candidate.property,
+																					call: candidate.call,
+																					operation: candidate.operation,
+																					...(candidate.exactReceiver === undefined
+																						? {}
+																						: {
+																								exactReceiver: candidate.exactReceiver,
+																							}),
+																				}),
+																			},
+		);
+		return selection;
+	};
 	return {
-		selection,
+		materialize,
+		source: candidate,
+		claims: {
+			function: candidate.function,
+			kind,
+			claimedInstructions: instructions,
+			composition:
+				candidate.kind === "numeric-fusion" ||
+				candidate.kind === "iterator-result-virtualization" ||
+				candidate.kind === "iterator-entry-pair-virtualization"
+					? "overlay"
+					: "exclusive",
+		},
 		budget: {
 			kind,
 			caller: candidate.function,
 			site: candidate.root,
 			revision: 0,
 			priorityClass: 0,
-			priorityScore: -selection.cost.runtimeBenefit,
+			priorityScore: -(cost.runtimeScore + candidate.fanOut),
 			targets: Object.freeze(
 				candidate.kind === "function-call-chain" && candidate.targetFunction !== undefined
 					? [candidate.targetFunction]
 					: [],
 			),
-			generatedCodeCost: selection.cost.generatedCode,
-			compilerWorkCost: selection.cost.compilerWork,
+			generatedCodeCost: cost.estimatedCStatements,
+			compilerWorkCost: cost.compileScore,
 			expansive:
 				candidate.kind !== "builtin-collection-call-chain" &&
 				candidate.kind !== "iterator-entry-pair-virtualization",
@@ -1190,37 +1213,44 @@ function guardedCallOpportunities(
 				compilerWorkCost: 1,
 				priorityScore: -(loopBlocks.has(fn.instructionBlock(site.instruction)) ? 32 : 8),
 				resolve: () => {
-					const selection: CorePlanSpecialization = Object.freeze({
-						id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
-						kind: "guarded-direct-call",
-						function: caller,
-						anchors: Object.freeze([site.instruction]),
-						claimedInstructions: Object.freeze([site.instruction]),
-						ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
-						exceptionalBlocks: Object.freeze([]),
-						representation:
-							!site.open && targetFunctions.length === 1
-								? "exact-function"
-								: "finite-function-set",
-						requiredRepresentations: Object.freeze([]),
-						target: "native",
-						fallback: "canonical-core",
-						semanticProtectors: Object.freeze([]),
-						targetFunctions,
-						admission: Object.freeze({
-							anchor: site.instruction,
-							mode: "per-use" as const,
-						}),
-						composition: "overlay",
-						cost: Object.freeze({
-							generatedCode: targetFunctions.length,
-							compilerWork: 1,
-							runtimeBenefit: 8,
-						}),
-					});
+					const materialize = (): CorePlanSpecialization =>
+						Object.freeze({
+							id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
+							kind: "guarded-direct-call",
+							function: caller,
+							anchors: Object.freeze([site.instruction]),
+							claimedInstructions: Object.freeze([site.instruction]),
+							ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
+							exceptionalBlocks: Object.freeze([]),
+							representation:
+								!site.open && targetFunctions.length === 1
+									? "exact-function"
+									: "finite-function-set",
+							requiredRepresentations: Object.freeze([]),
+							target: "native",
+							fallback: "canonical-core",
+							semanticProtectors: Object.freeze([]),
+							targetFunctions,
+							admission: Object.freeze({
+								anchor: site.instruction,
+								mode: "per-use" as const,
+							}),
+							composition: "overlay",
+							cost: Object.freeze({
+								generatedCode: targetFunctions.length,
+								compilerWork: 1,
+								runtimeBenefit: 8,
+							}),
+						});
 					return [
 						{
-							selection,
+							materialize,
+							claims: {
+								function: caller,
+								kind: "guarded-direct-call",
+								composition: "overlay",
+								claimedInstructions: [site.instruction],
+							},
 							budget: {
 								kind: "guarded-direct-call",
 								caller,
@@ -1229,8 +1259,8 @@ function guardedCallOpportunities(
 								priorityClass: 1,
 								priorityScore: 0,
 								targets: targetFunctions,
-								generatedCodeCost: selection.cost.generatedCode,
-								compilerWorkCost: selection.cost.compilerWork,
+								generatedCodeCost: targetFunctions.length,
+								compilerWorkCost: 1,
 								expansive: false,
 							},
 						},
@@ -1432,9 +1462,10 @@ function directEntryOpportunities(
 				const exactRestLengths = new Map<CoreFunctionId, Set<CoreInstructionId>>();
 				if (observation.restStarts.length > 0) {
 					for (const candidate of localCandidates(target)) {
-						if (candidate.selection.kind !== "indexed-length-loop") continue;
+						const source = candidate.source;
+						if (source?.kind !== "indexed-length-loop") continue;
 						const fn = program.function(target);
-						const length = candidate.selection.indexedLengthLoop.load;
+						const length = source.load;
 						const lengthReceiver = fn.kernel.operandAt(
 							fn.kernel.instructionOperandStart(length),
 						);
@@ -1448,7 +1479,7 @@ function directEntryOpportunities(
 								exactRestLengths.set(target, lengths);
 							}
 						}
-						for (const element of candidate.selection.indexedLengthLoop.elements) {
+						for (const element of source.elements) {
 							if (element.kind !== "load" || !element.arrayIndexIsUint32) continue;
 							const receiver = fn.kernel.operandAt(
 								fn.kernel.instructionOperandStart(element.instruction),
@@ -1694,7 +1725,7 @@ function directEntryOpportunities(
 }
 
 function conflicts(
-	selection: CorePlanSpecialization,
+	selection: CorePendingClaims,
 	claimed: ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreInstructionId, ClaimState>>,
 ): boolean {
 	const owned = claimed.get(selection.function);
@@ -1720,7 +1751,7 @@ interface ClaimState {
 }
 
 function claim(
-	selection: CorePlanSpecialization,
+	selection: CorePendingClaims,
 	claimed: Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>,
 ): void {
 	const owned =
@@ -1745,6 +1776,7 @@ export interface BuildCoreOptimizationPlanOptions {
 	readonly localInputs?: ReadonlyArray<CoreLocalOptimizationPlanInput>;
 	readonly discoverCandidates?: boolean;
 	readonly onPhase?: (phase: "discovery" | "selection", elapsedMs: number) => void;
+	readonly onMaterialize?: () => void;
 	readonly onLocalCandidates?: (
 		functionId: CoreFunctionId,
 		candidates: ReadonlyArray<CoreLocalCandidateSummary>,
@@ -1924,7 +1956,7 @@ export function buildCoreOptimizationPlan(
 			if (
 				reason === undefined &&
 				!isPendingDirectEntry(candidate) &&
-				conflicts(candidate.selection, claimed)
+				conflicts(candidate.claims, claimed)
 			) {
 				reason = "overlap";
 			}
@@ -1980,8 +2012,9 @@ export function buildCoreOptimizationPlan(
 				);
 				directEntriesByFunction.set(candidate.function, entries);
 			} else {
-				claim(candidate.selection, claimed);
-				specializations.push(candidate.selection);
+				claim(candidate.claims, claimed);
+				specializations.push(candidate.materialize());
+				options.onMaterialize?.();
 			}
 		}
 	}

@@ -377,27 +377,36 @@ function verifyBlockOrders(
 	return proofs;
 }
 
+type CoreLocalCandidateCache = Map<
+	CoreFunctionId,
+	{
+		readonly kinds: Set<CoreLocalSpecializationCandidate["kind"]>;
+		candidates?: ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>;
+	}
+>;
+
 function localCandidate(
 	program: SealedCoreProgram,
-	cache: Map<
-		CoreFunctionId,
-		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
-	>,
+	cache: CoreLocalCandidateCache,
 	functionId: CoreFunctionId,
 	key: string,
 ): CoreLocalSpecializationCandidate | undefined {
-	let candidates = cache.get(functionId);
+	const requested = cache.get(functionId)!;
+	let candidates = requested.candidates;
 	if (candidates === undefined) {
 		const indexed = new Map<number, Array<CoreLocalSpecializationCandidate>>();
-		for (const candidate of discoverCoreLocalSpecializationCandidates(program, functionId)
-			.candidates) {
+		for (const candidate of discoverCoreLocalSpecializationCandidates(
+			program,
+			functionId,
+			requested.kinds,
+		).candidates) {
 			const hash = numericStringHash(candidate.key);
 			const bucket = indexed.get(hash) ?? [];
 			bucket.push(candidate);
 			indexed.set(hash, bucket);
 		}
 		candidates = indexed;
-		cache.set(functionId, candidates);
+		requested.candidates = candidates;
 	}
 	return candidates
 		.get(numericStringHash(key))
@@ -578,7 +587,7 @@ function specializationAdmissionAnchor(
 }
 
 function verifySpecializationAdmission(
-	program: SealedCoreProgram,
+	control: () => CoreControlFlow,
 	fn: CoreFunctionStore,
 	selection: CorePlanSpecialization,
 ): void {
@@ -627,13 +636,15 @@ function verifySpecializationAdmission(
 			? "capture"
 			: selection.kind === "guarded-direct-call"
 				? "per-use"
-				: corePlanAdmissionMode(fn, buildCoreControlFlow(program, selection.function), {
-						anchor: admission.anchor,
-						dependencies,
-						claimedInstructions: selection.claimedInstructions,
-						ordinaryBlocks: selection.ordinaryBlocks,
-						exceptionalBlocks: selection.exceptionalBlocks,
-					});
+				: !dependencies.some((dependency) => dependency.kind === "epoch")
+					? "stable"
+					: corePlanAdmissionMode(fn, control(), {
+							anchor: admission.anchor,
+							dependencies,
+							claimedInstructions: selection.claimedInstructions,
+							ordinaryBlocks: selection.ordinaryBlocks,
+							exceptionalBlocks: selection.exceptionalBlocks,
+						});
 	if (admission.mode !== expected) {
 		fail(
 			`${selection.id} claims ${admission.mode} admission where Core proves ${expected}`,
@@ -657,10 +668,8 @@ function verifySpecialization(
 		>
 	>,
 	blocks: CorePlanBlockProof,
-	localCandidates: Map<
-		CoreFunctionId,
-		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
-	>,
+	localCandidates: CoreLocalCandidateCache,
+	control: () => CoreControlFlow,
 ): void {
 	if (ids.includes(selection.id)) fail(`duplicate specialization id ${selection.id}`);
 	ids.push(selection.id);
@@ -685,7 +694,7 @@ function verifySpecialization(
 		requireInstruction(fn, anchor, "anchor", selection.id);
 		if (!claims.has(anchor)) fail(`${selection.id} anchor @${anchor} is not claimed`);
 	}
-	verifySpecializationAdmission(program, fn, selection);
+	verifySpecializationAdmission(control, fn, selection);
 	const ordinary = new Set(selection.ordinaryBlocks);
 	const exceptional = new Set(selection.exceptionalBlocks);
 	for (const block of [...ordinary, ...exceptional]) {
@@ -898,7 +907,7 @@ function verifySpecialization(
 							),
 						),
 					].sort((left, right) => left - right);
-		const cfg = buildCoreControlFlow(program, selection.function);
+		const cfg = control();
 		const loadBlock = fn.instructionBlock(indexed.load);
 		const comparisonBlock = fn.instructionBlock(indexed.comparison);
 		const loadDominatesComparison =
@@ -1849,11 +1858,31 @@ export function verifyCoreOptimizationPlan(
 			}
 		>
 	>();
-	const localCandidates = new Map<
-		CoreFunctionId,
-		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
-	>();
+	const localCandidates: CoreLocalCandidateCache = new Map();
 	const specializations = projectCoreSpecializationRecipes(plan.recipes);
+	for (const selection of specializations) {
+		if (selection.kind === "guarded-direct-call") continue;
+		const requested = localCandidates.get(selection.function) ?? {
+			kinds: new Set<CoreLocalSpecializationCandidate["kind"]>(),
+		};
+		requested.kinds.add(
+			selection.kind === "stack-object-plan"
+				? "stack-object"
+				: selection.kind === "dense-array-plan"
+					? "dense-array"
+					: selection.kind,
+		);
+		localCandidates.set(selection.function, requested);
+	}
+	const controls = new Map<CoreFunctionId, CoreControlFlow>();
+	const control = (functionId: CoreFunctionId): CoreControlFlow => {
+		let cfg = controls.get(functionId);
+		if (cfg === undefined) {
+			cfg = buildCoreControlFlow(program, functionId);
+			controls.set(functionId, cfg);
+		}
+		return cfg;
+	};
 	for (const selection of specializations) {
 		verifySpecialization(
 			program,
@@ -1863,6 +1892,7 @@ export function verifyCoreOptimizationPlan(
 			claimedInstructions,
 			blockProofs.get(selection.function)!,
 			localCandidates,
+			() => control(selection.function),
 		);
 	}
 	for (const operation of plan.builtinInputs ?? []) {

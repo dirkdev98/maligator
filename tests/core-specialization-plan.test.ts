@@ -6,6 +6,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { discoverCoreLocalSpecializationCandidates } from "../src/compiler/core/core-ir-provenance.ts";
 import {
 	buildCoreLocalOptimizationPlanInput,
 	buildCoreOptimizationPlan,
@@ -545,6 +546,52 @@ describe("late Core specialization plan", () => {
 		expect(planSpecializations(declined)).toEqual([]);
 		expect(declined.statistics.discovery.attempted).toBe(0);
 		expect(declined.statistics.discovery.skippedByReason["generated-code-cost"]).toBe(1);
+	});
+
+	it("materializes local payloads only after expansion admission", () => {
+		const { program, function: functionId } = numericProgram();
+		const first = planning(program, [functionId]);
+		for (const limit of [0, 1]) {
+			let materialized = 0;
+			const plan = buildCoreOptimizationPlan(
+				program,
+				first.analyses,
+				first.summaries,
+				[functionId],
+				{
+					perFunctionExpansions: limit,
+					onMaterialize() {
+						materialized++;
+					},
+				},
+			);
+			expect(plan.statistics.considered).toBeGreaterThan(0);
+			expect(materialized).toBe(limit);
+			expect(planSpecializations(plan)).toHaveLength(limit);
+		}
+	});
+
+	it("recognizes only the requested specialization families", () => {
+		const { program, function: functionId } = numericProgram();
+		const full = discoverCoreLocalSpecializationCandidates(
+			program,
+			functionId,
+		).candidates;
+		expect(full.some((candidate) => candidate.kind === "numeric-fusion")).toBe(true);
+		expect(
+			discoverCoreLocalSpecializationCandidates(
+				program,
+				functionId,
+				new Set(["numeric-fusion"]),
+			).candidates,
+		).toEqual(full.filter((candidate) => candidate.kind === "numeric-fusion"));
+		expect(
+			discoverCoreLocalSpecializationCandidates(
+				program,
+				functionId,
+				new Set(["stack-object"]),
+			).candidates,
+		).toEqual([]);
 	});
 
 	it("reports local discovery from the planner's single query", () => {
