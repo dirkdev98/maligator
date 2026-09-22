@@ -218,6 +218,134 @@ it("discovers sparse initialization at the observation and preserves shared/cycl
 	expect(analysis.statistics.visits).toBeLessThan(20);
 });
 
+it.each([
+	"data-read",
+	"data-write",
+	"accessor-read",
+	"accessor-write",
+	"coercing-key",
+	"call",
+	"slot-alias",
+] as const)(
+	"keeps property metadata and effect checks for %s while demanding one value",
+	(effect) => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[120], [121]],
+		});
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = builder.blockParameterValue(entry, 0);
+		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [nine] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[seven!, seven!],
+			{ attributes: { keyStringIndices: [0, 1] } },
+		);
+		if (effect.startsWith("accessor")) {
+			const [key] = builder.appendInstruction(entry, "createString", [], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.appendInstruction(entry, "defineAccessor", [object!, key!, parameter], {
+				attributes: { kind: effect === "accessor-read" ? "get" : "set" },
+			});
+		}
+		if (effect.endsWith("read"))
+			builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 1 },
+			});
+		else if (effect.endsWith("write"))
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, nine!], {
+				attributes: { stringIndex: 1 },
+			});
+		else if (effect === "coercing-key")
+			builder.appendInstruction(entry, "defineProperty", [object!, parameter, nine!]);
+		else if (effect === "call")
+			builder.appendInstruction(entry, "call", [parameter, object!]);
+		else {
+			builder.appendInstruction(entry, "storeLocal", [object!], {
+				attributes: { index: 0 },
+			});
+			const [alias] = builder.appendInstruction(entry, "loadLocal", [], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(entry, "storePropertyStatic", [alias!, nine!], {
+				attributes: { stringIndex: 0 },
+			});
+		}
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
+		const property = facts.queryPropertyAt(object!, "x", fn.blockTerminator(entry));
+		if (effect === "data-read" || effect === "data-write" || effect === "slot-alias") {
+			if (property?.member.kind !== "constant")
+				throw new Error("Expected retained data property");
+			expect(facts.descriptionConstant(property.member.description)).toEqual({
+				kind: "number",
+				value: effect === "slot-alias" ? 9 : 7,
+			});
+		} else expect(property).toBeUndefined();
+	},
+);
+
+it.each([true, false])(
+	"retains unrequested array truncation blockers (configurable: %s)",
+	(configurable) => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[108, 101, 110, 103, 116, 104]],
+		});
+		const builder = new CoreFunctionBuilder(program),
+			entry = builder.createBlock();
+		const [array] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 3 },
+		});
+		const [nil] = builder.appendInstruction(entry, "createNull", []);
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [two] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.appendInstruction(entry, "setPrototype", [array!, nil!]);
+		builder.appendInstruction(entry, "defineProperty", [array!, two!, two!], {
+			attributes: { configurable },
+		});
+		builder.appendInstruction(entry, "storePropertyStatic", [array!, zero!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: array! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
+		const property = facts.queryPropertyAt(array!, "length", fn.blockTerminator(entry));
+		if (configurable) {
+			if (property?.member.kind !== "constant")
+				throw new Error("Expected truncated length");
+			expect(facts.descriptionConstant(property.member.description)).toEqual({
+				kind: "number",
+				value: 0,
+			});
+		} else expect(property).toBeUndefined();
+	},
+);
+
+it("keeps ignored initializer effects when folding a selected property", () => {
+	const result = inspectStaticValueFunction(
+		"function probe(f) { const obj = {x: 7, y: f()}; return obj.x; } globalThis.probe = probe;",
+		"probe",
+	);
+	expect(result.structure.genericLookups).toBe(0);
+	expect(result.structure.genericCalls).toBe(1);
+});
+
 it("retains descriptor kinds, duplicate-key updates, integer ordering and null prototypes", () => {
 	const program = new CoreProgram(coreOpcodeRegistry, {
 		stringConstants: [[122], [49, 48], [50]],
@@ -547,14 +675,15 @@ it("invalidates a shared cell proof when a later function session exposes its va
 		...context,
 		data: { ...context.data, singleAssignmentGlobalSlots: [0] },
 	};
-	const query = () =>
-		new CoreAnalysisManager(
-			program,
-			privateContext,
-			new CoreOptimizationReportBuilder(program, "off"),
-		)
-			.get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: readerFn.id })
-			.queryAt(loaded!, consumer);
+	const facts = new CoreAnalysisManager(
+		program,
+		privateContext,
+		new CoreOptimizationReportBuilder(program, "off"),
+	).get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: readerFn.id });
+	const query = () => facts.queryAt(loaded!, consumer);
+	const property = facts.queryPropertyAt(loaded!, "length", consumer);
+	if (property === undefined) throw new Error("Expected private cell length");
+	facts.verifyProperty(property, consumer);
 	const first = query();
 	expect(first.kind).toBe("known");
 	if (first.kind !== "known") throw new Error("missing private cell proof");
@@ -570,7 +699,10 @@ it("invalidates a shared cell proof when a later function session exposes its va
 	});
 	editor.replaceTerminator(otherEntry, { kind: "return", value: exposed! });
 	editor.commit();
+	expect(() => facts.verifyProperty(property, consumer)).toThrow("not owned");
+	expect(() => facts.verify(first, consumer)).toThrow("not owned");
 	expect(query().kind).toBe("unknown");
+	expect(facts.queryPropertyAt(loaded!, "length", consumer)).toBeUndefined();
 });
 
 const primitiveCellConsumers = [

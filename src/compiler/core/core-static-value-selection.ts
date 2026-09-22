@@ -280,7 +280,7 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
-		const { program, item, compilationContext } = context,
+		const { program, item } = context,
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const replacements: Array<{
@@ -312,49 +312,14 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 							? "undefined"
 							: String(keyConstant.value);
 			if (key === undefined) continue;
-			const fact = analysis.queryAt(receiver, instruction);
-			if (fact.kind === "unknown") continue;
-			const description = program.staticDescriptions.description(fact.description);
-			if (description.kind !== "array" && description.kind !== "object") continue;
-			let member: StaticMember | undefined;
-			if (description.kind === "array" && key === "length" && description.length !== null)
-				member = {
-					kind: "constant",
-					description: program.staticDescriptions.intern(
-						staticNumberDescription(description.length),
-					),
-				};
-			else {
-				const property = description.properties.find((property) => property.key === key);
-				if (property !== undefined) {
-					if (property.descriptor.kind !== "data") continue;
-					member = property.descriptor.value;
-				} else if (description.ownKeysComplete !== false) {
-					const absent =
-						fact.prototype.kind === "null" ||
-						(fact.prototype.kind === "intrinsic" &&
-							provePrimordialAccess(
-								compilationContext.facts.world,
-								{
-									kind: "fresh-allocation",
-									prototype: fact.prototype.id,
-									realm: "current",
-									ownKeys: [],
-									ownKeysComplete: true,
-									stableUntilRead: true,
-								},
-								key,
-							)?.kind === "absent");
-					if (absent)
-						member = {
-							kind: "constant",
-							description: program.staticDescriptions.intern({ kind: "undefined" }),
-						};
-				}
-			}
-			if (member === undefined) continue;
-			analysis.verify(fact, instruction);
-			const operation = coreStaticMemberOperation(program, member, fact.operands);
+			const property = analysis.queryPropertyAt(receiver, key, instruction);
+			if (property === undefined) continue;
+			analysis.verifyProperty(property, instruction);
+			const operation = coreStaticMemberOperation(
+				program,
+				property.member,
+				property.operands,
+			);
 			if (operation !== undefined) replacements.push({ instruction, ...operation });
 		}
 		if (replacements.length === 0) return undefined;

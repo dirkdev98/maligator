@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import { analyzeCoreMemoryVersions } from "../src/compiler/core/core-ir-memory.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
@@ -56,6 +57,176 @@ describe("static descriptions and allocation identities", () => {
 			value: 9,
 		});
 		expect(controlQueries).toBeGreaterThan(0);
+	});
+
+	it.each([false, true])(
+		"isolates demanded property values from full queries (full first: %s)",
+		(fullFirst) => {
+			const program = new CoreProgram(coreOpcodeRegistry, {
+				stringConstants: [[120], [121]],
+			});
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [nine] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 9 },
+			});
+			builder.appendInstruction(entry, "storeLocal", [nine!], {
+				attributes: { index: 0 },
+			});
+			const [loaded] = builder.appendInstruction(entry, "loadLocal", [], {
+				attributes: { index: 0 },
+			});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[loaded!, loaded!],
+				{ attributes: { keyStringIndices: [0, 1] } },
+			);
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, loaded!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, loaded!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, seven!], {
+				attributes: { stringIndex: 0 },
+			});
+			const [alias] = builder.appendInstruction(entry, "move", [object!]);
+			builder.setTerminator(entry, { kind: "return", value: alias! });
+			const fn = program.function(builder.finish(entry).function);
+			let memoryQueries = 0;
+			const facts = new CoreStaticValueAnalysis(
+				program,
+				fn,
+				() => buildCoreControlFlow(program, fn.id),
+				undefined,
+				undefined,
+				() => {
+					memoryQueries++;
+					return analyzeCoreMemoryVersions(program, fn.id);
+				},
+			);
+			const consumer = fn.blockTerminator(entry);
+			const full = () => {
+				const fact = facts.queryAt(alias!, consumer);
+				if (fact.kind !== "known") throw new Error("Expected complete object");
+				const description = program.staticDescriptions.description(fact.description);
+				if (description.kind !== "object") throw new Error("Expected object description");
+				expect(
+					description.properties.map((property) => {
+						if (
+							property.descriptor.kind !== "data" ||
+							property.descriptor.value.kind !== "constant"
+						)
+							throw new Error("Expected constant field");
+						return facts.descriptionConstant(property.descriptor.value.description);
+					}),
+				).toEqual([
+					{ kind: "number", value: 7 },
+					{ kind: "number", value: 9 },
+				]);
+			};
+			if (fullFirst) full();
+			const x = facts.queryPropertyAt(alias!, "x", consumer);
+			if (x?.member.kind !== "constant") throw new Error("Expected constant x");
+			expect(facts.descriptionConstant(x.member.description)).toEqual({
+				kind: "number",
+				value: 7,
+			});
+			facts.verifyProperty(x, consumer);
+			if (!fullFirst) expect(memoryQueries).toBe(0);
+			const y = facts.queryPropertyAt(alias!, "y", consumer);
+			if (y?.member.kind !== "constant") throw new Error("Expected constant y");
+			expect(facts.descriptionConstant(y.member.description)).toEqual({
+				kind: "number",
+				value: 9,
+			});
+			expect(memoryQueries).toBeGreaterThan(0);
+			full();
+		},
+	);
+
+	it("preserves the requested field's proof budget when another field has a large expression", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[120], [121]],
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		let expensive = seven!;
+		for (let index = 0; index < 100; index++)
+			expensive = builder.appendInstruction(entry, "binary", [expensive, seven!], {
+				attributes: { operator: "+" },
+			})[0]!;
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[seven!, expensive],
+			{ attributes: { keyStringIndices: [0, 1] } },
+		);
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(
+			program,
+			fn,
+			() => buildCoreControlFlow(program, fn.id),
+			20,
+		);
+		const property = facts.queryPropertyAt(object!, "x", fn.blockTerminator(entry));
+		if (property?.member.kind !== "constant")
+			throw new Error("Expected constant x within budget");
+		expect(facts.descriptionConstant(property.member.description)).toEqual({
+			kind: "number",
+			value: 7,
+		});
+		expect(facts.statistics.budgetBailouts).toBe(0);
+		expect(facts.queryAt(object!, fn.blockTerminator(entry)).kind).toBe("unknown");
+		expect(facts.queryPropertyAt(object!, "x", fn.blockTerminator(entry))).toEqual(
+			property,
+		);
+	});
+
+	it("binds property proofs to their observation before or after a mutation", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program),
+			entry = builder.createBlock();
+		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [nine] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [seven!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		const [read] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, nine!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
+		const before = coreInstructionId(fn.kernel.valueDefinitionOwner(read!)),
+			after = fn.blockTerminator(entry);
+		const property = facts.queryPropertyAt(object!, "x", before);
+		if (property === undefined) throw new Error("Expected initial property");
+		facts.verifyProperty(property, before);
+		expect(() => facts.verifyProperty(property, after)).toThrow("different observation");
+		const updated = facts.queryPropertyAt(object!, "x", after);
+		if (updated?.member.kind !== "constant") throw new Error("Expected updated property");
+		expect(facts.descriptionConstant(updated.member.description)).toEqual({
+			kind: "number",
+			value: 9,
+		});
 	});
 
 	it.each(["typeof", "tostring", "void"])(

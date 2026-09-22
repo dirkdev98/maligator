@@ -359,6 +359,11 @@ export interface CoreStaticValueStatistics {
 	budgetBailouts: number;
 }
 
+export interface CoreStaticProperty {
+	readonly member: Extract<StaticMember, { kind: "constant" | "operand" }>;
+	readonly operands: ReadonlyArray<CoreValueId>;
+}
+
 export class CoreStaticValueAnalysis {
 	readonly #program: CoreProgram;
 	readonly #fn: CoreFunctionStore;
@@ -381,7 +386,11 @@ export class CoreStaticValueAnalysis {
 	readonly #cache = new Map<CoreValueId, CoreStaticValueResult>();
 	readonly #visiting = new Set<CoreValueId>();
 	readonly #observations = new Map<string, CoreStaticValueResult>();
-	readonly #proofs = new WeakSet<CoreStaticValue>();
+	// Descriptor metadata stays complete; demanded payloads never enter the full-value caches.
+	readonly #propertyCache = new Map<string, CoreStaticValueResult>();
+	readonly #propertyObservations = new Map<string, CoreStaticValueResult>();
+	#propertyProofs = new WeakMap<CoreStaticProperty, CoreInstructionId>();
+	#proofs = new WeakSet<CoreStaticValue>();
 	readonly statistics: CoreStaticValueStatistics = {
 		queries: 0,
 		visits: 0,
@@ -435,17 +444,34 @@ export class CoreStaticValueAnalysis {
 		) {
 			this.#observations.clear();
 			this.#cache.clear();
+			this.#propertyCache.clear();
+			this.#propertyObservations.clear();
+			this.#proofs = new WeakSet();
+			this.#propertyProofs = new WeakMap();
 			this.#cellRevision = this.#program.programFlowRevision;
 		}
 	}
 
 	query(value: CoreValueId): CoreStaticValueResult {
+		return this.#query(value);
+	}
+
+	#query(value: CoreValueId, requestedKey?: string): CoreStaticValueResult {
 		this.assertCurrent();
 		this.#refreshCells();
 		this.statistics.queries++;
 		if (!this.#fn.isValueLive(value))
 			throw new Error("Static-value query references a dead SSA value");
-		const cached = this.#cache.get(value);
+		const key = requestedKey === undefined ? "" : `${value}:${requestedKey}`;
+		const full = this.#cache.get(value);
+		const property =
+			requestedKey === undefined ? undefined : this.#propertyCache.get(key);
+		const cached =
+			property?.kind === "known"
+				? property
+				: full?.kind === "known" || requestedKey === undefined
+					? full
+					: property;
 		if (cached !== undefined) {
 			this.statistics.cacheHits++;
 			return cached;
@@ -462,27 +488,92 @@ export class CoreStaticValueAnalysis {
 		this.#visiting.add(value);
 		let result: CoreStaticValueResult;
 		try {
-			result = this.#describe(value);
+			result = this.#describe(value, requestedKey);
 		} finally {
 			this.#visiting.delete(value);
 		}
-		this.#cache.set(value, result);
+		if (requestedKey === undefined) this.#cache.set(value, result);
+		else this.#propertyCache.set(key, result);
 		if (result.kind === "known") this.#proofs.add(result);
 		return result;
 	}
 
 	queryAt(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
+		return this.#queryAt(value, consumer);
+	}
+
+	#queryAt(
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		requestedKey?: string,
+	): CoreStaticValueResult {
 		this.assertCurrent();
 		this.#refreshCells();
-		const key = `${value}:${consumer}`;
-		const cached = this.#observations.get(key);
+		const fullKey = `${value}:${consumer}`;
+		const key = requestedKey === undefined ? fullKey : `${fullKey}:${requestedKey}`;
+		const cache =
+			requestedKey === undefined ? this.#observations : this.#propertyObservations;
+		const full = this.#observations.get(fullKey);
+		const property = cache.get(key);
+		const cached =
+			property?.kind === "known" ? property : full?.kind === "known" ? full : property;
 		if (cached !== undefined) return cached;
 		// Recursive control flow widens before following backedges.
-		this.#observations.set(key, { kind: "unknown", reason: "cycle-widening" });
-		const result = this.#observe(value, consumer);
-		this.#observations.set(key, result);
+		cache.set(key, { kind: "unknown", reason: "cycle-widening" });
+		const result = this.#observe(value, consumer, requestedKey);
+		cache.set(key, result);
 		if (result.kind === "known") this.#proofs.add(result);
 		return result;
+	}
+
+	queryPropertyAt(
+		value: CoreValueId,
+		key: string,
+		consumer: CoreInstructionId,
+	): CoreStaticProperty | undefined {
+		const fact = this.#queryAt(value, consumer, key);
+		if (fact.kind === "unknown") return undefined;
+		const intern = this.#program.staticDescriptions;
+		const description = intern.description(fact.description);
+		if (description.kind !== "array" && description.kind !== "object") return undefined;
+		let member: StaticMember | undefined;
+		if (description.kind === "array" && key === "length" && description.length !== null)
+			member = {
+				kind: "constant",
+				description: intern.intern(staticNumberDescription(description.length)),
+			};
+		else {
+			const property = description.properties.find((property) => property.key === key);
+			if (property !== undefined) {
+				if (property.descriptor.kind === "data") member = property.descriptor.value;
+			} else if (
+				description.ownKeysComplete !== false &&
+				(fact.prototype.kind === "null" || this.inherited(fact, key)?.kind === "absent")
+			)
+				member = {
+					kind: "constant",
+					description: intern.intern({ kind: "undefined" }),
+				};
+		}
+		if (member?.kind !== "constant" && member?.kind !== "operand") return undefined;
+		const operands: Array<CoreValueId> = [];
+		if (member.kind === "operand") {
+			operands.push(fact.operands[member.index]!);
+			member = { kind: "operand", index: 0 };
+		}
+		const result = { member, operands };
+		this.#propertyProofs.set(result, consumer);
+		return result;
+	}
+
+	verifyProperty(value: CoreStaticProperty, consumer: CoreInstructionId): void {
+		this.assertCurrent();
+		this.#refreshCells();
+		if (!this.#propertyProofs.has(value))
+			throw new Error("Static-property proof is not owned by this analysis");
+		if (this.#propertyProofs.get(value) !== consumer)
+			throw new Error("Static-property proof belongs to a different observation");
+		this.#verifyOperands(value.operands, consumer);
 	}
 
 	#arguments(instruction: CoreInstructionId): Array<CoreValueId> {
@@ -494,8 +585,12 @@ export class CoreStaticValueAnalysis {
 		);
 	}
 
-	#observe(value: CoreValueId, consumer: CoreInstructionId): CoreStaticValueResult {
-		const initial = this.query(value);
+	#observe(
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+		requestedKey?: string,
+	): CoreStaticValueResult {
+		const initial = this.#query(value, requestedKey);
 		if (
 			initial.kind === "unknown" &&
 			this.#cells !== undefined &&
@@ -582,11 +677,14 @@ export class CoreStaticValueAnalysis {
 		const bindings = [...initial.operands];
 		const aliases = new Set<CoreValueId>([root]);
 		const bindingIndices = new Map(bindings.map((input, index) => [input, index]));
-		const symbolKeys: Array<{ identity: StaticAllocationIdentity; index: number }> = [];
-		const bind = (input: CoreValueId): StaticMember => {
-			const fact = this.query(input);
+		const symbolKeys: Array<{
+			identity: StaticAllocationIdentity;
+			index: number;
+		}> = [];
+		const bind = (input: CoreValueId, deferred = false): StaticMember => {
+			const fact = deferred ? undefined : this.query(input);
 			if (
-				fact.kind === "known" &&
+				fact?.kind === "known" &&
 				fact.state === "immutable-value" &&
 				["undefined", "null", "boolean", "number", "string", "bigint"].includes(
 					intern.description(fact.description).kind,
@@ -601,6 +699,13 @@ export class CoreStaticValueAnalysis {
 			}
 			return { kind: "operand", index };
 		};
+		const payload = (
+			key: StaticPropertyDescription["key"],
+			input: CoreValueId,
+		): StaticMember =>
+			requestedKey !== undefined && requestedKey !== key
+				? { kind: "unknown" }
+				: bind(input, requestedKey !== undefined);
 		const propertyKey = (
 			input: CoreValueId,
 		): StaticPropertyDescription["key"] | undefined => {
@@ -638,6 +743,20 @@ export class CoreStaticValueAnalysis {
 				}
 				if (!started) continue;
 				if (instruction === consumer) {
+					const selected =
+						requestedKey === undefined
+							? undefined
+							: propertyMap.get(staticPropertyKey(requestedKey));
+					if (
+						selected?.descriptor.kind === "data" &&
+						selected.descriptor.value.kind === "operand"
+					) {
+						const member = bind(bindings[selected.descriptor.value.index]!);
+						propertyMap.set(staticPropertyKey(requestedKey!), {
+							...selected,
+							descriptor: { ...selected.descriptor, value: member },
+						});
+					}
 					// Integer indices precede strings; stable sorting retains insertion order for strings
 					// and symbols.
 					const index = (key: StaticPropertyDescription["key"]) =>
@@ -691,7 +810,7 @@ export class CoreStaticValueAnalysis {
 					const output = this.#fn.kernel.resultAt(
 						this.#fn.kernel.instructionResultStart(instruction),
 					);
-					const fact = this.query(output);
+					const fact = this.#query(output, requestedKey);
 					if (
 						fact.kind === "known" &&
 						fact.identity !== undefined &&
@@ -809,7 +928,9 @@ export class CoreStaticValueAnalysis {
 										kind: "accessor",
 										get:
 											attributes.kind === "get"
-												? bind(input)
+												? requestedKey === undefined
+													? bind(input)
+													: { kind: "unknown" }
 												: previous?.descriptor.kind === "accessor"
 													? previous.descriptor.get
 													: {
@@ -818,7 +939,9 @@ export class CoreStaticValueAnalysis {
 														},
 										set:
 											attributes.kind === "set"
-												? bind(input)
+												? requestedKey === undefined
+													? bind(input)
+													: { kind: "unknown" }
 												: previous?.descriptor.kind === "accessor"
 													? previous.descriptor.set
 													: {
@@ -841,7 +964,7 @@ export class CoreStaticValueAnalysis {
 											opcode.startsWith("store") && previous?.descriptor.kind === "data"
 												? previous.descriptor.writable
 												: attributes.writable !== false,
-										value: bind(input),
+										value: payload(key, input),
 									},
 								};
 					propertyMap.set(keyId, property);
@@ -885,7 +1008,11 @@ export class CoreStaticValueAnalysis {
 								key,
 								enumerable: true,
 								configurable: true,
-								descriptor: { kind: "data", writable: true, value: bind(input) },
+								descriptor: {
+									kind: "data",
+									writable: true,
+									value: payload(key, input),
+								},
 							});
 						}
 						continue;
@@ -910,7 +1037,7 @@ export class CoreStaticValueAnalysis {
 					(escaped || touches) &&
 					initial.identity?.kind === "fresh-per-evaluation"
 				) {
-					const target = this.query(args[0]!),
+					const target = this.#query(args[0]!, requestedKey),
 						key = this.query(args[1]!);
 					const keyDescription =
 						key.kind === "known" ? intern.description(key.description) : undefined;
@@ -964,6 +1091,7 @@ export class CoreStaticValueAnalysis {
 
 	verify(value: CoreStaticValue, consumer?: CoreInstructionId): void {
 		this.assertCurrent();
+		this.#refreshCells();
 		if (!this.#proofs.has(value))
 			throw new Error("Static-value proof is not owned by this analysis");
 		const summary = this.#program.staticDescriptions.summary(value.description);
@@ -973,7 +1101,25 @@ export class CoreStaticValueAnalysis {
 		for (const index of summary.operandSlots)
 			if (value.operands[index] === undefined)
 				throw new Error("Static recipe has an unbound SSA operand");
-		for (const operand of [...value.operands, ...(value.construction?.arguments ?? [])]) {
+		this.#verifyOperands(
+			[...value.operands, ...(value.construction?.arguments ?? [])],
+			consumer,
+		);
+		if (
+			(value.brand === "object" || value.brand === "array") &&
+			value.state === "initial-allocation" &&
+			(value.identity?.kind !== "fresh-per-evaluation" ||
+				value.identity.function !== this.#fn.id ||
+				!this.#fn.isValueLive(value.identity.value))
+		)
+			throw new Error("Static recipe lost its per-evaluation identity");
+	}
+
+	#verifyOperands(
+		operands: ReadonlyArray<CoreValueId>,
+		consumer?: CoreInstructionId,
+	): void {
+		for (const operand of operands) {
 			if (!this.#fn.isValueLive(operand))
 				throw new Error("Static recipe hides a dead SSA operand");
 			if (consumer === undefined) continue;
@@ -1002,14 +1148,6 @@ export class CoreStaticValueAnalysis {
 				if (!found) throw new Error("Static recipe operand follows its consumer");
 			}
 		}
-		if (
-			(value.brand === "object" || value.brand === "array") &&
-			value.state === "initial-allocation" &&
-			(value.identity?.kind !== "fresh-per-evaluation" ||
-				value.identity.function !== this.#fn.id ||
-				!this.#fn.isValueLive(value.identity.value))
-		)
-			throw new Error("Static recipe lost its per-evaluation identity");
 	}
 
 	#join(value: CoreValueId, facts: Array<CoreStaticValue>): CoreStaticValueResult {
@@ -1222,7 +1360,7 @@ export class CoreStaticValueAnalysis {
 		};
 	}
 
-	#describe(value: CoreValueId): CoreStaticValueResult {
+	#describe(value: CoreValueId, requestedKey?: string): CoreStaticValueResult {
 		const fn = this.#fn;
 		const program = this.#program;
 		if (fn.kernel.valueDefinitionKind(value) === 0) {
@@ -1235,7 +1373,7 @@ export class CoreStaticValueAnalysis {
 				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (input === undefined || edge.kind === "exceptional")
 					return { kind: "unknown", reason: "conflicting-join" };
-				const fact = this.queryAt(input, fn.blockTerminator(edge.from));
+				const fact = this.#queryAt(input, fn.blockTerminator(edge.from), requestedKey);
 				if (fact.kind === "unknown") return fact;
 				facts.push(fact);
 			}
@@ -1302,7 +1440,7 @@ export class CoreStaticValueAnalysis {
 				"number",
 			);
 		if (opcode === "move") {
-			const input = this.query(operands[0]!);
+			const input = this.#query(operands[0]!, requestedKey);
 			return input.kind === "known" ? { ...input, value } : input;
 		}
 		if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
@@ -1323,7 +1461,7 @@ export class CoreStaticValueAnalysis {
 				? this.#memory().valueForRead(instruction, location)
 				: undefined;
 			if (input !== undefined && input !== value) {
-				const fact = this.query(input);
+				const fact = this.#query(input, requestedKey);
 				if (fact.kind === "known") return { ...fact, value };
 			}
 			// Without a local initializer, a cell proof needs a later consumer's TDZ check.
@@ -1738,7 +1876,7 @@ export class CoreStaticValueAnalysis {
 				const args = operands.slice(opcode === "construct" ? 1 : 2);
 				// Object returns an existing object argument; its identity is never a new allocation.
 				if (canonical === "Object" && args.length !== 0) {
-					const argument = this.query(args[0]!);
+					const argument = this.#query(args[0]!, requestedKey);
 					if (
 						argument.kind === "known" &&
 						["object", "array", "function"].includes(argument.brand)
@@ -1942,9 +2080,9 @@ export class CoreStaticValueAnalysis {
 		}
 		const bindings: Array<CoreValueId> = [];
 		const member = (input: CoreValueId): StaticMember => {
-			const fact = this.query(input);
+			const fact = requestedKey === undefined ? this.query(input) : undefined;
 			if (
-				fact.kind === "known" &&
+				fact?.kind === "known" &&
 				fact.state === "immutable-value" &&
 				["undefined", "null", "boolean", "number", "string", "bigint"].includes(
 					intern.description(fact.description).kind,
@@ -1967,12 +2105,22 @@ export class CoreStaticValueAnalysis {
 			this.statistics.visits += keys.length;
 			if (this.statistics.visits > this.#limit)
 				return { kind: "unknown", reason: "work-limit" };
-			const properties: Array<StaticPropertyDescription> = keys.map((key, index) => ({
-				key: this.string(key),
-				enumerable: true,
-				configurable: true,
-				descriptor: { kind: "data", writable: true, value: member(operands[index]!) },
-			}));
+			const properties: Array<StaticPropertyDescription> = keys.map((keyIndex, index) => {
+				const key = this.string(keyIndex);
+				return {
+					key,
+					enumerable: true,
+					configurable: true,
+					descriptor: {
+						kind: "data",
+						writable: true,
+						value:
+							requestedKey === undefined || requestedKey === key
+								? member(operands[index]!)
+								: { kind: "unknown" },
+					},
+				};
+			});
 			description = intern.intern({
 				kind: "object",
 				prototype: { kind: "intrinsic", id: "Object.prototype" },
