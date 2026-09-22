@@ -21,6 +21,10 @@ import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
+import {
+	CORE_GENERATED_CODE_COST_WEIGHTS,
+	coreBlockLoopFrequency,
+} from "./core-ir-generated-cost.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
@@ -1124,6 +1128,17 @@ function prefersNumericFieldEntryDispatch(
 	});
 }
 
+function inlinePriorityScore(
+	loopFrequency: number,
+	generatedCodeCost: number,
+	addedRuntimeCost: number,
+): number {
+	const weights = CORE_GENERATED_CODE_COST_WEIGHTS.runtime;
+	// Inlining removes one dispatch; the callee body still executes, even with many targets.
+	const savedWork = Math.max(0, weights.helperCall - addedRuntimeCost);
+	return -(loopFrequency * savedWork) / Math.max(1, generatedCodeCost);
+}
+
 function offerFunctionCandidates(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -1136,6 +1151,7 @@ function offerFunctionCandidates(
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
 	const globalTargetUses = new Map<CoreFunctionId, number>();
+	const blockFrequencies = new Map<CoreBlockId, number>();
 	for (const site of outgoing) {
 		const target =
 			site.targets.functions.length === 1 ? site.targets.functions[0] : undefined;
@@ -1151,13 +1167,21 @@ function offerFunctionCandidates(
 		if (invocation === undefined) continue;
 		const current = fn.instructionAttributes(site.instruction);
 		if (current[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true) continue;
-		const inLoop = analyses
-			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-				scope: "function",
-				function: functionId,
-			})
-			.ordinary()
-			.loops.some((loop) => loop.blocks.has(fn.instructionBlock(site.instruction)));
+		const block = fn.instructionBlock(site.instruction);
+		let loopFrequency = blockFrequencies.get(block);
+		if (loopFrequency === undefined) {
+			loopFrequency = coreBlockLoopFrequency(
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.ordinary(),
+				block,
+			);
+			blockFrequencies.set(block, loopFrequency);
+		}
+		const inLoop = loopFrequency > 1;
 		const predicate = inLoop
 			? coreArrayPredicateCall(program, fn, site.instruction)
 			: undefined;
@@ -1173,15 +1197,21 @@ function offerFunctionCandidates(
 				directCaptureContext(fn, predicate.callback, site.instruction, callback),
 			);
 			if (inline?.linear) {
+				const generatedCodeCost = 32 + inline.instructions.length;
 				service.offer({
 					kind: "array-predicate-inline",
 					caller: functionId,
 					site: site.instruction,
 					revision: summaries.version(callback),
 					priorityClass: 2,
-					priorityScore: 0,
+					// The eligibility helper replaces builtin dispatch; credit one callback only.
+					priorityScore: inlinePriorityScore(
+						loopFrequency,
+						generatedCodeCost,
+						CORE_GENERATED_CODE_COST_WEIGHTS.runtime.admissionCheck,
+					),
 					targets: [callback],
-					generatedCodeCost: 32 + inline.instructions.length,
+					generatedCodeCost,
 					compilerWorkCost:
 						32 + inline.instructions.length + inline.function.valueCapacity,
 					expansive: true,
@@ -1229,6 +1259,14 @@ function offerFunctionCandidates(
 			const inlines = finiteTargets.map((target) =>
 				inlineTarget(program, target, invocation),
 			);
+			const generatedCodeCost = inlines.reduce(
+				(cost, inline) =>
+					cost +
+					(inline?.instructions.length ?? 0) +
+					(inline?.linear === false ? inline.blocks.length : 0) +
+					1,
+				0,
+			);
 			const bridgesResult =
 				result !== undefined &&
 				inlines.every(
@@ -1251,17 +1289,15 @@ function offerFunctionCandidates(
 						0,
 					),
 					priorityClass: targetSetKind === "closed" ? 2 : 3,
-					priorityScore: 0,
+					priorityScore: inlinePriorityScore(
+						loopFrequency,
+						generatedCodeCost,
+						(finiteTargets.length - (targetSetKind === "closed" ? 1 : 0)) *
+							CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard,
+					),
 					targets: Object.freeze([...finiteTargets]),
 					targetSetKind,
-					generatedCodeCost: inlines.reduce(
-						(cost, inline) =>
-							cost +
-							(inline?.instructions.length ?? 0) +
-							(inline?.linear === false ? inline.blocks.length : 0) +
-							1,
-						0,
-					),
+					generatedCodeCost,
 					compilerWorkCost: inlines.reduce(
 						(cost, inline) =>
 							cost +
@@ -1329,20 +1365,25 @@ function offerFunctionCandidates(
 					fn.valueRepresentation(result),
 				),
 			);
+		const generatedCodeCost =
+			(inline?.instructions.length ?? 0) +
+			(inline?.linear === false ? inline.blocks.length : 0) +
+			consumerDuplication +
+			(open ? 1 : 0);
 		service.offer(
 			Object.freeze({
 				kind: open ? "guarded-inline" : "inline",
 				caller: functionId,
 				site: site.instruction,
 				revision: summaries.version(target),
-				priorityClass: hintedTarget !== undefined ? 3 : open ? 1 : 2,
-				priorityScore: 0,
+				priorityClass: hintedTarget !== undefined ? 3 : 2,
+				priorityScore: inlinePriorityScore(
+					loopFrequency,
+					generatedCodeCost,
+					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
+				),
 				targets: Object.freeze([target]),
-				generatedCodeCost:
-					(inline?.instructions.length ?? 0) +
-					(inline?.linear === false ? inline.blocks.length : 0) +
-					consumerDuplication +
-					(open ? 1 : 0),
+				generatedCodeCost,
 				compilerWorkCost:
 					(inline?.instructions.length ?? 0) +
 					(inline?.function.valueCapacity ?? 0) +

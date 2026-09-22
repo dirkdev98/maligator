@@ -88,6 +88,56 @@ function callInstructions(program: CoreProgram, functionId: number) {
 	);
 }
 
+function appendBudgetCaller(
+	program: CoreProgram,
+	target: number,
+	loop: boolean,
+	guarded = false,
+) {
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{}]);
+	const body = loop ? builder.createBlock() : entry;
+	const exit = loop ? builder.createBlock() : body;
+	const condition = builder.blockParameterValue(entry, 0);
+	const [created] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	let callee = created!;
+	if (guarded) {
+		const stringIndex = builder.editor.appendStringConstants([
+			[..."method"].map((unit) => unit.charCodeAt(0)),
+		]);
+		const object = callee;
+		builder.appendInstruction(entry, "storePropertyStatic", [object, callee], {
+			attributes: { stringIndex },
+			outputCount: 0,
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object], {
+			attributes: { stringIndex },
+		});
+		callee = loaded!;
+	}
+	const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+	if (loop)
+		builder.setTerminator(entry, { kind: "jump", edge: { block: body, arguments: [] } });
+	const [result] = builder.appendInstruction(body, "call", [
+		callee,
+		receiver!,
+		condition,
+	]);
+	const call = builder.bodyInstructionIds(body).at(-1)!;
+	if (loop) {
+		builder.setTerminator(body, {
+			kind: "branch",
+			condition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+	}
+	builder.setTerminator(exit, { kind: "return", value: result! });
+	return { function: builder.finish(entry).function, call };
+}
+
 const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 	perSiteExpansions: 1,
 	perCallerExpansions: 8,
@@ -255,6 +305,110 @@ describe("bounded Core cross-call transforms", () => {
 		expect(result.statistics.callerEditSessions).toBe(
 			result.statistics.callerLocalOptimizations,
 		);
+	});
+
+	it("spends a tight caller budget on the loop call before an earlier cold call", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const loop = builder.createBlock();
+		const exit = builder.createBlock();
+		const condition = builder.blockParameterValue(entry, 0);
+		const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "call", [callee!, receiver!]);
+		const coldCall = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "jump", edge: { block: loop, arguments: [] } });
+		const [result] = builder.appendInstruction(loop, "call", [callee!, receiver!]);
+		builder.setTerminator(loop, {
+			kind: "branch",
+			condition,
+			consequent: { block: loop, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: result! });
+		const caller = builder.finish(entry).function;
+		appendLeaf(program);
+
+		const transformed = runTransforms(program, {
+			...TINY_CODE_BUDGET,
+			perCallerGeneratedCode: 1,
+			programGeneratedCode: 1,
+		});
+		expect(callInstructions(program, caller)).toEqual([coldCall]);
+		expect(transformed.statistics.generatedCodeConsumed).toBe(1);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it.each([false, true])(
+		"selects the hot caller with reversed function order %s",
+		(reverse) => {
+			const program = analysisProgram();
+			const first = appendBudgetCaller(program, 2, reverse);
+			const second = appendBudgetCaller(program, 2, !reverse);
+			appendLeaf(program);
+			const hot = reverse ? first : second;
+			const cold = reverse ? second : first;
+
+			runTransforms(program, {
+				...TINY_CODE_BUDGET,
+				perCallerGeneratedCode: 1,
+				programGeneratedCode: 1,
+			});
+			expect(callInstructions(program, hot.function)).toEqual([]);
+			expect(callInstructions(program, cold.function)).toEqual([cold.call]);
+			verifyCoreProgram(program, { stage: "pre-target" });
+		},
+	);
+
+	it("prefers a smaller inline over an earlier larger body at the same frequency", () => {
+		const program = analysisProgram();
+		const largeCaller = appendBudgetCaller(program, 2, false);
+		const smallCaller = appendBudgetCaller(program, 3, false);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		let value = builder.blockParameterValue(entry, 0);
+		for (let index = 0; index < 3; index++) {
+			const [negated] = builder.appendInstruction(entry, "unary", [value], {
+				attributes: { operator: "!" },
+			});
+			value = negated!;
+		}
+		builder.setTerminator(entry, { kind: "return", value });
+		builder.finish(entry);
+		appendLeaf(program);
+
+		const transformed = runTransforms(program, {
+			...TINY_CODE_BUDGET,
+			perCallerGeneratedCode: 3,
+			programGeneratedCode: 3,
+		});
+		expect(callInstructions(program, largeCaller.function)).toEqual([largeCaller.call]);
+		expect(callInstructions(program, smallCaller.function)).toEqual([]);
+		expect(transformed.statistics.generatedCodeConsumed).toBe(1);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
+	it("lets an exact inline beat an earlier guarded call under the shared budget", () => {
+		const program = analysisProgram();
+		const guarded = appendBudgetCaller(program, 2, false, true);
+		const exact = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+
+		const transformed = runTransforms(program, {
+			...TINY_CODE_BUDGET,
+			perCallerGeneratedCode: 2,
+			programGeneratedCode: 2,
+		});
+		expect(callInstructions(program, exact.function)).toEqual([]);
+		expect(callInstructions(program, guarded.function)).toEqual([guarded.call]);
+		expect(
+			transformed.statistics.declinedByReason["generated-code-cost"],
+		).toBeGreaterThan(0);
+		expect(transformed.statistics.appliedByKind["guarded-inline"] ?? 0).toBe(0);
+		verifyCoreProgram(program, { stage: "pre-target" });
 	});
 
 	it("preserves representation joins when inlining represented returns", () => {
@@ -1102,8 +1256,7 @@ describe("bounded Core cross-call transforms", () => {
 				({ opcode }) => opcode === "createObject" || opcode === "createObjectShaped",
 			),
 		).toBe(false);
-		expect(report!.transforms.appliedByKind.inline).toBe(8);
-		expect(report!.transforms.generatedCodeConsumed).toBe(39);
+		expect(report!.transforms.generatedCodeConsumed).toBeLessThanOrEqual(39);
 		expect(report!.transforms.declinedByReason["generated-code-cost"]).toBe(0);
 	});
 

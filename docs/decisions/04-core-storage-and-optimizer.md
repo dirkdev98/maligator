@@ -220,6 +220,16 @@ introduced by expansion cannot increase it. Per-site and per-function limits rem
 fixed, and development-mode budgets remain fixed. Discovery is admitted before
 expensive proofs and charged even when no usable candidate is found.
 
+Cross-call inline candidates rank estimated dispatch savings, minus added guards,
+times capped loop frequency, divided by generated-code growth. Known exact and
+guarded targets compete in the same priority class; method hints remain lower
+priority. The estimate credits one eliminated dispatch, even for finite target
+sets, because the callee body still executes. Array predicates credit one callback
+dispatch after accounting for eligibility checks, without assuming an array length.
+Scoring uses the already-demanded CFG and candidate costs; it does not request
+additional proofs. Compiler-work costs remain hard admission limits. This is a
+static scheduling estimate, not a measured runtime benefit or a semantic proof.
+
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,
 anchors, representations, or admission payloads. Plan verification rediscovers only

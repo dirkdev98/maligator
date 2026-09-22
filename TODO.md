@@ -243,6 +243,13 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## P2: source closure and generated-code profitability
 
+- [ ] Add VM training feedback for Core optimization priority: assign function and
+      call-site identities before optimization, preserve them through lowering,
+      and export execution counts with source/configuration identity. Collect only
+      counters consumed by the optimizer. Use matching counts in inline scoring
+      and before expensive lazy discovery; retain static estimates for unmatched
+      sites. Training observations must not replace proofs or remove fallbacks.
+
 - [ ] Establish a complete source-closed entry/escape set for native reduction,
       including exports, host callbacks, dynamic loading/eval policy, reflection,
       and generic/interpreted callers. Use it to remove unreachable functions,
