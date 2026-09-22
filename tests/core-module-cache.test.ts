@@ -1,7 +1,10 @@
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import {
@@ -9,14 +12,21 @@ import {
 	encodeCoreModule,
 	importCoreModule,
 } from "../src/compiler/core/core-module-artifact.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import { loadOrCompileCoreModule } from "../src/core-module-cache.ts";
-import { appendLeaf } from "./helpers/core-program-analysis.ts";
+import { appendLeaf, programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 const source =
 	"let n = 1; export function add(x) { n += x + (2 * 3); return n; } export function read() { return n; }";
 const directories: Array<string> = [];
 afterEach(() => {
+	vi.restoreAllMocks();
 	for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function options() {
@@ -311,10 +321,151 @@ it("relocates literal pools, exception edges and string switches before importin
 		corrupt(bad);
 		const functions = destination.functionCapacity;
 		const globals = destination.globalCount;
+		const versions = destination.versions;
+		const revision = destination.programFlowRevision;
+		const pools = [
+			destination.stringConstants,
+			destination.bigintConstants,
+			destination.literalTemplateData,
+			destination.sourcePositions,
+		];
 		expect(() => importCoreModule(destination, bad, "/corrupt.mjs")).toThrow();
 		expect(destination.functionCapacity).toBe(functions);
 		expect(destination.globalCount).toBe(globals);
+		expect(destination.versions).toEqual(versions);
+		expect(destination.programFlowRevision).toBe(revision);
+		[
+			destination.stringConstants,
+			destination.bigintConstants,
+			destination.literalTemplateData,
+			destination.sourcePositions,
+		].forEach((pool, i) => expect(pool).toBe(pools[i]));
 	}
+});
+
+it("builds decoded stores once and gives each repeated import independent ownership", () => {
+	const result = loadOrCompileCoreModule({
+		...options(),
+		source: "export function value() { return 7; }",
+	});
+	if (result.status !== "ready") throw new Error(result.reason);
+	const destination = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[120]],
+		sourcePositions: [{ line: 50, column: 2 }],
+	});
+	const active = new CoreFunctionBuilder(destination);
+	const entry = active.createBlock();
+	const [value] = active.appendInstruction(entry, "createUndefined", []);
+	const other = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[121]] });
+	appendLeaf(other);
+	other.finalizeConstructionGeneration();
+	const create = vi.spyOn(CoreEditor, "createFunction");
+	const artifact = decodeCoreModule(encodeCoreModule(result.optimized));
+	const count = artifact.functions.length;
+	expect(create).toHaveBeenCalledTimes(count);
+	const preparedStores = create.mock.results.map((result) => {
+		if (result.type !== "return") throw new Error("Function construction failed");
+		return result.value.function;
+	});
+	const positions = preparedStores.map((fn) =>
+		[...fn.instructionIds()].map((id) => [id, fn.instructionSourcePosition(id)] as const),
+	);
+	const first = importCoreModule(destination, artifact, "/first.mjs");
+	expect(create).toHaveBeenCalledTimes(count);
+	first.functions.forEach((id, ordinal) => {
+		const fn = destination.function(id);
+		expect(fn).toBe(preparedStores[ordinal]);
+		for (const [instruction, position] of positions[ordinal]!)
+			expect(fn.instructionSourcePosition(instruction)).toBe(
+				position === undefined ? undefined : position + 1,
+			);
+	});
+	const firstBody = destination.function(first.functions[1]!);
+	const number = [...firstBody.blockIds()]
+		.flatMap((block) => [...firstBody.bodyInstructionIds(block)])
+		.find((id) =>
+			["createNumber", "createI32", "createF64"].includes(
+				firstBody.instructionOpcodeName(id),
+			),
+		)!;
+	const edit = CoreEditor.open(destination, firstBody.id);
+	edit.replaceInstruction(number, "createBoolean", [], { attributes: { value: true } });
+	edit.commit();
+	const second = importCoreModule(destination, artifact, "/second.mjs");
+	expect(create).toHaveBeenCalledTimes(count * 2);
+	const third = importCoreModule(other, artifact, "/third.mjs");
+	expect(create).toHaveBeenCalledTimes(count * 3);
+	for (const [program, imported] of [
+		[destination, second],
+		[other, third],
+	] as const) {
+		const body = program.function(imported.functions[1]!);
+		expect(body).not.toBe(firstBody);
+		expect(body.generation).toBe(program.generation);
+		expect(
+			[...body.blockIds()]
+				.flatMap((block) => [...body.bodyInstructionIds(block)])
+				.some(
+					(id) =>
+						["createNumber", "createI32", "createF64"].includes(
+							body.instructionOpcodeName(id),
+						) && body.instructionAttributes(id).value === 7,
+				),
+		).toBe(true);
+	}
+	active.setTerminator(entry, { kind: "return", value: value! });
+	active.finish(entry);
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	verifyCoreProgram(other, { stage: "pre-target" });
+});
+
+it("refreshes existing program analyses after attachment and edits to an imported body", () => {
+	const result = loadOrCompileCoreModule({
+		...options(),
+		source: "export function value() { return 7; }",
+	});
+	if (result.status !== "ready") throw new Error(result.reason);
+	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+	appendLeaf(program);
+	const context = programAnalysisContext(false);
+	const manager = new CoreAnalysisManager(
+		program,
+		context,
+		new CoreOptimizationReportBuilder(program),
+	);
+	manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+	const imported = importCoreModule(
+		program,
+		decodeCoreModule(encodeCoreModule(result.optimized)),
+		"/attached.mjs",
+	);
+	const id = imported.functions[1]!;
+	expect(
+		manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds.summary(id)
+			.returnKind,
+	).toBe(COMPILER_VALUE_KIND_NUMBER);
+	const fn = program.function(id);
+	const number = [...fn.blockIds()]
+		.flatMap((block) => [...fn.bodyInstructionIds(block)])
+		.find((instruction) =>
+			["createNumber", "createI32", "createF64"].includes(
+				fn.instructionOpcodeName(instruction),
+			),
+		)!;
+	const edit = CoreEditor.open(program, id);
+	edit.replaceInstruction(number, "createBoolean", [], { attributes: { value: true } });
+	edit.commit();
+	const refreshed = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+		scope: "program",
+	}).kinds;
+	expect(refreshed.summary(id).returnKind).toBe(COMPILER_VALUE_KIND_BOOLEAN);
+	const fresh = new CoreAnalysisManager(
+		program,
+		context,
+		new CoreOptimizationReportBuilder(program),
+	).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	for (const fn of program.functionIds())
+		expect(refreshed.summary(fn)).toEqual(fresh.summary(fn));
 });
 
 it("accepts long static property names and sparse argument reads without host argument limits", () => {

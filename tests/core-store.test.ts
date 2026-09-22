@@ -12,6 +12,7 @@ import {
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 import type {
+	CoreInstructionId,
 	CoreBlockId,
 	CoreEdge,
 	CoreImmediate,
@@ -32,6 +33,52 @@ import {
 	inspectCoreUses,
 	inspectCoreValueDefinition,
 } from "./helpers/core-inspection.ts";
+
+it("leaves both owners unchanged when a later transfer callback or identity preflight fails", () => {
+	const opcodes = registry();
+	const source = new CoreProgram(opcodes);
+	const first = oneFunction(source);
+	const second = oneFunction(source);
+	const destination = oneFunction(new CoreProgram(opcodes)).program;
+	const sourceVersions = source.versions;
+	const destinationVersions = destination.versions;
+	const sourceRevision = source.programFlowRevision;
+	const destinationRevision = destination.programFlowRevision;
+	const relocation = {
+		data: { globalCount: 9 },
+		sourcePositionOffset: 0,
+		metadata: (fn: coreStore.CoreFunctionStore) => fn.metadata,
+		attributes: (fn: coreStore.CoreFunctionStore, instruction: CoreInstructionId) =>
+			fn.instructionAttributes(instruction),
+		immediate: (value: CoreImmediate) => value,
+	};
+	const unchanged = () => {
+		expect(source.function(first.fn.id)).toBe(first.fn);
+		expect(source.function(second.fn.id)).toBe(second.fn);
+		expect(source.functionCapacity).toBe(2);
+		expect(destination.functionCapacity).toBe(1);
+		expect(destination.globalCount).toBe(0);
+		expect(source.versions).toEqual(sourceVersions);
+		expect(destination.versions).toEqual(destinationVersions);
+		expect(source.programFlowRevision).toBe(sourceRevision);
+		expect(destination.programFlowRevision).toBe(destinationRevision);
+	};
+	expect(() =>
+		CoreEditor.transferFunctions(destination, source, {
+			...relocation,
+			attributes(fn, instruction) {
+				if (fn === second.fn) throw new Error("late relocation failure");
+				return fn.instructionAttributes(instruction);
+			},
+		}),
+	).toThrow("late relocation failure");
+	unchanged();
+	Object.freeze(second.fn);
+	expect(() => CoreEditor.transferFunctions(destination, source, relocation)).toThrow(
+		"frozen Core identity",
+	);
+	unchanged();
+});
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();

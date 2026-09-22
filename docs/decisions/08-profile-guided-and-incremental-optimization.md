@@ -841,3 +841,48 @@ A small manifest with separately addressable variants should also keep canonical
 alternatives available without reading them on the ordinary warm path. Splitting
 payloads alone does not remove the duplicated Core construction. Function-level
 loading and further persisted recipes remain separate completion claims.
+
+## D019 — 2026-09-22 — Attach the Core storage already built for validation
+
+**Status:** Implemented with focused verification; repeated performance acceptance
+remains open. **Refines:** D017 and D018. **Supersedes:** Rebuilding function bodies
+during the first import of a decoded artifact.
+
+Decoding still validates the entire selected artifact in isolated Core, including
+cross-function references and constant tables. A private weak map retains that
+prepared program alongside the immutable decoded artifact. First import consumes
+its function storage after preparing every relocation. Subsequent imports construct
+independent storage from the immutable artifact; mutable caller-created artifacts
+receive fresh verification. Failed preparation leaves the prepared program usable
+and does not change destination tables, functions, versions or analysis journals.
+
+Transfer preserves function-local blocks, instructions, SSA values, normal use
+chains and exception-use chains. It changes function ownership and program-level
+references: function IDs, global slots, constant pools, source positions and source
+metadata. The closed opcode contract checks those references before attachment.
+Local graph structure therefore retains its existing verification; attachment does
+not repeat CFG and SSA verification. Facts and effect refinements remain excluded.
+
+The Core store owns this transfer primitive. Relocation callbacks must be pure.
+Metadata, changed attributes, switch cases and combined tables are prepared before
+either owner changes. Source functions must be finished with inactive editors and
+writable identity fields. An active destination initializer editor is allowed.
+Function identity remains ordinary data properties so self-hosted hot reads do not
+gain accessor dispatch. The source relinquishes its functions, and each attached
+function records all change domains in the destination's program-flow journal.
+Destination generation remains unchanged; existing analyses observe the append and
+subsequent edits through the normal version machinery.
+
+Focused tests observe actual function creation and retained store identity across
+decode and attachment. They cover repeated imports into different generations,
+independent edits, analysis refresh against a fresh analysis manager, and failure
+after partial relocation preparation. Native and VM acceptance retain Meriyah's
+Node output parity. Matching before/after MALW digests check that this storage
+change preserves output selection rather than trading away optimization.
+
+This removes the second function-body materialization at the cache boundary.
+Ordinary later optimization and construction compaction still run. Loading still
+reads both artifact variants, and table preparation still copies immutable pool
+contents. Separately addressable variants, sharing immutable table entries and
+function-level loading remain distinct opportunities; this change does not claim
+that all cached-module analysis or allocation has disappeared.

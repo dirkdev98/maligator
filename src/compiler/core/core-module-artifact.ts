@@ -14,6 +14,7 @@ import {
 import { CoreEditor } from "./core-editor.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import { coreFunctionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -130,7 +131,24 @@ export interface CompletedCoreModule {
 	completedRecipe: "conservative-local-v1";
 }
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
-const immutableDecodedModules = new WeakSet<CoreModuleArtifact>();
+const preparedDecodedModules = new WeakMap<CoreModuleArtifact, CoreProgram | undefined>();
+// These admitted operations carry program references; other attributes remain function-local.
+const RELOCATED_OPERATIONS = new Set([
+	"createFunction",
+	"loadCaptured",
+	"storeCaptured",
+	"loadGlobal",
+	"storeGlobal",
+	"createString",
+	"loadPropertyStatic",
+	"storePropertyStatic",
+	"throwIfTdz",
+	"loadGlobalProperty",
+	"loadUndeclared",
+	"createObjectShaped",
+	"createBigint",
+	"instantiateLiteralTemplate",
+]);
 
 function freezeDecodedValue(value: unknown): void {
 	if (value === null || typeof value !== "object") return;
@@ -152,7 +170,8 @@ function index(value: unknown, length: number): number {
 	return value;
 }
 function attributes(
-	op: ModuleOperation,
+	op: Pick<ModuleOperation, "opcode" | "attributes">,
+	inputCount: number,
 	functions: ReadonlyArray<CoreFunctionId>,
 	globals: number,
 	strings: number,
@@ -187,7 +206,7 @@ function attributes(
 		}
 		case "createObjectShaped": {
 			const keys = op.attributes.keyStringIndices;
-			if (!Array.isArray(keys) || keys.length > 64 || keys.length !== op.inputs.length)
+			if (!Array.isArray(keys) || keys.length > 64 || keys.length !== inputCount)
 				throw new Error("Invalid shaped object keys");
 			const names = keys.map((key: unknown) => {
 				const units = artifact.strings[index(key, artifact.strings.length)]!;
@@ -479,9 +498,15 @@ export function captureCoreModule(
 }
 
 export function validateCoreModule(artifact: CoreModuleArtifact): void {
+	prepareCoreModule(artifact);
+}
+
+function prepareCoreModule(artifact: CoreModuleArtifact): CoreProgram {
 	const scratch = new CoreProgram(coreOpcodeRegistry);
 	importValidatedCoreModule(scratch, artifact, "<validation>");
-	verifyCoreProgram(scratch, { stage: "pre-target" });
+	if (!preparedDecodedModules.has(artifact))
+		verifyCoreProgram(scratch, { stage: "pre-target" });
+	return scratch;
 }
 
 export function importCoreModule(
@@ -489,11 +514,78 @@ export function importCoreModule(
 	artifact: CoreModuleArtifact,
 	sourcePath: string,
 ) {
-	if (program.registry !== coreOpcodeRegistry || sourcePath.length === 0)
+	if (
+		program.registry !== coreOpcodeRegistry ||
+		program.sealed ||
+		sourcePath.length === 0
+	)
 		throw new Error("Unsupported Core module destination");
-	// Core editors have no rollback; reject malformed artifacts before reserving destination IDs.
-	if (!immutableDecodedModules.has(artifact)) validateCoreModule(artifact);
-	return importValidatedCoreModule(program, artifact, sourcePath);
+	const prepared = preparedDecodedModules.get(artifact) ?? prepareCoreModule(artifact);
+	const functions = artifact.functions.map((_, ordinal) =>
+		coreFunctionId(program.functionCapacity + ordinal),
+	);
+	const globalBase = program.globalCount;
+	const stringBase = program.stringConstants.length;
+	const bigintBase = program.bigintConstants.length;
+	const templateBase = program.literalTemplateData.length;
+	const templateRoots = new Set<number>();
+	for (let offset = 0; offset < artifact.literalTemplates.length; ) {
+		templateRoots.add(offset);
+		offset = scanLiteralTemplateSegment(
+			artifact.literalTemplates,
+			offset,
+			"Core module",
+		).endOffset;
+	}
+	const templates = remapLiteralTemplateConstants(
+		artifact.literalTemplates,
+		[...templateRoots],
+		"Core module",
+		(value) => stringBase + index(value, artifact.strings.length),
+		(value) => bigintBase + index(value, artifact.bigints.length),
+	);
+	const imported = importedModule(artifact, functions, globalBase);
+	CoreEditor.transferFunctions(program, prepared, {
+		data: {
+			globalCount: globalBase + artifact.globals,
+			stringConstants: [...program.stringConstants, ...prepared.stringConstants],
+			bigintConstants: [...program.bigintConstants, ...prepared.bigintConstants],
+			literalTemplateData: [...program.literalTemplateData, ...templates],
+			sourcePositions: [...program.sourcePositions, ...prepared.sourcePositions],
+		},
+		sourcePositionOffset: program.sourcePositions.length,
+		metadata: (fn) => ({
+			...fn.metadata,
+			sourcePath,
+			nameStringIndex: stringBase + fn.metadata.nameStringIndex,
+		}),
+		attributes(fn, instruction) {
+			const opcode = fn.instructionOpcodeName(instruction);
+			const original = fn.instructionAttributes(instruction);
+			if (!RELOCATED_OPERATIONS.has(opcode)) return original;
+			return attributes(
+				{
+					opcode,
+					attributes: original,
+				},
+				fn.kernel.instructionOperandCount(instruction),
+				functions,
+				globalBase,
+				stringBase,
+				bigintBase,
+				templateBase,
+				templateRoots,
+				artifact,
+			);
+		},
+		immediate: (value) =>
+			value.kind === "string"
+				? relocateImmediate(value, artifact.strings.length, stringBase)
+				: value,
+	});
+	if (preparedDecodedModules.has(artifact))
+		preparedDecodedModules.set(artifact, undefined);
+	return imported;
 }
 
 function importValidatedCoreModule(
@@ -669,6 +761,7 @@ function importValidatedCoreModule(
 						outputCount: operation.outputs.length,
 						attributes: attributes(
 							operation,
+							operation.inputs.length,
 							functions,
 							globalBase,
 							stringBase,
@@ -743,6 +836,14 @@ function importValidatedCoreModule(
 			fn.bodyEntry === undefined ? undefined : mapped(blocks, fn.bodyEntry),
 		);
 	});
+	return importedModule(artifact, functions, globalBase);
+}
+
+function importedModule(
+	artifact: CoreModuleArtifact,
+	functions: ReadonlyArray<CoreFunctionId>,
+	globalBase: number,
+) {
 	return {
 		initializer: functions[artifact.initializer]!,
 		functions,
@@ -822,10 +923,10 @@ export function decodeCoreModule(encoded: string): CoreModuleArtifact {
 				};
 		}
 	}
-	validateCoreModule(artifact);
+	const prepared = prepareCoreModule(artifact);
 	// Only freshly decoded, recursively immutable objects can reuse structural validation.
 	freezeDecodedValue(artifact);
-	immutableDecodedModules.add(artifact);
+	preparedDecodedModules.set(artifact, prepared);
 	return artifact;
 }
 

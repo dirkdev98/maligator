@@ -255,8 +255,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       cells and source-immutable facts; skip only the completed scalar seed.
 - [x] Extend the boxed artifact boundary for Meriyah's classes, handlers, switches,
       heap operations and literal pools; reuse its Core after application edits.
-- [ ] Finish ADR stage 4: stage one validated Core import, split manifests/variants/
-      bodies for demand loading and
+- [x] Reuse the verified Core function storage on first import instead of rebuilding
+      SSA and use chains; keep repeated imports independently owned.
+- [ ] Finish ADR stage 4: split manifests/variants/bodies for demand loading and
       complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,
       semantic analysis and selected-module decoding remain current-build work.

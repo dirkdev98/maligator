@@ -26,6 +26,7 @@ import type {
 	CoreProgram,
 	CoreProgramChangeDomain,
 	CoreProgramDataTables,
+	CoreProgramRelocation,
 	CoreSourcePosition,
 	CoreStoreMutation,
 } from "./core-store.ts";
@@ -339,6 +340,15 @@ export class CoreEditor {
 
 	static configureProgram(program: CoreProgram, data: CoreProgramDataTables): void {
 		program._configureProgramData(data);
+	}
+
+	/** Consumes source storage; callbacks must relocate every program reference. */
+	static transferFunctions(
+		program: CoreProgram,
+		source: CoreProgram,
+		relocation: CoreProgramRelocation,
+	): void {
+		program._transferFunctions(source, relocation);
 	}
 
 	appendLiteralTemplate(
