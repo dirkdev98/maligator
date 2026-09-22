@@ -35,6 +35,7 @@ import {
 import { CORE_OPTIMIZATION_OWNER } from "../src/compiler/core/core-optimization-owners.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
+import { CoreOptimizationBudgetError } from "../src/compiler/core/core-pass.ts";
 import type {
 	CoreFunctionPass,
 	CoreFunctionPassContext,
@@ -130,6 +131,105 @@ function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
 }
 
 describe("Core optimizer infrastructure", () => {
+	it("rejects a strict pass batch that overshoots without scheduling another run", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const target = functions[0]!;
+		const { analyses, report } = analysisHarness(program);
+		const pass: CoreFunctionPass = {
+			...noOpPass("bounded-batch", []),
+			wakesOn: [],
+			budget: { maxWorkItems: 100, maxEdits: 1, exhaustion: "error" },
+			run() {
+				const editor = CoreEditor.open(program, target.id);
+				editor.appendInstruction(target.entry, "identity", [target.value]);
+				editor.appendInstruction(target.entry, "identity", [target.value]);
+				return editor.commit();
+			},
+		};
+		expect(() =>
+			new CoreFunctionPassScheduler(
+				program,
+				context(),
+				analyses,
+				report,
+				target.id,
+			).runComponent("canonicalize", [pass]),
+		).toThrow(CoreOptimizationBudgetError);
+	});
+	it("rejects incomplete strict linear merging even when no edit fits", () => {
+		for (const exhaustion of ["stop", "error"] as const) {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const body = builder.createBlock();
+			const value = builder.appendInstruction(body, "createNumber", [], {
+				attributes: { value: 7 },
+			})[0]!;
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: body, arguments: [] },
+			});
+			builder.setTerminator(body, { kind: "return", value });
+			const id = builder.finish(entry).function;
+			const pass = CORE_CONSTRUCTION_NORMALIZATION_PASSES.find(
+				(pass) => pass.name === "linear-block-merging",
+			)!;
+			const report = new CoreOptimizationReportBuilder(program, "off");
+			const scheduler = new CoreFunctionPassScheduler(
+				program,
+				context(),
+				new CoreAnalysisManager(program, context(), report),
+				report,
+				id,
+			);
+			const run = () =>
+				scheduler.runComponent("canonicalize", [
+					{ ...pass, budget: { maxWorkItems: 100, maxEdits: 1, exhaustion } },
+				]);
+			if (exhaustion === "error") expect(run).toThrow(CoreOptimizationBudgetError);
+			else {
+				expect(run()).toEqual([]);
+				expect([...program.function(id).blockIds()]).toHaveLength(2);
+			}
+		}
+	});
+	it("enforces scalar wake budgets with reporting disabled", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const one = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		})[0]!;
+		const sum = builder.appendInstruction(entry, "binary", [one, one], {
+			attributes: { operator: "+" },
+		})[0]!;
+		builder.setTerminator(entry, { kind: "return", value: sum });
+		const id = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(program, "off");
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			new CoreAnalysisManager(program, context(), report),
+			report,
+			id,
+			{
+				localOptimization: true,
+				localOptimizationCompleted: true,
+				localOptimizationBudget: {
+					maxWorkItems: 1,
+					maxEdits: 100,
+					budgetExhaustion: "error",
+				},
+			},
+		);
+		expect(scheduler.runComponent("canonicalize", [])).toEqual([]);
+		const editor = CoreEditor.open(program, id);
+		editor.appendInstruction(entry, "createNumber", [], { attributes: { value: 9 } });
+		const changes = editor.commit();
+		expect(() => scheduler.runComponent("canonicalize", [], [changes])).toThrow(
+			CoreOptimizationBudgetError,
+		);
+	});
 	it("skips a completed scalar seed but folds new work after a later edit", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

@@ -676,8 +676,9 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 };
 
 function decodeString(program: CoreProgram, index: number): string | undefined {
-	const units = program.stringConstants[index];
-	return units === undefined ? undefined : String.fromCodePoint(...units);
+	return program.stringConstants[index] === undefined
+		? undefined
+		: program.stringConstantText(index);
 }
 
 function builtinSourceSite(
@@ -2037,7 +2038,10 @@ const mergeLinearBlocks: CoreFunctionPass = {
 						}).length;
 			const candidateEdits =
 				bodyInstructions.length + replacementInstructions.size + handlerEdits + 2;
-			if (estimatedEdits + candidateEdits > remainingEdits) continue;
+			if (estimatedEdits + candidateEdits > remainingEdits) {
+				context.deferForBudget();
+				continue;
+			}
 			selected.push({
 				predecessor,
 				target,

@@ -128,8 +128,9 @@ export interface CoreModuleArtifact {
 }
 export interface CompletedCoreModule {
 	artifact: CoreModuleArtifact;
-	completedRecipe: "conservative-local-v1";
+	completedRecipe: typeof CORE_MODULE_RECIPE;
 }
+export const CORE_MODULE_RECIPE = "conservative-structural-v2";
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
 const preparedDecodedModules = new WeakMap<CoreModuleArtifact, CoreProgram | undefined>();
 // These admitted operations carry program references; other attributes remain function-local.

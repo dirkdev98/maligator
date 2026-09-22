@@ -263,6 +263,8 @@ iterator cursor is not, by itself, permission to delete its language object.
       frontend import/finalization while snapshotting caller-owned inputs.
 - [x] Materialize decoder operand placeholders only for actual forward references,
       retaining verification of missing, cyclic and non-dominating uses.
+- [x] Persist completed scalar/structural cleanup with strict budget completion and
+      version witnesses; skip unchanged imports' initial construction cleanup.
 - [ ] Finish ADR stage 4: split function bodies for demand loading and
       complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,

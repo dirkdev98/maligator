@@ -10,10 +10,14 @@ import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
+import type { CoreLocalOptimizerOptions } from "./core-local-optimizer.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerId } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
-import { CoreFunctionPassContextDriver } from "./core-pass.ts";
+import {
+	CoreFunctionPassContextDriver,
+	CoreOptimizationBudgetError,
+} from "./core-pass.ts";
 import type {
 	CoreFunctionPass,
 	CoreFunctionPassAdmissionContext,
@@ -41,6 +45,10 @@ export interface CoreFunctionPassSchedulerOptions {
 	readonly localOptimizationReportName?: string;
 	readonly featureIndex?: CoreFunctionFeatureIndex;
 	readonly localRules?: CoreLocalRuleRegistry;
+	readonly localOptimizationBudget?: Pick<
+		CoreLocalOptimizerOptions,
+		"maxWorkItems" | "maxEdits" | "budgetExhaustion"
+	>;
 }
 
 function wakesForChanges(pass: CoreFunctionPass, changes: CoreChangeSet): boolean {
@@ -75,6 +83,7 @@ export class CoreFunctionPassScheduler {
 	readonly #localOptimization: boolean;
 	readonly #localOptimizationReportName: string;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
+	readonly #localBudget: CoreFunctionPassSchedulerOptions["localOptimizationBudget"];
 	readonly #features: CoreFunctionFeatureIndex;
 	readonly #passOpcodeIds = new WeakMap<CoreFunctionPass, ReadonlyArray<CoreOpcodeId>>();
 	readonly #passContexts = new WeakMap<CoreFunctionPass, CoreFunctionPassContextDriver>();
@@ -104,6 +113,7 @@ export class CoreFunctionPassScheduler {
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
+		this.#localBudget = options.localOptimizationBudget;
 		this.#localSeeded = options.localOptimizationCompleted === true;
 		this.#localOptimizationReportName =
 			options.localOptimizationReportName ?? "fused-local-optimizer";
@@ -226,6 +236,7 @@ export class CoreFunctionPassScheduler {
 					CORE_OPTIMIZATION_OWNER.fusedLocalOptimization,
 					() =>
 						new CoreLocalOptimizer(this.#program, this.#functionId, {
+							...this.#localBudget,
 							ruleRegistry: this.#localRules!,
 						}).run(pending.full ? undefined : pending.changes),
 				);
@@ -287,6 +298,8 @@ export class CoreFunctionPassScheduler {
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
+			if (pass.budget.exhaustion === "error" && used.edits > pass.budget.maxEdits)
+				this.#exhaust(pass, used);
 			consumption[key] = used;
 			this.#report.recordPassRun(pass.name, 1, edits > 0, edits, elapsedMs);
 			this.#report.recordBudget(1, edits);
@@ -371,7 +384,9 @@ export class CoreFunctionPassScheduler {
 	#exhaust(pass: CoreFunctionPass, consumption: PassConsumption): void {
 		this.#report.recordBudgetExhaustion(pass.name);
 		if (pass.budget.exhaustion === "error") {
-			throw new Error(`Required Core pass ${pass.name} exhausted its work budget`);
+			throw new CoreOptimizationBudgetError(
+				`Required Core pass ${pass.name} exhausted its work budget`,
+			);
 		}
 		consumption.exhausted = true;
 	}

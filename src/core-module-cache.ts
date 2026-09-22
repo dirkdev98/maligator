@@ -3,16 +3,27 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import * as path from "node:path";
 import { touchCacheEntry } from "./cache-management.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
+import { CoreAnalysisManager } from "./compiler/core/core-analysis-manager.ts";
+import { CoreAnalysisScratchPool } from "./compiler/core/core-analysis-scratch.ts";
 import { lowerSemanticProgramToCore } from "./compiler/core/core-frontend.ts";
-import { CoreLocalOptimizer } from "./compiler/core/core-local-optimizer.ts";
+import { CoreFunctionFeatureIndex } from "./compiler/core/core-function-features.ts";
+import {
+	CoreLocalOptimizer,
+	CoreLocalRuleRegistry,
+} from "./compiler/core/core-local-optimizer.ts";
+import { CORE_CONSTRUCTION_NORMALIZATION_PASSES } from "./compiler/core/core-local-passes.ts";
 import {
 	captureCoreModule,
 	decodeCoreModule,
 	encodeCoreModule,
 	UnsupportedCoreModuleError,
 	CORE_MODULE_MAX_ENCODED_LENGTH,
+	CORE_MODULE_RECIPE as RECIPE,
 } from "./compiler/core/core-module-artifact.ts";
 import type { CoreModuleArtifact } from "./compiler/core/core-module-artifact.ts";
+import { CoreOptimizationReportBuilder } from "./compiler/core/core-optimization-report.ts";
+import { CoreFunctionPassScheduler } from "./compiler/core/core-pass-manager.ts";
+import { CoreOptimizationBudgetError } from "./compiler/core/core-pass.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import type { ModuleRecord } from "./compiler/frontend/module-graph.ts";
@@ -20,7 +31,6 @@ import { parseModule } from "./compiler/frontend/parser.ts";
 import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 
 const BOUNDARY = "strict-esm-private-cells-boxed-local-v3";
-const RECIPE = "conservative-local-v1";
 const RECEIPT_SCHEMA = 2;
 export interface CoreModuleCacheOptions {
 	source: string;
@@ -58,7 +68,6 @@ interface UnsupportedReceipt {
 	unsupported: string;
 	status: "unsupported" | "budget-limited";
 }
-class CoreModuleBudgetError extends Error {}
 function digest(text: string) {
 	return hash("sha256", text, "hex");
 }
@@ -244,17 +253,35 @@ export function loadOrCompileCoreModule(
 			functions[0]!,
 			core.context.data,
 		);
+		const localRules = new CoreLocalRuleRegistry(core.program);
+		const featureIndex = new CoreFunctionFeatureIndex(core.program, localRules.dispatch);
+		const scratch = new CoreAnalysisScratchPool();
+		const report = new CoreOptimizationReportBuilder(core.program, "off");
+		const passes = CORE_CONSTRUCTION_NORMALIZATION_PASSES.map((pass) => ({
+			...pass,
+			budget: { maxWorkItems, maxEdits, exhaustion: "error" as const },
+		}));
 		for (const fn of functions) {
 			options.onWork?.("optimize", 1);
-			const result = new CoreLocalOptimizer(core.program, fn, {
+			new CoreLocalOptimizer(core.program, fn, {
 				maxWorkItems,
 				maxEdits,
-				budgetExhaustion: "stop",
+				budgetExhaustion: "error",
+				ruleRegistry: localRules,
 			}).run();
-			if (result.statistics.workBudgetExhausted || result.statistics.editBudgetExhausted)
-				throw new CoreModuleBudgetError(
-					"Reusable Core scalar recipe exceeded its work budget",
-				);
+			const analyses = new CoreAnalysisManager(
+				core.program,
+				core.context,
+				report,
+				scratch,
+			);
+			new CoreFunctionPassScheduler(core.program, core.context, analyses, report, fn, {
+				localOptimization: true,
+				localOptimizationCompleted: true,
+				localRules,
+				featureIndex,
+				localOptimizationBudget: { maxWorkItems, maxEdits, budgetExhaustion: "error" },
+			}).runComponent("canonicalize", passes);
 		}
 		const optimized = captureCoreModule(
 			core.program,
@@ -297,10 +324,10 @@ export function loadOrCompileCoreModule(
 	} catch (error) {
 		if (
 			error instanceof UnsupportedCoreModuleError ||
-			error instanceof CoreModuleBudgetError
+			error instanceof CoreOptimizationBudgetError
 		) {
 			const status =
-				error instanceof CoreModuleBudgetError ? "budget-limited" : "unsupported";
+				error instanceof CoreOptimizationBudgetError ? "budget-limited" : "unsupported";
 			publishReceipt(directory, {
 				schema: RECEIPT_SCHEMA,
 				key,

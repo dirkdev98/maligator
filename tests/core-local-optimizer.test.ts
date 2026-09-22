@@ -5,6 +5,7 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreLocalOptimizer } from "../src/compiler/core/core-local-optimizer.ts";
 import type { CoreLocalInstructionRule } from "../src/compiler/core/core-local-optimizer.ts";
+import { CoreOptimizationBudgetError } from "../src/compiler/core/core-pass.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import {
@@ -26,6 +27,26 @@ function moveChainProgram(): CoreProgram {
 	builder.finish(entry);
 	return program;
 }
+
+it("reports an eligible two-edit merge that cannot fit the remaining budget", () => {
+	for (const budgetExhaustion of ["stop", "error"] as const) {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [destination] = builder.appendInstruction(entry, "createObject", []);
+		const [source] = builder.appendInstruction(entry, "createObject", []);
+		builder.appendInstruction(entry, "mergeDataProperties", [destination!, source!]);
+		builder.setTerminator(entry, { kind: "return", value: destination! });
+		const id = builder.finish(entry).function;
+		const optimizer = new CoreLocalOptimizer(program, id, {
+			maxEdits: 1,
+			budgetExhaustion,
+		});
+		if (budgetExhaustion === "error")
+			expect(() => optimizer.run()).toThrow(CoreOptimizationBudgetError);
+		else expect(optimizer.run().statistics.editBudgetExhausted).toBe(true);
+	}
+});
 
 describe("CoreLocalOptimizer", () => {
 	it("folds a changed branch from incremental edits", () => {

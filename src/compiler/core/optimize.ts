@@ -35,6 +35,7 @@ import {
 } from "./core-platform-constants.ts";
 import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
+import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 	coreProgramTransformBudgets,
@@ -135,6 +136,7 @@ export function optimizeCore(
 		}
 	}
 	measurePhase("construction-cleanup", () => undefined);
+	let completedImportedFunctions: Set<number> | undefined;
 	reportBuilder.measureOwner(
 		CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup,
 		() => {
@@ -176,6 +178,17 @@ export function optimizeCore(
 						CORE_CONSTRUCTION_ANNOTATION_PASSES,
 					),
 				);
+				const reusedVersion = compilation.reusedFunctions?.get(functionId);
+				if (
+					reusedVersion !== undefined &&
+					coreFunctionVersionsAreCurrent(
+						compilation.program.function(functionId),
+						reusedVersion,
+					)
+				) {
+					(completedImportedFunctions ??= new Set()).add(functionId);
+					continue;
+				}
 				const normalizationPasses = new CoreFunctionPassScheduler(
 					compilation.program,
 					compilation.context,
@@ -186,7 +199,6 @@ export function optimizeCore(
 						verification: options.verification,
 						optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 						localOptimization: true,
-						localOptimizationCompleted: compilation.reusedFunctions?.has(functionId),
 						localOptimizationReportName: ablateLocalOptimization
 							? "mandatory-local-cleanup"
 							: undefined,
@@ -269,7 +281,7 @@ export function optimizeCore(
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 					benchmarkAblation: ablatedFamily,
-					localOptimizationCompleted: compilation.reusedFunctions?.has(functionId),
+					localOptimizationCompleted: completedImportedFunctions?.has(functionId),
 				},
 			).optimizePrimary(runFunctionPhase),
 		);

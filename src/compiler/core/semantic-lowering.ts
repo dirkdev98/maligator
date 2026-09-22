@@ -79,14 +79,14 @@ import type {
 } from "./core-frontend-construction.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
-import { importCoreModule } from "./core-module-artifact.ts";
+import { importCoreModule, CORE_MODULE_RECIPE } from "./core-module-artifact.ts";
 import type { CompletedCoreModule } from "./core-module-artifact.ts";
 import { CoreProgram } from "./core-store.ts";
-import type { CoreSourcePosition } from "./core-store.ts";
+import type { CoreSourcePosition, CoreFunctionVersions } from "./core-store.ts";
 
 interface CoreFrontendContext {
 	reusableModule?: (sourcePath: string) => CompletedCoreModule | undefined;
-	reusedFunctions?: Set<number>;
+	reusedFunctions?: Map<number, CoreFunctionVersions>;
 	reusedGlobalCandidates?: Array<number>;
 	reusedCapturedCandidates?: Array<CoreCapturedSlotRef>;
 	pgoTraining: boolean;
@@ -1082,7 +1082,7 @@ function emitReusableModuleInit(
 		? undefined
 		: program.reusableModule?.(modulePath);
 	if (reusable === undefined) return undefined;
-	if (reusable.completedRecipe !== "conservative-local-v1")
+	if (reusable.completedRecipe !== CORE_MODULE_RECIPE)
 		throw new Error("Unknown reusable Core recipe");
 	const exportNames = new Set(reusable.artifact.exports.map((item) => item.name));
 	if (exports.some(({ name }) => !exportNames.has(name)))
@@ -1113,7 +1113,8 @@ function emitReusableModuleInit(
 	(program.reusedCapturedCandidates ??= []).push(
 		...imported.singleAssignmentCapturedSlots,
 	);
-	for (const id of imported.functions) (program.reusedFunctions ??= new Set()).add(id);
+	for (const id of imported.functions)
+		(program.reusedFunctions ??= new Map()).set(id, program.core.function(id).versions);
 	for (const { name, exporter } of exports)
 		program.bindingToStorage.set(exporter, {
 			type: "global",

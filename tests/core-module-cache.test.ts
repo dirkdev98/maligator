@@ -354,6 +354,56 @@ it("records budget-limited attempts without publishing completed bodies and retr
 	});
 });
 
+it("persists structural cleanup and retains UTF-16 constants across equal branch inputs", () => {
+	const input = options();
+	const long = `${"x".repeat(150_000)}\ud800`;
+	input.source = `export function choose(flag) { let value; if (flag) value = ${JSON.stringify(long)}; else value = ${JSON.stringify(long)}; return value === ${JSON.stringify(long)}; }`;
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const blocks = (artifact: typeof cold.canonical) =>
+		artifact.functions.reduce((n, fn) => n + fn.blocks.length, 0);
+	expect(blocks(cold.optimized)).toBeLessThan(blocks(cold.canonical));
+	const warm = loadOrCompileCoreModule(input);
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	expect(encodeCoreModule(warm.optimized)).toBe(encodeCoreModule(cold.optimized));
+	const program = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(program, warm.optimized, input.sourcePath);
+	expect(
+		program.stringConstants.some(
+			(units) => units.length === long.length && units.at(-1) === 0xd800,
+		),
+	).toBe(true);
+	verifyCoreProgram(program, { stage: "pre-target" });
+});
+
+it("does not publish a partial structural recipe when its edit budget is exhausted", () => {
+	const input = {
+		...options(),
+		source:
+			"export function pick(flag, x) { let value; if(flag) value = x; else value = x; return value; }",
+		maxEdits: 1,
+	};
+	expect(loadOrCompileCoreModule(input)).toMatchObject({ status: "budget-limited" });
+	const entries = readdirSync(input.cacheDirectory);
+	expect(entries).toHaveLength(1);
+	expect(readdirSync(path.join(input.cacheDirectory, entries[0]!))).toEqual([
+		"manifest.json",
+	]);
+	expect(
+		loadOrCompileCoreModule({
+			...input,
+			onWork() {
+				throw new Error("Repeated bounded recipe");
+			},
+		}),
+	).toMatchObject({ status: "budget-limited" });
+	expect(loadOrCompileCoreModule({ ...input, maxEdits: 100_000 })).toMatchObject({
+		status: "ready",
+		cache: "miss",
+	});
+});
+
 it("continues compilation when the optional cache cannot publish", () => {
 	const input = options();
 	const file = path.join(input.cacheDirectory, "not-a-directory");

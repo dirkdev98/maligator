@@ -143,14 +143,21 @@ it("reuses Meriyah after an application edit with relocated pools and identical 
 			try { try { switch (key) { case 'a': return callback(1); case 'a': return 91; case 'b': return callback(2); default: return 3; } }
 			catch (error) { return key + error; } } finally { effects++; }
 		}
+		export function flow(flag) {
+			let value; if (flag) value = -0; else value = -0;
+			let sum = 0; for (let i = 0; i < 7; i++) { if (i === 2) continue; sum += i; }
+			try { try { if (flag) throw sum; return [1/value, sum, 0/0]; }
+			catch (error) { return [1/value, error, 0/0]; } } finally { effects += 2; }
+		}
 	`,
 	);
 	const entry = `
 		import { parseScript, parseModule, isParseError } from './meriyah.mjs';
-		import { literal, Box, choose, effects } from './values.mjs';
+		import { literal, Box, choose, flow, effects } from './values.mjs';
 		const box = new Box(), other = new Box(); box.items[0] = 99;
 		console.log(box instanceof Error, box.message, box.size, other.items[0], String(literal()[15]), 13 in literal(), 1 / literal()[16].key);
 		console.log(choose('a', x => x + 4), choose('b', x => { throw x; }), choose('z', () => 9), effects);
+		console.log(flow(true).join(','), flow(false).join(','), effects);
 		const comments = [], tokens = [];
 		const first = parseScript('// hello\\nconst café = "雪"; /a+/u;', { loc: true, ranges: true, onComment: comments, onToken: tokens });
 		console.log(JSON.stringify(first), comments.length, tokens.length);

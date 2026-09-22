@@ -1,17 +1,98 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileBuildFrontend } from "../src/build-frontend-cache.ts";
 import { parseCliArgs } from "../src/cli.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import {
+	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+	CORE_LOCAL_CANONICALIZATION_PASSES,
+} from "../src/compiler/core/core-local-passes.ts";
+import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import { loadOrCompileCoreModule } from "../src/core-module-cache.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
+	vi.restoreAllMocks();
 	for (const directory of directories.splice(0))
 		rmSync(directory, { recursive: true, force: true });
 });
+
+it.each([false, true])(
+	"rechecks construction cleanup only after imported body edits: %s",
+	(edit) => {
+		const { root, options } = fixture();
+		const lib = path.join(root, "lib.mjs");
+		const reused = loadOrCompileCoreModule({
+			source: readFileSync(lib, "utf8"),
+			sourcePath: lib,
+			moduleKey: "lib",
+			cacheDirectory: path.join(root, "module-cache"),
+		});
+		if (reused.status !== "ready") throw new Error(reused.reason);
+		const semantic = runSemanticAnalysisForGraph(
+			buildModuleGraph(options.entrypoint, {
+				entryGoal: "module",
+				stripTypes: (source) => source,
+			}),
+		);
+		const compilation = lowerSemanticProgramToCore(semantic, {
+			facts: conservativeCompilerProgramFacts(),
+			reusableModule: (sourcePath) =>
+				sourcePath === lib
+					? { artifact: reused.optimized, completedRecipe: reused.completedRecipe }
+					: undefined,
+		});
+		const imported = new Set(compilation.reusedFunctions!.keys());
+		const target = [...compilation.program.functionIds()].find((id) => imported.has(id))!;
+		if (edit) {
+			const editor = CoreEditor.open(compilation.program, target);
+			editor.appendInstruction(editor.function.entry, "createNumber", [], {
+				attributes: { value: 12345 },
+			});
+			editor.commit();
+		}
+		// eslint-disable-next-line @typescript-eslint/unbound-method -- The spy forwards each scheduler receiver.
+		const run = CoreFunctionPassScheduler.prototype.runComponent;
+		const runComponent = vi.spyOn(CoreFunctionPassScheduler.prototype, "runComponent");
+		const normalized = new Set<number>();
+		const primary = new Set<number>();
+		runComponent.mockImplementation(function (this: CoreFunctionPassScheduler, ...args) {
+			const observed =
+				args[1] === CORE_CONSTRUCTION_NORMALIZATION_PASSES
+					? normalized
+					: args[1] === CORE_LOCAL_CANONICALIZATION_PASSES
+						? primary
+						: undefined;
+			if (observed === undefined) return run.apply(this, args);
+			return run.call(
+				this,
+				args[0],
+				args[1].map((pass) => ({
+					...pass,
+					run(context) {
+						observed.add(context.item.function);
+						return pass.run(context);
+					},
+				})),
+				args[2],
+				args[3],
+			);
+		});
+		optimizeCore(compilation, { verification: "per-pass" });
+		expect(normalized.has(target)).toBe(edit);
+		for (const id of imported) if (id !== target) expect(normalized.has(id)).toBe(false);
+		for (const id of imported) expect(primary.has(id)).toBe(true);
+	},
+);
 function fixture() {
 	const root = mkdtempSync(path.join(tmpdir(), "core-module-build-"));
 	directories.push(root);

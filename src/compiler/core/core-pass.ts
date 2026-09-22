@@ -32,6 +32,8 @@ export interface CorePassBudget {
 	readonly exhaustion: "stop" | "error";
 }
 
+export class CoreOptimizationBudgetError extends Error {}
+
 export interface CorePassCapabilities {
 	readonly cfg: boolean;
 	readonly calls: boolean;
@@ -44,6 +46,7 @@ export interface CoreFunctionPassContext {
 	readonly compilationContext: CoreCompilationContext;
 	readonly item: CoreFunctionPassWorkItem;
 	readonly remainingEdits: number;
+	deferForBudget(): void;
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result;
 }
 
@@ -100,6 +103,13 @@ export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 	prepare(remainingEdits: number): CoreFunctionPassContext {
 		this.#remainingEdits = remainingEdits;
 		return this;
+	}
+
+	deferForBudget(): void {
+		if (this.#pass.budget.exhaustion === "error")
+			throw new CoreOptimizationBudgetError(
+				`Required Core pass ${this.#pass.name} exhausted its work budget`,
+			);
 	}
 
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {

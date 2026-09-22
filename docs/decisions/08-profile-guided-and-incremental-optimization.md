@@ -953,3 +953,46 @@ verification still rejects cyclic or non-dominating uses before import. This cha
 temporary construction work, not proof authority or the selected optimization
 recipe. Focused tests cover direct operands, valid reordered blocks, unresolved and
 cyclic references, followed by native/VM output parity.
+
+## D023 — 2026-09-22 — Persist completed scalar and structural cleanup
+
+**Status:** Implemented with focused verification; representative performance
+acceptance remains open. **Refines:** D017–D022. **Supersedes:** The scalar-only
+`conservative-local-v1` recipe.
+
+`conservative-structural-v2` first completes scalar cleanup, then runs block-parameter
+simplification, forwarding-block elimination, linear-block merging and unreachable
+block removal with scalar wakeups until the scheduler drains. These passes consume
+function-local CFG/SSA and literal constants. They do not admit application facts,
+cross-call assumptions, proof attributes or target representations. Canonical Core
+is captured before the recipe, and optimized capture retains full format validation.
+One rule registry, feature index, analysis scratch pool and instrumentation-off
+report serve the module's functions.
+
+Completion is a control-flow contract, independent of diagnostic reporting. Strict
+passes throw a typed budget error when scheduling exhausts, a candidate cannot fit,
+or a final edit batch exceeds its allowance. Strict scalar drains also report an
+eligible two-edit rewrite that cannot fit the remaining budget. Cache compilation
+catches only the typed budget failure and publishes a negative receipt, never a
+completed partial variant. Ordinary stop-mode pass scheduling remains unchanged.
+The configured limits apply per structural pass and per scalar invocation; they are
+not an aggregate module CPU or edit allowance. Larger limits produce a distinct key.
+
+Import records all function-version domains after relocation. After construction
+annotations, an unchanged imported body skips only the initial construction
+normalization component. An edited body runs ordinary cleanup and retains the full
+primary scalar seed. Primary canonicalization, later CFG/proof/memory work and their
+mutation wakeups remain enabled for every body. The completion witness is not carried
+as a version comparison across the dense-generation boundary.
+
+Structural simplification can expose large string constants to scalar comparisons.
+Both consumers now use the Core store's bounded UTF-16 decoder and text cache rather
+than spreading all code units into a host call. Focused coverage includes a long
+string with a lone surrogate, strict budget failures with reporting disabled,
+edited-import invalidation, primary-pass eligibility, and native/VM branches,
+signed zero, NaN, loops and nested exception/finally effects against Node.
+
+Moving cleanup before serialization reduces the selected artifact and avoids its
+repeated initial scans. It increases cold recipe work; cold and warm results must be
+reported separately. The earlier recipes remain historical decisions only, with
+their identities invalidated rather than maintained as parallel readers.

@@ -20,6 +20,7 @@ import type {
 	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CoreOptimizationBudgetError } from "./core-pass.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const DEAD_CODE_RULE = 0x8000_0000;
@@ -442,7 +443,9 @@ export class CoreLocalOptimizer {
 			this.#budgetExhaustion === "error" &&
 			(this.#workBudgetExhausted || this.#editBudgetExhausted)
 		) {
-			throw new Error("Required Core local optimizer exhausted its budget");
+			throw new CoreOptimizationBudgetError(
+				"Required Core local optimizer exhausted its budget",
+			);
 		}
 
 		const changes = this.#editor?.commit();
@@ -628,8 +631,7 @@ export class CoreLocalOptimizer {
 	eliminateEmptyObjectMerge(instruction: CoreInstructionId): boolean {
 		if (
 			this.#fn.kernel.instructionLive(instruction) === 0 ||
-			this.#fn.instructionOpcodeName(instruction) !== "mergeDataProperties" ||
-			(this.#editor?.pendingEdits ?? 0) + 2 > this.#maxEdits
+			this.#fn.instructionOpcodeName(instruction) !== "mergeDataProperties"
 		) {
 			return false;
 		}
@@ -664,6 +666,10 @@ export class CoreLocalOptimizer {
 						| undefined
 				)?.length !== 0)
 		) {
+			return false;
+		}
+		if ((this.#editor?.pendingEdits ?? 0) + 2 > this.#maxEdits) {
+			this.#editBudgetExhausted = true;
 			return false;
 		}
 
@@ -1251,8 +1257,9 @@ export class CoreLocalOptimizer {
 	}
 
 	#decodeString(index: number): string | undefined {
-		const units = this.#program.stringConstants[index];
-		return units === undefined ? undefined : String.fromCodePoint(...units);
+		return this.#program.stringConstants[index] === undefined
+			? undefined
+			: this.#program.stringConstantText(index);
 	}
 
 	#immediateEqualsConstant(immediate: CoreImmediate, constant: LocalConstant): boolean {
