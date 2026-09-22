@@ -110,6 +110,59 @@ check(
 	"proxy descriptor and get mutation order remains stable",
 );
 
+const sameShapeMutation = { first: 1, later: 2 };
+check(
+	JSON.stringify(sameShapeMutation, function (key, value) {
+		if (key === "first") this.later = 22;
+		return value;
+	}) === '{"first":1,"later":22}',
+	"replacer reloads later values from the current slots",
+);
+
+const descriptorMutation = { first: 1, later: 2 };
+check(
+	JSON.stringify(descriptorMutation, function (key, value) {
+		if (key === "first") {
+			Object.defineProperty(this, "later", {
+				enumerable: false,
+				configurable: true,
+				get() {
+					collect();
+					return 23;
+				},
+			});
+		}
+		return value;
+	}) === '{"first":1,"later":23}',
+	"replacer shape changes retain snapshotted keys and invoke getters",
+);
+
+let inheritedLaterGets = 0;
+const mutationPrototype = {};
+Object.defineProperty(mutationPrototype, "later", {
+	get() {
+		inheritedLaterGets++;
+		return 41;
+	},
+});
+const toJSONMutation = {
+	first: {
+		toJSON() {
+			delete toJSONMutation.later;
+			toJSONMutation.added = 43;
+			collect();
+			return 39;
+		},
+	},
+	later: 4,
+};
+Object.setPrototypeOf(toJSONMutation, mutationPrototype);
+check(
+	JSON.stringify(toJSONMutation) === '{"first":39,"later":41}' &&
+		inheritedLaterGets === 1,
+	"toJSON shape changes fall back to inherited reads without adding keys",
+);
+
 const marker = new Error("marker");
 const throwLog = [];
 const throwing = {};

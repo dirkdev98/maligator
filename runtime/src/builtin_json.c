@@ -474,8 +474,17 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                     mal_ops_to_string(&vm->heap, key.value));
             }
             member->buffer.length = 0;
-            MalJsonResult result = mal_json_serialize_property(
-                state, member, key, key_string, value, depth + 1);
+            MalJsonResult result;
+            if (shape_snapshot != nullptr &&
+                object->shape == shape_snapshot &&
+                !mal_object_has_public_overflow(object)) {
+                result = mal_json_serialize_value(
+                    state, member, key, key_string, value,
+                    object->slots[shape_snapshot->props[i].slot], depth + 1);
+            } else {
+                result = mal_json_serialize_property(
+                    state, member, key, key_string, value, depth + 1);
+            }
             if (result == MAL_JSON_THROW) {
                 ok = false;
                 break;
