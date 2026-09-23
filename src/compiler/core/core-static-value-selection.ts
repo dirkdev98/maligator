@@ -261,18 +261,6 @@ export const selectStaticPropertyReads: CoreFunctionPass = {
 
 export const foldStaticPropertyReads: CoreFunctionPass = {
 	name: "fold-static-property-reads",
-	admission: {
-		predicate: "static or computed property read",
-		hasOpportunity({ program, function: functionId }) {
-			const fn = program.function(functionId);
-			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode === "loadPropertyStatic" || opcode === "loadProperty") return true;
-			}
-			return false;
-		},
-	},
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadProperty", "loadPropertyStatic"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
@@ -282,6 +270,8 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context,
 			fn = program.function(item.function);
+		const loadPropertyOpcode = program.registry.get("loadProperty")?.id;
+		const loadPropertyStaticOpcode = program.registry.get("loadPropertyStatic")?.id;
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const replacements: Array<{
 			instruction: CoreInstructionId;
@@ -290,21 +280,17 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 			attributes?: Readonly<Record<string, CoreAttributeValue>>;
 		}> = [];
 		for (const instruction of fn.instructionIds()) {
-			if (
-				replacements.length >= context.remainingEdits ||
-				fn.instructionKind(instruction) !== "operation"
-			)
-				continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "loadProperty" && opcode !== "loadPropertyStatic") continue;
+			if (replacements.length >= context.remainingEdits) continue;
+			const opcode = fn.kernel.instructionOpcode(instruction);
+			if (opcode !== loadPropertyOpcode && opcode !== loadPropertyStaticOpcode) continue;
 			const start = fn.kernel.instructionOperandStart(instruction),
 				receiver = fn.kernel.operandAt(start);
 			const keyConstant =
-				opcode === "loadProperty"
+				opcode === loadPropertyOpcode
 					? analysis.constant(fn.kernel.operandAt(start + 1))
 					: undefined;
 			const key =
-				opcode === "loadPropertyStatic"
+				opcode === loadPropertyStaticOpcode
 					? analysis.string(fn.instructionAttributes(instruction).stringIndex as number)
 					: keyConstant === undefined
 						? undefined
