@@ -31,7 +31,7 @@ const WORKLOADS = [
 	{
 		name: "compiler-shape",
 		source: "src/compiler/core/core-ir-shape-provenance.ts",
-		train: false,
+		train: true,
 	},
 	{
 		name: "compiler-pass-manager",
@@ -75,6 +75,7 @@ The source-only CAPTURE comes from bench:self-compile-experiment capture DIR --s
 Build all three binaries from that same frozen source/src/selfhost-frontend-entry.mts.
 This runner never builds a binary. Train merges only exact-wire-matching captures;
 compare checks both training inputs and separate holdouts against the frozen Node oracle.
+Comparison reports call every input evaluation because the binaries do not identify their training corpus.
 Output directories must be new. Incomplete reports and captures are retained.
 `;
 
@@ -271,6 +272,9 @@ function execute(options: Options): void {
 				sha256(readFileSync(binary)),
 			]),
 		);
+		report.binaryBytes = Object.fromEntries(
+			Object.entries(binaryPaths).map(([name, binary]) => [name, statSync(binary).size]),
+		);
 		const captures: Array<string> = [];
 		for (const workload of WORKLOADS) {
 			if (!options.workloads.includes(workload.name)) continue;
@@ -278,7 +282,8 @@ function execute(options: Options): void {
 			const item: Record<string, unknown> = {
 				name: workload.name,
 				source: workload.source,
-				role: workload.train ? "train" : "holdout",
+				role: options.command === "train" ? "train" : "evaluation",
+				trainingEligible: workload.train,
 			};
 			results.push(item);
 			writeReport(reportPath, report);

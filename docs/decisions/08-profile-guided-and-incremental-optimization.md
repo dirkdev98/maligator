@@ -1576,3 +1576,115 @@ select only functions with positive measured net value. This does not widen the
 current import-free module receipt boundary or weaken later program-flow and
 cross-call optimization. The probe summary and timing rows are under
 `.cache/core-structural-cache-probe-20260923/`.
+
+## D043 — 2026-09-23 — Relocate private-name owners in leaf Core receipts
+
+**Status:** Implemented with focused unit and native behavior checks and a
+self-hosted admission count; compile-time benefit remains to be measured.
+**Refines:** D035, D042.
+
+The existing leaf receipt rejected `createPrivateNames`, which appears in class
+modules in the self-hosted compiler. That operation's `functionIndex` names the
+class evaluator that owns the captured private-name slots; replaying its old
+numeric index after an earlier module is inserted would initialize another
+function's slots. The receipt now records the module-local owner ordinal and
+relocates it to the destination function. Import validation requires that the
+owner is the current function and each captured slot is in range and distinct.
+The other private-field operations in this slice carry only function-local
+operands, so their boxed forms can be admitted without program reference
+relocation. The completed recipe changed to `conservative-structural-v4`,
+invalidating old receipts.
+
+A focused native fixture exercises ordinary compilation, a cold receipt, and a
+warm import after an earlier application function shifts global function IDs.
+It checks Node output including reads, writes, and brand tests across two
+independent imports and two calls to the same class factory. The receipt test
+also rejects a displaced owner or out-of-range captured slot. This establishes
+the private-brand behavior of the admitted leaf slice; it does not justify
+admitting importing modules or a full-graph function cache.
+
+On the frozen self-hosted frontend source, the new recipe admitted 34 leaf
+modules on a cold build; a subsequent PGO build reused all 34 with zero leaf
+functions constructed or optimized. The previous recipe reused 28 modules.
+Of the four remaining unsupported leaves, three require synthetic captured
+environment handling and one uses an intrinsic outside the current receipt
+whitelist. These are separate boundary questions, not reasons to weaken the
+private-name owner check. The builds establish increased reuse; a matched
+changed-entry compilation comparison is still needed to price the saving.
+
+## D044 — 2026-09-23 — Charge typed native entries to selected call sites
+
+**Status:** Implemented with focused planner checks; same-source native
+performance and output-size acceptance remain open. **Refines:** D032, D041.
+
+Function-entry heat is useful for deciding which target deserves a proof
+attempt, but it is not the exposure of the typed ABI entry emitted for that
+target. The old planner discovered a target using its function-entry count and
+then copied that same count onto the resolved typed-entry candidate, even when
+its selected calls were cold. A typed entry adds code and optimization work;
+the selected calls are the only sites that can repay that cost. A read-only
+Mach-O symbol estimate on the summaries-trained self-hosted compiler found 192
+typed entries occupying about 1.51 MB in the PGO binary, versus 155 and about
+1.00 MB in static. These adjacent-symbol spans include alignment and cannot
+by themselves establish runtime cost.
+
+Discovery still orders targets by function-entry heat. Once a representation
+and its calls are selected, application budget exposure is the sum of exact
+profile attempts only for unguarded, ordinary, closed singleton calls to that
+target. Guarded, open and unmeasured selected calls keep the exposure unknown;
+all-zero exact selected calls decline the entry. If every possible call for a
+target is already exact and zero, the planner skips the proof opportunity
+before native-entry analysis. A PGO-only caller/site memo shares queries with
+signature selection. Core transforms can clone an IR call while preserving its
+source-call identity, so each signature and the final entry count a measured
+source-site counter only once. Without a profile, the planner follows its
+previous path.
+
+The existing summaries-only PGO binary remains the control. On a separately
+frozen shape input, two idle-host pairs with exact Node wire parity took
+45.22–47.23 seconds under PGO versus 41.67–43.27 seconds under static.
+Pass-manager took 16.81–17.27 seconds under PGO versus 15.88–17.06 seconds
+under static; region selection was mixed at 50.74–52.15 versus 49.32–53.78
+seconds. The runner's old role label called shape trainable, but this binary
+was trained only on summaries; later reports use `evaluation` instead of
+inferring the profile's corpus. This is a holdout slowdown, not evidence that
+the new policy fixes it. Build
+static and PGO binaries from the same current compiler source and profile,
+then compare selected entries, net binary bytes, trained and held-out runtime
+before accepting a new default. Add shape training only as a separate
+experiment so policy and corpus changes remain attributable.
+
+## D045 — 2026-09-23 — Keep frontend PGO opt-in until holdouts recover
+
+**Status:** Two bounded matched-pair comparisons with exact Node output parity;
+full self-compile and broader repeatability remain open. **Refines:** D041, D044.
+
+The current compiler built static and PGO binaries from one frozen self-hosted
+frontend source. Both used the same production settings and 34 reusable Core
+leaves. The summaries-only PGO binary was 323,760 bytes larger than static
+(53,307,688 versus 52,983,928). Its two trained summaries pairs were 0.36%
+and 0.41% slower. Shape was mixed (+6.29%, then −0.01%), pass-manager was
+slower (+8.82% and +4.09%), and region selection was mixed (+0.89%, then
+−5.82%). These measurements are from prepared binaries, with native output
+checked against the frozen Node oracle on every run.
+
+A separate shape capture used the same training binary and source and matched
+the Node wire exactly. The merged summaries-plus-shape profile contains two
+distinct completed, non-overflowing runs. It queried 51 more positive functions
+and 429 more positive call sites in the current build. The resulting PGO binary
+was 274,208 bytes larger than static, 49,552 bytes smaller than the
+summaries-only PGO binary. On shape it beat static in both pairs by 5.00% and
+2.96%. Summaries was faster in both pairs, though one static sample rose by
+1.78 seconds and limits that inference. Pass-manager remained slower by 10.70%
+and 5.18%; region selection stayed mixed (+4.29%, then −1.00%).
+
+The profile helps a trained compiler phase, but the untrained pass-manager
+regression is too large to make PGO the production default. The merged profile
+still contains 20,639 zero-attempt call sites; a complete capture establishes
+zero only for its training inputs. The next policy experiment should distinguish
+source-call attempts from successful guarded-target traffic without changing
+the corpus. A separate later experiment may reserve bounded static exploration
+for measured-zero sites if diagnostics show the holdout lost valuable
+optimizations there. Neither change is justified by this comparison alone.
+Reports, binaries, captures and build counters are under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.

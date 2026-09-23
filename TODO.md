@@ -266,7 +266,14 @@ iterator cursor is not, by itself, permission to delete its language object.
       direct named class methods, raising attributable self-hosted function
       entries from 31% to 92%; three matched pairs improved the trained input
       while the first holdout was neutral. Check more representative holdouts
-      and full self-compile before enabling PGO by default.
+      and full self-compile before enabling PGO by default. D044 separates
+      target discovery heat from selected typed-entry call exposure. D045's
+      frozen-source comparisons show two shape wins after adding shape training,
+      but pass-manager remains 5–11% slower on the untrained holdout. Keep PGO
+      opt-in; check guarded-target attribution and broader training/holdouts
+      before changing the default. If cloned instructions
+      with one source-site counter enter different ABI signatures, do not assign
+      that entire positive counter to either signature without a partition proof.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -311,7 +318,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       requirements for a full-graph completed-local-stage pilot. Implement a
       cheaper typed key and safe body replacement only if the measured restore
       cost fits below the avoided work; widening module import support also
-      needs a complete initializer and binding-ownership contract.
+      needs a complete initializer and binding-ownership contract. D043 admits
+      private-name class leaves with owner and captured-slot relocation; measure
+      the added self-hosted receipts and changed-entry compile saving.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
