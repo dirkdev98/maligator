@@ -2344,3 +2344,33 @@ shortcut also preserved the wire, but its memory phase did not fall versus the
 predecessor-only version. These results argue against expanding receipt recipes
 or adding more local proof caches before their residual cost is measured.
 Diagnostic reports are under `.cache/pgo-cache-next-20260923/`.
+
+## D060 — 2026-09-23 — Reject early guarded-inline target ranking on native evidence
+
+**Status:** Exact-target ranking pilot rejected and removed. **Refines:** D054–D055.
+
+The v2 training profile has exact `guardedCallHits` for many open calls, but the
+late region selector cannot spend them after the optional unknown-code budget
+is exhausted. A pilot queried target hits only for otherwise admissible,
+ordinary guarded inlines with one exact target and measured call attempts. It
+ranked them by `(hits × helper-call cost − attempts × guard cost) / generated
+code cost`, skipped nonpositive exact benefit, and retained the static score
+when the target was unknown. No budget or guard semantics changed.
+
+Both warm-cache builds reused 34 Core leaves and 605 functions from the same
+frozen self-hosted source. Exact-target queries had 1,285 positive and one
+unknown result. The candidate spent the same 8,184 units of optional unknown
+generated code, but selected 724 guarded inlines versus 871 for a target-unknown
+control. Ordinary inlines fell from 124 to 25; introduced instructions rose
+from 7,803 to 8,459. The candidate's wire was 23,959 bytes smaller, while its
+generated C grew by 305,948 bytes and its native binary by 270,184 bytes.
+
+Three interleaved native pairs per slice matched the frozen Node output byte
+for byte. Candidate time relative to control was −0.13% for compiler summaries,
++0.11% for shape, −0.59% for pass manager, and +0.38% for region selection.
+The sum of measured times was +0.09%. This is no useful aggregate win and has
+a size cost, so the ranking code and tests were removed. Exact target capture
+and demand-gated late queries remain; a future policy needs a stronger estimate
+of the cost of displaced inlines and native growth before spending this budget.
+The complete comparison report and compact diagnostic summaries are under
+`.cache/pgo-crosscall-rank-20260923/`.
