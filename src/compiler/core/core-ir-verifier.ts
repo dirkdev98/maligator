@@ -441,7 +441,9 @@ function verifyInstructionRows(
 			if (descriptor.opcode === "loadPrimordial") {
 				const node = getPrimordialCatalog().nodes[attributes.nodeIndex as number];
 				if (node === undefined || (node[2] & 9) === 0)
-					fail("Invalid primordial identity");
+					fail(
+						`Invalid primordial identity ${typeof attributes.nodeIndex === "number" ? attributes.nodeIndex : "non-number"} at ${fn.metadata.sourcePath} @${instruction}`,
+					);
 				verifyBuiltinWorldAssumptions(attributes.worldAssumptions, node[0], world);
 			} else if (descriptor.opcode === "builtinError") {
 				if (!isKnownBuiltinError(attributes.error))

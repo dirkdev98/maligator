@@ -198,6 +198,34 @@ it("reuses an independent ESM leaf beside Node host imports", () => {
 	});
 });
 
+it("keeps globalThis loads executable when reusing the optimizer's owner module", () => {
+	const { write, options } = fixture();
+	const owners = path.resolve(
+		import.meta.dirname,
+		"../src/compiler/core/core-optimization-owners.ts",
+	);
+	write(
+		"entry.mjs",
+		`import { coreOptimizationRuntimeCounterReaders } from ${JSON.stringify(owners)}; globalThis.readers = coreOptimizationRuntimeCounterReaders();`,
+	);
+	const config = resolveBuildConfig({ engine: { primordials: "locked" } });
+	const cold = compileBuildFrontend({
+		...options,
+		config,
+		optimization: "full",
+		forceCompile: true,
+	});
+	expect(cold.coreModules).toMatchObject({ misses: 1, unsupported: 0 });
+	const warm = compileBuildFrontend({
+		...options,
+		config,
+		optimization: "full",
+		forceCompile: true,
+	});
+	expect(warm.coreModules).toMatchObject({ hits: 1, constructedFunctions: 0 });
+	expect(warm.wire).toEqual(cold.wire);
+});
+
 it("leaves Node-context import.meta and host-global leaves to ordinary lowering", () => {
 	const { write, options } = fixture();
 	write("meta.mjs", "export const filename = import.meta.filename;");

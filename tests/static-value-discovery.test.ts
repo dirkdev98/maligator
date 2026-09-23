@@ -541,6 +541,19 @@ it("folds own-presence, descriptors, typeof and Array.isArray through shared fac
 	expect(inspected.structure.genericCalls).toBe(0);
 });
 
+it.each([
+	"globalThis",
+	"Object.getOwnPropertyDescriptor(globalThis, 'globalThis').value",
+])("keeps the global object executable when its identity is known: %s", (expression) => {
+	const inspected = inspectStaticValueFunction(
+		`function probe() { return ${expression}; } globalThis.probe = probe;`,
+		"probe",
+	);
+	expect(inspected.core.some((operation) => operation.opcode === "loadPrimordial")).toBe(
+		false,
+	);
+});
+
 it("folds an array brand after mutation and escape without folding its escaped contents", () => {
 	const inspected = inspectStaticValueFunction(
 		`function probe(escape) { const array=[1]; array[0]=2; escape(array); return Array.isArray(array) && array[0]; } globalThis.probe=probe;`,

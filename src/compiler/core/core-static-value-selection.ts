@@ -526,7 +526,11 @@ export const foldStaticReflections: CoreFunctionPass = {
 						if (value < 0)
 							return { key, operation: { opcode: "createUndefined", inputs: [] } };
 						const node = getPrimordialCatalog().nodes[value];
-						if (node === undefined || !primordialNodeAvailable(world, node[0]))
+						if (
+							node === undefined ||
+							(node[2] & 9) === 0 ||
+							!primordialNodeAvailable(world, node[0])
+						)
 							return undefined;
 						return {
 							key,

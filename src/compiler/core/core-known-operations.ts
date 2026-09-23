@@ -354,6 +354,9 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				);
 				if (fact.kind === "known" && fact.canonical !== undefined) {
 					const operation = primordialArgument(fact.canonical);
+					const node =
+						getPrimordialCatalog().nodes[operation.attributes?.nodeIndex as number];
+					if (node === undefined || (node[2] & 9) === 0) continue;
 					plans.push({
 						instruction,
 						opcode: "loadPrimordial",
