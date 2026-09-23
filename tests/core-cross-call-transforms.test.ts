@@ -463,6 +463,31 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(program, { stage: "pre-target" });
 	});
 
+	it("does not spend measured inline budget on positive guarded call attempts", () => {
+		const program = analysisProgram();
+		const guarded = appendBudgetCaller(program, 2, false, true);
+		const exact = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+
+		const transformed = runTransforms(
+			program,
+			{
+				...TINY_CODE_BUDGET,
+				perCallerGeneratedCode: 2,
+				programGeneratedCode: 2,
+			},
+			{
+				digest: "guarded-call-attempts",
+				functionEntries: () => undefined,
+				callAttempts: (caller) => (caller === guarded.function ? 1_000 : 1),
+			},
+		);
+		expect(callInstructions(program, exact.function)).toEqual([]);
+		expect(callInstructions(program, guarded.function)).toEqual([guarded.call]);
+		expect(transformed.statistics.appliedByKind.inline).toBe(1);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
+
 	it("preserves representation joins when inlining represented returns", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program);

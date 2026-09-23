@@ -1264,6 +1264,8 @@ function offerFunctionCandidates(
 		const finiteTargets = closedFiniteTargets ?? openHintTargets;
 		if (finiteTargets !== undefined) {
 			const targetSetKind = closedFiniteTargets === undefined ? "open-hints" : "closed";
+			// A source-call attempt does not show which hinted target passed its guard.
+			const targetExposure = targetSetKind === "closed" ? measured : undefined;
 			const inlines = finiteTargets.map((target) =>
 				inlineTarget(program, target, invocation),
 			);
@@ -1291,7 +1293,7 @@ function offerFunctionCandidates(
 				Object.freeze({
 					kind: "finite-dispatch",
 					caller: functionId,
-					exposure: measured,
+					exposure: targetExposure,
 					site: site.instruction,
 					revision: finiteTargets.reduce(
 						(revision, target) => revision * 31 + summaries.version(target),
@@ -1299,7 +1301,7 @@ function offerFunctionCandidates(
 					),
 					priorityClass: targetSetKind === "closed" ? 2 : 3,
 					priorityScore: inlinePriorityScore(
-						exposure,
+						targetExposure ?? loopFrequency,
 						generatedCodeCost,
 						(finiteTargets.length - (targetSetKind === "closed" ? 1 : 0)) *
 							CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard,
@@ -1379,16 +1381,17 @@ function offerFunctionCandidates(
 			(inline?.linear === false ? inline.blocks.length : 0) +
 			consumerDuplication +
 			(open ? 1 : 0);
+		const targetExposure = open ? undefined : measured;
 		service.offer(
 			Object.freeze({
 				kind: open ? "guarded-inline" : "inline",
 				caller: functionId,
-				exposure: measured,
+				exposure: targetExposure,
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass: hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
-					exposure,
+					targetExposure ?? loopFrequency,
 					generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
 				),

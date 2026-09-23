@@ -1688,3 +1688,44 @@ for measured-zero sites if diagnostics show the holdout lost valuable
 optimizations there. Neither change is justified by this comparison alone.
 Reports, binaries, captures and build counters are under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.
+
+## D046 — 2026-09-23 — Do not equate guarded call attempts with target hits
+
+**Status:** Provisionally retained after focused Core checks and a direct native
+policy comparison; PGO remains opt-in. **Refines:** D032, D045.
+
+The VM counts attempts at the source invocation, before any optimized target
+guard succeeds. An exact closed call gives useful exposure for its one target;
+a positive open call count does not say which hinted target, if any, ran. The
+cross-call scheduler previously gave the full attempt count to a guarded
+inline or open-hint finite dispatch, allowing such candidates to outrank exact
+calls and consume the measured PGO budget. These open candidates now keep
+exposure unknown and use the static loop-frequency score. Closed targets still
+use measured attempts. The existing exact-zero skip stays before candidate
+discovery: a zero attempt is a valid reason to omit optional work for the
+training corpus, not a proof that the call is unreachable. Missing and
+owner-mismatched profile sites remain unknown. No-profile scheduling and all
+runtime guards and fallbacks are unchanged.
+
+A tight-budget planner check puts 1,000 attempts on an open guarded site and
+one on an exact site; the exact inline wins the measured budget. The focused
+Core contract, infrastructure and cross-call suite passed all 106 tests, with
+type-check and lint passing. On the same frozen source and two-capture profile,
+the candidate build applied 1,034 cross-call transforms versus 848 before,
+while estimated generated code fell from 10,230 to 9,580 units and introduced
+instructions from 9,440 to 7,803. Its binary is 895,040 bytes smaller than
+the prior PGO binary and 620,832 bytes smaller than static. These structural
+figures do not establish runtime benefit. In a direct comparison with the old
+summaries-plus-shape PGO binary, the guarded-call candidate improved summaries
+by 3.35% and 4.59%, tied pass-manager within 0.1%, and was mixed on shape
+(−1.13%, +0.41%). Region selection was 5.63% slower in the first pair and
+0.49% slower in the second; the old binary drifted from 49.75 to 53.95 seconds
+across those pairs. One additional region pair at the same source and profile
+was effectively tied: candidate 55.20 versus control 55.38 seconds. Every
+native result matched the frozen Node wire. The smaller binary and trained
+workload win justify retaining the policy for further evaluation, while the
+mixed region result precludes calling it a general runtime win. Train another
+representative compiler phase and compare a new profile before changing the
+PGO default. The direct comparison reports are under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/compare-guard-attribution/`
+and `compare-guard-region-extra/` in the same evidence root.

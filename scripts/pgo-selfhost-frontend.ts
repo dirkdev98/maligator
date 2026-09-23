@@ -36,7 +36,7 @@ const WORKLOADS = [
 	{
 		name: "compiler-pass-manager",
 		source: "src/compiler/core/core-pass-manager.ts",
-		train: false,
+		train: true,
 	},
 	{
 		name: "compiler-region-selection",
