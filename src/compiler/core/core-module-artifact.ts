@@ -48,6 +48,8 @@ const ATTRIBUTES: Readonly<Record<string, ReadonlyArray<string>>> = {
 	instantiateLiteralTemplate: ["templateOffset"],
 	createObject: [],
 	createObjectShaped: ["keyStringIndices"],
+	createPrivateName: [],
+	createPrivateNames: ["functionIndex", "capturedIndices"],
 	createArray: ["length"],
 	createArrayFromIterable: [],
 	loadGlobalProperty: ["nameStringIndex"],
@@ -59,6 +61,11 @@ const ATTRIBUTES: Readonly<Record<string, ReadonlyArray<string>>> = {
 	storePropertyStatic: ["stringIndex"],
 	defineProperty: ["enumerable", "writable?", "configurable?"],
 	defineAccessor: ["kind", "enumerable"],
+	definePrivate: [],
+	initPrivateFields: [],
+	loadPrivate: [],
+	storePrivate: [],
+	hasPrivate: [],
 	deleteProperty: [],
 	setPrototype: ["literal"],
 	checkSuperClass: [],
@@ -143,7 +150,7 @@ export interface CompletedCoreModule {
 	artifact: CoreModuleArtifact;
 	completedRecipe: typeof CORE_MODULE_RECIPE;
 }
-export const CORE_MODULE_RECIPE = "conservative-structural-v3";
+export const CORE_MODULE_RECIPE = "conservative-structural-v4";
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
 const preparedImmutableModules = new WeakMap<
 	CoreModuleArtifact,
@@ -152,6 +159,7 @@ const preparedImmutableModules = new WeakMap<
 // These admitted operations carry program references; other attributes remain function-local.
 const RELOCATED_OPERATIONS = new Set([
 	"createFunction",
+	"createPrivateNames",
 	"loadCaptured",
 	"storeCaptured",
 	"loadGlobal",
@@ -328,6 +336,18 @@ function attributes(
 					artifact.functions[owner]!.metadata.capturedCount,
 				),
 			};
+		}
+		case "createPrivateNames": {
+			const classOwner = index(op.attributes.functionIndex, functions.length);
+			if (classOwner !== owner) throw new Error("Private name owner mismatch");
+			const slots = op.attributes.capturedIndices;
+			if (!Array.isArray(slots) || slots.length === 0 || slots.length > 100_000)
+				throw new Error("Invalid private name slots");
+			const capturedCount = artifact.functions[classOwner]!.metadata.capturedCount;
+			const capturedIndices = slots.map((slot: unknown) => index(slot, capturedCount));
+			if (new Set(capturedIndices).size !== capturedIndices.length)
+				throw new Error("Duplicate private name slot");
+			return { functionIndex: functions[classOwner]!, capturedIndices };
 		}
 		case "createFunction":
 			return {
@@ -555,7 +575,8 @@ export function captureCoreModule(
 								attributes:
 									opcode === "createFunction" ||
 									opcode === "loadCaptured" ||
-									opcode === "storeCaptured"
+									opcode === "storeCaptured" ||
+									opcode === "createPrivateNames"
 										? {
 												...serializedAttrs,
 												functionIndex: functionOrdinal(attrs.functionIndex),
@@ -685,6 +706,7 @@ export function importCoreModule(
 						templateBase,
 						templateRoots,
 						artifact,
+						fn.id,
 					)
 				: sourceAttrs;
 			return site === undefined ? relocated : { ...relocated, sourceCall: site };

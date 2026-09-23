@@ -105,6 +105,80 @@ it("loads completed optimized Core without construction or optimizer work in ano
 	expect(destination.globalCount).toBe(13);
 	verifyCoreProgram(destination, { stage: "pre-target" });
 });
+
+it("relocates batched private names to the cached class evaluator's captured slots", () => {
+	const input = {
+		...options(),
+		source: `
+			export function makeClass() {
+				return class {
+					#first = 1;
+					#second = 2;
+					read() { return this.#first + this.#second; }
+					static owns(value) { return #first in value; }
+				};
+			}
+		`,
+	};
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const warm = loadOrCompileCoreModule({
+		...input,
+		sourcePath: "/second/private.mjs",
+		onWork() {
+			throw new Error("Warm class import repeated Core work");
+		},
+	});
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	const artifact = decodeCoreModule(encodeCoreModule(warm.optimized));
+	const owner = artifact.functions.findIndex((fn) =>
+		fn.blocks.some((block) =>
+			block.operations.some((operation) => operation.opcode === "createPrivateNames"),
+		),
+	);
+	expect(owner).toBeGreaterThanOrEqual(0);
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	appendLeaf(destination);
+	const imported = importCoreModule(destination, artifact, "/second/private.mjs");
+	const classEvaluator = destination.function(imported.functions[owner]!);
+	const privateNames = [...classEvaluator.blockIds()]
+		.flatMap((block) => [...classEvaluator.bodyInstructionIds(block)])
+		.find(
+			(instruction) =>
+				classEvaluator.instructionOpcodeName(instruction) === "createPrivateNames",
+		)!;
+	const attributes = classEvaluator.instructionAttributes(privateNames);
+	expect(attributes.functionIndex).toBe(classEvaluator.id);
+	expect(attributes.capturedIndices).toEqual(
+		artifact.functions[owner]!.blocks.flatMap((block) => block.operations).find(
+			(operation) => operation.opcode === "createPrivateNames",
+		)!.attributes.capturedIndices,
+	);
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	const invalid = structuredClone(artifact);
+	const operation = invalid.functions[owner]!.blocks.flatMap(
+		(block) => block.operations,
+	).find((candidate) => candidate.opcode === "createPrivateNames")!;
+	operation.attributes = {
+		...operation.attributes,
+		capturedIndices: [invalid.functions[owner]!.metadata.capturedCount],
+	};
+	expect(() => decodeCoreModule(encodeCoreModule(invalid))).toThrow(
+		"Invalid Core module index",
+	);
+	const wrongOwner = structuredClone(artifact);
+	const wrongOperation = wrongOwner.functions[owner]!.blocks.flatMap(
+		(block) => block.operations,
+	).find((candidate) => candidate.opcode === "createPrivateNames")!;
+	wrongOperation.attributes = {
+		...wrongOperation.attributes,
+		functionIndex: (owner + 1) % wrongOwner.functions.length,
+	};
+	expect(() => decodeCoreModule(encodeCoreModule(wrongOwner))).toThrow(
+		"Private name owner mismatch",
+	);
+});
 it("captures only optimized Core for selection and reconstructs canonical explicitly", () => {
 	const input = options();
 	const full = loadOrCompileCoreModule(input);
