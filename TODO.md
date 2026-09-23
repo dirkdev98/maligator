@@ -306,9 +306,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       D035 admits independent leaves beside host imports and cyclic consumers;
       D037's frontend probe saw 28 hits and 475 imported functions, but native
       parity and matched application-edit timing remain to be established. D040
-      attributes the changed-entry Core work; measure exact pre-recipe Core
-      identity and per-function structural cost before piloting completed local
-      stages from the full graph or widening module import support.
+      attributes the changed-entry Core work. D042 finds exact numeric function
+      keys ineffective after an added import and sets the binding and net-cost
+      requirements for a full-graph completed-local-stage pilot. Implement a
+      cheaper typed key and safe body replacement only if the measured restore
+      cost fits below the avoided work; widening module import support also
+      needs a complete initializer and binding-ownership contract.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

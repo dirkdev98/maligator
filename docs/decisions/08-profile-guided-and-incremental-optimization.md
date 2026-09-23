@@ -1535,3 +1535,44 @@ pairs were mixed and near neutral. This is useful profile coverage and a
 repeatable gain on one trained input, not yet a general default-policy result.
 The prepared binaries, capture, and comparison report are under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.
+
+## D042 — 2026-09-23 — Require a costed, binding-aware function cache
+
+**Status:** Diagnostic decision; no full-graph function cache admitted. **Refines:**
+D009, D040.
+
+On the frozen self-hosted frontend graph, 28 leaf receipts already avoid rebuilding
+475 functions. A changed entry still sends 4,089 other functions through initial
+structural cleanup. The 400 functions entering that stage with at least 256
+instructions account for about 1.52 seconds of its 1.88-second measured work in
+one timing-only probe build. Adding an early local function kept 399 of the
+400 optimistic body fingerprints unchanged. Adding a new first import kept only
+one exact numeric fingerprint unchanged, because the graph renumbered shared
+program references. An intentionally over-permissive fingerprint that erased
+those references matched 399 of 400, or 202 of 203 functions above 512
+instructions. These matches are an opportunity ceiling, not reusable receipts:
+the probe did not encode constant contents, alias relationships, capture owners,
+source positions, call-site identities, or the semantic binding closure.
+
+The one-hash normalized probe cost about 0.66 seconds for the 400 candidates,
+but an unrelated Android build overlapped that run, so it is not a matched
+comparison with the earlier 1.52-second structural measurement. Key cost still
+needs an idle-host measurement together with artifact lookup, decoding,
+rebinding, and body replacement. The current store has no replacement operation
+that preserves those ownership and version contracts. An exact numeric cache is
+therefore ineffective for the motivating import edit; shipping the permissive
+key would risk wrong code, and merely computing it for every build would add
+work to misses. Enabling the probe left the unedited entry's wire bytes
+identical, establishing diagnostic noninterference, not cache correctness.
+
+Before a full-graph function cache is admitted, its key must bind each program
+reference by type, content, and distinct-index alias pattern, including globals,
+function/self and capture-scope owners, constants and templates, source positions,
+and source-call identities. The output recipe must use only the frozen input
+binding vector or explicitly declare new table rows. A miss or uncertain binding
+falls back to the current optimizer. Benchmark key, lookup, restore, and residual
+verification separately against the actual avoided pass time on a graph edit;
+select only functions with positive measured net value. This does not widen the
+current import-free module receipt boundary or weaken later program-flow and
+cross-call optimization. The probe summary and timing rows are under
+`.cache/core-structural-cache-probe-20260923/`.
