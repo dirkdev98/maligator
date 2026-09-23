@@ -71,6 +71,7 @@ export interface CoreTransformBudgetLimits {
 	readonly perCallerCompilerWork: number;
 	readonly programGeneratedCode: number;
 	readonly programCompilerWork: number;
+	readonly profileUnknownWorkLimit?: number;
 }
 
 export const DEFAULT_CORE_TRANSFORM_BUDGETS: CoreTransformBudgetLimits = Object.freeze({
@@ -283,7 +284,9 @@ export class CoreTransformCandidateService {
 		if (!this.#profileScheduling) return undefined;
 		const unknown = cost.exposure === undefined;
 		const used = unknown ? this.#unknownUse : this.#measuredUse;
-		const work = Math.floor(this.#limits.programCompilerWork * 0.2);
+		const work =
+			this.#limits.profileUnknownWorkLimit ??
+			Math.floor(this.#limits.programCompilerWork * 0.2);
 		const code = Math.floor(this.#limits.programGeneratedCode * 0.2);
 		if (
 			used.work + cost.compilerWorkCost >
@@ -484,7 +487,9 @@ export class CoreTransformCandidateService {
 	}
 
 	statistics(): CoreTransformBudgetStatistics {
-		const unknownWorkLimit = Math.floor(this.#limits.programCompilerWork * 0.2);
+		const unknownWorkLimit =
+			this.#limits.profileUnknownWorkLimit ??
+			Math.floor(this.#limits.programCompilerWork * 0.2);
 		const unknownCodeLimit = Math.floor(this.#limits.programGeneratedCode * 0.2);
 		return Object.freeze({
 			considered: this.#considered,

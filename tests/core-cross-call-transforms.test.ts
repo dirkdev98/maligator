@@ -302,6 +302,39 @@ describe("bounded Core cross-call transforms", () => {
 			measured: { compilerWorkConsumed: 2, generatedCodeConsumed: 5 },
 		});
 	});
+	it("grants only measured compiler work while preserving the unknown reserve and code caps", () => {
+		const service = new CoreTransformCandidateService({
+			perSiteExpansions: 2,
+			perCallerExpansions: 8,
+			perCallerGeneratedCode: 100,
+			perCallerCompilerWork: 200,
+			programGeneratedCode: 100,
+			programCompilerWork: 125,
+			profileUnknownWorkLimit: 20,
+		});
+		service.enablePgoScheduling();
+		expect(
+			service.admitDiscovery({
+				caller: 0 as never,
+				exposure: 1,
+				generatedCodeCost: 1,
+				compilerWorkCost: 90,
+			}),
+		).toBeUndefined();
+		expect(
+			service.admitDiscovery({
+				caller: 0 as never,
+				generatedCodeCost: 1,
+				compilerWorkCost: 21,
+			}),
+		).toBe("compiler-work-cost");
+		expect(service.statistics().profileBudget).toMatchObject({
+			unknownWorkLimit: 20,
+			measuredWorkLimit: 105,
+			unknownCodeLimit: 20,
+			measuredCodeLimit: 80,
+		});
+	});
 	it("owns exactly two deliberate waves without driving pass stages", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),

@@ -16,6 +16,7 @@ export interface BuildCommand {
 	coreCache?: boolean;
 	pgoTrain?: boolean;
 	pgoUse?: string;
+	pgoMeasuredWorkBonus?: number;
 	pgoWorkload?: string;
 	kind: "build";
 	entry?: string;
@@ -78,7 +79,12 @@ export interface CacheCommand {
 }
 
 export type CliCommand =
-	| { kind: "pgo-merge"; inputs: Array<string>; output?: string }
+	| {
+			kind: "pgo-merge";
+			inputs: Array<string>;
+			cpuProfiles: Array<{ workload: string; directory: string }>;
+			output?: string;
+	  }
 	| { kind: "pgo-run"; binary: string; workload: string; programArgs: Array<string> }
 	| { kind: "help" }
 	| { kind: "version" }
@@ -100,7 +106,7 @@ export class CliUsageError extends Error {
 export const CLI_HELP = `Usage: maligator <command> [options]
 
 Commands:
-  pgo merge <captures...>      Merge explicit completed training captures
+  pgo merge <captures...>      Merge explicit training and optional CPU captures
   pgo run <binary>              Capture a workload with a prepared training binary
   init                         Create maligator.build.ts
   doctor                       Check native build toolchains
@@ -120,9 +126,11 @@ Options:
   --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
   --pgo-use <profile>    Use a validated merged PGO profile for optimization
+  --pgo-measured-work-bonus <percent>  Grant extra measured PGO proof work (build only)
   --pgo-train                  Build or run with compact VM training counters
   --pgo-workload <name>        Label a training run (run only)
   --out <path>                Select the merged profile output (pgo merge)
+  --cpu-profile <name> <dir>   Add a completed production CPU capture (pgo merge)
   --artifact <directory>       Create a deployable production artifact
   --verbose                    Show build diagnostics or every pruned cache entry
   --run <name>                 Filter tests by hierarchical name
@@ -212,6 +220,16 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--pgo-use") {
 			command.pgoUse = optionValue(args, index++, argument);
+			continue;
+		}
+		if (argument === "--pgo-measured-work-bonus") {
+			const value = optionValue(args, index++, argument);
+			const percent = Number(value);
+			if (!Number.isSafeInteger(percent) || percent < 0 || percent > 100)
+				throw new CliUsageError(
+					"--pgo-measured-work-bonus requires an integer from 0 to 100",
+				);
+			command.pgoMeasuredWorkBonus = percent;
 			continue;
 		}
 		if (argument === "--pgo-train") {
@@ -486,6 +504,14 @@ function validatePgoTraining<T extends BuildCommand | RunCommand | DevCommand>(
 ): T {
 	if (
 		command.kind === "build" &&
+		command.pgoMeasuredWorkBonus !== undefined &&
+		(command.pgoUse === undefined || !command.production)
+	)
+		throw new CliUsageError(
+			"--pgo-measured-work-bonus requires --pgo-use and --production",
+		);
+	if (
+		command.kind === "build" &&
 		command.coreCache &&
 		(!command.production || command.profile || command.pgoTrain)
 	)
@@ -536,11 +562,20 @@ function parsePgo(args: Array<string>): CliCommand {
 	const command: Extract<CliCommand, { kind: "pgo-merge" }> = {
 		kind: "pgo-merge",
 		inputs: [],
+		cpuProfiles: [],
 	};
 	for (let index = 2; index < args.length; index++) {
 		const argument = args[index]!;
 		if (argument === "--out") command.output = optionValue(args, index++, argument);
-		else if (argument.startsWith("-")) return unexpectedArgument("pgo merge", argument);
+		else if (argument === "--cpu-profile") {
+			const workload = optionValue(args, index++, argument);
+			const directory = optionValue(args, index++, argument);
+			if (workload.trim() === "" || directory.startsWith("-"))
+				throw new CliUsageError(
+					"--cpu-profile needs a workload name and capture directory",
+				);
+			command.cpuProfiles.push({ workload, directory });
+		} else if (argument.startsWith("-")) return unexpectedArgument("pgo merge", argument);
 		else command.inputs.push(argument);
 	}
 	if (command.inputs.length === 0)

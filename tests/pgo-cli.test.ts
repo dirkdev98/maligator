@@ -107,8 +107,34 @@ it("parses explicit training, profile use and merge inputs", () => {
 		pgoUse: "profile.json",
 	});
 	expect(
+		parseCliArgs([
+			"build",
+			"app.mjs",
+			"--production",
+			"--pgo-use",
+			"profile.json",
+			"--pgo-measured-work-bonus",
+			"25",
+		]),
+	).toMatchObject({ kind: "build", pgoMeasuredWorkBonus: 25 });
+	expect(() =>
+		parseCliArgs(["build", "app.mjs", "--production", "--pgo-measured-work-bonus", "25"]),
+	).toThrow(/requires --pgo-use/);
+	expect(
 		parseCliArgs(["pgo", "merge", "run-a", "run-b", "--out", "profile.json"]),
-	).toEqual({ kind: "pgo-merge", inputs: ["run-a", "run-b"], output: "profile.json" });
+	).toEqual({
+		kind: "pgo-merge",
+		inputs: ["run-a", "run-b"],
+		cpuProfiles: [],
+		output: "profile.json",
+	});
+	expect(
+		parseCliArgs(["pgo", "merge", "run-a", "--cpu-profile", "frontend", "cpu-run"]),
+	).toEqual({
+		kind: "pgo-merge",
+		inputs: ["run-a"],
+		cpuProfiles: [{ workload: "frontend", directory: "cpu-run" }],
+	});
 	expect(
 		parseCliArgs([
 			"pgo",

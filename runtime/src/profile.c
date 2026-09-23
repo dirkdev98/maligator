@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 
 #include "gc.h"
 #include "function_object.h"
@@ -71,7 +72,6 @@ typedef struct MalProfileState {
     u32 dropped_frames;
     u32 interval_us;
     u64 start_ns;
-    u64 expected_sample_cpu_ns;
     u64 allocation_rng;
     u8 capture_identity[32];
     bool finished;
@@ -92,14 +92,27 @@ typedef struct MalProfileState {
 
 static MalProfileState *g_profile = nullptr;
 static volatile sig_atomic_t g_profile_pending_ticks = 0;
+static volatile sig_atomic_t g_profile_first_tick_cpu_seconds = -1;
+static volatile sig_atomic_t g_profile_first_tick_cpu_nanoseconds = 0;
 static volatile sig_atomic_t g_profile_termination_signal = 0;
 volatile sig_atomic_t mal_profile_poll_requested = 0;
 
 static void mal_profile_signal(int signal_number) {
     (void) signal_number;
+    int saved_errno = errno;
+    if (g_profile_pending_ticks == 0) {
+        struct timespec delivered;
+        if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &delivered) == 0) {
+            g_profile_first_tick_cpu_seconds = (sig_atomic_t) delivered.tv_sec;
+            g_profile_first_tick_cpu_nanoseconds = (sig_atomic_t) delivered.tv_nsec;
+        } else {
+            g_profile_first_tick_cpu_seconds = -1;
+        }
+    }
     if (g_profile_pending_ticks < 0x7fff) g_profile_pending_ticks++;
     mal_profile_poll_requested = 1;
     mal_gc_poll = true;
+    errno = saved_errno;
 }
 
 static void mal_profile_terminate_signal(int signal_number) {
@@ -279,7 +292,7 @@ static void mal_profile_record(
 }
 
 static void mal_profile_record_cpu_ticks(
-    MalProfileState *state, MalVm *vm, u32 ticks, u64 now_cpu
+    MalProfileState *state, MalVm *vm, u32 ticks, u64 oldest_delay_ns
 ) {
     u32 available = MAL_PROFILE_MAX_RECORDS - state->record_count;
     u32 recorded = ticks > available ? available : ticks;
@@ -300,14 +313,10 @@ static void mal_profile_record_cpu_ticks(
         state->dropped_frames += omitted * (recorded - 1);
     }
     u64 timestamp_ns = mal_monotonic_now_ns() - state->start_ns;
-    u64 interval_ns = (u64) state->interval_us * 1000u;
-    u64 expected = state->expected_sample_cpu_ns;
     for (u32 index = 0; index < recorded; index++) {
-        u64 tick_expected = expected + interval_ns * index;
-        u64 delay = now_cpu > tick_expected ? now_cpu - tick_expected : 0;
         state->records[state->record_count++] = (MalProfileRecord) {
             .timestamp_ns = timestamp_ns,
-            .auxiliary = delay,
+            .auxiliary = oldest_delay_ns,
             .frame_offset = frame_offset,
             .frame_count = copied.count,
             .frame_omission = copied.omission,
@@ -318,10 +327,6 @@ static void mal_profile_record_cpu_ticks(
         };
     }
 
-    u64 projected = expected + interval_ns * ticks;
-    state->expected_sample_cpu_ns = now_cpu > projected + interval_ns * 4
-        ? now_cpu + interval_ns
-        : projected;
 }
 
 void mal_profile_safepoint_slow(MalVm *vm) {
@@ -334,15 +339,25 @@ void mal_profile_safepoint_slow(MalVm *vm) {
     sigaddset(&blocked, SIGTERM);
     sigprocmask(SIG_BLOCK, &blocked, &previous);
     sig_atomic_t ticks = g_profile_pending_ticks;
+    sig_atomic_t first_seconds = g_profile_first_tick_cpu_seconds;
+    sig_atomic_t first_nanoseconds = g_profile_first_tick_cpu_nanoseconds;
     int termination_signal = g_profile_termination_signal;
     g_profile_pending_ticks = 0;
+    g_profile_first_tick_cpu_seconds = -1;
     g_profile_termination_signal = 0;
     mal_profile_poll_requested = 0;
     sigprocmask(SIG_SETMASK, &previous, nullptr);
     if (state == nullptr) return;
     if (ticks > 0) {
-        u64 now_cpu = mal_process_cpu_now_ns();
-        mal_profile_record_cpu_ticks(state, vm, (u32) ticks, now_cpu);
+        if (first_seconds < 0 || first_nanoseconds < 0 || first_nanoseconds >= 1000000000) {
+            state->dropped_records += (u32) ticks;
+        } else {
+            u64 first_cpu = (u64) first_seconds * 1000000000u + (u64) first_nanoseconds;
+            u64 now_cpu = mal_process_cpu_now_ns();
+            mal_profile_record_cpu_ticks(
+                state, vm, (u32) ticks, now_cpu > first_cpu ? now_cpu - first_cpu : 0
+            );
+        }
     }
     if (termination_signal != 0) {
         mal_profile_finish(vm);
@@ -527,8 +542,8 @@ static void mal_profile_publish(MalProfileState *state) {
                 state->output_path, strerror(errno));
         return;
     }
-    fwrite("MALPROF4", 1, 8, file);
-    mal_profile_write_u32(file, 4);
+    fwrite("MALPROF5", 1, 8, file);
+    mal_profile_write_u32(file, 5);
     mal_profile_write_u32(file, state->record_count);
     mal_profile_write_u32(file, state->frame_count);
     mal_profile_write_u32(file, state->dropped_records);
@@ -650,8 +665,6 @@ void mal_profile_init(MalVm *vm) {
         if (parsed >= 1000 && parsed <= 1000000) state->interval_us = (u32) parsed;
     }
     state->start_ns = mal_monotonic_now_ns();
-    state->expected_sample_cpu_ns =
-        mal_process_cpu_now_ns() + (u64) state->interval_us * 1000u;
     state->allocation_rng = state->start_ns ^ (u64) (uptr) state ^ 0x9e3779b97f4a7c15ull;
     if (state->allocation_rng == 0) state->allocation_rng = 1;
     const char *capture_identity = getenv("MAL_PROFILE_IDENTITY");
@@ -693,6 +706,8 @@ void mal_profile_init(MalVm *vm) {
 #else
     state->compiler_enabled = false;
 #endif
+    g_profile_pending_ticks = 0;
+    g_profile_first_tick_cpu_seconds = -1;
     vm->heap.profile_state = state;
     g_profile = state;
 
@@ -724,6 +739,7 @@ void mal_profile_finish(MalVm *vm) {
     sigaction(SIGINT, &state->previous_interrupt_action, nullptr);
     sigaction(SIGTERM, &state->previous_terminate_action, nullptr);
     g_profile_pending_ticks = 0;
+    g_profile_first_tick_cpu_seconds = -1;
     g_profile_termination_signal = 0;
     mal_profile_poll_requested = 0;
     vm->heap.profile_state = nullptr;

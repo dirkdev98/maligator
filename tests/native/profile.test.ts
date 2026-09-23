@@ -79,9 +79,9 @@ describe("production profile recorder", () => {
 		expect(result.status).toBe(0);
 		expect(existsSync(capture)).toBe(true);
 		const bytes = readFileSync(capture);
-		expect(bytes.subarray(0, 8).toString()).toBe("MALPROF4");
+		expect(bytes.subarray(0, 8).toString()).toBe("MALPROF5");
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-		expect(view.getUint32(8, true)).toBe(4);
+		expect(view.getUint32(8, true)).toBe(5);
 		const recordCount = view.getUint32(12, true);
 		const frameCount = view.getUint32(16, true);
 		expect(recordCount).toBeGreaterThan(0);
@@ -143,7 +143,7 @@ describe("production profile recorder", () => {
 		child.kill("SIGTERM");
 		const signal = await exited;
 		expect(signal).toBe("SIGTERM");
-		expect(readFileSync(capture).subarray(0, 8).toString()).toBe("MALPROF4");
+		expect(readFileSync(capture).subarray(0, 8).toString()).toBe("MALPROF5");
 	});
 
 	it("publishes exact source-site compiler counters in a separate artifact", () => {

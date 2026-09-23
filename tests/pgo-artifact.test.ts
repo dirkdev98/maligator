@@ -11,6 +11,12 @@ import {
 	readPgoProfile,
 } from "../src/pgo-artifact.ts";
 import type { PreparedPgo } from "../src/pgo-artifact.ts";
+import {
+	finalizeProfileCapture,
+	profileCaptureIdentity,
+} from "../src/profile-artifact.ts";
+import type { PreparedProfile } from "../src/profile-artifact.ts";
+import { canonicalProfileJson } from "../src/source-profile-identity.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
@@ -85,6 +91,243 @@ function record(
 	writeFileSync(path.join(capture.directory, "counts.bin"), bytes);
 	return { capture, bytes };
 }
+function cpuRecord(
+	root: string,
+	semanticKey: string,
+	intervalUs: number,
+	samples = 24,
+	workloadSucceeded = true,
+	options: {
+		attribution?: "physical" | "inline" | "shared" | "ambiguous";
+		dropped?: number;
+		delayNs?: bigint;
+	} = {},
+) {
+	const directory = mkdtempSync(path.join(root, "cpu-"));
+	const prepared: PreparedProfile = {
+		schema: 6,
+		calls: [],
+		mode: "sampling",
+		buildId: "b".repeat(64),
+		pgoCompatibility: {
+			semanticKey,
+			producer: "sampling-test",
+			optimization: "full",
+		},
+		entrypoint: "/project/input.js",
+		functions: [
+			{
+				name: "f",
+				file: "input.js",
+				identity:
+					options.attribution === "ambiguous"
+						? { status: "ambiguous", reason: "fixture" }
+						: {
+								status: options.attribution === "shared" ? "shared" : "known",
+								origin: "c".repeat(64),
+								revision: "d".repeat(64),
+								portability: "portable",
+							},
+			},
+			...(options.attribution === "inline"
+				? [
+						{
+							name: "inlined",
+							file: "input.js",
+							identity: {
+								status: "known" as const,
+								origin: "e".repeat(64),
+								revision: "f".repeat(64),
+								portability: "portable" as const,
+							},
+						},
+					]
+				: []),
+		],
+		sites:
+			options.attribution === "inline"
+				? [
+						{
+							id: 0,
+							logicalId: "inline-site",
+							originId: "inline-origin",
+							instanceId: "inline-instance",
+							regionId: "inline-region",
+							functionIndex: 0,
+							instructionIndex: 0,
+							positionId: 5,
+							file: "input.js",
+							line: 1,
+							column: 1,
+							operation: "call",
+							inlineChain: [
+								{ functionIndex: 1, positionId: 5 },
+								{ functionIndex: 0, positionId: 4 },
+							],
+						},
+					]
+				: [],
+		remarks: [],
+	};
+	prepared.captureIdentity = profileCaptureIdentity(prepared);
+	const bytes = Buffer.alloc(80 + samples * 40 + samples * 12);
+	bytes.write("MALPROF5");
+	bytes.writeUInt32LE(5, 8);
+	bytes.writeUInt32LE(samples, 12);
+	bytes.writeUInt32LE(samples, 16);
+	bytes.writeUInt32LE(options.dropped ?? 0, 20);
+	bytes.writeUInt32LE(intervalUs, 28);
+	Buffer.from(prepared.captureIdentity, "hex").copy(bytes, 48);
+	for (let index = 0; index < samples; index++) {
+		const offset = 80 + index * 40;
+		bytes.writeUInt8(1, offset);
+		bytes.writeBigUInt64LE(BigInt(index + 1) * BigInt(intervalUs) * 1_000n, offset + 8);
+		bytes.writeBigUInt64LE(options.delayNs ?? 0n, offset + 24);
+		bytes.writeUInt32LE(index, offset + 32);
+		bytes.writeUInt32LE(1, offset + 36);
+		const frame = 80 + samples * 40 + index * 12;
+		bytes.writeInt32LE(0, frame);
+		bytes.writeInt32LE(-1, frame + 4);
+		bytes.writeInt32LE(options.attribution === "inline" ? 0 : -1, frame + 8);
+	}
+	writeFileSync(path.join(directory, "metadata.json"), JSON.stringify(prepared));
+	writeFileSync(path.join(directory, "capture.bin"), bytes);
+	finalizeProfileCapture(directory, prepared, "run", { workloadSucceeded });
+	return { directory, bytes };
+}
+
+it("merges validated CPU captures by exact revision and sampling interval", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const first = cpuRecord(root, prepared.semanticKey, 10_000);
+	const second = cpuRecord(root, prepared.semanticKey, 20_000);
+	const merged = mergePgoCaptures(
+		[counter.capture.directory],
+		path.join(root, "cpu-merged.json"),
+		{
+			cpuProfiles: [
+				{ workload: "first", directory: first.directory },
+				{ workload: "second", directory: second.directory },
+				{ workload: "first", directory: first.directory },
+			],
+		},
+	);
+	expect(merged.profile.cpuCaptures).toHaveLength(2);
+	expect(merged.profile.cpuFunctions).toEqual([
+		{
+			origin: "c".repeat(64),
+			revision: "d".repeat(64),
+			samples: "48",
+			estimatedCpuNs: "720000000",
+		},
+	]);
+	expect(readPgoProfile(merged.path, prepared.semanticKey).cpuFunctions).toEqual(
+		merged.profile.cpuFunctions,
+	);
+	first.bytes[90] = first.bytes[90]! ^ 1;
+	writeFileSync(path.join(first.directory, "capture.bin"), first.bytes);
+	expect(() =>
+		mergePgoCaptures([counter.capture.directory], undefined, {
+			cpuProfiles: [{ workload: "first", directory: first.directory }],
+		}),
+	).toThrow(/checksum/);
+});
+
+it("rejects CPU evidence with too few samples even if other profile evidence exists", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const sparse = cpuRecord(root, prepared.semanticKey, 10_000, 19);
+	expect(() =>
+		mergePgoCaptures([counter.capture.directory], undefined, {
+			cpuProfiles: [{ workload: "sparse", directory: sparse.directory }],
+		}),
+	).toThrow(/insufficient/);
+});
+
+it("rejects interrupted captures and CPU costs inconsistent with recorded intervals", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const interrupted = cpuRecord(root, prepared.semanticKey, 10_000, 24, false);
+	expect(() =>
+		mergePgoCaptures([counter.capture.directory], undefined, {
+			cpuProfiles: [{ workload: "interrupted", directory: interrupted.directory }],
+		}),
+	).toThrow(/completed/);
+	const completed = cpuRecord(root, prepared.semanticKey, 10_000);
+	const merged = mergePgoCaptures(
+		[counter.capture.directory],
+		path.join(root, "cost.json"),
+		{
+			cpuProfiles: [{ workload: "completed", directory: completed.directory }],
+		},
+	);
+	const malformed = {
+		...merged.profile,
+		cpuFunctions: merged.profile.cpuFunctions.map((row) => ({
+			...row,
+			estimatedCpuNs: "0",
+		})),
+	};
+	const { digest: _digest, ...contents } = malformed;
+	malformed.digest = hash("sha256", canonicalProfileJson(contents), "hex");
+	const file = path.join(root, "malformed.json");
+	writeFileSync(file, JSON.stringify(malformed));
+	expect(() => readPgoProfile(file, prepared.semanticKey)).toThrow(/CPU function row/);
+});
+
+it("attributes an inlined sample to its source leaf and excludes ambiguous identities", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const inline = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, {
+		attribution: "inline",
+	});
+	const shared = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, {
+		attribution: "shared",
+	});
+	const ambiguous = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, {
+		attribution: "ambiguous",
+	});
+	const merged = mergePgoCaptures(
+		[counter.capture.directory],
+		path.join(root, "inline.json"),
+		{
+			cpuProfiles: [
+				{ workload: "inline", directory: inline.directory },
+				{ workload: "shared", directory: shared.directory },
+				{ workload: "ambiguous", directory: ambiguous.directory },
+			],
+		},
+	);
+	expect(merged.profile.cpuFunctions).toEqual([
+		{
+			origin: "e".repeat(64),
+			revision: "f".repeat(64),
+			samples: "24",
+			estimatedCpuNs: "240000000",
+		},
+	]);
+	expect(
+		merged.profile.cpuCaptures.map((capture) => capture.ambiguousSamples).sort(),
+	).toEqual([0, 24, 24]);
+});
+
+it("rejects dropped and delayed CPU samples before they can guide optimization", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	for (const options of [{ dropped: 1 }, { delayNs: 50_000_000n }]) {
+		const bad = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, options);
+		expect(() =>
+			mergePgoCaptures([counter.capture.directory], undefined, {
+				cpuProfiles: [{ workload: "bad", directory: bad.directory }],
+			}),
+		).toThrow(/dropped|delayed/);
+	}
+});
 it("merges exact target guard matches and keeps an incomplete site unknown", () => {
 	const { root, prepared } = setup();
 	const first = record(prepared, root, [3n, 3n, 0n], 0, {

@@ -81,7 +81,7 @@ const ALLOCATION_FAMILY_NAMES = [
 ];
 
 export interface PreparedProfile {
-	schema: 5;
+	schema: 6;
 	calls: Array<{
 		file: string;
 		line: number;
@@ -92,6 +92,11 @@ export interface PreparedProfile {
 	}>;
 	mode: "sampling" | "compiler";
 	buildId: string;
+	pgoCompatibility?: {
+		semanticKey: string;
+		producer: string;
+		optimization: "full" | "development";
+	};
 	captureIdentity?: string;
 	entrypoint: string;
 	functions: Array<{
@@ -132,7 +137,7 @@ interface RawRecord {
 }
 
 interface RawCapture {
-	schema: 1 | 2 | 3 | 4;
+	schema: 1 | 2 | 3 | 4 | 5;
 	captureIdentity?: string;
 	intervalUs: number;
 	allocationIntervalBytes: number;
@@ -174,7 +179,7 @@ export function profileCaptureIdentity(prepared: PreparedProfile): string {
 function validatedCaptureIdentity(prepared: PreparedProfile): string {
 	const identity = prepared.captureIdentity;
 	if (
-		prepared.schema !== 5 ||
+		prepared.schema !== 6 ||
 		identity === undefined ||
 		!/^[0-9a-f]{64}$/u.test(identity)
 	) {
@@ -284,11 +289,12 @@ export function prepareProfile(
 	image: ProgramImage,
 	mode: PreparedProfile["mode"] = "sampling",
 	optimization: ProfileOptimizationSidecar = {},
+	pgoCompatibility?: PreparedProfile["pgoCompatibility"],
 ): PreparedProfile {
 	const resolver = new SourceProfileIdentities();
 	const identities = profileFunctionIdentities(image, resolver);
 	const prepared: PreparedProfile = {
-		schema: 5,
+		schema: 6,
 		calls: (image.diagnostics.sourceCallSites ?? []).map((site) => ({
 			file: site.file,
 			line: site.line,
@@ -299,6 +305,7 @@ export function prepareProfile(
 		})),
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
+		pgoCompatibility,
 		entrypoint: image.runtime.entrypointPath,
 		functions: image.runtime.functions.map((fn, index) => ({
 			name: functionName(image, index),
@@ -334,13 +341,14 @@ export function createProfileCapture(
 	command: string,
 	prepared: PreparedProfile,
 	cwd = process.cwd(),
+	destination?: string,
 ): {
 	directory: string;
 	capturePath: string;
 	environment: { MAL_PROFILE_CAPTURE: string; MAL_PROFILE_IDENTITY: string };
 } {
 	const captureIdentity = validatedCaptureIdentity(prepared);
-	const override = process.env.MALIGATOR_PROFILE_DIRECTORY;
+	const override = destination ?? process.env.MALIGATOR_PROFILE_DIRECTORY;
 	const directory = path.resolve(
 		override === undefined
 			? defaultProfileDirectory(command, prepared, cwd)
@@ -376,7 +384,8 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 		magic !== "MALPROF1" &&
 		magic !== "MALPROF2" &&
 		magic !== "MALPROF3" &&
-		magic !== "MALPROF4"
+		magic !== "MALPROF4" &&
+		magic !== "MALPROF5"
 	) {
 		throw new Error("profile capture has an unknown magic value");
 	}
@@ -386,12 +395,13 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 		(magic === "MALPROF1" && schema !== 1) ||
 		(magic === "MALPROF2" && schema !== 2) ||
 		(magic === "MALPROF3" && schema !== 3) ||
-		(magic === "MALPROF4" && schema !== 4)
+		(magic === "MALPROF4" && schema !== 4) ||
+		(magic === "MALPROF5" && schema !== 5)
 	)
 		throw new Error("profile capture schema is unsupported");
-	const typedSchema = schema as 1 | 2 | 3 | 4;
+	const typedSchema = schema as 1 | 2 | 3 | 4 | 5;
 	const headerBytes =
-		schema === 4
+		schema >= 4
 			? CAPTURE_V4_HEADER_BYTES
 			: schema === 3
 				? CAPTURE_V3_HEADER_BYTES
@@ -439,7 +449,7 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 	}
 	return {
 		schema: typedSchema,
-		...(schema === 4
+		...(schema >= 4
 			? {
 					captureIdentity: Buffer.from(bytes.subarray(48, 80)).toString("hex"),
 				}
@@ -1028,9 +1038,12 @@ function functionIdentityCoverage(prepared: PreparedProfile): FunctionIdentityCo
 }
 
 export interface ProfileManifest {
-	schema: 4;
+	schema: 5;
 	functionIdentities: FunctionIdentityCoverage;
 	status: "complete";
+	workloadSucceeded: boolean;
+	captureId: string;
+	payloadDigest: string;
 	command: string;
 	mode: PreparedProfile["mode"];
 	buildId: string;
@@ -1379,10 +1392,13 @@ export function finalizeProfileCapture(
 	directory: string,
 	prepared: PreparedProfile,
 	command: string,
+	options: { workloadSucceeded?: boolean } = {},
 ): { findings: Array<ProfileFinding>; manifest: ProfileManifest } {
-	const capture = parseProfileCapture(readFileSync(path.join(directory, "capture.bin")));
+	const payload = readFileSync(path.join(directory, "capture.bin"));
+	const payloadDigest = hash("sha256", payload, "hex");
+	const capture = parseProfileCapture(payload);
 	let captureIdentity: string;
-	if (capture.schema === 4) {
+	if (capture.schema >= 4) {
 		captureIdentity = validatedCaptureIdentity(prepared);
 		if (capture.captureIdentity !== captureIdentity) {
 			throw new Error("profile capture identity does not match its metadata and build");
@@ -1399,7 +1415,7 @@ export function finalizeProfileCapture(
 	const compiler = existsSync(compilerPath)
 		? parseCompilerCapture(readFileSync(compilerPath))
 		: undefined;
-	if (capture.schema === 4 && compiler !== undefined) {
+	if (capture.schema >= 4 && compiler !== undefined) {
 		if (compiler.schema < 3 || compiler.captureIdentity !== captureIdentity) {
 			throw new Error(
 				"compiler profile identity does not match the sampling capture, metadata, and build",
@@ -1501,9 +1517,12 @@ export function finalizeProfileCapture(
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
 	const manifest: ProfileManifest = {
-		schema: 4,
+		schema: 5,
 		functionIdentities: functionIdentityCoverage(prepared),
 		status: "complete",
+		workloadSucceeded: options.workloadSucceeded === true,
+		captureId: hash("sha256", `${captureIdentity}:${payloadDigest}`, "hex"),
+		payloadDigest,
 		command,
 		mode: prepared.mode,
 		buildId: prepared.buildId,
@@ -1595,6 +1614,145 @@ export function finalizeProfileCapture(
 	// Completeness marker is intentionally published last.
 	atomicJson(path.join(directory, "manifest.json"), manifest);
 	return { findings: ranked, manifest };
+}
+
+export interface ProfileCpuEvidence {
+	readonly captureId: string;
+	readonly payloadDigest: string;
+	readonly workload: string;
+	readonly buildId: string;
+	readonly producer: string;
+	readonly semanticKey: string;
+	readonly captureIdentity: string;
+	readonly intervalUs: number;
+	readonly totalSamples: number;
+	readonly unattributedSamples: number;
+	readonly ambiguousSamples: number;
+	readonly functions: ReadonlyArray<{
+		origin: string;
+		revision: string;
+		samples: number;
+		estimatedCpuNs: string;
+	}>;
+}
+
+export function readProfileCpuEvidence(
+	directory: string,
+	workload: string,
+): ProfileCpuEvidence {
+	if (workload.trim() === "")
+		throw new Error("CPU profile workload name must be nonempty");
+	const manifest = JSON.parse(
+		readFileSync(path.join(directory, "manifest.json"), "utf8"),
+	) as ProfileManifest;
+	if (
+		manifest.schema !== 5 ||
+		manifest.status !== "complete" ||
+		manifest.workloadSucceeded !== true
+	)
+		throw new Error("PGO requires a completed current CPU profile; recapture it");
+	const prepared = JSON.parse(
+		readFileSync(path.join(directory, "metadata.json"), "utf8"),
+	) as PreparedProfile;
+	const captureIdentity = validatedCaptureIdentity(prepared);
+	const compatibility = prepared.pgoCompatibility;
+	if (
+		prepared.mode !== "sampling" ||
+		compatibility?.optimization !== "full" ||
+		!/^[0-9a-f]{64}$/u.test(compatibility.semanticKey) ||
+		compatibility.producer.trim() === ""
+	)
+		throw new Error("PGO requires production sampling with compatible metadata");
+	const payload = readFileSync(path.join(directory, "capture.bin"));
+	const payloadDigest = hash("sha256", payload, "hex");
+	const captureId = hash("sha256", `${captureIdentity}:${payloadDigest}`, "hex");
+	if (
+		manifest.captureIdentity !== captureIdentity ||
+		manifest.buildId !== prepared.buildId ||
+		manifest.mode !== prepared.mode ||
+		manifest.payloadDigest !== payloadDigest ||
+		manifest.captureId !== captureId
+	)
+		throw new Error("CPU profile manifest, metadata, or payload checksum mismatch");
+	const capture = parseProfileCapture(payload);
+	const cpu = capture.records.filter((record) => record.kind === 1);
+	const maximumDelayNs = capture.intervalUs * 4_000;
+	if (
+		capture.schema !== 5 ||
+		capture.captureIdentity !== captureIdentity ||
+		capture.samplingClock !== "process-cpu" ||
+		capture.intervalUs === 0 ||
+		capture.droppedRecords !== 0 ||
+		capture.droppedFrames !== 0 ||
+		cpu.length < 20 ||
+		percentile(
+			cpu.map((record) => record.auxiliary),
+			0.99,
+		) > maximumDelayNs ||
+		cpu.some((record) => record.omittedFrames !== 0)
+	)
+		throw new Error("CPU profile has insufficient, delayed, dropped, or unbound samples");
+	if (
+		manifest.captureSchema !== capture.schema ||
+		manifest.intervalUs !== capture.intervalUs ||
+		manifest.cpuSamples !== cpu.length ||
+		manifest.clocks.sampling !== capture.samplingClock
+	)
+		throw new Error("CPU profile manifest does not match its raw capture");
+	const functions = new Map<
+		string,
+		{ origin: string; revision: string; samples: number }
+	>();
+	let unattributedSamples = 0;
+	let ambiguousSamples = 0;
+	for (const record of cpu) {
+		const frame = record.frames.at(-1);
+		if (frame === undefined) {
+			unattributedSamples++;
+			continue;
+		}
+		const site = prepared.sites[frame.siteId];
+		const leafIndex =
+			site?.functionIndex === frame.functionIndex
+				? (site.inlineChain[0]?.functionIndex ?? frame.functionIndex)
+				: frame.functionIndex;
+		const identity = prepared.functions[leafIndex]?.identity;
+		if (identity?.status !== "known") {
+			if (identity?.status === "shared" || identity?.status === "ambiguous")
+				ambiguousSamples++;
+			else unattributedSamples++;
+			continue;
+		}
+		const key = `${identity.origin}:${identity.revision}`;
+		const prior = functions.get(key);
+		functions.set(key, {
+			origin: identity.origin,
+			revision: identity.revision,
+			samples: (prior?.samples ?? 0) + 1,
+		});
+	}
+	return {
+		captureId,
+		payloadDigest,
+		workload,
+		buildId: prepared.buildId,
+		producer: compatibility.producer,
+		semanticKey: compatibility.semanticKey,
+		captureIdentity,
+		intervalUs: capture.intervalUs,
+		totalSamples: cpu.length,
+		unattributedSamples,
+		ambiguousSamples,
+		functions: [...functions.values()]
+			.sort(
+				(a, b) =>
+					a.origin.localeCompare(b.origin) || a.revision.localeCompare(b.revision),
+			)
+			.map((row) => ({
+				...row,
+				estimatedCpuNs: String(BigInt(row.samples) * BigInt(capture.intervalUs) * 1_000n),
+			})),
+	};
 }
 
 export function formatProfileFindings(

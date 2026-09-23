@@ -327,9 +327,21 @@ export function optimizeCore(
 			total + compilation.program.function(functionId).liveStorageCounts().instructions,
 		0,
 	);
-	const o3Candidates = new CoreTransformCandidateService(
+	const baseO3Budgets =
 		profile.o3Budgets ??
-			coreProgramTransformBudgets(DEFAULT_CORE_SPECIALIZATION_BUDGETS, liveInstructions),
+		coreProgramTransformBudgets(DEFAULT_CORE_SPECIALIZATION_BUDGETS, liveInstructions);
+	const measuredWorkBonus = Math.floor(
+		(baseO3Budgets.programCompilerWork * (options.pgo?.measuredWorkBonusPercent ?? 0)) /
+			100,
+	);
+	const o3Candidates = new CoreTransformCandidateService(
+		measuredWorkBonus === 0
+			? baseO3Budgets
+			: {
+					...baseO3Budgets,
+					programCompilerWork: baseO3Budgets.programCompilerWork + measuredWorkBonus,
+					profileUnknownWorkLimit: Math.floor(baseO3Budgets.programCompilerWork * 0.2),
+				},
 	);
 	const crossCallBudgets =
 		profile.o3Budgets ??

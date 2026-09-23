@@ -11,8 +11,10 @@ import {
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
+import type { CoreFunctionId } from "./compiler/core/core-ir.ts";
 import type { CorePgoInput, CorePgoQueryCoverage } from "./compiler/core/core-pgo.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
+import { readProfileCpuEvidence } from "./profile-artifact.ts";
 import {
 	SourceProfileIdentities,
 	canonicalProfileJson,
@@ -67,7 +69,7 @@ export interface PgoCaptureManifest {
 }
 
 export interface MergedPgoProfile {
-	schema: 2;
+	schema: 3;
 	semantics: 2;
 	semanticKey: string;
 	digest: string;
@@ -79,6 +81,25 @@ export interface MergedPgoProfile {
 		image: string;
 		captureIdentity: string;
 		payloadDigest: string;
+	}>;
+	cpuCaptures: Array<{
+		captureId: string;
+		workload: string;
+		producer: string;
+		image: string;
+		captureIdentity: string;
+		payloadDigest: string;
+		intervalUs: number;
+		totalSamples: number;
+		unattributedSamples: number;
+		ambiguousSamples: number;
+		functions: Array<{ origin: string; revision: string; samples: string }>;
+	}>;
+	cpuFunctions: Array<{
+		origin: string;
+		revision: string;
+		samples: string;
+		estimatedCpuNs: string;
 	}>;
 	functions: Array<{ origin: string; revision: string; count: string }>;
 	calls: Array<{ key: string; count: string }>;
@@ -404,6 +425,7 @@ export function finalizePgoCapture(
 export function mergePgoCaptures(
 	inputs: ReadonlyArray<string>,
 	output?: string,
+	options: { cpuProfiles?: ReadonlyArray<{ workload: string; directory: string }> } = {},
 ): { profile: MergedPgoProfile; path: string } {
 	if (inputs.length === 0) throw new Error("PGO merge needs explicit captures");
 	const captures = new Map<
@@ -429,6 +451,40 @@ export function mergePgoCaptures(
 		a.manifest.runId.localeCompare(b.manifest.runId),
 	);
 	const semanticKey = ordered[0]!.manifest.prepared.semanticKey;
+	const cpuCaptures = new Map<string, ReturnType<typeof readProfileCpuEvidence>>();
+	for (const input of options.cpuProfiles ?? []) {
+		const evidence = readProfileCpuEvidence(input.directory, input.workload);
+		if (evidence.semanticKey !== semanticKey)
+			throw new Error("PGO CPU profile semantic configuration mismatch");
+		const prior = cpuCaptures.get(evidence.captureId);
+		if (
+			prior !== undefined &&
+			(prior.payloadDigest !== evidence.payloadDigest ||
+				prior.captureIdentity !== evidence.captureIdentity ||
+				prior.workload !== evidence.workload)
+		)
+			throw new Error("PGO merge rejects conflicting duplicate CPU captures");
+		cpuCaptures.set(evidence.captureId, evidence);
+	}
+	const orderedCpu = [...cpuCaptures.values()].sort((a, b) =>
+		a.captureId.localeCompare(b.captureId),
+	);
+	const cpuFunctions = new Map<
+		string,
+		{ origin: string; revision: string; samples: bigint; estimatedCpuNs: bigint }
+	>();
+	for (const evidence of orderedCpu) {
+		for (const row of evidence.functions) {
+			const key = `${row.origin}:${row.revision}`;
+			const prior = cpuFunctions.get(key);
+			cpuFunctions.set(key, {
+				origin: row.origin,
+				revision: row.revision,
+				samples: (prior?.samples ?? 0n) + BigInt(row.samples),
+				estimatedCpuNs: (prior?.estimatedCpuNs ?? 0n) + BigInt(row.estimatedCpuNs),
+			});
+		}
+	}
 	const functions = new Map<
 		string,
 		{ origin: string; revision: string; count: bigint }
@@ -525,7 +581,7 @@ export function mergePgoCaptures(
 	if (functions.size + calls.size + targets.size > MAX_COUNTERS)
 		throw new Error("PGO merged profile counter limit exceeded");
 	const profile: MergedPgoProfile = {
-		schema: 2,
+		schema: 3,
 		semantics: 2,
 		semanticKey,
 		digest: "",
@@ -538,6 +594,31 @@ export function mergePgoCaptures(
 			captureIdentity: manifest.captureIdentity,
 			payloadDigest: counts.payloadDigest,
 		})),
+		cpuCaptures: orderedCpu.map((evidence) => ({
+			captureId: evidence.captureId,
+			workload: evidence.workload,
+			producer: evidence.producer,
+			image: evidence.buildId,
+			captureIdentity: evidence.captureIdentity,
+			payloadDigest: evidence.payloadDigest,
+			intervalUs: evidence.intervalUs,
+			totalSamples: evidence.totalSamples,
+			unattributedSamples: evidence.unattributedSamples,
+			ambiguousSamples: evidence.ambiguousSamples,
+			functions: evidence.functions.map((row) => ({
+				origin: row.origin,
+				revision: row.revision,
+				samples: String(row.samples),
+			})),
+		})),
+		cpuFunctions: [...cpuFunctions.entries()]
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, row]) => ({
+				origin: row.origin,
+				revision: row.revision,
+				samples: String(row.samples),
+				estimatedCpuNs: String(row.estimatedCpuNs),
+			})),
 		functions: [...functions.entries()]
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([, fn]) => ({ ...fn, count: String(fn.count) })),
@@ -566,7 +647,7 @@ function mergedIdentity(profile: MergedPgoProfile): string {
 export function readPgoProfile(file: string, semanticKey: string): MergedPgoProfile {
 	const profile = JSON.parse(readFileSync(file, "utf8")) as MergedPgoProfile;
 	if (
-		profile.schema !== 2 ||
+		profile.schema !== 3 ||
 		profile.semantics !== 2 ||
 		profile.semanticKey !== semanticKey
 	)
@@ -575,10 +656,16 @@ export function readPgoProfile(file: string, semanticKey: string): MergedPgoProf
 		throw new Error("PGO profile checksum mismatch");
 	if (
 		!Array.isArray(profile.functions) ||
+		!Array.isArray(profile.cpuCaptures) ||
+		!Array.isArray(profile.cpuFunctions) ||
 		!Array.isArray(profile.calls) ||
 		!Array.isArray(profile.targets) ||
 		!Array.isArray(profile.targetUnknownCalls) ||
-		profile.functions.length + profile.calls.length + profile.targets.length >
+		profile.functions.length +
+			profile.calls.length +
+			profile.targets.length +
+			profile.cpuFunctions.length +
+			profile.cpuCaptures.length >
 			MAX_COUNTERS
 	)
 		throw new Error("PGO profile counter limit exceeded");
@@ -654,7 +741,97 @@ export function readPgoProfile(file: string, semanticKey: string): MergedPgoProf
 			throw new Error("PGO incomplete target keys are invalid or duplicated");
 		unknownKeys.add(key);
 	}
+	const captureIds = new Set<string>();
+	const capturedCpuFunctions = new Map<
+		string,
+		{ samples: bigint; estimatedCpuNs: bigint }
+	>();
+	for (const capture of profile.cpuCaptures) {
+		if (
+			!isDigest(capture.captureId) ||
+			!isDigest(capture.image) ||
+			!isDigest(capture.captureIdentity) ||
+			!isDigest(capture.payloadDigest) ||
+			captureIds.has(capture.captureId) ||
+			typeof capture.workload !== "string" ||
+			capture.workload.trim() === "" ||
+			typeof capture.producer !== "string" ||
+			capture.producer.trim() === "" ||
+			!Number.isSafeInteger(capture.intervalUs) ||
+			capture.intervalUs <= 0 ||
+			!Number.isSafeInteger(capture.totalSamples) ||
+			capture.totalSamples < 20 ||
+			!Number.isSafeInteger(capture.unattributedSamples) ||
+			!Number.isSafeInteger(capture.ambiguousSamples) ||
+			capture.unattributedSamples < 0 ||
+			capture.ambiguousSamples < 0 ||
+			capture.unattributedSamples + capture.ambiguousSamples > capture.totalSamples ||
+			!Array.isArray(capture.functions) ||
+			capture.functions.length > MAX_COUNTERS
+		)
+			throw new Error("PGO CPU capture provenance is invalid or duplicated");
+		captureIds.add(capture.captureId);
+		const seen = new Set<string>();
+		let attributed = 0n;
+		for (const row of capture.functions) {
+			const key = `${row.origin}:${row.revision}`;
+			if (
+				!isDigest(row.origin) ||
+				!isDigest(row.revision) ||
+				!isU64Decimal(row.samples) ||
+				BigInt(row.samples) === 0n ||
+				seen.has(key)
+			)
+				throw new Error("PGO CPU capture function attribution is invalid");
+			seen.add(key);
+			const samples = BigInt(row.samples);
+			attributed += samples;
+			const prior = capturedCpuFunctions.get(key);
+			capturedCpuFunctions.set(key, {
+				samples: (prior?.samples ?? 0n) + samples,
+				estimatedCpuNs:
+					(prior?.estimatedCpuNs ?? 0n) + samples * BigInt(capture.intervalUs) * 1_000n,
+			});
+		}
+		if (
+			attributed !==
+			BigInt(
+				capture.totalSamples - capture.unattributedSamples - capture.ambiguousSamples,
+			)
+		)
+			throw new Error("PGO CPU capture attribution does not match sample totals");
+	}
+	const cpuKeys = new Set<string>();
+	for (const row of profile.cpuFunctions) {
+		const key = `${row.origin}:${row.revision}`;
+		if (
+			!isDigest(row.origin) ||
+			!isDigest(row.revision) ||
+			cpuKeys.has(key) ||
+			!isU64Decimal(row.samples) ||
+			!isU64Decimal(row.estimatedCpuNs) ||
+			BigInt(row.samples) === 0n ||
+			capturedCpuFunctions.get(key)?.samples !== BigInt(row.samples) ||
+			capturedCpuFunctions.get(key)?.estimatedCpuNs !== BigInt(row.estimatedCpuNs)
+		)
+			throw new Error("PGO CPU function row is invalid or duplicated");
+		cpuKeys.add(key);
+	}
+	if (cpuKeys.size !== capturedCpuFunctions.size)
+		throw new Error("PGO CPU function rows do not match capture provenance");
 	return profile;
+}
+
+function isDigest(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function isU64Decimal(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		/^(0|[1-9][0-9]{0,19})$/u.test(value) &&
+		BigInt(value) <= MAX_COUNT
+	);
 }
 
 function publishPgoProfile(file: string, profile: MergedPgoProfile): void {
@@ -677,13 +854,21 @@ function publishPgoProfile(file: string, profile: MergedPgoProfile): void {
 
 export function pgoOptimizationInput(
 	profile: MergedPgoProfile,
-	options: { collectQueryCoverage?: boolean } = {},
+	options: { collectQueryCoverage?: boolean; measuredWorkBonusPercent?: number } = {},
 ): CorePgoInput {
 	const functions = new Map(
 		profile.functions.map((row) => [
 			`${row.origin}:${row.revision}`,
 			Math.min(Number(row.count), Number.MAX_SAFE_INTEGER),
 		]),
+	);
+	const cpuFunctions = new Map(
+		profile.cpuFunctions
+			.filter((row) => BigInt(row.samples) >= 20n)
+			.map((row) => [
+				`${row.origin}:${row.revision}`,
+				Math.min(Number(row.estimatedCpuNs), Number.MAX_SAFE_INTEGER),
+			]),
 	);
 	const calls = new Map(
 		profile.calls.map((row) => [
@@ -712,7 +897,7 @@ export function pgoOptimizationInput(
 		: undefined;
 	return {
 		digest: profile.digest,
-		policy: `target-zero-v2-unknown-20:${compilerProducerIdentity("pgo-training", 2)}`,
+		policy: `cpu-local-v1-work-${options.measuredWorkBonusPercent ?? 0}-target-zero-v2-unknown-20:${compilerProducerIdentity("pgo-training", 2)}`,
 		bind({ program, context }) {
 			const identities = new SourceProfileIdentities();
 			const origins = new Map(
@@ -722,6 +907,7 @@ export function pgoOptimizationInput(
 				]),
 			);
 			const functionCounts = new Map<number, number | undefined>();
+			const functionCpuCosts = new Map<number, number | undefined>();
 			const callCounts = new Map<number, number | undefined>();
 			let currentSourceCalls: Map<number, number> | undefined;
 			let currentSourceFunctionsVersion = -1;
@@ -738,6 +924,22 @@ export function pgoOptimizationInput(
 				: undefined;
 			return {
 				digest: profile.digest,
+				measuredWorkBonusPercent: options.measuredWorkBonusPercent,
+				...(cpuFunctions.size === 0
+					? {}
+					: {
+							functionCpuCost(id: CoreFunctionId) {
+								if (functionCpuCosts.has(id)) return functionCpuCosts.get(id);
+								const fn = program.function(id);
+								const identity = identities.functionIdentity(origins.get(id));
+								const cost =
+									fn.isGenerator || identity.status !== "known"
+										? undefined
+										: cpuFunctions.get(`${identity.origin}:${identity.revision}`);
+								functionCpuCosts.set(id, cost);
+								return cost;
+							},
+						}),
 				functionEntries(id) {
 					if (functionCounts.has(id)) return functionCounts.get(id);
 					const fn = program.function(id);

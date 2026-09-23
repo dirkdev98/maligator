@@ -25,12 +25,14 @@ function construct(source: string) {
 function profile(core: ReturnType<typeof construct>): MergedPgoProfile {
 	const identities = new SourceProfileIdentities();
 	return {
-		schema: 2,
+		schema: 3,
 		semantics: 2,
 		semanticKey: "a".repeat(64),
 		digest: "b".repeat(64),
 		overflow: false,
 		runs: [],
+		cpuCaptures: [],
+		cpuFunctions: [],
 		coverage: {
 			unknownFunctions: 0,
 			unknownCalls: 0,
@@ -105,6 +107,38 @@ it("matches exact revisions and leaves generator bodies and copied calls unknown
 		functions: { positive: 1, unsupportedBody: 1, missingOrigin: 1 },
 		calls: { positive: 1, ownerMismatch: 2 },
 	});
+});
+it("uses CPU samples only for exact source revisions and leaves call counts unchanged", () => {
+	const source = "function f(cb) { return cb(1); } globalThis.f=f;";
+	const core = construct(source);
+	const merged = profile(core);
+	const f = [...core.program.functionIds()].find(
+		(id) => core.program.function(id).parameterCount === 1,
+	)!;
+	const identity = new SourceProfileIdentities().functionIdentity(
+		core.program.function(f).metadata.sourceOrigin,
+	);
+	if (identity.status !== "known") throw new Error("Expected exact source identity");
+	merged.cpuFunctions = [
+		{
+			origin: identity.origin,
+			revision: identity.revision,
+			samples: "20",
+			estimatedCpuNs: "200000000",
+		},
+	];
+	const hints = pgoOptimizationInput(merged).bind(core);
+	expect(hints.functionCpuCost?.(f)).toBe(200000000);
+	expect(hints.functionEntries(f)).toBe(5);
+	const changed = construct(source.replace("cb(1)", "cb(2)"));
+	const changedF = [...changed.program.functionIds()].find(
+		(id) => changed.program.function(id).parameterCount === 1,
+	)!;
+	expect(
+		pgoOptimizationInput(merged).bind(changed).functionCpuCost?.(changedF),
+	).toBeUndefined();
+	merged.cpuFunctions[0]!.samples = "19";
+	expect(pgoOptimizationInput(merged).bind(core).functionCpuCost?.(f)).toBeUndefined();
 });
 it("uses only complete guard matches for exact target identities", () => {
 	const source =

@@ -3,7 +3,9 @@ import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 
 export interface CorePgoHints {
 	readonly digest: string;
+	readonly measuredWorkBonusPercent?: number;
 	functionEntries(id: CoreFunctionId): number | undefined;
+	functionCpuCost?(id: CoreFunctionId): number | undefined;
 	callAttempts(id: CoreFunctionId, instruction: CoreInstructionId): number | undefined;
 	guardedCallHits?(
 		id: CoreFunctionId,

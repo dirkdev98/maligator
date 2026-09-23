@@ -131,6 +131,7 @@ type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
 interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
 	readonly kind: "local" | "direct-entry" | "guarded-call";
 	readonly priorityScore: number;
+	readonly cpuCost?: number;
 	readonly observedZero?: () => boolean;
 	readonly resolve: () => ReadonlyArray<PendingCandidate>;
 }
@@ -1969,9 +1970,13 @@ export function buildCoreOptimizationPlan(
 	if (options.discoverCandidates !== false) {
 		for (const input of resolvedLocalInputs) {
 			if (input.discovery === undefined) continue;
+			const cpuCost = options.pgo?.functionCpuCost?.(input.function);
+			const entries = options.pgo?.functionEntries(input.function);
 			opportunities.push({
 				kind: "local",
-				exposure: options.pgo?.functionEntries(input.function),
+				exposure:
+					cpuCost !== undefined && (entries === undefined || entries === 0) ? 1 : entries,
+				cpuCost,
 				caller: input.function,
 				generatedCodeCost: 1,
 				...input.discovery,
@@ -2010,6 +2015,18 @@ export function buildCoreOptimizationPlan(
 			left.caller - right.caller ||
 			left.kind.localeCompare(right.kind),
 	);
+	if (options.pgo?.functionCpuCost !== undefined) {
+		const localPositions: Array<number> = [];
+		const local = opportunities.filter((opportunity, index) => {
+			if (opportunity.kind !== "local") return false;
+			localPositions.push(index);
+			return true;
+		});
+		local.sort((left, right) => (right.cpuCost ?? -1) - (left.cpuCost ?? -1));
+		localPositions.forEach((position, index) => {
+			opportunities[position] = local[index]!;
+		});
+	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const service =

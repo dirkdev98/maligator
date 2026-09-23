@@ -42,6 +42,7 @@ import type {
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
+import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CorePgoQueryCoverage } from "./compiler/core/core-pgo.ts";
@@ -499,7 +500,11 @@ function compileAndBuild(
 			? undefined
 			: pgoOptimizationInput(
 					readPgoProfile(path.resolve(command.pgoUse), pgoSemanticIdentity(buildConfig)),
-					{ collectQueryCoverage: reporter.verbose },
+					{
+						collectQueryCoverage: reporter.verbose,
+						measuredWorkBonusPercent:
+							command.kind === "build" ? command.pgoMeasuredWorkBonus : undefined,
+					},
 				);
 	const pgoQueryCoverage: Array<CorePgoQueryCoverage> = [];
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
@@ -945,6 +950,11 @@ function compileAndBuild(
 						coreOptimizationReport: frontend.optimizationReport,
 						coreOptimizationPlan: frontend.optimizationPlan,
 					},
+					{
+						semanticKey: pgoSemanticIdentity(buildConfig),
+						producer: compilerProducerIdentity("pgo-sampling", 1),
+						optimization: "full",
+					},
 				),
 			)
 		: undefined;
@@ -1068,6 +1078,7 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 					capture.directory,
 					result.profile,
 					"run",
+					{ workloadSucceeded: outcome.status === 0 && outcome.signal === undefined },
 				);
 				writeStderr(`Profile ${capture.directory}`);
 				for (const line of formatProfileReport(finalized)) writeStderr(line);
@@ -1530,6 +1541,11 @@ function executeProfiledTests(
 			coreOptimizationReport: compiled.optimizationReport,
 			coreOptimizationPlan: compiled.optimizationPlan,
 		},
+		{
+			semanticKey: pgoSemanticIdentity(config),
+			producer: compilerProducerIdentity("pgo-sampling", 1),
+			optimization: "full",
+		},
 	);
 	const capture = createProfileCapture("test", profile);
 	const executionStartedAt = Date.now();
@@ -1568,7 +1584,9 @@ function executeProfiledTests(
 		);
 	}
 	if (existsSync(capture.capturePath)) {
-		const finalized = finalizeProfileCapture(capture.directory, profile, "test");
+		const finalized = finalizeProfileCapture(capture.directory, profile, "test", {
+			workloadSucceeded: testResult.failed === 0,
+		});
 		writeStderr(`Profile ${capture.directory}`);
 		for (const line of formatProfileReport(finalized)) writeStderr(line);
 	} else {
@@ -1650,7 +1668,9 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "pgo-merge") {
-			const merged = mergePgoCaptures(command.inputs, command.output);
+			const merged = mergePgoCaptures(command.inputs, command.output, {
+				cpuProfiles: command.cpuProfiles,
+			});
 			writeStderr(
 				`PGO profile ${merged.path} (${merged.profile.runs.length} unique runs)`,
 			);

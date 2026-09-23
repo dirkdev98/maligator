@@ -341,6 +341,7 @@ if (options !== undefined) {
 							compilerProfile.capture.directory,
 							compilerProfile.prepared,
 							"self-compile",
+							{ workloadSucceeded: true },
 						);
 			const report = {
 				schema: 3,

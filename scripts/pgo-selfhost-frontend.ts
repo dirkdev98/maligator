@@ -20,6 +20,8 @@ import {
 	mergePgoCaptures,
 	readPreparedPgoTraining,
 } from "../src/pgo-artifact.ts";
+import { createProfileCapture, finalizeProfileCapture } from "../src/profile-artifact.ts";
+import type { PreparedProfile } from "../src/profile-artifact.ts";
 import { SELF_COMPILE_CONFIG } from "./self-compile-workload.ts";
 
 const WORKLOADS = [
@@ -51,14 +53,16 @@ const WORKLOADS = [
 ] as const;
 
 interface Options {
-	command: "oracle" | "train" | "compare";
+	command: "oracle" | "train" | "sample" | "compare";
 	snapshot: string;
 	output: string;
 	trainingBinary?: string;
+	profileBinary?: string;
 	staticBinary?: string;
 	pgoBinary?: string;
 	budgetSeconds: number;
 	childTimeoutSeconds: number;
+	sampleIntervalUs: number;
 	pairs: number;
 	workloads: Array<string>;
 	plan: boolean;
@@ -73,12 +77,13 @@ interface SourceCapture {
 }
 
 const HELP = `Usage: node scripts/pgo-selfhost-frontend.ts train --snapshot CAPTURE --training-binary PATH --out DIR [--workloads NAME,...] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
+       node scripts/pgo-selfhost-frontend.ts sample --snapshot CAPTURE --profile-binary PATH --out DIR [--workloads NAME,...] [--sample-interval-us N] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
        node scripts/pgo-selfhost-frontend.ts compare --snapshot CAPTURE --static-binary PATH --pgo-binary PATH --out DIR [--workloads NAME,...] [--pairs N] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
        node scripts/pgo-selfhost-frontend.ts oracle --snapshot CAPTURE --out DIR [--workloads NAME,...] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
 
 The source-only CAPTURE comes from bench:self-compile-experiment capture DIR --source-only.
-Build all three binaries from that same frozen source/src/selfhost-frontend-entry.mts.
-This runner never builds a binary. Train merges only exact-wire-matching captures;
+Build the binaries from that same frozen source/src/selfhost-frontend-entry.mts.
+This runner never builds a binary. Train and sample require exact wire matches;
 compare checks both training inputs and separate holdouts against the frozen Node oracle.
 Comparison reports call every input evaluation because the binaries do not identify their training corpus.
 Output directories must be new. Incomplete reports and captures are retained.
@@ -88,7 +93,12 @@ compiler-full compiles the entire frozen frontend and runs only when explicitly 
 function parseOptions(args: Array<string>): Options | undefined {
 	if (args[0] === "--help" || args[0] === "-h") return undefined;
 	const command = args[0];
-	if (command !== "oracle" && command !== "train" && command !== "compare")
+	if (
+		command !== "oracle" &&
+		command !== "train" &&
+		command !== "sample" &&
+		command !== "compare"
+	)
 		throw new Error(HELP);
 	const options: Options = {
 		command,
@@ -96,9 +106,12 @@ function parseOptions(args: Array<string>): Options | undefined {
 		output: "",
 		budgetSeconds: 300,
 		childTimeoutSeconds: 60,
+		sampleIntervalUs: 50_000,
 		pairs: 3,
 		workloads: WORKLOADS.filter(
-			(item) => item.name !== "compiler-full" && (command !== "train" || item.train),
+			(item) =>
+				item.name !== "compiler-full" &&
+				((command !== "train" && command !== "sample") || item.train),
 		).map((item) => item.name),
 		plan: false,
 	};
@@ -113,11 +126,13 @@ function parseOptions(args: Array<string>): Options | undefined {
 		if (option === "--snapshot") options.snapshot = value;
 		else if (option === "--out") options.output = value;
 		else if (option === "--training-binary") options.trainingBinary = value;
+		else if (option === "--profile-binary") options.profileBinary = value;
 		else if (option === "--static-binary") options.staticBinary = value;
 		else if (option === "--pgo-binary") options.pgoBinary = value;
 		else if (option === "--budget-seconds") options.budgetSeconds = Number(value);
 		else if (option === "--child-timeout-seconds")
 			options.childTimeoutSeconds = Number(value);
+		else if (option === "--sample-interval-us") options.sampleIntervalUs = Number(value);
 		else if (option === "--pairs") options.pairs = Number(value);
 		else if (option === "--workloads") {
 			options.workloads = value.split(",");
@@ -129,7 +144,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 	)
 		throw new Error("unknown self-hosted frontend workload");
 	if (
-		command === "train" &&
+		(command === "train" || command === "sample") &&
 		options.workloads.some(
 			(name) => !WORKLOADS.some((item) => item.name === name && item.train),
 		)
@@ -142,11 +157,15 @@ function parseOptions(args: Array<string>): Options | undefined {
 		options.budgetSeconds < 1 ||
 		!Number.isSafeInteger(options.childTimeoutSeconds) ||
 		options.childTimeoutSeconds < 1 ||
+		!Number.isSafeInteger(options.sampleIntervalUs) ||
+		options.sampleIntervalUs < 1_000 ||
+		options.sampleIntervalUs > 1_000_000 ||
 		!Number.isSafeInteger(options.pairs) ||
 		options.pairs < 1 ||
 		options.workloads.length === 0 ||
 		new Set(options.workloads).size !== options.workloads.length ||
 		(command === "train" && !options.trainingBinary) ||
+		(command === "sample" && !options.profileBinary) ||
 		(command === "compare" && (!options.staticBinary || !options.pgoBinary))
 	)
 		throw new Error(HELP);
@@ -272,6 +291,12 @@ function execute(options: Options): void {
 			options.command === "train"
 				? readPreparedPgoTraining(path.resolve(options.trainingBinary!))
 				: undefined;
+		const sampling =
+			options.command === "sample"
+				? (JSON.parse(
+						readFileSync(`${path.resolve(options.profileBinary!)}.profile.json`, "utf8"),
+					) as PreparedProfile)
+				: undefined;
 		const binaries =
 			options.command === "compare"
 				? {
@@ -283,7 +308,9 @@ function execute(options: Options): void {
 			binaries ??
 			(options.command === "train"
 				? { training: path.resolve(options.trainingBinary!) }
-				: {});
+				: options.command === "sample"
+					? { sampling: path.resolve(options.profileBinary!) }
+					: {});
 		report.binaries = Object.fromEntries(
 			Object.entries(binaryPaths).map(([name, binary]) => [
 				name,
@@ -294,13 +321,21 @@ function execute(options: Options): void {
 			Object.entries(binaryPaths).map(([name, binary]) => [name, statSync(binary).size]),
 		);
 		const captures: Array<string> = [];
+		const cpuCaptures: Array<{ workload: string; directory: string }> = [];
 		for (const workload of WORKLOADS) {
 			if (!options.workloads.includes(workload.name)) continue;
-			if (options.command === "train" && !workload.train) continue;
+			if (
+				(options.command === "train" || options.command === "sample") &&
+				!workload.train
+			)
+				continue;
 			const item: Record<string, unknown> = {
 				name: workload.name,
 				source: workload.source,
-				role: options.command === "train" ? "train" : "evaluation",
+				role:
+					options.command === "train" || options.command === "sample"
+						? "train"
+						: "evaluation",
 				trainingEligible: workload.train,
 			};
 			results.push(item);
@@ -350,6 +385,50 @@ function execute(options: Options): void {
 						}
 					throw error;
 				}
+			} else if (sampling !== undefined) {
+				const capture = createProfileCapture(
+					`selfhost-${workload.name}`,
+					sampling,
+					process.cwd(),
+					path.join(output, "cpu-captures", workload.name),
+				);
+				item.capture = path.join(capture.directory, "manifest.json");
+				writeReport(reportPath, report);
+				const actual = path.join(output, `${workload.name}-sampling.malw`);
+				try {
+					item.samplingMs = run(
+						path.resolve(options.profileBinary!),
+						[input, actual],
+						path.join(output, `${workload.name}-sampling.log`),
+						deadline,
+						options.childTimeoutSeconds,
+						{
+							...env,
+							...capture.environment,
+							MAL_PROFILE_INTERVAL_US: String(options.sampleIntervalUs),
+						},
+					);
+					assertWire(actual, oracle);
+					rmSync(actual);
+					const finalized = finalizeProfileCapture(
+						capture.directory,
+						sampling,
+						"self-compile",
+						{
+							workloadSucceeded: true,
+						},
+					);
+					item.cpuSamples = finalized.manifest.cpuSamples;
+					cpuCaptures.push({ workload: workload.name, directory: capture.directory });
+				} catch (error) {
+					if (existsSync(capture.capturePath))
+						try {
+							finalizeProfileCapture(capture.directory, sampling, "self-compile");
+						} catch {
+							// Preserve the workload error while retaining any diagnostic capture.
+						}
+					throw error;
+				}
 			} else if (binaries !== undefined) {
 				const samples: Array<{ binary: string; wallMs: number }> = [];
 				item.samples = samples;
@@ -377,6 +456,7 @@ function execute(options: Options): void {
 		}
 		if (training !== undefined)
 			report.profile = mergePgoCaptures(captures, path.join(output, "profile.json")).path;
+		if (sampling !== undefined) report.cpuProfiles = cpuCaptures;
 		if (identity.closure !== sourceIdentity(snapshot).closure)
 			throw new Error("compiler source or resolved dependency changed during the run");
 		for (const [name, binary] of Object.entries(binaryPaths)) {
@@ -410,14 +490,17 @@ if (import.meta.main) {
 						workloads: WORKLOADS.filter(
 							(item) =>
 								options.workloads.includes(item.name) &&
-								(options.command !== "train" || item.train),
+								((options.command !== "train" && options.command !== "sample") ||
+									item.train),
 						),
 						runs:
 							options.command === "oracle"
 								? `${options.workloads.length} Node oracles`
 								: options.command === "train"
 									? `${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} Node oracles + ${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} instrumented captures + explicit merge`
-									: `${options.workloads.length} Node oracles + ${2 * options.workloads.length * (options.pairs + 1)} native runs including warmups`,
+									: options.command === "sample"
+										? `${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} Node oracles + ${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} production CPU captures`
+										: `${options.workloads.length} Node oracles + ${2 * options.workloads.length * (options.pairs + 1)} native runs including warmups`,
 						failureExitCode: 2,
 					},
 					null,
