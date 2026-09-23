@@ -11,6 +11,7 @@ import type { CorePgoHints } from "../src/compiler/core/core-pgo.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { serializeCompilerArtifact } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { pgoOptimizationInput } from "../src/pgo-artifact.ts";
 import type { MergedPgoProfile } from "../src/pgo-artifact.ts";
 import { SourceProfileIdentities } from "../src/source-profile-identity.ts";
@@ -55,8 +56,9 @@ it("matches exact revisions and leaves generator bodies and copied calls unknown
 	const source =
 		"function f(cb) { return cb(1); } function* g() { yield 2; } globalThis.f=f; globalThis.g=g;";
 	const core = construct(source);
-	const input = pgoOptimizationInput(profile(core));
+	const input = pgoOptimizationInput(profile(core), { collectQueryCoverage: true });
 	const hints = input.bind(core);
+	expect(hints.queryCoverage?.().functions.positive).toBe(0);
 	const f = [...core.program.functionIds()].find(
 		(id) => core.program.function(id).parameterCount === 1,
 	)!;
@@ -66,13 +68,17 @@ it("matches exact revisions and leaves generator bodies and copied calls unknown
 			fn.instructionKind(id) === "operation" && fn.instructionOpcodeName(id) === "call",
 	)!;
 	expect(hints.functionEntries(f)).toBe(5);
+	expect(hints.functionEntries(f)).toBe(5);
+	expect(hints.callAttempts(f, call)).toBe(7);
 	expect(hints.callAttempts(f, call)).toBe(7);
 	const generator = [...core.program.functionIds()].find(
 		(id) => core.program.function(id).isGenerator,
 	)!;
 	expect(hints.functionEntries(generator)).toBeUndefined();
 	const changed = construct(source.replace("cb(1)", "cb(2)"));
-	expect(input.bind(changed).functionEntries(f)).toBeUndefined();
+	const changedHints = input.bind(changed);
+	expect(changedHints.functionEntries(f)).toBeUndefined();
+	expect(changedHints.queryCoverage?.().functions.unmatchedRevision).toBe(1);
 	const clone = new CoreFunctionBuilder(core.program, { metadata: fn.metadata });
 	const block = clone.createBlock();
 	const value = clone.appendInstruction(block, "createUndefined", [])[0]!;
@@ -92,6 +98,66 @@ it("matches exact revisions and leaves generator bodies and copied calls unknown
 	});
 	editor.commit();
 	expect(hints.callAttempts(generator, inserted.instruction)).toBeUndefined();
+	expect(hints.queryCoverage?.()).toMatchObject({
+		functions: { positive: 1, unsupportedBody: 1, missingOrigin: 1 },
+		calls: { positive: 1, ownerMismatch: 2 },
+	});
+});
+it("reports only requested PGO matches through the optimizer callback", () => {
+	const source = "const f = x => x + 1; globalThis.result = f(2);";
+	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "/project/input.js");
+	const merged = profile(construct(source));
+	const input = pgoOptimizationInput(merged, {
+		collectQueryCoverage: true,
+	});
+	let queriedFunctions = 0;
+	const diagnostic = compileSemanticProgramToProgramImage(semantic, {
+		pgo: input,
+		afterCoreOptimization(_program, _context, report) {
+			const coverage = report.pgoQueries;
+			expect(coverage).toBeDefined();
+			queriedFunctions = Object.values(coverage!.functions).reduce(
+				(sum, count) => sum + count,
+				0,
+			);
+		},
+	});
+	expect(queriedFunctions).toBeGreaterThan(0);
+	const regular = compileSemanticProgramToProgramImage(semantic, {
+		pgo: pgoOptimizationInput(merged),
+		afterCoreOptimization(_program, _context, report) {
+			expect(report.pgoQueries).toBeUndefined();
+		},
+	});
+	expect(serializeCompilerArtifact(diagnostic)).toEqual(
+		serializeCompilerArtifact(regular),
+	);
+});
+it("retains the missing-origin outcome when an unknown call is queried again", () => {
+	const source = "function f(cb) { return cb(1); } globalThis.f = f;";
+	const core = construct(source);
+	const id = [...core.program.functionIds()].find(
+		(candidate) => core.program.function(candidate).parameterCount === 1,
+	)!;
+	const fn = core.program.function(id);
+	const call = [...fn.instructionIds()].find(
+		(instruction) => fn.instructionOpcodeName(instruction) === "call",
+	)!;
+	const siteId = fn.instructionAttributes(call).sourceCall;
+	if (typeof siteId !== "number") throw new Error("Expected original call site");
+	const sites = [...core.context.data.sourceCallSites!];
+	sites[siteId] = { ...sites[siteId]!, start: undefined };
+	const input = pgoOptimizationInput(profile(core), { collectQueryCoverage: true });
+	const hints = input.bind({
+		...core,
+		context: { ...core.context, data: { ...core.context.data, sourceCallSites: sites } },
+	});
+	expect(hints.callAttempts(id, call)).toBeUndefined();
+	expect(hints.callAttempts(id, call)).toBeUndefined();
+	expect(hints.queryCoverage?.().calls).toMatchObject({
+		missingOrigin: 1,
+		unmatchedProfile: 0,
+	});
 });
 it("preserves original call heat through a verified builtin rewrite", () => {
 	const source = "function f(value) { return Object.keys(value); } globalThis.f=f;";

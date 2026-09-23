@@ -11,7 +11,7 @@ import {
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
-import type { CorePgoInput } from "./compiler/core/core-pgo.ts";
+import type { CorePgoInput, CorePgoQueryCoverage } from "./compiler/core/core-pgo.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import {
 	SourceProfileIdentities,
@@ -508,7 +508,10 @@ function publishPgoProfile(file: string, profile: MergedPgoProfile): void {
 	}
 }
 
-export function pgoOptimizationInput(profile: MergedPgoProfile): CorePgoInput {
+export function pgoOptimizationInput(
+	profile: MergedPgoProfile,
+	options: { collectQueryCoverage?: boolean } = {},
+): CorePgoInput {
 	const functions = new Map(
 		profile.functions.map((row) => [
 			`${row.origin}:${row.revision}`,
@@ -521,6 +524,9 @@ export function pgoOptimizationInput(profile: MergedPgoProfile): CorePgoInput {
 			Math.min(Number(row.count), Number.MAX_SAFE_INTEGER),
 		]),
 	);
+	const profileOrigins = options.collectQueryCoverage
+		? new Set(profile.functions.map((row) => row.origin))
+		: undefined;
 	return {
 		digest: profile.digest,
 		policy: `exposure-v1-unknown-20:${compilerProducerIdentity("pgo-training", 1)}`,
@@ -534,6 +540,13 @@ export function pgoOptimizationInput(profile: MergedPgoProfile): CorePgoInput {
 			);
 			const functionCounts = new Map<number, number | undefined>();
 			const callCounts = new Map<number, number | undefined>();
+			const diagnostics = options.collectQueryCoverage
+				? {
+						functions: new Map<number, keyof CorePgoQueryCoverage["functions"]>(),
+						calls: new Map<string, keyof CorePgoQueryCoverage["calls"]>(),
+						callCounts: new Map<number, keyof CorePgoQueryCoverage["calls"]>(),
+					}
+				: undefined;
 			return {
 				digest: profile.digest,
 				functionEntries(id) {
@@ -544,6 +557,18 @@ export function pgoOptimizationInput(profile: MergedPgoProfile): CorePgoInput {
 						fn.isGenerator || "reason" in identity
 							? undefined
 							: functions.get(`${identity.origin}:${identity.revision}`);
+					if (diagnostics !== undefined) {
+						let outcome: keyof CorePgoQueryCoverage["functions"];
+						if (fn.isGenerator) outcome = "unsupportedBody";
+						else if ("reason" in identity) outcome = "missingOrigin";
+						else if (count === undefined)
+							outcome =
+								profileOrigins?.has(identity.origin) === true
+									? "unmatchedRevision"
+									: "untrainedOrigin";
+						else outcome = count === 0 ? "zero" : "positive";
+						diagnostics.functions.set(id, outcome);
+					}
 					functionCounts.set(id, count);
 					return count;
 				},
@@ -551,20 +576,67 @@ export function pgoOptimizationInput(profile: MergedPgoProfile): CorePgoInput {
 					const siteId = program
 						.function(id)
 						.instructionAttributes(instruction).sourceCall;
-					if (typeof siteId !== "number") return undefined;
-					const site = context.data.sourceCallSites?.[siteId];
-					if (
-						site === undefined ||
-						site.owner === undefined ||
-						site.owner !== origins.get(id)
-					)
+					if (typeof siteId !== "number") {
+						diagnostics?.calls.set(`${id}:${instruction}`, "missingSite");
 						return undefined;
-					if (callCounts.has(siteId)) return callCounts.get(siteId);
+					}
+					const site = context.data.sourceCallSites?.[siteId];
+					if (site === undefined || site.owner === undefined) {
+						diagnostics?.calls.set(`${id}:${instruction}`, "missingOrigin");
+						return undefined;
+					}
+					if (site.owner !== origins.get(id)) {
+						diagnostics?.calls.set(`${id}:${instruction}`, "ownerMismatch");
+						return undefined;
+					}
+					if (callCounts.has(siteId)) {
+						const count = callCounts.get(siteId);
+						if (diagnostics !== undefined)
+							diagnostics.calls.set(
+								`${id}:${instruction}`,
+								diagnostics.callCounts.get(siteId)!,
+							);
+						return count;
+					}
 					const identity = identities.callIdentity(site);
 					const count = identity.status === "known" ? calls.get(identity.key) : undefined;
+					if (diagnostics !== undefined) {
+						let outcome: keyof CorePgoQueryCoverage["calls"];
+						if (identity.status !== "known") outcome = "missingOrigin";
+						else if (count === undefined) outcome = "unmatchedProfile";
+						else outcome = count === 0 ? "zero" : "positive";
+						diagnostics.calls.set(`${id}:${instruction}`, outcome);
+						diagnostics.callCounts.set(siteId, outcome);
+					}
 					callCounts.set(siteId, count);
 					return count;
 				},
+				...(diagnostics === undefined
+					? {}
+					: {
+							queryCoverage(): CorePgoQueryCoverage {
+								const functions = {
+									positive: 0,
+									zero: 0,
+									unmatchedRevision: 0,
+									untrainedOrigin: 0,
+									missingOrigin: 0,
+									unsupportedBody: 0,
+								};
+								const calls = {
+									positive: 0,
+									zero: 0,
+									unmatchedProfile: 0,
+									missingSite: 0,
+									missingOrigin: 0,
+									ownerMismatch: 0,
+								};
+								for (const outcome of diagnostics.functions.values())
+									functions[outcome]++;
+								for (const outcome of diagnostics.calls.values()) calls[outcome]++;
+								return { functions, calls };
+							},
+						}),
 			};
 		},
 	};

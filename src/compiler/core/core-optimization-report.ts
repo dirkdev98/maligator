@@ -13,6 +13,7 @@ import type {
 	CoreOptimizationOwnerReport,
 	CoreOptimizationRuntimeCounterReaders,
 } from "./core-optimization-owners.ts";
+import type { CorePgoQueryCoverage } from "./core-pgo.ts";
 import type { CoreConstructionStatistics, CoreProgram } from "./core-store.ts";
 
 export type CoreInstrumentationMode = "off" | "phases" | "counters" | "full";
@@ -91,6 +92,7 @@ export interface CoreBudgetWorkReport {
 
 export interface CoreOptimizationReport {
 	readonly instrumentation: CoreInstrumentationMode;
+	readonly pgoQueries?: CorePgoQueryCoverage;
 	readonly construction: CoreConstructionStatistics;
 	readonly input: CoreOptimizationCounts;
 	readonly output: CoreOptimizationCounts;

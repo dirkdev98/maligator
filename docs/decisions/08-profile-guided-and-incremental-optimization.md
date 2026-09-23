@@ -1277,3 +1277,33 @@ observed-zero versus unknown exposure, no-profile selection, guarded/open
 attribution, an all-zero decline, and the corresponding lowered call entry. This verifies that PGO
 can change selected output, but does not demonstrate a native runtime win;
 training and holdout workloads still need matched measurement.
+
+## D033 — 2026-09-23 — Report the profile facts actually requested by Core
+
+**Status:** Implemented with focused verification and one frontend-only
+diagnostic; representative training remains open. **Refines:** D004, D010 and
+D032.
+
+An opt-in PGO adapter records distinct function and call queries made during
+optimization. Its snapshot separates positive, observed-zero, unmatched
+revision/profile, untrained or missing origin, missing source site, and owner
+mismatch outcomes. It does not scan unrequested identities or change hint
+results. Disabled collection does not construct per-call diagnostic keys, and
+the adapter still binds inside the Core optimization phase for consistent
+timing. The snapshot joins the existing optimizer report when requested;
+training-capture coverage remains a separate property of the merged profile.
+
+A frontend-only Meriyah diagnostic used a retained probe profile whose
+semantic key is a placeholder, not a valid current CLI profile. All 37
+positive function rows and 129 positive call rows were queried, alongside
+163 observed-zero function queries and 2,034 observed-zero call queries.
+There were no unmatched revisions or profile call keys; 38 function queries
+lacked a source origin, and call queries included 74 missing sites, two
+missing origins and 89 owner mismatches. The optimizer skipped 1,537 planning
+opportunities as observed zero. A single warm static/PGO frontend pair took
+973/933 ms and produced distinct wire digests (484,881/480,312 bytes); it is
+only a diagnostic, with no runtime or repeatability claim. The cached Meriyah
+leaf performed zero standalone construction and local recipe work in both
+warm builds. Focused tests verify unique queried outcomes, repeated unknown
+calls, report publication, and identical serialized output with diagnostics
+enabled or disabled.

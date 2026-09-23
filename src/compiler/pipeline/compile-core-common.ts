@@ -14,7 +14,7 @@ import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
 } from "../core/core-optimization-report.ts";
-import type { CorePgoInput } from "../core/core-pgo.ts";
+import type { CorePgoHints, CorePgoInput } from "../core/core-pgo.ts";
 import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -87,24 +87,33 @@ export function optimizeConstructedCore(
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 ): CoreCompilation {
-	const optimizedResult = runPhase("optimize core ir", () =>
-		optimizeCore(core, {
+	let pgo: CorePgoHints | undefined;
+	const optimizedResult = runPhase("optimize core ir", () => {
+		pgo = options.pgo?.bind(core);
+		return optimizeCore(core, {
 			training: options.pgoTraining,
-			pgo: options.pgo?.bind(core),
+			pgo,
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
 			instrumentation: options.coreInstrumentation ?? "off",
 			benchmarkAblation: options.coreOptimizationBenchmarkAblation,
-		}),
-	);
+		});
+	});
 	const optimized =
 		options.profile === true
 			? attachCoreCompilerSiteFacts(optimizedResult.compilation)
 			: optimizedResult.compilation;
+	const report =
+		pgo?.queryCoverage === undefined
+			? optimizedResult.report
+			: Object.freeze({
+					...optimizedResult.report,
+					pgoQueries: pgo.queryCoverage(),
+				});
 	options.afterCoreOptimization?.(
 		optimized.program,
 		optimized.context,
-		optimizedResult.report,
+		report,
 		optimized.plan,
 	);
 	return optimized;

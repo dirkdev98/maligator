@@ -254,6 +254,8 @@ iterator cursor is not, by itself, permission to delete its language object.
       records why a fixed proof-work cap did not help Meriyah. D032 makes
       attributable call heat choose the emitted native entry signature; verify
       runtime benefit on training and holdout inputs before tuning its policy.
+      D033 exposes opt-in current-build query coverage; the retained Meriyah
+      capture has a placeholder semantic key and is only diagnostic evidence.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
