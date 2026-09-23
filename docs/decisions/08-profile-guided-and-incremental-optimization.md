@@ -2374,3 +2374,27 @@ and demand-gated late queries remain; a future policy needs a stronger estimate
 of the cost of displaced inlines and native growth before spending this budget.
 The complete comparison report and compact diagnostic summaries are under
 `.cache/pgo-crosscall-rank-20260923/`.
+
+## D061 — 2026-09-23 — Do not persist exact-load forwarding in leaf receipts
+
+**Status:** Applicability and cost measured; richer recipe rejected. **Refines:**
+D056–D059.
+
+Exact-memory-load forwarding is function-local enough to consider as a
+completed leaf-receipt recipe, but a completion witness would have to survive
+the main program's canonicalization, CFG and proof passes. A temporary census
+saved post-generation-barrier function versions for the 605 imported functions
+and checked them immediately before the primary memory component. Only 123
+remained unchanged. On those survivors, the warm build ran 122 initial
+`forward-exact-memory-loads` admission scans in 0.128 ms. Including later
+wakeups, it ran 159 scans in 0.174 ms; five functions were admitted, and six
+pass bodies took 0.154 ms with no edits. These are instrumented in-process
+times, so they estimate an upper bound on avoidable work, not a measured speedup.
+
+The census used the same frozen self-hosted source and produced the same wire
+SHA-256 `cd1909fa3e2f6e4910688a075a1cfc211445901cf57756f90f2f42f05a375019`
+on cold and warm runs. The warm build reused 34 leaves and 605 functions.
+Avoiding roughly 0.3 ms cannot repay a larger receipt, extra validation and
+invalidation rules. The temporary hooks and their generated cache were removed;
+compact census results remain under
+`.cache/pgo-cache-next-20260923/recipe-applicability/`.
