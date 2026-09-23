@@ -1498,3 +1498,40 @@ still run against the assembled current graph. Measure the share of local work
 actually reused before expanding the receipt to modules with imports. The
 phase and pass evidence is under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/core-full-report.log`.
+
+## D041 — 2026-09-23 — Attribute direct named class methods in PGO
+
+**Status:** Implemented with focused source-origin and PGO checks, exact native
+training parity, and a bounded static/PGO comparison. More held-out workloads
+and full self-compile acceptance remain open. **Refines:** D013, D038, D039.
+
+The first compiled self-hosted frontend capture attributed only 71.6 million of
+227.5 million function entries. The hottest unknowns were methods of direct
+named class declarations, mostly exported classes such as `CoreEditor` and the
+Core function store. Their source origins were excluded solely because class
+methods had no stable lexical-owner path. Direct named top-level classes,
+including direct named exports, now give noncomputed public and private methods
+distinct paths for the class, static/instance role, accessor kind and key.
+Anonymous or nested classes, computed or decorated methods, and duplicate
+declarations remain unknown or ambiguous. The method revision includes a hash
+of the complete class source, so edits to sibling methods conservatively
+invalidate the profile. Class-scope binding identities no longer depend on the
+absolute source offset.
+
+The same frozen training binary produced exactly the same 227,456,439 raw
+function entries and 292,495,762 raw call attempts before and after the new
+source map, with exact Node wire parity. Attributable entries rose from
+71,604,056 (31.48%) to 209,564,425 (92.13%); attributable calls rose from
+159,406,516 (54.49%) to 265,502,170 (90.77%). The new production PGO build
+queried 1,815 positive functions and 9,932 positive calls, with no unmatched
+revisions or profiles. It reused the same 28 Core leaf modules as the static
+build.
+
+Three interleaved prepared-binary pairs with exact Node wire parity measured
+15.04–15.27 seconds for static and 14.78–14.85 seconds for PGO on the trained
+summaries input; PGO was faster in all three pairs. On the held-out region
+selection input, the 44.38–45.50-second static and 44.79–45.62-second PGO
+pairs were mixed and near neutral. This is useful profile coverage and a
+repeatable gain on one trained input, not yet a general default-policy result.
+The prepared binaries, capture, and comparison report are under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.

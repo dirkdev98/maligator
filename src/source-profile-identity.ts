@@ -24,6 +24,7 @@ export type ProfileCallIdentity =
 
 export class SourceProfileIdentities {
 	readonly #functions = new Map<SourceFunctionOrigin, ProfileFunctionIdentity>();
+	readonly #classRevisions = new Map<string, string>();
 
 	functionIdentity(source: SourceFunctionOrigin | undefined): ProfileFunctionIdentity {
 		if (source === undefined) return { status: "unknown", reason: "no-source-origin" };
@@ -37,6 +38,14 @@ export class SourceProfileIdentities {
 			portability: source.source.portability,
 			declaration: source.declaration,
 		};
+		let classRevision: string | undefined;
+		if (source.classSource !== undefined) {
+			classRevision = this.#classRevisions.get(source.classSource);
+			if (classRevision === undefined) {
+				classRevision = hash("sha256", source.classSource, "hex");
+				this.#classRevisions.set(source.classSource, classRevision);
+			}
+		}
 		const identity: ProfileFunctionIdentity = {
 			status: "known",
 			origin: hash("sha256", canonicalProfileJson(declaration), "hex"),
@@ -51,6 +60,7 @@ export class SourceProfileIdentities {
 					async: source.async,
 					generator: source.generator,
 					bindings: source.bindings,
+					classRevision,
 					source: source.source.contents.slice(source.start, source.end),
 				}),
 				"hex",

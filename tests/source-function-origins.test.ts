@@ -160,6 +160,87 @@ test("body edits preserve the declaration origin and change the exact revision",
 	expect(after.revision).not.toBe(before.revision);
 });
 
+test("named class methods have stable identities and distinguish method roles", () => {
+	const source = `class Core {
+		method() { return 1; }
+		static method() { return 2; }
+		get value() { return 3; }
+		set value(next) { globalThis.next = next; }
+		#private() { return 4; }
+		read() { return this.#private(); }
+	}
+	globalThis.Core = Core;`;
+	const before = publish(compile(source).image);
+	const after = publish(compile(`function noise() { return 0; }\n${source}`).image);
+	const methodIdentities = (profile: PreparedProfile) =>
+		profile.functions
+			.filter((fn) =>
+				["method", "get value", "set value", "#private", "read"].includes(fn.name),
+			)
+			.map((fn) => fn.identity);
+	const identities = methodIdentities(before);
+	expect(identities).toHaveLength(6);
+	expect(identities.every((identity) => identity.status === "known")).toBe(true);
+	expect(
+		new Set(
+			identities.map((identity) => (identity.status === "known" ? identity.origin : "")),
+		).size,
+	).toBe(6);
+	expect(methodIdentities(after)).toEqual(identities);
+});
+
+test("class edits change method revisions while preserving declaration origins", () => {
+	const source =
+		"class Core { first() { return 1; } second() { return 2; } } globalThis.Core = Core;";
+	const before = known(publish(compile(source).image), "first");
+	const after = known(
+		publish(compile(source.replace("return 2;", "return 3;")).image),
+		"first",
+	);
+	expect(after.origin).toBe(before.origin);
+	expect(after.revision).not.toBe(before.revision);
+});
+
+test("class method call keys survive unrelated insertion", () => {
+	const source =
+		"class Core { run(fn) { return fn(1) + fn(2); } } globalThis.Core = Core;";
+	const calls = (profile: PreparedProfile) =>
+		profile.calls.map((call) => {
+			expect(call.identity.status).toBe("known");
+			return call.identity.status === "known" ? call.identity.key : "";
+		});
+	const before = calls(publish(compile(source).image));
+	const after = calls(
+		publish(compile(`function noise() { return 0; }\n${source}`).image),
+	);
+	expect(before).toHaveLength(2);
+	expect(new Set(before).size).toBe(2);
+	expect(after).toEqual(before);
+});
+
+test("class self-reference bindings survive earlier declarations", () => {
+	const source = "class Core { same() { return Core; } } globalThis.Core = Core;";
+	const before = known(publish(compile(source).image), "same");
+	const after = known(
+		publish(compile(`function noise() { return 0; }\n${source}`).image),
+		"same",
+	);
+	expect(after).toEqual(before);
+});
+
+test("computed and repeated class methods do not claim a unique source origin", () => {
+	const profile = publish(
+		compile(
+			'class Core { ["computed"]() { return 1; } repeated() { return 2; } repeated() { return 3; } } globalThis.Core = Core;',
+		).image,
+	);
+	const methods = profile.functions.filter((fn) =>
+		["computed", "repeated"].includes(fn.name),
+	);
+	expect(methods.length).toBeGreaterThanOrEqual(2);
+	expect(methods.every((fn) => fn.identity.status !== "known")).toBe(true);
+});
+
 test("moving a captured binding changes the revision without changing the reader's text", () => {
 	const outer =
 		"function outer() { return function read() { return x; }; } globalThis.saved = outer;";
@@ -249,7 +330,7 @@ test("publication uses the captured semantic snapshot rather than mutable fronte
 	}
 });
 
-test("anonymous callbacks and class contexts stay explicitly unmapped", () => {
+test("anonymous callbacks and class expressions stay explicitly unmapped", () => {
 	const profile = publish(
 		compile("globalThis.saved = [() => 1, class Example { method() { return 1; } }];")
 			.image,
@@ -333,6 +414,21 @@ function moduleProfile(
 		}),
 	);
 }
+
+test("directly exported named class methods retain identities across module insertion", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-origin-class-"));
+	try {
+		const source = "export class Core { read() { return 1; } } globalThis.saved = Core;";
+		const before = known(moduleProfile(directory, source), "read");
+		const after = known(
+			moduleProfile(directory, `export const noise = 0;\n${source}`),
+			"read",
+		);
+		expect(after).toEqual(before);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
 
 test("resolved ESM export ownership changes revisions but dependency implementation alone does not", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-origin-import-"));

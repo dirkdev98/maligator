@@ -37,6 +37,7 @@ export type SourceFunctionOrigin =
 			readonly async: boolean;
 			readonly generator: boolean;
 			readonly bindings: ReadonlyArray<string>;
+			readonly classSource?: string;
 	  };
 
 export interface SourceFunctionOriginOptions {
@@ -86,7 +87,14 @@ interface FunctionDraft {
 	readonly references: Set<Binding>;
 	readonly async: boolean;
 	readonly generator: boolean;
+	readonly classSource?: string;
 	origin?: SourceFunctionOrigin;
+}
+
+interface ClassContext {
+	readonly path: ReadonlyArray<ReadonlyArray<string>>;
+	readonly declaration: string;
+	readonly source: string;
 }
 
 function isFunction(node: ESTree.Node): node is SourceFunction {
@@ -112,6 +120,28 @@ function declarationRole(
 		return ["expression", node.id.name];
 	}
 	return undefined;
+}
+
+function methodRole(
+	node: SourceFunction,
+	parent: ESTree.Node | undefined,
+): ReadonlyArray<string> | undefined {
+	if (
+		parent?.type !== "MethodDefinition" ||
+		parent.value !== node ||
+		parent.computed ||
+		(parent.decorators?.length ?? 0) !== 0 ||
+		parent.key === null ||
+		(parent.key.type !== "Identifier" && parent.key.type !== "PrivateIdentifier")
+	)
+		return undefined;
+	return [
+		"method",
+		parent.static ? "static" : "instance",
+		parent.kind,
+		parent.key.type,
+		parent.key.name,
+	];
 }
 
 function lineOffsets(contents: string): ReadonlyArray<number> {
@@ -162,6 +192,7 @@ export function collectSourceFunctionOrigins(
 		source: SourceSnapshot;
 		offsets: ReadonlyArray<number>;
 		owners: Map<ESTree.Node, FunctionDraft | undefined>;
+		classes: Map<ESTree.Node, ClassContext | undefined>;
 	}> = [];
 	const moduleKeys = new Set<string>();
 	const calls: Array<{
@@ -192,23 +223,49 @@ export function collectSourceFunctionOrigins(
 		const offsets = lineOffsets(source.contents);
 		const functions = new Map<ESTree.Node, FunctionDraft>();
 		const owners = new Map<ESTree.Node, FunctionDraft | undefined>();
+		const classes = new Map<ESTree.Node, ClassContext | undefined>();
 		const scopeNodes = new Set(file.scopes.map((scope) => scope.node));
 		drafts.set(file, functions);
-		scopes.push({ file, source, offsets, owners });
+		scopes.push({ file, source, offsets, owners, classes });
 		const visit = (
 			node: ESTree.Node,
 			parent: ESTree.Node | undefined,
 			owner: FunctionDraft | undefined,
 			inClass: boolean,
+			classContext: ClassContext | undefined,
 		): void => {
+			if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+				const start = sourceOffset(offsets, node.loc?.start);
+				const end = sourceOffset(offsets, node.loc?.end);
+				classContext =
+					node.type === "ClassDeclaration" &&
+					(parent?.type === "Program" ||
+						parent?.type === "ExportNamedDeclaration" ||
+						parent?.type === "ExportDefaultDeclaration") &&
+					node.id !== null &&
+					(node.decorators?.length ?? 0) === 0 &&
+					start !== undefined &&
+					end !== undefined
+						? {
+								path: [["class", node.id.name]],
+								declaration: JSON.stringify([source.moduleKey, ["class", node.id.name]]),
+								source: source.contents.slice(start, end),
+							}
+						: undefined;
+			}
 			if (isFunction(node)) {
-				const role = declarationRole(node, parent);
+				const role =
+					classContext !== undefined && parent?.type === "MethodDefinition"
+						? methodRole(node, parent)
+						: declarationRole(node, parent);
 				const path =
 					role === undefined ||
-					inClass ||
+					(inClass &&
+						(classContext === undefined ||
+							(parent?.type !== "MethodDefinition" && owner?.path === undefined))) ||
 					(owner !== undefined && owner.path === undefined)
 						? undefined
-						: [...(owner?.path ?? []), role];
+						: [...(owner?.path ?? classContext?.path ?? []), role];
 				const declaration =
 					path === undefined ? undefined : JSON.stringify([source.moduleKey, ...path]);
 				if (declaration !== undefined) {
@@ -230,10 +287,14 @@ export function collectSourceFunctionOrigins(
 					references: new Set(),
 					async: node.async === true,
 					generator: node.type !== "ArrowFunctionExpression" && node.generator === true,
+					classSource: classContext?.source,
 				};
 				functions.set(node, owner);
 			}
-			if (scopeNodes.has(node)) owners.set(node, owner);
+			if (scopeNodes.has(node)) {
+				owners.set(node, owner);
+				classes.set(node, classContext);
+			}
 			if (
 				node.type === "CallExpression" ||
 				node.type === "NewExpression" ||
@@ -272,16 +333,19 @@ export function collectSourceFunctionOrigins(
 			if (binding !== undefined) {
 				for (let fn = owner; fn !== undefined; fn = fn.parent) fn.references.add(binding);
 			}
-			const classContext =
+			const insideClass =
 				inClass || node.type === "ClassDeclaration" || node.type === "ClassExpression";
-			forEachEstreeChild(node, (child) => visit(child, node, owner, classContext));
+			forEachEstreeChild(node, (child) =>
+				visit(child, node, owner, insideClass, classContext),
+			);
 		};
-		visit(file.ast, undefined, undefined, false);
+		visit(file.ast, undefined, undefined, false, undefined);
 	}
 
-	for (const { file, source, offsets, owners } of scopes) {
+	for (const { file, source, offsets, owners, classes } of scopes) {
 		for (const scope of file.scopes) {
 			const owner = owners.get(scope.node);
+			const classContext = classes.get(scope.node);
 			const offset = sourceOffset(offsets, scope.node.loc?.start);
 			const scopeRole =
 				scope.node.type === "Program"
@@ -290,9 +354,11 @@ export function collectSourceFunctionOrigins(
 						? "parameters"
 						: scope.node === owner?.node.body
 							? "body"
-							: offset === undefined
-								? undefined
-								: [scope.node.type, offset - (owner?.start ?? 0)];
+							: scope.node.type === "ClassDeclaration" && classContext !== undefined
+								? ["class", classContext.declaration]
+								: offset === undefined
+									? undefined
+									: [scope.node.type, offset - (owner?.start ?? 0)];
 			const knownOwner =
 				owners.has(scope.node) &&
 				scopeRole !== undefined &&
@@ -450,6 +516,7 @@ export function collectSourceFunctionOrigins(
 				async: draft.async,
 				generator: draft.generator,
 				bindings: Object.freeze(bindings.sort()),
+				...(draft.classSource === undefined ? {} : { classSource: draft.classSource }),
 			});
 			draft.origin = origin;
 			return origin;

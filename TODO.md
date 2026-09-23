@@ -262,8 +262,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       D038 records frozen-source native parity and positive current-build PGO
       query matches. D039 makes compiled training preserve the raw counters and
       reduces the single frozen training run from 244 to 26 seconds. The
-      three-pair comparison did not establish a runtime win; repeat static/PGO
-      comparison before enabling PGO by default.
+      initial three-pair comparison did not establish a runtime win. D041 maps
+      direct named class methods, raising attributable self-hosted function
+      entries from 31% to 92%; three matched pairs improved the trained input
+      while the first holdout was neutral. Check more representative holdouts
+      and full self-compile before enabling PGO by default.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -303,8 +306,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       D035 admits independent leaves beside host imports and cyclic consumers;
       D037's frontend probe saw 28 hits and 475 imported functions, but native
       parity and matched application-edit timing remain to be established. D040
-      attributes the changed-entry Core work; pilot completed function-local
-      stages from the full graph before widening module import support.
+      attributes the changed-entry Core work; measure exact pre-recipe Core
+      identity and per-function structural cost before piloting completed local
+      stages from the full graph or widening module import support.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
