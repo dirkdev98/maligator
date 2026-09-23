@@ -56,6 +56,7 @@ export function selectReusableCoreModules(
 			source: module.source,
 			sourcePath,
 			moduleKey: sourcePath,
+			capturePolicy: "optimized-only",
 			parsed: { result: module.parsed, producer: stripperIdentity },
 			cacheDirectory: directory,
 			onWork(phase, functions) {
@@ -71,6 +72,9 @@ export function selectReusableCoreModules(
 		if (result.cache === "hit") statistics.hits++;
 		else statistics.misses++;
 		statistics.importedFunctions += result.optimized.functions.length;
-		return { artifact: result.optimized, completedRecipe: result.completedRecipe };
+		return {
+			artifact: result.optimized,
+			completedRecipe: result.completedRecipe,
+		};
 	};
 }

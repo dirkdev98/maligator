@@ -280,11 +280,10 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
       bookkeeping. Sharing across verification or frame-exit consumers requires an
       explicit body-ownership contract; mutable function identity is insufficient.
-- [ ] Design and measure explicit optimized-only cold-cache capture, skipping unused
-      canonical capture, validation and encoding. Preserve D020/D023's current
-      canonical publication and load-only access contracts until an append-only
-      decision defines variant identities and reconstruction from pinned inputs.
-      Keep reconstruction explicit and measure cold cost separately from warm reuse.
+- [x] Capture only selected optimized Core on cold production module-cache builds,
+      with a separate explicit canonical reconstruction pinned to its receipt key.
+      D031 records the format and three matched cold Meriyah pairs; selected
+      artifacts remain byte-identical to full capture.
 - [ ] Finish ADR stage 4: split function bodies for demand loading and
       complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,

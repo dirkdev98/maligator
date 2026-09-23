@@ -31,7 +31,8 @@ import { parseModule } from "./compiler/frontend/parser.ts";
 import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 
 const BOUNDARY = "strict-esm-private-cells-boxed-local-v4";
-const RECEIPT_SCHEMA = 3;
+const RECEIPT_SCHEMA = 4;
+type CapturePolicy = "full" | "optimized-only";
 export interface CoreModuleCacheOptions {
 	source: string;
 	sourcePath: string;
@@ -39,6 +40,7 @@ export interface CoreModuleCacheOptions {
 	cacheDirectory: string;
 	maxWorkItems?: number;
 	maxEdits?: number;
+	capturePolicy?: CapturePolicy;
 	onWork?: (phase: "construct" | "optimize", functions: number) => void;
 	/** The parsed tree must correspond to source under this stripping/transform producer. */
 	parsed?: { result: ModuleRecord["parsed"]; producer: string };
@@ -47,7 +49,7 @@ export type CoreModuleCacheResult =
 	| {
 			status: "ready";
 			cache: "hit" | "miss";
-			/** Warm hits load this variant on demand and throw if its payload is unavailable. */
+			/** Canonical access only loads published bytes; optimized-only receipts need explicit reconstruction. */
 			canonical: CoreModuleArtifact;
 			optimized: CoreModuleArtifact;
 			completedRecipe: typeof RECIPE;
@@ -59,8 +61,13 @@ interface ModuleReceipt {
 	schema: typeof RECEIPT_SCHEMA;
 	key: string;
 	status: "ready";
-	canonicalDigest: string;
+	canonicalDigest: string | null;
 	optimizedDigest: string;
+}
+interface CanonicalDescriptor {
+	schema: typeof RECEIPT_SCHEMA;
+	key: string;
+	digest: string;
 }
 interface UnsupportedReceipt {
 	schema: typeof RECEIPT_SCHEMA;
@@ -139,13 +146,8 @@ function loadPayload(directory: string, expectedDigest: string): CoreModuleArtif
 	return decodeCoreModule(bytes);
 }
 
-/** Callers import the selected variant and invoke its initializer before reading live exports. */
-export function loadOrCompileCoreModule(
-	options: CoreModuleCacheOptions,
-): CoreModuleCacheResult {
-	const maxWorkItems = options.maxWorkItems ?? 100_000;
-	const maxEdits = options.maxEdits ?? 100_000;
-	const key = digest(
+function cacheKey(options: CoreModuleCacheOptions, capturePolicy: CapturePolicy): string {
+	return digest(
 		JSON.stringify({
 			schema: RECEIPT_SCHEMA,
 			boundary: BOUNDARY,
@@ -153,11 +155,132 @@ export function loadOrCompileCoreModule(
 			producer: compilerProducerIdentity("core-module", RECEIPT_SCHEMA),
 			module: options.moduleKey,
 			source: digest(JSON.stringify(options.source)),
-			maxWorkItems,
-			maxEdits,
+			maxWorkItems: options.maxWorkItems ?? 100_000,
+			maxEdits: options.maxEdits ?? 100_000,
 			parser: options.parsed?.producer,
+			capturePolicy,
 		}),
 	);
+}
+
+function loadCanonical(
+	directory: string,
+	key: string,
+	canonicalDigest: string | null,
+): CoreModuleArtifact {
+	if (canonicalDigest !== null) return loadPayload(directory, canonicalDigest);
+	const descriptor = JSON.parse(
+		readFileSync(path.join(directory, "canonical.json"), "utf8"),
+	) as CanonicalDescriptor;
+	if (descriptor.schema !== RECEIPT_SCHEMA || descriptor.key !== key)
+		throw new Error("Canonical Core descriptor identity mismatch");
+	return loadPayload(directory, descriptor.digest);
+}
+
+function constructCoreModule(options: CoreModuleCacheOptions) {
+	const parsed = options.parsed?.result ?? parseModule(options.source);
+	rejectUnsupportedSyntax(parsed.ast);
+	const graph =
+		options.parsed === undefined
+			? buildModuleGraph(options.sourcePath, {
+					entrySource: options.source,
+					entryGoal: "module",
+					stripTypes: (source) => source,
+				})
+			: {
+					entry: options.sourcePath,
+					nodeEnabled: false,
+					modules: new Map([
+						[
+							options.sourcePath,
+							{
+								path: options.sourcePath,
+								goal: "module" as const,
+								source: options.source,
+								parsed,
+								dependencies: [],
+							},
+						],
+					]),
+					evaluationOrder: [options.sourcePath],
+					cycles: [],
+				};
+	if (
+		graph.modules.size !== 1 ||
+		[...graph.modules.values()].some((module) => module.dependencies.length !== 0)
+	)
+		throw new UnsupportedCoreModuleError(
+			"Reusable Core pilot requires one import-free module",
+		);
+	const core = lowerSemanticProgramToCore(runSemanticAnalysisForGraph(graph), {
+		facts: conservativeCompilerProgramFacts(),
+		captureModuleExports: true,
+		sourceOrigins: {
+			moduleKeys: new Map([[options.sourcePath, options.moduleKey]]),
+		},
+	});
+	const functions = [...core.program.functionIds()];
+	options.onWork?.("construct", functions.length);
+	const exports = (core.context.data.moduleExports ?? []).map(({ name, slot }) => ({
+		name,
+		slot,
+	}));
+	return { core, functions, exports };
+}
+
+/** The expected key pins reconstruction to the receipt selected before inputs can change. */
+export function reconstructCanonicalCoreModule(
+	options: Omit<CoreModuleCacheOptions, "capturePolicy">,
+	expectedKey: string,
+): CoreModuleArtifact {
+	const key = cacheKey(options, "optimized-only");
+	if (key !== expectedKey)
+		throw new Error("Canonical Core reconstruction input mismatch");
+	const directory = path.join(options.cacheDirectory, key);
+	const receipt = JSON.parse(
+		readFileSync(path.join(directory, "manifest.json"), "utf8"),
+	) as ModuleReceipt;
+	if (
+		receipt.schema !== RECEIPT_SCHEMA ||
+		receipt.key !== key ||
+		receipt.status !== "ready" ||
+		receipt.canonicalDigest !== null ||
+		typeof receipt.optimizedDigest !== "string"
+	)
+		throw new Error("No matching optimized-only Core receipt");
+	loadPayload(directory, receipt.optimizedDigest);
+	const { core, functions, exports } = constructCoreModule(options);
+	const canonical = captureCoreModule(
+		core.program,
+		exports,
+		functions[0]!,
+		core.context.data,
+	);
+	const bytes = encodeCoreModule(canonical);
+	if (bytes.length > CORE_MODULE_MAX_ENCODED_LENGTH)
+		throw new UnsupportedCoreModuleError("Reusable Core exceeds the artifact size limit");
+	const descriptor: CanonicalDescriptor = {
+		schema: RECEIPT_SCHEMA,
+		key,
+		digest: digest(bytes),
+	};
+	try {
+		writeAtomic(path.join(directory, `${descriptor.digest}.json`), bytes);
+		writeAtomic(path.join(directory, "canonical.json"), JSON.stringify(descriptor));
+	} catch (error) {
+		if (!(error instanceof Error) || !("code" in error)) throw error;
+	}
+	return canonical;
+}
+
+/** Callers import the selected variant and invoke its initializer before reading live exports. */
+export function loadOrCompileCoreModule(
+	options: CoreModuleCacheOptions,
+): CoreModuleCacheResult {
+	const maxWorkItems = options.maxWorkItems ?? 100_000;
+	const maxEdits = options.maxEdits ?? 100_000;
+	const capturePolicy = options.capturePolicy ?? "full";
+	const key = cacheKey(options, capturePolicy);
 	const directory = path.join(options.cacheDirectory, key);
 	try {
 		const receipt = JSON.parse(
@@ -181,7 +304,8 @@ export function loadOrCompileCoreModule(
 			receipt.schema === RECEIPT_SCHEMA &&
 			receipt.key === key &&
 			receipt.status === "ready" &&
-			typeof receipt.canonicalDigest === "string" &&
+			(receipt.canonicalDigest === null || typeof receipt.canonicalDigest === "string") &&
+			(receipt.canonicalDigest === null) === (capturePolicy === "optimized-only") &&
 			typeof receipt.optimizedDigest === "string"
 		) {
 			const optimized = loadPayload(directory, receipt.optimizedDigest);
@@ -191,7 +315,7 @@ export function loadOrCompileCoreModule(
 				status: "ready",
 				cache: "hit",
 				get canonical() {
-					return (canonical ??= loadPayload(directory, receipt.canonicalDigest));
+					return (canonical ??= loadCanonical(directory, key, receipt.canonicalDigest));
 				},
 				optimized,
 				completedRecipe: RECIPE,
@@ -203,57 +327,11 @@ export function loadOrCompileCoreModule(
 		/* An unusable cache entry is a miss; destination Core has not been touched. */
 	}
 	try {
-		const parsed = options.parsed?.result ?? parseModule(options.source);
-		rejectUnsupportedSyntax(parsed.ast);
-		const graph =
-			options.parsed === undefined
-				? buildModuleGraph(options.sourcePath, {
-						entrySource: options.source,
-						entryGoal: "module",
-						stripTypes: (source) => source,
-					})
-				: {
-						entry: options.sourcePath,
-						nodeEnabled: false,
-						modules: new Map([
-							[
-								options.sourcePath,
-								{
-									path: options.sourcePath,
-									goal: "module" as const,
-									source: options.source,
-									parsed,
-									dependencies: [],
-								},
-							],
-						]),
-						evaluationOrder: [options.sourcePath],
-						cycles: [],
-					};
-		if (
-			graph.modules.size !== 1 ||
-			[...graph.modules.values()].some((module) => module.dependencies.length !== 0)
-		)
-			throw new UnsupportedCoreModuleError(
-				"Reusable Core pilot requires one import-free module",
-			);
-		const core = lowerSemanticProgramToCore(runSemanticAnalysisForGraph(graph), {
-			facts: conservativeCompilerProgramFacts(),
-			captureModuleExports: true,
-			sourceOrigins: { moduleKeys: new Map([[options.sourcePath, options.moduleKey]]) },
-		});
-		const functions = [...core.program.functionIds()];
-		options.onWork?.("construct", functions.length);
-		const exports = (core.context.data.moduleExports ?? []).map(({ name, slot }) => ({
-			name,
-			slot,
-		}));
-		const canonical = captureCoreModule(
-			core.program,
-			exports,
-			functions[0]!,
-			core.context.data,
-		);
+		const { core, functions, exports } = constructCoreModule(options);
+		let canonical: CoreModuleArtifact | undefined =
+			capturePolicy === "full"
+				? captureCoreModule(core.program, exports, functions[0]!, core.context.data)
+				: undefined;
 		const localRules = new CoreLocalRuleRegistry(core.program);
 		const featureIndex = new CoreFunctionFeatureIndex(core.program, localRules.dispatch);
 		const scratch = new CoreAnalysisScratchPool();
@@ -281,7 +359,11 @@ export function loadOrCompileCoreModule(
 				localOptimizationCompleted: true,
 				localRules,
 				featureIndex,
-				localOptimizationBudget: { maxWorkItems, maxEdits, budgetExhaustion: "error" },
+				localOptimizationBudget: {
+					maxWorkItems,
+					maxEdits,
+					budgetExhaustion: "error",
+				},
 			}).runComponent("canonicalize", passes);
 		}
 		const optimized = captureCoreModule(
@@ -291,10 +373,12 @@ export function loadOrCompileCoreModule(
 			core.context.data,
 			{ retainPreparedImport: true },
 		);
-		const canonicalBytes = encodeCoreModule(canonical);
+		const canonicalBytes =
+			canonical === undefined ? undefined : encodeCoreModule(canonical);
 		const optimizedBytes = encodeCoreModule(optimized);
 		if (
-			canonicalBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH ||
+			(canonicalBytes !== undefined &&
+				canonicalBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH) ||
 			optimizedBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH
 		)
 			throw new UnsupportedCoreModuleError(
@@ -304,17 +388,21 @@ export function loadOrCompileCoreModule(
 			schema: RECEIPT_SCHEMA,
 			key,
 			status: "ready",
-			canonicalDigest: digest(canonicalBytes),
+			canonicalDigest: canonicalBytes === undefined ? null : digest(canonicalBytes),
 			optimizedDigest: digest(optimizedBytes),
 		};
 		publishReceipt(directory, receipt, [
-			{ digest: receipt.canonicalDigest, bytes: canonicalBytes },
+			...(canonicalBytes === undefined || receipt.canonicalDigest === null
+				? []
+				: [{ digest: receipt.canonicalDigest, bytes: canonicalBytes }]),
 			{ digest: receipt.optimizedDigest, bytes: optimizedBytes },
 		]);
 		return {
 			status: "ready",
 			cache: "miss",
-			canonical,
+			get canonical() {
+				return (canonical ??= loadCanonical(directory, key, null));
+			},
 			optimized,
 			completedRecipe: RECIPE,
 			key,

@@ -1211,3 +1211,42 @@ reserving application work and generated-code capacity before declining colder
 sites. Unknown-profile allowance, exact target certainty, fallbacks, and
 deterministic static ties remain independent of measured heat. Proof caching
 alone is not a substitute for avoiding unused proof discovery.
+
+## D031 — 2026-09-23 — Capture only selected Core variants on cold builds
+
+**Status:** Implemented with focused verification and matched cold diagnostics;
+native parity remains pending. **Refines:** D020 and D023.
+**Supersedes:** Their unconditional canonical publication requirement for
+optimized-only callers.
+
+The production selector imports only optimized Core. It may request an
+optimized-only receipt, avoiding canonical capture, validation, encoding and
+publication during a cold build. Direct callers retain the full-capture policy.
+The policy is part of the receipt key and schema identity, so a full receipt
+cannot be mistaken for an optimized-only one. The optimized artifact and its
+recipe remain identical under either policy.
+
+Canonical access remains load-only: absent or corrupt canonical bytes throw
+without compiler work. An explicit reconstruction operation accepts the same
+source, module and parser-producer inputs and recomputes the pinned receipt key
+before constructing conservative Core. It captures and verifies canonical Core
+without running the optimized recipe. Its digest is published in a separate
+atomic descriptor after the immutable payload, so another optimized-only
+writer cannot erase the advertisement. Failed optional publication leaves the
+optimized receipt usable. No canonical output digest is claimed before the
+artifact exists.
+
+On the 243-function Meriyah module, three interleaved isolated-cache pairs
+measured full capture at 585/607/588 ms and optimized-only capture at
+477/474/481 ms. Cache entries shrank from 7,091,979 to 3,005,220 bytes.
+Maximum resident sizes reported by the isolated Node processes were
+326,944/364,032/328,496 KiB for full capture and
+281,584/282,528/280,848 KiB for optimized-only capture. All six optimized
+artifacts had the same 3,005,010-byte length and SHA-256 digest. First-import
+times stayed near 8 ms, with one 11 ms full-capture sample. These diagnostics
+support the cold capture and storage saving; they do not establish a native
+runtime improvement. Focused cache and build integration tests cover output
+parity, PGO rebinding, missing and reconstructed canonical bytes, changed
+inputs with an alternate valid receipt, descriptor preservation on republish,
+and publication failure. The cold Rust/ICU build prevented a current native
+test result.

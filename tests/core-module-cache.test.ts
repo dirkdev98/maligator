@@ -28,12 +28,16 @@ import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-prog
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { collectSourceFunctionOrigins } from "../src/compiler/frontend/source-function-origins.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
-import { loadOrCompileCoreModule } from "../src/core-module-cache.ts";
+import {
+	loadOrCompileCoreModule,
+	reconstructCanonicalCoreModule,
+} from "../src/core-module-cache.ts";
 import { pgoOptimizationInput } from "../src/pgo-artifact.ts";
 import type { MergedPgoProfile } from "../src/pgo-artifact.ts";
 import { SourceProfileIdentities } from "../src/source-profile-identity.ts";
@@ -101,6 +105,86 @@ it("loads completed optimized Core without construction or optimizer work in ano
 	expect(destination.globalCount).toBe(13);
 	verifyCoreProgram(destination, { stage: "pre-target" });
 });
+it("captures only optimized Core for selection and reconstructs canonical explicitly", () => {
+	const input = options();
+	const full = loadOrCompileCoreModule(input);
+	if (full.status !== "ready") throw new Error(full.reason);
+	const selected = { ...input, capturePolicy: "optimized-only" as const };
+	const cold = loadOrCompileCoreModule(selected);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	expect(cold.cache).toBe("miss");
+	expect(cold.key).not.toBe(full.key);
+	expect(encodeCoreModule(cold.optimized)).toBe(encodeCoreModule(full.optimized));
+	const directory = path.join(input.cacheDirectory, cold.key);
+	const receipt = JSON.parse(
+		readFileSync(path.join(directory, "manifest.json"), "utf8"),
+	) as { canonicalDigest: string | null; optimizedDigest: string };
+	expect(receipt.canonicalDigest).toBeNull();
+	expect(readdirSync(directory).sort()).toEqual(
+		[`${receipt.optimizedDigest}.json`, "manifest.json"].sort(),
+	);
+	const warm = loadOrCompileCoreModule({
+		...selected,
+		onWork() {
+			throw new Error("Canonical access repeated compiler work");
+		},
+	});
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	expect(() => cold.canonical).toThrow();
+	expect(() => warm.canonical).toThrow();
+	loadOrCompileCoreModule({ ...selected, source: `${source}\nvoid 0;` });
+	expect(() =>
+		reconstructCanonicalCoreModule({ ...input, source: `${source}\nvoid 0;` }, cold.key),
+	).toThrow("input mismatch");
+	loadOrCompileCoreModule({
+		...selected,
+		parsed: { result: parseModule(source), producer: "other-stripper" },
+	});
+	expect(() =>
+		reconstructCanonicalCoreModule(
+			{
+				...input,
+				parsed: { result: parseModule(source), producer: "other-stripper" },
+			},
+			cold.key,
+		),
+	).toThrow("input mismatch");
+	const canonical = reconstructCanonicalCoreModule(input, cold.key);
+	expect(encodeCoreModule(canonical)).toBe(encodeCoreModule(full.canonical));
+	const loadedWarm = warm.canonical;
+	const loadedCold = cold.canonical;
+	expect(encodeCoreModule(loadedWarm)).toBe(encodeCoreModule(canonical));
+	expect(encodeCoreModule(loadedCold)).toBe(encodeCoreModule(canonical));
+	writeFileSync(path.join(directory, "manifest.json"), "partial");
+	const rebuilt = loadOrCompileCoreModule(selected);
+	expect(rebuilt).toMatchObject({ status: "ready", cache: "miss" });
+	if (rebuilt.status !== "ready") throw new Error(rebuilt.reason);
+	expect(encodeCoreModule(rebuilt.canonical)).toBe(encodeCoreModule(canonical));
+	const descriptor = JSON.parse(
+		readFileSync(path.join(directory, "canonical.json"), "utf8"),
+	) as { digest: string };
+	rmSync(path.join(directory, `${descriptor.digest}.json`));
+	expect(warm.canonical).toBe(loadedWarm);
+	expect(cold.canonical).toBe(loadedCold);
+	const afterRemoval = loadOrCompileCoreModule(selected);
+	if (afterRemoval.status !== "ready") throw new Error(afterRemoval.reason);
+	expect(() => afterRemoval.canonical).toThrow();
+});
+it("keeps optimized Core usable when canonical reconstruction cannot publish", () => {
+	const input = { ...options(), capturePolicy: "optimized-only" as const };
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const directory = path.join(input.cacheDirectory, cold.key);
+	mkdirSync(path.join(directory, "canonical.json"));
+	const reconstructed = reconstructCanonicalCoreModule(input, cold.key);
+	expect(reconstructed.functions).toHaveLength(cold.optimized.functions.length);
+	const warm = loadOrCompileCoreModule(input);
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	expect(encodeCoreModule(warm.optimized)).toBe(encodeCoreModule(cold.optimized));
+	expect(() => warm.canonical).toThrow();
+});
 it("imports a cold optimized capture from its validated storage", () => {
 	const input = options();
 	const cold = loadOrCompileCoreModule(input);
@@ -128,7 +212,9 @@ it("snapshots caller-owned export and assignment inputs before retaining a captu
 			stripTypes: (source) => source,
 		}),
 	);
-	const core = lowerSemanticProgramToCore(semantic, { captureModuleExports: true });
+	const core = lowerSemanticProgramToCore(semantic, {
+		captureModuleExports: true,
+	});
 	const exports = (core.context.data.moduleExports ?? []).map(({ name, slot }) => ({
 		name,
 		slot,
@@ -169,8 +255,12 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 			stripTypes: (source) => source,
 		}),
 	);
-	const sourceOptions = { moduleKeys: new Map([[input.sourcePath, input.moduleKey]]) };
-	const baseline = lowerSemanticProgramToCore(semantic, { sourceOrigins: sourceOptions });
+	const sourceOptions = {
+		moduleKeys: new Map([[input.sourcePath, input.moduleKey]]),
+	};
+	const baseline = lowerSemanticProgramToCore(semantic, {
+		sourceOrigins: sourceOptions,
+	});
 	const identities = new SourceProfileIdentities();
 	const baselineFunction = [...baseline.program.functionIds()].find(
 		(id) => baseline.program.function(id).metadata.sourceOrigin?.status === "captured",
@@ -208,7 +298,10 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 		calls: [{ key: callIdentity.key, count: "17" }],
 	};
 	const origins = collectSourceFunctionOrigins(semantic, sourceOptions);
-	const prefix = Array.from({ length: 7 }, () => ({ ...baselineSite, owner: undefined }));
+	const prefix = Array.from({ length: 7 }, () => ({
+		...baselineSite,
+		owner: undefined,
+	}));
 	const relocatedOrigins = {
 		...origins,
 		callAt(...args: Parameters<typeof origins.callAt>) {
@@ -269,7 +362,10 @@ it("misses after source or recipe changes and repairs a corrupt entry before imp
 		cache: "miss",
 	});
 	expect(
-		loadOrCompileCoreModule({ ...input, source: source.replace("n = 1", "n = 2") }),
+		loadOrCompileCoreModule({
+			...input,
+			source: source.replace("n = 1", "n = 2"),
+		}),
 	).toMatchObject({ status: "ready", cache: "miss" });
 	expect(loadOrCompileCoreModule({ ...input, maxWorkItems: 90_000 })).toMatchObject({
 		status: "ready",
@@ -359,7 +455,10 @@ it("keeps a cold result usable without publishing an incomplete manifest", () =>
 		status: "ready",
 		cache: "miss",
 	});
-	expect(loadOrCompileCoreModule(input)).toMatchObject({ status: "ready", cache: "hit" });
+	expect(loadOrCompileCoreModule(input)).toMatchObject({
+		status: "ready",
+		cache: "hit",
+	});
 });
 it("decodes already available operands without temporary use lists", () => {
 	const cold = loadOrCompileCoreModule({
@@ -550,7 +649,9 @@ it("does not publish a partial structural recipe when its edit budget is exhaust
 			"export function pick(flag, x) { let value; if(flag) value = x; else value = x; return value; }",
 		maxEdits: 1,
 	};
-	expect(loadOrCompileCoreModule(input)).toMatchObject({ status: "budget-limited" });
+	expect(loadOrCompileCoreModule(input)).toMatchObject({
+		status: "budget-limited",
+	});
 	const entries = readdirSync(input.cacheDirectory);
 	expect(entries).toHaveLength(1);
 	expect(readdirSync(path.join(input.cacheDirectory, entries[0]!))).toEqual([
@@ -656,7 +757,10 @@ it("relocates literal pools, exception edges and string switches before importin
 				block.terminator = {
 					...term,
 					cases: [
-						{ value: { kind: "string", index: bad.strings.length }, edge: term.default },
+						{
+							value: { kind: "string", index: bad.strings.length },
+							edge: term.default,
+						},
 					],
 				};
 		},
@@ -713,7 +817,9 @@ it("builds decoded stores once and gives each repeated import independent owners
 	const active = new CoreFunctionBuilder(destination);
 	const entry = active.createBlock();
 	const [value] = active.appendInstruction(entry, "createUndefined", []);
-	const other = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[121]] });
+	const other = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[121]],
+	});
 	appendLeaf(other);
 	other.finalizeConstructionGeneration();
 	const create = vi.spyOn(CoreEditor, "createFunction");
@@ -746,7 +852,9 @@ it("builds decoded stores once and gives each repeated import independent owners
 			),
 		)!;
 	const edit = CoreEditor.open(destination, firstBody.id);
-	edit.replaceInstruction(number, "createBoolean", [], { attributes: { value: true } });
+	edit.replaceInstruction(number, "createBoolean", [], {
+		attributes: { value: true },
+	});
 	edit.commit();
 	const second = importCoreModule(destination, artifact, "/second.mjs");
 	expect(create).toHaveBeenCalledTimes(count * 2);
@@ -782,7 +890,9 @@ it("refreshes existing program analyses after attachment and edits to an importe
 		source: "export function value() { return 7; }",
 	});
 	if (result.status !== "ready") throw new Error(result.reason);
-	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[120]],
+	});
 	appendLeaf(program);
 	const context = programAnalysisContext(false);
 	const manager = new CoreAnalysisManager(
@@ -810,7 +920,9 @@ it("refreshes existing program analyses after attachment and edits to an importe
 			),
 		)!;
 	const edit = CoreEditor.open(program, id);
-	edit.replaceInstruction(number, "createBoolean", [], { attributes: { value: true } });
+	edit.replaceInstruction(number, "createBoolean", [], {
+		attributes: { value: true },
+	});
 	edit.commit();
 	const refreshed = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
 		scope: "program",
