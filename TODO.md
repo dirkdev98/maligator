@@ -274,6 +274,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       before changing the default. If cloned instructions
       with one source-site counter enter different ABI signatures, do not assign
       that entire positive counter to either signature without a partition proof.
+      D046 provisionally retains guarded-call attempt demotion after a smaller
+      binary and mixed held-out runtime. D047 finds that a third compiler-phase
+      capture changes only one applied transform and has no isolated runtime
+      gain; measure successful guard targets and fix open hinted region-candidate
+      exposure before adding more similar training slices.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -320,7 +325,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       cost fits below the avoided work; widening module import support also
       needs a complete initializer and binding-ownership contract. D043 admits
       private-name class leaves with owner and captured-slot relocation; measure
-      the added self-hosted receipts and changed-entry compile saving.
+      the added self-hosted receipts and changed-entry compile saving. D048's
+      alternating changed-entry probe reused 34 leaves and 605 functions but
+      showed no frontend-time saving and produced structurally different
+      cache-on/off wires. Establish native output and initializer parity, then
+      attribute retained functions and compile phases before widening reuse.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

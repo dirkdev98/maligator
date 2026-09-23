@@ -1729,3 +1729,69 @@ representative compiler phase and compare a new profile before changing the
 PGO default. The direct comparison reports are under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/compare-guard-attribution/`
 and `compare-guard-region-extra/` in the same evidence root.
+
+## D047 — 2026-09-23 — Do not widen training from call attempts alone
+
+**Status:** Three-phase capture and prepared-binary comparison completed with
+exact Node output parity; PGO remains opt-in. **Refines:** D034, D045, D046.
+
+The same frozen training binary captured compiler pass-manager after summaries
+and shape. The explicit merge contains three distinct completed runs with one
+semantic key and no counter overflow. Relative to the two-phase profile, the
+new capture made only two more function entries and 39 more call sites positive.
+The current compiler queried two more positive functions and 38 more positive
+calls, selected 20 more specialization candidates, and applied one more
+cross-call transform. The three-phase binary is only 48 bytes smaller than the
+guarded two-phase PGO binary (52,363,048 versus 52,363,096 bytes).
+
+Against the frozen-source static binary, two interleaved pairs showed shape
+faster by 1.50% and 4.72%, summaries slower by 4.11% and 2.23%, and
+pass-manager faster by 4.72% and 8.07%. Absolute times drifted substantially
+and Chrome and WindowServer were consuming CPU during the run. A direct
+two-phase versus three-phase PGO comparison on pass-manager isolated the extra
+capture: the three-phase binary was 4.32% slower in one pair and 0.78% faster
+in the other. The latter comparison does not establish an incremental runtime
+gain. All native results matched their Node oracle wire exactly.
+
+Further captures of similar compiler slices are unlikely to help much while
+they only increment the same source-call and function-entry counters. The next
+PGO experiment should measure which guarded targets actually pass their guards,
+then charge target-specific candidate benefit to successful hits. In the
+region planner, open hinted guarded calls still use source-call attempts as
+measured exposure; closed finite dispatches may use total attempts because
+their target set covers the call. Keep that policy change separate from corpus
+expansion and test it on trained and held-out compiler slices before considering
+PGO by default. The complete training, build, and comparison evidence is under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/` in the
+`train-pass-class-export/`, `profile-three-phase.json`,
+`pgo-three-phase-build.log`, `compare-three-phase/`, and
+`compare-third-capture-pass/` paths.
+
+## D048 — 2026-09-23 — Keep self-hosted Core cache acceptance open
+
+**Status:** Changed-entry diagnostic completed; wire parity failed and no
+frontend-time saving was measured. **Refines:** D040, D043.
+
+A frozen self-hosted frontend entry gained one inert `void 0` statement. Four
+forced production frontend compiles alternated cache off/on/on/off and restored
+the original entry bytes afterward. Cache-on reused 34 leaves and imported 605
+functions without constructing or optimizing those leaves. In the first pair,
+off and on took 28.352 and 28.350 seconds; in the second, on and off took
+26.785 and 26.684 seconds. The paired timings provide no evidence of a net
+changed-entry saving on this compiler cone.
+
+Each variant reproduced its own exact runtime wire, but off and on differed.
+The off wire was 7,280,655 bytes with 4,536 functions; the on wire was
+7,040,123 bytes with 4,570 functions. The 34 additional on functions are
+anonymous functions, one in each reused module; three source files also remain
+in the on image but not the off image. This is a structural output difference,
+not nondeterministic serialization. It may reflect conservative initializer
+retention or changed whole-program optimization; the probe did not execute
+both wires, so it cannot establish observable equivalence or a semantic bug.
+Do not count these leaves as an accepted performance win yet. Compare native
+output and initializer effects from both wires on one representative input,
+then attribute the retained functions and compile phases before expanding the
+cache boundary. The report (intentionally marked incomplete on wire mismatch)
+and both wires are retained under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/cache-frontend-probe.json`
+and `cache-probe-wires/`.
