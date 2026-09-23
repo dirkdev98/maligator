@@ -1307,3 +1307,26 @@ leaf performed zero standalone construction and local recipe work in both
 warm builds. Focused tests verify unique queried outcomes, repeated unknown
 calls, report publication, and identical serialized output with diagnostics
 enabled or disabled.
+
+## D034 — 2026-09-23 — Capture repeated workloads without rebuilding training code
+
+**Status:** Implemented with focused CLI subprocess verification; representative
+native training and performance acceptance remain open. **Refines:** D014.
+
+`build --pgo-train` already emits a native interpreter-training binary and an
+adjacent source map. `pgo run <binary> --pgo-workload <name> -- <args...>` now
+reads that map, validates its schema and counter semantics, and checks its
+recorded SHA-256 against the current binary before creating a capture. The
+recorded semantic key and source identities remain authoritative; an older
+supported training producer is not silently rebuilt or rejected merely because
+the current compiler changed. Each invocation gets its own run ID and incomplete
+manifest until the child exits successfully and publishes valid counters. It
+forces interpreter execution and uses the existing capture directory and merge
+format. Merge remains explicit, so holdout runs are not accidentally added to
+training input.
+
+This removes frontend construction, native compilation and toolchain setup from
+each subsequent workload run. Focused subprocess tests run two captures from
+one prepared executable and merge their counts, then reject a failed run, a
+missing payload and a changed executable. No native compiler or representative
+runtime benchmark was run for this decision.

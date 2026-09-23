@@ -264,6 +264,14 @@ function validatePrepared(prepared: PreparedPgo): void {
 	}
 }
 
+export function readPreparedPgoTraining(binary: string): PreparedPgo {
+	const prepared = JSON.parse(readFileSync(`${binary}.pgo.json`, "utf8")) as PreparedPgo;
+	validatePrepared(prepared);
+	if (prepared.image !== hash("sha256", readFileSync(binary), "hex"))
+		throw new Error("PGO training binary does not match its source map");
+	return prepared;
+}
+
 function readCounts(directory: string, manifest: PgoCaptureManifest) {
 	validatePrepared(manifest.prepared);
 	if (

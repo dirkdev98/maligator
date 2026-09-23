@@ -31,6 +31,7 @@ import {
 import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "./cli-run.ts";
+import type { RunOutcome } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type {
 	BuildCommand,
@@ -65,6 +66,7 @@ import {
 	preparePgoTraining,
 	readPgoProfile,
 	pgoOptimizationInput,
+	readPreparedPgoTraining,
 } from "./pgo-artifact.ts";
 import type { PreparedPgo } from "./pgo-artifact.ts";
 import {
@@ -978,35 +980,60 @@ export function buildCommand(
 	return compileAndBuild(command, context);
 }
 
+function executePgoTrainingRun(
+	binaryPath: string,
+	args: Array<string>,
+	prepared: PreparedPgo,
+	workload: string,
+): RunOutcome {
+	const training = createPgoCapture(prepared, workload);
+	const outcome = executeBinary(binaryPath, args, {
+		...runEnv(),
+		...training.environment,
+		MAL_INTERP: "1",
+	});
+	try {
+		finalizePgoCapture(training, outcome.status === 0 && outcome.signal === undefined);
+	} finally {
+		writeStderr(`PGO capture ${path.join(training.directory, "manifest.json")}`);
+	}
+	return outcome;
+}
+
+function reportRunOutcome(outcome: RunOutcome): void {
+	if (outcome.status === 0) {
+		writeStderr("Exited with code 0");
+		return;
+	}
+	writeStderr(
+		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
+	);
+	if (outcome.signal !== undefined) process.kill(process.pid, outcome.signal);
+	process.exit(outcome.status ?? 1);
+}
+
 /** Compile, link, and execute one parsed `run` command. */
 export function runCommand(command: RunCommand, context: CommandContext): void {
 	const result = compileAndBuild(command, context);
 	const binaryPath = result.binaryPath!;
-	const training =
-		result.pgo === undefined
-			? undefined
-			: createPgoCapture(
-					result.pgo,
-					command.pgoWorkload ?? path.basename(command.entry ?? "application"),
-				);
 	const capture =
 		command.profile && result.profile !== undefined
 			? createProfileCapture("run", result.profile)
 			: undefined;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
-	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
-		...runEnv(),
-		...(capture === undefined ? {} : capture.environment),
-		...compilerProfileRuntimeEnvironment(command),
-		...(training === undefined ? {} : { ...training.environment, MAL_INTERP: "1" }),
-	});
-	if (training !== undefined) {
-		try {
-			finalizePgoCapture(training, outcome.status === 0 && outcome.signal === undefined);
-		} finally {
-			writeStderr(`PGO capture ${path.join(training.directory, "manifest.json")}`);
-		}
-	}
+	const outcome =
+		result.pgo === undefined
+			? executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
+					...runEnv(),
+					...(capture === undefined ? {} : capture.environment),
+					...compilerProfileRuntimeEnvironment(command),
+				})
+			: executePgoTrainingRun(
+					binaryPath,
+					result.runArguments ?? command.programArgs,
+					result.pgo,
+					command.pgoWorkload ?? path.basename(command.entry ?? "application"),
+				);
 	if (capture !== undefined && result.profile !== undefined) {
 		if (existsSync(capture.capturePath)) {
 			try {
@@ -1026,15 +1053,7 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 			writeStderr(`warning: profiled process did not publish ${capture.capturePath}`);
 		}
 	}
-	if (outcome.status === 0) {
-		writeStderr("Exited with code 0");
-		return;
-	}
-	writeStderr(
-		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
-	);
-	if (outcome.signal !== undefined) process.kill(process.pid, outcome.signal);
-	process.exit(outcome.status ?? 1);
+	reportRunOutcome(outcome);
 }
 
 interface WatchedFileState {
@@ -1607,6 +1626,14 @@ export async function runCli(
 			const merged = mergePgoCaptures(command.inputs, command.output);
 			writeStderr(
 				`PGO profile ${merged.path} (${merged.profile.runs.length} unique runs)`,
+			);
+			return;
+		}
+		if (command.kind === "pgo-run") {
+			const binary = path.resolve(command.binary);
+			const prepared = readPreparedPgoTraining(binary);
+			reportRunOutcome(
+				executePgoTrainingRun(binary, command.programArgs, prepared, command.workload),
 			);
 			return;
 		}

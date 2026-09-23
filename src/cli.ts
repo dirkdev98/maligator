@@ -76,6 +76,7 @@ export interface CacheCommand {
 
 export type CliCommand =
 	| { kind: "pgo-merge"; inputs: Array<string>; output?: string }
+	| { kind: "pgo-run"; binary: string; workload: string; programArgs: Array<string> }
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
@@ -97,6 +98,7 @@ export const CLI_HELP = `Usage: maligator <command> [options]
 
 Commands:
   pgo merge <captures...>      Merge explicit completed training captures
+  pgo run <binary>              Capture a workload with a prepared training binary
   init                         Create maligator.build.ts
   doctor                       Check native build toolchains
   cache status                 Show Maligator-owned cache usage
@@ -494,7 +496,30 @@ function validatePgoTraining<T extends BuildCommand | RunCommand | DevCommand>(
 }
 
 function parsePgo(args: Array<string>): CliCommand {
-	if (args[1] !== "merge") throw new CliUsageError("expected pgo merge <captures...>");
+	if (args[1] === "run") {
+		let binary: string | undefined;
+		let workload: string | undefined;
+		let programArgs: Array<string> = [];
+		for (let index = 2; index < args.length; index++) {
+			const argument = args[index]!;
+			if (argument === "--") {
+				programArgs = args.slice(index + 1);
+				break;
+			}
+			if (argument === "--pgo-workload") {
+				workload = optionValue(args, index++, argument);
+				continue;
+			}
+			if (argument.startsWith("-")) return unexpectedArgument("pgo run", argument);
+			if (binary !== undefined) return unexpectedArgument("pgo run", argument);
+			binary = argument;
+		}
+		if (binary === undefined || workload === undefined || workload.trim() === "")
+			throw new CliUsageError("pgo run needs a binary and --pgo-workload <name>");
+		return { kind: "pgo-run", binary, workload, programArgs };
+	}
+	if (args[1] !== "merge")
+		throw new CliUsageError("expected pgo run <binary> or pgo merge <captures...>");
 	const command: Extract<CliCommand, { kind: "pgo-merge" }> = {
 		kind: "pgo-merge",
 		inputs: [],

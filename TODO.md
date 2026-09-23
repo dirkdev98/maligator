@@ -256,6 +256,8 @@ iterator cursor is not, by itself, permission to delete its language object.
       runtime benefit on training and holdout inputs before tuning its policy.
       D033 exposes opt-in current-build query coverage; the retained Meriyah
       capture has a placeholder semantic key and is only diagnostic evidence.
+      D034 permits repeated named captures from one validated training binary;
+      build a varied training/holdout corpus and measure native output and time.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
