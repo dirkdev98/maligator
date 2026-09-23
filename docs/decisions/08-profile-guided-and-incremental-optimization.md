@@ -2039,3 +2039,72 @@ The post-change off/on/on/off probe measured 22,908.9/22,158.2 and
 variation is visible against D052's earlier timings. No speedup is assigned
 to the new skip alone. The report is in
 `.cache/pgo-cache-followup-20260923/cache-structural-skip-probe/report.json`.
+
+## D054 — 2026-09-23 — Capture exact guarded targets, retain a bounded policy
+
+**Status:** PGO target capture and exact query implemented; positive-hit budget
+promotion rejected by the frozen self-hosted comparison. PGO remains opt-in and
+has no established runtime win. **Refines:** D049, D051.
+
+An ordinary call training marker now carries the callee observed after argument
+evaluation. The VM counts a target only when that callee satisfies the same
+realm-aware compiled-function guard used by direct-call specialization. Native,
+bound, proxy and primitive callees are valid call attempts but not successful
+guards; a later body throw does not undo a guard match. Spread, construct and
+other unsupported markers retain attempt counts without claiming target
+coverage. Each source site has four non-evicting target slots, a truncation bit
+and a bounded allocation. Counter overflow or an unresolved target identity
+makes attribution unknown rather than zero. The payload, prepared map and merged
+profile use schema and semantics 2; the runtime wire and compiler artifact
+identities were advanced so old captures and products cannot be reused.
+
+Merge translates runtime function indices through exact source origins and
+revisions. A query requires the current source owner, one live call per source
+site across the whole Core program, and unique current target identities.
+Cloned calls can preserve a source-site marker before late region planning, so
+the source population cannot safely be credited to either clone. The
+multiplicity scan is demanded only by a complete target query and invalidated
+by function membership or call edits. Mixed target revisions, truncation and
+copied target identities remain unknown. This evidence only guides optional
+late guarded-region scheduling; it never removes a guard or discovers a new
+target.
+
+The frozen frontend training capture used `compiler-summaries` and
+`compiler-shape`, leaving pass-manager and region-selection as holdouts. Both
+training executions produced the exact Node wire. The merged profile has
+7,398 complete positive target sites and 1,820 incomplete sites. A controlled
+positive-promotion experiment preserved every other PGO fact and made a second
+profile with all targets marked unknown. That positive policy selected 4,130
+specialization recipes versus 2,367, and grew the native binary by 644,000
+bytes (1.24%). Every comparison run matched the frozen Node wire.
+
+| Compiler input   | Role     | Positive-promotion wall-time change versus target-unknown control |
+| ---------------- | -------- | ----------------------------------------------------------------- |
+| summaries        | trained  | +0.35%, +5.18%                                                    |
+| shape            | trained  | +0.75%, +1.58%                                                    |
+| pass-manager     | held out | +0.08%, -0.85%                                                    |
+| region-selection | held out | -0.27%, -0.03%                                                    |
+
+Positive percentages mean slower. Two pairs do not establish a stable
+regression, but they give no reason to buy 1,763 additional recipes. A
+successful guard count alone does not price the generated code, miss path or
+instruction-cache cost. The retained policy therefore treats complete zero
+hits as a reason to omit an open guarded candidate, while positive and unknown
+hits remain within the existing 20% optional allowance. After the unique-site
+correction, 3,456 guarded-target queries were positive, 755 zero and 3,068
+unknown. On this corpus the zero-only policy selected exactly the same 2,367
+recipes and produced the same 7,245,982-byte diagnostic wire as the
+target-unknown control. The target signal is semantically usable but has not
+yet changed a profitable output decision. A next experiment should rank
+positive targets within the optional allowance or use a calibrated marginal
+benefit/cost model, then repeat matched trained and held-out checks before
+promotion.
+
+Focused unit tests cover exact identities, copied source/target calls,
+invalidation, zero versus unknown, bounded/overflow payloads and profile
+validation. The two-case native PGO fixture exercises interpreter and compiled
+capture, argument evaluation, target truncation, misses and throws. The frozen
+training and comparison, binary/profile provenance and diagnostic counters are
+under `.cache/pgo-cache-followup-20260923/target-v2-training/`,
+`target-v2-compare/`, `target-v2-variants.json` and the `target-v2-*-diagnostic.log`
+files. The local native and focused checks do not replace the normal gate.

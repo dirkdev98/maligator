@@ -539,14 +539,62 @@ describe("bounded Core cross-call transforms", () => {
 		]);
 		verifyCoreOptimizationPlan(program.seal(), plan, context);
 	});
+	it("does not promote positive open target matches into the measured budget", () => {
+		const program = analysisProgram();
+		const open = appendBudgetCaller(program, 2, false, true);
+		const closed = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+		const context = programAnalysisContext();
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		const plan = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			summaries,
+			[...program.functionIds()],
+			{
+				context,
+				pgo: {
+					digest: "guarded-target-matches",
+					functionEntries: () => 0,
+					callAttempts: (caller) => (caller === open.function ? 1_000 : 1),
+					guardedCallHits: (caller) => (caller === open.function ? 100 : undefined),
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 4,
+					perCallerCompilerWork: 100,
+					programGeneratedCode: 1,
+					programCompilerWork: 100,
+				},
+			},
+		);
+		expect(
+			projectCoreSpecializationRecipes(plan.recipes).filter(
+				(recipe) => recipe.kind === "guarded-direct-call",
+			),
+		).toEqual([
+			expect.objectContaining({ function: closed.function, anchors: [closed.call] }),
+		]);
+		verifyCoreOptimizationPlan(program.seal(), plan, context);
+	});
 
 	it.each([
-		{ attempts: undefined, selected: 1 },
-		{ attempts: 1_000, selected: 1 },
-		{ attempts: 0, selected: 0 },
+		{ attempts: undefined, targetHits: undefined, selected: 1 },
+		{ attempts: 1_000, targetHits: undefined, selected: 1 },
+		{ attempts: 1_000, targetHits: 100, selected: 1 },
+		{ attempts: 1_000, targetHits: 0, selected: 0 },
+		{ attempts: 0, targetHits: undefined, selected: 0 },
 	])(
-		"keeps open guarded regions optional under $attempts source attempts",
-		({ attempts, selected }) => {
+		"keeps open guarded regions optional under $attempts attempts and $targetHits target hits",
+		({ attempts, targetHits, selected }) => {
 			const program = analysisProgram();
 			const open = appendBudgetCaller(program, 1, false, true);
 			appendLeaf(program);
@@ -571,6 +619,7 @@ describe("bounded Core cross-call transforms", () => {
 						digest: "open-region-attempts",
 						functionEntries: () => 0,
 						callAttempts: () => attempts,
+						guardedCallHits: () => targetHits,
 					},
 					budgets: {
 						perSiteExpansions: 1,

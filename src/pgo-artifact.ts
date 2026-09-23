@@ -24,10 +24,17 @@ import type {
 
 const MAX_COUNTERS = 1_048_576;
 const MAX_COUNT = 0xffff_ffff_ffff_ffffn;
+const TARGET_SLOTS = 4;
+const TARGET_SITE_BYTES = 4 + TARGET_SLOTS * 12;
+const MAX_CAPTURE_MEMORY = 64 * 1024 * 1024;
+
+function captureMemoryBytes(functions: number, calls: number): number {
+	return (functions + calls) * 8 + calls * 72;
+}
 
 export interface PreparedPgo {
-	schema: 1;
-	semantics: 1;
+	schema: 2;
+	semantics: 2;
 	producer: string;
 	semanticKey: string;
 	image: string;
@@ -42,12 +49,13 @@ export interface PreparedPgo {
 		line: number;
 		column: number;
 		instrumented: boolean;
+		targetInstrumented: boolean;
 		identity: ProfileCallIdentity;
 	}>;
 }
 
 export interface PgoCaptureManifest {
-	schema: 1;
+	schema: 2;
 	runId: string;
 	workload: string;
 	status: "complete" | "incomplete";
@@ -59,8 +67,8 @@ export interface PgoCaptureManifest {
 }
 
 export interface MergedPgoProfile {
-	schema: 1;
-	semantics: 1;
+	schema: 2;
+	semantics: 2;
 	semanticKey: string;
 	digest: string;
 	overflow: boolean;
@@ -74,12 +82,15 @@ export interface MergedPgoProfile {
 	}>;
 	functions: Array<{ origin: string; revision: string; count: string }>;
 	calls: Array<{ key: string; count: string }>;
+	targets: Array<{ key: string; origin: string; revision: string; count: string }>;
+	targetUnknownCalls: Array<string>;
 	coverage: {
 		unknownFunctions: number;
 		unknownCalls: number;
 		uninstrumentedCalls: number;
 		observedZeroFunctions: number;
 		observedZeroCalls: number;
+		incompleteTargetCalls: number;
 	};
 }
 
@@ -110,9 +121,14 @@ export function preparePgoTraining(
 	if (image.diagnostics.pgoTraining !== true)
 		throw new Error("PGO requires a training image");
 	const sites = image.diagnostics.sourceCallSites ?? [];
-	if (image.runtime.functions.length + sites.length > MAX_COUNTERS)
+	if (
+		image.runtime.functions.length + sites.length > MAX_COUNTERS ||
+		captureMemoryBytes(image.runtime.functions.length, sites.length) > MAX_CAPTURE_MEMORY
+	)
 		throw new Error("PGO counter limit exceeded");
 	const instrumented = new Set<number>();
+	const targetInstrumented = new Set<number>();
+	const targetUnsupported = new Set<number>();
 	for (const fn of image.runtime.functions)
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode !== "PGO_CALL") continue;
@@ -123,12 +139,18 @@ export function preparePgoTraining(
 			)
 				throw new Error("PGO call marker is outside the source map");
 			instrumented.add(instruction.site);
+			if (instruction.callee < 0) targetUnsupported.add(instruction.site);
+			else {
+				if (instruction.callee >= fn.registerCount)
+					throw new Error("PGO callee marker is outside its function register file");
+				targetInstrumented.add(instruction.site);
+			}
 		}
 	const resolver = new SourceProfileIdentities();
 	const prepared: PreparedPgo = {
-		schema: 1,
-		semantics: 1,
-		producer: compilerProducerIdentity("pgo-training", 1),
+		schema: 2,
+		semantics: 2,
+		producer: compilerProducerIdentity("pgo-training", 2),
 		semanticKey,
 		image: hash("sha256", readFileSync(binary), "hex"),
 		functions: image.runtime.functions.map((fn, index) => ({
@@ -144,6 +166,7 @@ export function preparePgoTraining(
 			line: site.line,
 			column: site.column,
 			instrumented: instrumented.has(index),
+			targetInstrumented: targetInstrumented.has(index) && !targetUnsupported.has(index),
 			identity: resolver.callIdentity(site),
 		})),
 	};
@@ -161,7 +184,7 @@ export function createPgoCapture(
 	const directory = path.join(root, runId);
 	const captureIdentity = digest({ prepared, runId, workload });
 	const manifest: PgoCaptureManifest = {
-		schema: 1,
+		schema: 2,
 		runId,
 		workload,
 		status: "incomplete",
@@ -185,30 +208,65 @@ export function parsePgoCounts(bytes: Uint8Array) {
 	if (bytes.length < 64) throw new Error("PGO payload is truncated");
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	if (
-		Buffer.from(bytes.subarray(0, 8)).toString() !== "MALPGO1\0" ||
-		view.getUint32(8, true) !== 1 ||
-		view.getUint32(12, true) !== 1
+		Buffer.from(bytes.subarray(0, 8)).toString() !== "MALPGO2\0" ||
+		view.getUint32(8, true) !== 2 ||
+		view.getUint32(12, true) !== 2
 	)
 		throw new Error("PGO payload schema or semantics mismatch");
 	const functionCount = view.getUint32(16, true);
 	const callCount = view.getUint32(20, true);
-	const flags = view.getUint32(24, true);
-	if (flags > 3 || view.getUint32(28, true) !== 0)
+	const payloadFlags = view.getUint32(24, true);
+	if (payloadFlags > 3 || view.getUint32(28, true) !== TARGET_SLOTS)
 		throw new Error("PGO payload flags are invalid");
 	if (
 		functionCount + callCount > MAX_COUNTERS ||
-		bytes.length !== 64 + (functionCount + callCount) * 8
+		captureMemoryBytes(functionCount, callCount) > MAX_CAPTURE_MEMORY ||
+		bytes.length !== 64 + (functionCount + callCount) * 8 + callCount * TARGET_SITE_BYTES
 	)
 		throw new Error("PGO payload counter length mismatch");
 	const counts = Array.from({ length: functionCount + callCount }, (_, index) =>
 		view.getBigUint64(64 + index * 8, true),
 	);
+	const targets = Array.from({ length: callCount }, (_, site) => {
+		const offset = 64 + (functionCount + callCount) * 8 + site * TARGET_SITE_BYTES;
+		const siteFlags = view.getUint32(offset, true);
+		if (siteFlags > 1) throw new Error("PGO target table flags are invalid");
+		const entries: Array<{ functionIndex: number; count: bigint }> = [];
+		const seen = new Set<number>();
+		let empty = false;
+		for (let slot = 0; slot < TARGET_SLOTS; slot++) {
+			const at = offset + 4 + slot * 12;
+			const functionIndex = view.getUint32(at, true);
+			const count = view.getBigUint64(at + 4, true);
+			if (functionIndex === 0xffff_ffff && count === 0n) {
+				empty = true;
+				continue;
+			}
+			if (
+				empty ||
+				functionIndex >= functionCount ||
+				count === 0n ||
+				seen.has(functionIndex)
+			)
+				throw new Error("PGO target table has invalid or duplicate entries");
+			seen.add(functionIndex);
+			entries.push({ functionIndex, count });
+		}
+		if (
+			(payloadFlags & 1) === 0 &&
+			entries.reduce((sum, entry) => sum + entry.count, 0n) >
+				counts[functionCount + site]!
+		)
+			throw new Error("PGO target count exceeds source attempts");
+		return { truncated: siteFlags === 1, entries };
+	});
 	return {
 		captureIdentity: Buffer.from(bytes.subarray(32, 64)).toString("hex"),
-		overflow: (flags & 1) !== 0,
-		invalid: (flags & 2) !== 0,
+		overflow: (payloadFlags & 1) !== 0,
+		invalid: (payloadFlags & 2) !== 0,
 		functions: counts.slice(0, functionCount),
 		calls: counts.slice(functionCount),
+		targets,
 	};
 }
 
@@ -216,14 +274,16 @@ function validatePrepared(prepared: PreparedPgo): void {
 	const hex = (value: unknown) =>
 		typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 	if (
-		prepared.schema !== 1 ||
-		prepared.semantics !== 1 ||
+		prepared.schema !== 2 ||
+		prepared.semantics !== 2 ||
 		!hex(prepared.semanticKey) ||
 		!hex(prepared.image) ||
 		typeof prepared.producer !== "string" ||
 		!Array.isArray(prepared.functions) ||
 		!Array.isArray(prepared.calls) ||
-		prepared.functions.length + prepared.calls.length > MAX_COUNTERS
+		prepared.functions.length + prepared.calls.length > MAX_COUNTERS ||
+		captureMemoryBytes(prepared.functions.length, prepared.calls.length) >
+			MAX_CAPTURE_MEMORY
 	)
 		throw new Error("Invalid PGO source map");
 	for (const fn of prepared.functions) {
@@ -246,6 +306,8 @@ function validatePrepared(prepared: PreparedPgo): void {
 	for (const site of prepared.calls) {
 		if (
 			typeof site.instrumented !== "boolean" ||
+			typeof site.targetInstrumented !== "boolean" ||
+			(site.targetInstrumented && !site.instrumented) ||
 			typeof site.kind !== "string" ||
 			typeof site.file !== "string" ||
 			!Number.isSafeInteger(site.line) ||
@@ -282,9 +344,9 @@ function readCounts(directory: string, manifest: PgoCaptureManifest) {
 	)
 		throw new Error("Invalid PGO run identity");
 	if (
-		manifest.schema !== 1 ||
-		manifest.prepared.schema !== 1 ||
-		manifest.prepared.semantics !== 1
+		manifest.schema !== 2 ||
+		manifest.prepared.schema !== 2 ||
+		manifest.prepared.semantics !== 2
 	)
 		throw new Error("PGO manifest schema or semantics mismatch");
 	if (
@@ -372,12 +434,18 @@ export function mergePgoCaptures(
 		{ origin: string; revision: string; count: bigint }
 	>();
 	const calls = new Map<string, bigint>();
+	const targets = new Map<
+		string,
+		{ key: string; origin: string; revision: string; count: bigint }
+	>();
+	const targetUnknownCalls = new Set<string>();
 	const coverage = {
 		unknownFunctions: 0,
 		unknownCalls: 0,
 		uninstrumentedCalls: 0,
 		observedZeroFunctions: 0,
 		observedZeroCalls: 0,
+		incompleteTargetCalls: 0,
 	};
 	let overflow = false;
 	const add = (left: bigint, right: bigint) => {
@@ -389,6 +457,12 @@ export function mergePgoCaptures(
 		if (manifest.prepared.semanticKey !== semanticKey)
 			throw new Error("PGO semantic configuration mismatch");
 		overflow ||= counts.overflow;
+		const functionIdentityCounts = new Map<string, number>();
+		for (const fn of manifest.prepared.functions) {
+			if (fn.identity.status !== "known") continue;
+			const key = `${fn.identity.origin}:${fn.identity.revision}`;
+			functionIdentityCounts.set(key, (functionIdentityCounts.get(key) ?? 0) + 1);
+		}
 		manifest.prepared.functions.forEach((fn, index) => {
 			const identity = fn.identity;
 			if ("reason" in identity) {
@@ -417,11 +491,42 @@ export function mergePgoCaptures(
 			const count = counts.calls[index]!;
 			if (count === 0n) coverage.observedZeroCalls++;
 			calls.set(site.identity.key, add(calls.get(site.identity.key) ?? 0n, count));
+			const observation = counts.targets[index]!;
+			if (!site.targetInstrumented || observation.truncated) {
+				targetUnknownCalls.add(site.identity.key);
+				coverage.incompleteTargetCalls++;
+				return;
+			}
+			for (const entry of observation.entries) {
+				const identity = manifest.prepared.functions[entry.functionIndex]!.identity;
+				if (
+					identity.status !== "known" ||
+					functionIdentityCounts.get(`${identity.origin}:${identity.revision}`) !== 1
+				) {
+					targetUnknownCalls.add(site.identity.key);
+					coverage.incompleteTargetCalls++;
+					return;
+				}
+			}
+			for (const entry of observation.entries) {
+				const identity = manifest.prepared.functions[entry.functionIndex]!.identity;
+				if (identity.status !== "known") throw new Error("Unresolved PGO target");
+				const targetKey = `${site.identity.key}:${identity.origin}:${identity.revision}`;
+				const prior = targets.get(targetKey);
+				targets.set(targetKey, {
+					key: site.identity.key,
+					origin: identity.origin,
+					revision: identity.revision,
+					count: add(prior?.count ?? 0n, entry.count),
+				});
+			}
 		});
 	}
+	if (functions.size + calls.size + targets.size > MAX_COUNTERS)
+		throw new Error("PGO merged profile counter limit exceeded");
 	const profile: MergedPgoProfile = {
-		schema: 1,
-		semantics: 1,
+		schema: 2,
+		semantics: 2,
 		semanticKey,
 		digest: "",
 		overflow,
@@ -439,6 +544,10 @@ export function mergePgoCaptures(
 		calls: [...calls.entries()]
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([key, count]) => ({ key, count: String(count) })),
+		targets: [...targets.entries()]
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, target]) => ({ ...target, count: String(target.count) })),
+		targetUnknownCalls: [...targetUnknownCalls].sort(),
 		coverage,
 	};
 	profile.digest = mergedIdentity(profile);
@@ -457,8 +566,8 @@ function mergedIdentity(profile: MergedPgoProfile): string {
 export function readPgoProfile(file: string, semanticKey: string): MergedPgoProfile {
 	const profile = JSON.parse(readFileSync(file, "utf8")) as MergedPgoProfile;
 	if (
-		profile.schema !== 1 ||
-		profile.semantics !== 1 ||
+		profile.schema !== 2 ||
+		profile.semantics !== 2 ||
 		profile.semanticKey !== semanticKey
 	)
 		throw new Error("PGO semantic configuration or schema mismatch");
@@ -467,7 +576,10 @@ export function readPgoProfile(file: string, semanticKey: string): MergedPgoProf
 	if (
 		!Array.isArray(profile.functions) ||
 		!Array.isArray(profile.calls) ||
-		profile.functions.length + profile.calls.length > MAX_COUNTERS
+		!Array.isArray(profile.targets) ||
+		!Array.isArray(profile.targetUnknownCalls) ||
+		profile.functions.length + profile.calls.length + profile.targets.length >
+			MAX_COUNTERS
 	)
 		throw new Error("PGO profile counter limit exceeded");
 	if (
@@ -479,6 +591,12 @@ export function readPgoProfile(file: string, semanticKey: string): MergedPgoProf
 		) ||
 		profile.calls.some(
 			(row) => typeof row.key !== "string" || "origin" in row || "revision" in row,
+		) ||
+		profile.targets.some(
+			(row) =>
+				typeof row.key !== "string" ||
+				typeof row.origin !== "string" ||
+				typeof row.revision !== "string",
 		)
 	)
 		throw new Error("Invalid PGO profile row shape");
@@ -494,6 +612,47 @@ export function readPgoProfile(file: string, semanticKey: string): MergedPgoProf
 			BigInt(row.count) > MAX_COUNT
 		)
 			throw new Error("PGO profile count is outside u64");
+	}
+	const targetKeys = new Set<string>();
+	const sourceAttempts = new Map(
+		profile.calls.map((row) => [row.key, BigInt(row.count)]),
+	);
+	const knownFunctions = new Set(
+		profile.functions.map((row) => `${row.origin}:${row.revision}`),
+	);
+	const targetTotals = new Map<string, bigint>();
+	for (const row of profile.targets) {
+		const key = `${row.key}:${row.origin}:${row.revision}`;
+		if (
+			!/^[0-9a-f]{64}(:[0-9a-f]{64}){2}$/u.test(key) ||
+			targetKeys.has(key) ||
+			!sourceAttempts.has(row.key) ||
+			!knownFunctions.has(`${row.origin}:${row.revision}`)
+		)
+			throw new Error("PGO target profile keys are invalid or duplicated");
+		targetKeys.add(key);
+		if (
+			typeof row.count !== "string" ||
+			!/^(0|[1-9][0-9]{0,19})$/u.test(row.count) ||
+			BigInt(row.count) > MAX_COUNT
+		)
+			throw new Error("PGO target profile count is outside u64");
+		targetTotals.set(row.key, (targetTotals.get(row.key) ?? 0n) + BigInt(row.count));
+	}
+	if (!profile.overflow)
+		for (const [key, count] of targetTotals)
+			if (count > sourceAttempts.get(key)!)
+				throw new Error("PGO target matches exceed source attempts");
+	const unknownKeys = new Set<string>();
+	for (const key of profile.targetUnknownCalls) {
+		if (
+			typeof key !== "string" ||
+			!/^[0-9a-f]{64}$/u.test(key) ||
+			unknownKeys.has(key) ||
+			!sourceAttempts.has(key)
+		)
+			throw new Error("PGO incomplete target keys are invalid or duplicated");
+		unknownKeys.add(key);
 	}
 	return profile;
 }
@@ -532,12 +691,28 @@ export function pgoOptimizationInput(
 			Math.min(Number(row.count), Number.MAX_SAFE_INTEGER),
 		]),
 	);
+	const targets = new Map(
+		profile.targets.map((row) => [
+			`${row.key}:${row.origin}:${row.revision}`,
+			Math.min(Number(row.count), Number.MAX_SAFE_INTEGER),
+		]),
+	);
+	const targetUnknownCalls = new Set(profile.targetUnknownCalls);
+	const targetRevisions = new Map<string, Set<string>>();
+	for (const row of profile.functions) {
+		let revisions = targetRevisions.get(row.origin);
+		if (revisions === undefined) {
+			revisions = new Set();
+			targetRevisions.set(row.origin, revisions);
+		}
+		revisions.add(row.revision);
+	}
 	const profileOrigins = options.collectQueryCoverage
 		? new Set(profile.functions.map((row) => row.origin))
 		: undefined;
 	return {
 		digest: profile.digest,
-		policy: `exposure-v1-unknown-20:${compilerProducerIdentity("pgo-training", 1)}`,
+		policy: `target-zero-v2-unknown-20:${compilerProducerIdentity("pgo-training", 2)}`,
 		bind({ program, context }) {
 			const identities = new SourceProfileIdentities();
 			const origins = new Map(
@@ -548,11 +723,17 @@ export function pgoOptimizationInput(
 			);
 			const functionCounts = new Map<number, number | undefined>();
 			const callCounts = new Map<number, number | undefined>();
+			let currentSourceCalls: Map<number, number> | undefined;
+			let currentSourceFunctionsVersion = -1;
+			let currentSourceCallsVersion = -1;
+			let currentTargetIdentities: Map<string, number> | undefined;
+			let currentTargetIdentityVersion = -1;
 			const diagnostics = options.collectQueryCoverage
 				? {
 						functions: new Map<number, keyof CorePgoQueryCoverage["functions"]>(),
 						calls: new Map<string, keyof CorePgoQueryCoverage["calls"]>(),
 						callCounts: new Map<number, keyof CorePgoQueryCoverage["calls"]>(),
+						targets: new Map<string, keyof CorePgoQueryCoverage["targets"]>(),
 					}
 				: undefined;
 			return {
@@ -619,6 +800,105 @@ export function pgoOptimizationInput(
 					callCounts.set(siteId, count);
 					return count;
 				},
+				guardedCallHits(id, instruction, targetFunctions) {
+					const finish = (result: number | undefined) => {
+						diagnostics?.targets.set(
+							`${id}:${instruction}:${targetFunctions.join(",")}`,
+							result === undefined ? "unknown" : result === 0 ? "zero" : "positive",
+						);
+						return result;
+					};
+					if (profile.overflow || targetFunctions.length === 0) return finish(undefined);
+					const function_ = program.function(id);
+					if (
+						function_.registry.byId(function_.instructionOpcode(instruction)).callTransfer
+							?.invocation !== "call"
+					)
+						return finish(undefined);
+					const attributes = function_.instructionAttributes(instruction);
+					const siteId = attributes.sourceCall;
+					if (typeof siteId !== "number") return finish(undefined);
+					const site = context.data.sourceCallSites?.[siteId];
+					if (site?.owner === undefined || site.owner !== origins.get(id))
+						return finish(undefined);
+					const sourceIdentity = identities.callIdentity(site);
+					if (
+						sourceIdentity.status !== "known" ||
+						!calls.has(sourceIdentity.key) ||
+						targetUnknownCalls.has(sourceIdentity.key)
+					)
+						return finish(undefined);
+					const functionsVersion = program.programVersion("functions");
+					const callsVersion = program.functionVersion("calls");
+					if (
+						currentSourceCalls === undefined ||
+						currentSourceFunctionsVersion !== functionsVersion ||
+						currentSourceCallsVersion !== callsVersion
+					) {
+						currentSourceCalls = new Map();
+						currentSourceFunctionsVersion = functionsVersion;
+						currentSourceCallsVersion = callsVersion;
+						for (const functionId of program.functionIds()) {
+							const body = program.function(functionId);
+							for (const current of body.instructionIds()) {
+								if (
+									body.instructionKind(current) !== "operation" ||
+									body.registry.byId(body.instructionOpcode(current)).callTransfer ===
+										undefined
+								)
+									continue;
+								const sourceCall = body.instructionAttributes(current).sourceCall;
+								if (typeof sourceCall === "number")
+									currentSourceCalls.set(
+										sourceCall,
+										(currentSourceCalls.get(sourceCall) ?? 0) + 1,
+									);
+							}
+						}
+					}
+					if (currentSourceCalls.get(siteId) !== 1) return finish(undefined);
+					const functionVersion = program.programVersion("functions");
+					if (
+						currentTargetIdentities === undefined ||
+						currentTargetIdentityVersion !== functionVersion
+					) {
+						currentTargetIdentities = new Map();
+						currentTargetIdentityVersion = functionVersion;
+						for (const functionId of program.functionIds()) {
+							const identity = identities.functionIdentity(
+								program.function(functionId).metadata.sourceOrigin,
+							);
+							if (identity.status !== "known") continue;
+							const key = `${identity.origin}:${identity.revision}`;
+							currentTargetIdentities.set(
+								key,
+								(currentTargetIdentities.get(key) ?? 0) + 1,
+							);
+						}
+					}
+					const distinct = new Set<string>();
+					let total = 0;
+					for (const target of targetFunctions) {
+						const identity = identities.functionIdentity(
+							program.function(target).metadata.sourceOrigin,
+						);
+						if (identity.status !== "known") return finish(undefined);
+						const key = `${identity.origin}:${identity.revision}`;
+						if (
+							currentTargetIdentities.get(key) !== 1 ||
+							targetRevisions.get(identity.origin)?.size !== 1 ||
+							!targetRevisions.get(identity.origin)?.has(identity.revision)
+						)
+							return finish(undefined);
+						if (distinct.has(key)) continue;
+						distinct.add(key);
+						total +=
+							targets.get(
+								`${sourceIdentity.key}:${identity.origin}:${identity.revision}`,
+							) ?? 0;
+					}
+					return finish(Math.min(total, Number.MAX_SAFE_INTEGER));
+				},
 				...(diagnostics === undefined
 					? {}
 					: {
@@ -639,10 +919,12 @@ export function pgoOptimizationInput(
 									missingOrigin: 0,
 									ownerMismatch: 0,
 								};
+								const targets = { positive: 0, zero: 0, unknown: 0 };
 								for (const outcome of diagnostics.functions.values())
 									functions[outcome]++;
 								for (const outcome of diagnostics.calls.values()) calls[outcome]++;
-								return { functions, calls };
+								for (const outcome of diagnostics.targets.values()) targets[outcome]++;
+								return { functions, calls, targets };
 							},
 						}),
 			};

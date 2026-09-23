@@ -1209,10 +1209,16 @@ function guardedCallOpportunities(
 				continue;
 			}
 			const attempts = pgo?.callAttempts(caller, site.instruction);
+			const exposure = site.open
+				? attempts === 0
+					? 0
+					: pgo?.guardedCallHits?.(caller, site.instruction, targetFunctions) === 0
+						? 0
+						: undefined
+				: attempts;
 			candidates.push({
 				kind: "guarded-call",
-				// Open hints have no target hit count; zero still skips optional work.
-				exposure: site.open && attempts !== 0 ? undefined : attempts,
+				exposure,
 				caller,
 				generatedCodeCost: targetFunctions.length,
 				compilerWorkCost: 1,

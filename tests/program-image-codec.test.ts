@@ -716,6 +716,23 @@ describe("program-image-codec", () => {
 		]);
 	});
 
+	it("rejects a PGO call marker outside the owning register frame", () => {
+		const image = (callee: number) =>
+			withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					registerCount: 3,
+					positions: [],
+					instructions: [{ opcode: "PGO_CALL", site: 0, callee }],
+				},
+			]);
+		expect(() => serializeCompilerArtifact(image(-1))).not.toThrow();
+		expect(() => serializeCompilerArtifact(image(-2))).toThrow(
+			/invalid PGO call marker/u,
+		);
+		expect(() => serializeCompilerArtifact(image(3))).toThrow(/invalid PGO call marker/u);
+	});
+
 	it("round-trips bounded precise sums and rejects invalid input registers", () => {
 		const sum = { opcode: "PRECISE_NUMBER_SUM", dst: 0, arguments: [0, 1, 2] } as const;
 		const withSum = (replacement: BytecodeInstruction): ProgramImage =>

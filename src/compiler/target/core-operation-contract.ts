@@ -37,7 +37,6 @@ const compilerOperationOwnershipIsExact: [
 	: never = true;
 
 const CORE_REGISTERLESS_OPERATIONS = [
-	"pgoCall",
 	"asyncStart",
 	"createPrivateNames",
 	"envCopy",

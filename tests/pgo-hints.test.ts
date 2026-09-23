@@ -25,8 +25,8 @@ function construct(source: string) {
 function profile(core: ReturnType<typeof construct>): MergedPgoProfile {
 	const identities = new SourceProfileIdentities();
 	return {
-		schema: 1,
-		semantics: 1,
+		schema: 2,
+		semantics: 2,
 		semanticKey: "a".repeat(64),
 		digest: "b".repeat(64),
 		overflow: false,
@@ -37,6 +37,7 @@ function profile(core: ReturnType<typeof construct>): MergedPgoProfile {
 			uninstrumentedCalls: 0,
 			observedZeroFunctions: 0,
 			observedZeroCalls: 0,
+			incompleteTargetCalls: 0,
 		},
 		functions: [...core.program.functionIds()].flatMap((id) => {
 			const identity = identities.functionIdentity(
@@ -50,6 +51,8 @@ function profile(core: ReturnType<typeof construct>): MergedPgoProfile {
 			const identity = identities.callIdentity(site);
 			return identity.status === "known" ? [{ key: identity.key, count: "7" }] : [];
 		}),
+		targets: [],
+		targetUnknownCalls: [],
 	};
 }
 it("matches exact revisions and leaves generator bodies and copied calls unknown", () => {
@@ -102,6 +105,106 @@ it("matches exact revisions and leaves generator bodies and copied calls unknown
 		functions: { positive: 1, unsupportedBody: 1, missingOrigin: 1 },
 		calls: { positive: 1, ownerMismatch: 2 },
 	});
+});
+it("uses only complete guard matches for exact target identities", () => {
+	const source =
+		"function a() { return 1; } function b(x) { return x; } function use(f, x) { return f(x); } globalThis.use = use;";
+	const core = construct(source);
+	const ids = [...core.program.functionIds()];
+	const named = (name: string) =>
+		ids.find((id) => {
+			const index = core.program.function(id).metadata.nameStringIndex;
+			return (
+				String.fromCodePoint(...(core.program.stringConstants[index] ?? [])) === name
+			);
+		})!;
+	const a = named("a");
+	const b = named("b");
+	const use = named("use");
+	const fn = core.program.function(use);
+	const call = [...fn.instructionIds()].find(
+		(id) =>
+			fn.instructionKind(id) === "operation" && fn.instructionOpcodeName(id) === "call",
+	)!;
+	const identities = new SourceProfileIdentities();
+	const site =
+		core.context.data.sourceCallSites![
+			fn.instructionAttributes(call).sourceCall as number
+		]!;
+	const sourceIdentity = identities.callIdentity(site);
+	const targetIdentity = identities.functionIdentity(
+		core.program.function(a).metadata.sourceOrigin,
+	);
+	if (sourceIdentity.status !== "known" || targetIdentity.status !== "known")
+		throw new Error("Expected exact source identities");
+	const merged = profile(core);
+	merged.targets = [
+		{
+			key: sourceIdentity.key,
+			origin: targetIdentity.origin,
+			revision: targetIdentity.revision,
+			count: "3",
+		},
+	];
+	const hints = pgoOptimizationInput(merged).bind(core);
+	expect(hints.guardedCallHits?.(use, call, [a])).toBe(3);
+	expect(hints.guardedCallHits?.(use, call, [b])).toBe(0);
+	expect(hints.guardedCallHits?.(use, call, [a, b, a])).toBe(3);
+	const mixedRevisions = {
+		...merged,
+		functions: [
+			...merged.functions,
+			{
+				origin: targetIdentity.origin,
+				revision: "f".repeat(64),
+				count: "0",
+			},
+		],
+	};
+	expect(
+		pgoOptimizationInput(mixedRevisions).bind(core).guardedCallHits?.(use, call, [a]),
+	).toBeUndefined();
+	const clone = new CoreFunctionBuilder(core.program, {
+		metadata: core.program.function(a).metadata,
+	});
+	const block = clone.createBlock();
+	const result = clone.appendInstruction(block, "createUndefined", [])[0]!;
+	clone.setTerminator(block, { kind: "return", value: result });
+	clone.finish(block);
+	expect(hints.guardedCallHits?.(use, call, [a])).toBeUndefined();
+	const duplicateCalls = construct(source);
+	const duplicateHints = pgoOptimizationInput(merged).bind(duplicateCalls);
+	expect(duplicateHints.guardedCallHits?.(use, call, [a])).toBe(3);
+	const editor = CoreEditor.open(duplicateCalls.program, use);
+	const value = editor.appendInstruction(fn.entry, "createUndefined", []).outputs[0]!;
+	const copiedCall = editor.appendInstruction(fn.entry, "call", [value, value], {
+		attributes: fn.instructionAttributes(call),
+	});
+	editor.commit();
+	expect(duplicateHints.guardedCallHits?.(use, call, [a])).toBeUndefined();
+	const remove = CoreEditor.open(duplicateCalls.program, use);
+	remove.removeInstruction(copiedCall.instruction);
+	remove.commit();
+	expect(duplicateHints.guardedCallHits?.(use, call, [a])).toBe(3);
+	const copiedOwner = new CoreFunctionBuilder(duplicateCalls.program, {
+		metadata: duplicateCalls.program.function(use).metadata,
+	});
+	const copiedBlock = copiedOwner.createBlock();
+	const copiedValue = copiedOwner.appendInstruction(
+		copiedBlock,
+		"createUndefined",
+		[],
+	)[0]!;
+	copiedOwner.appendInstruction(copiedBlock, "call", [copiedValue, copiedValue], {
+		attributes: fn.instructionAttributes(call),
+	});
+	copiedOwner.setTerminator(copiedBlock, { kind: "return", value: copiedValue });
+	copiedOwner.finish(copiedBlock);
+	expect(duplicateHints.guardedCallHits?.(use, call, [a])).toBeUndefined();
+	merged.targetUnknownCalls = [sourceIdentity.key];
+	expect(
+		pgoOptimizationInput(merged).bind(core).guardedCallHits?.(use, call, [a]),
+	).toBeUndefined();
 });
 it("reports only requested PGO matches through the optimizer callback", () => {
 	const source = "const f = x => x + 1; globalThis.result = f(2);";

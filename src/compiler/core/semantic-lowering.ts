@@ -12597,7 +12597,11 @@ function emitSourceCall(
 ): void {
 	const sourceCall = program.sourceOrigins?.call(fn.semanticFile, node);
 	if (program.pgoTraining && sourceCall !== undefined)
-		cursor.block.emitter.emit({ type: "pgoCall", site: sourceCall });
+		cursor.block.emitter.emit({
+			type: "pgoCall",
+			site: sourceCall,
+			registers: instruction.type === "call" ? [instruction.registers[1]] : [],
+		});
 	cursor.block.emitter.emit(
 		sourceCall === undefined ? instruction : { ...instruction, sourceCall },
 	);

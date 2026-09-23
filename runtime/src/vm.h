@@ -325,7 +325,7 @@ typedef struct MalInstruction {
         } load_callee;
 
         struct {
-            i32 site;
+            i32 site, callee;
         } pgo_call;
 
         struct {

@@ -620,7 +620,7 @@ function opcodeAccesses(opcode: CoreOpcode): ReadonlyArray<CoreOpcodeAccess> {
 }
 
 const INPUT_ARITIES = {
-	pgoCall: [0, 0],
+	pgoCall: [0, 1],
 	queryStaticData: [2, 2],
 	arrayRest: [1, 1],
 	asyncStart: [0, 0],

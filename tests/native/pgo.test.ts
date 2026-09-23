@@ -37,6 +37,7 @@ describe("VM PGO training", () => {
 			name: "pgo-interpreted",
 			compiled: false,
 		});
+
 		const prepared = preparePgoTraining(
 			built.binaryPath,
 			built.programImage,
@@ -87,6 +88,7 @@ describe("VM PGO training", () => {
 		);
 		expect(compiledCounts.functions).toEqual(counts.functions);
 		expect(compiledCounts.calls).toEqual(counts.calls);
+		expect(compiledCounts.targets).toEqual(counts.targets);
 		const entries = (name: string) =>
 			prepared.functions.reduce(
 				(sum, fn, i) => sum + (fn.name === name ? counts.functions[i]! : 0n),
@@ -120,11 +122,29 @@ describe("VM PGO training", () => {
 					: [],
 			);
 		expect(lineCounts("for (let i")).toEqual([3n]);
+		const loopSite = prepared.calls.findIndex(
+			(site) =>
+				site.line === sourceLines.findIndex((line) => line.includes("for (let i")) + 1 &&
+				site.instrumented,
+		);
+		const addIndex = prepared.functions.findIndex((fn) => fn.name === "add");
+		expect(prepared.calls[loopSite]?.targetInstrumented).toBe(true);
+		expect(counts.targets[loopSite]).toEqual({
+			truncated: false,
+			entries: [{ functionIndex: addIndex, count: 3n }],
+		});
 		expect(lineCounts("add(argumentFailure())")).toEqual([0n, 1n]);
 		expect(lineCounts("defaults();")).toEqual([1n]);
 		expect(lineCounts("null(1)")).toEqual([1n]);
 		expect(lineCounts("absent?.")).toEqual([0n, 0n]);
 		expect(lineCounts("add(...iterator)")).toEqual([0n]);
+		expect(
+			prepared.calls.find(
+				(site) =>
+					site.line ===
+					sourceLines.findIndex((line) => line.includes("add(...iterator)")) + 1,
+			)?.targetInstrumented,
+		).toBe(false);
 		const merged = mergePgoCaptures(
 			[capture.directory, capture.directory],
 			path.join(directory, "merged.json"),
@@ -132,4 +152,90 @@ describe("VM PGO training", () => {
 		expect(merged.profile.runs).toHaveLength(1);
 		expect(merged.profile.coverage.observedZeroCalls).toBeGreaterThan(0);
 	}, 120_000);
+	it("attributes raw guarded callees across misses, throws and target-table truncation", () => {
+		const options = {
+			outDir: directory,
+			pgoTraining: true as const,
+			evalEnabled: false,
+			realmsEnabled: false,
+			intlEnabled: false,
+			temporalEnabled: false,
+			regexpEnabled: false,
+			webPlatformEnabled: false,
+		};
+		const built = buildNativeBinaryResult({
+			...options,
+			fixture: "tests/local/pgo-targets.mjs",
+			name: "pgo-targets-interpreted",
+			compiled: false,
+		});
+		const interpreted = preparePgoTraining(
+			built.binaryPath,
+			built.programImage,
+			"a".repeat(64),
+		);
+		const first = createPgoCapture(interpreted, "targets-interpreted", directory);
+		const result = spawnSync(built.binaryPath, [], {
+			encoding: "utf8",
+			env: { ...process.env, ...first.environment, MAL_INTERP: "1" },
+		});
+		expect(result).toMatchObject({ status: 0, stdout: "26\n", stderr: "" });
+		finalizePgoCapture(first, true);
+		const counts = parsePgoCounts(readFileSync(path.join(first.directory, "counts.bin")));
+		const compiled = buildNativeProgramImageResult(built.programImage, {
+			...options,
+			name: "pgo-targets-compiled",
+			compiled: true,
+		});
+		const compiledPrepared = preparePgoTraining(
+			compiled.binaryPath,
+			compiled.programImage,
+			"a".repeat(64),
+		);
+		expect(compiledPrepared.functions).toEqual(interpreted.functions);
+		expect(compiledPrepared.calls).toEqual(interpreted.calls);
+		const second = createPgoCapture(compiledPrepared, "targets-compiled", directory);
+		const compiledResult = spawnSync(compiled.binaryPath, [], {
+			encoding: "utf8",
+			env: { ...process.env, ...second.environment, MAL_INTERP: "0" },
+		});
+		expect(compiledResult).toMatchObject({ status: 0, stdout: "26\n", stderr: "" });
+		finalizePgoCapture(second, true);
+		const compiledCounts = parsePgoCounts(
+			readFileSync(path.join(second.directory, "counts.bin")),
+		);
+		expect(compiledCounts.functions).toEqual(counts.functions);
+		expect(compiledCounts.calls).toEqual(counts.calls);
+		expect(compiledCounts.targets).toEqual(counts.targets);
+		const source = readFileSync("tests/local/pgo-targets.mjs", "utf8").split("\n");
+		const site = (text: string) => {
+			const line = source.findIndex((row) => row.includes(text)) + 1;
+			return interpreted.calls.findIndex(
+				(entry) => entry.line === line && entry.instrumented,
+			);
+		};
+		const name = (index: number) => interpreted.functions[index]?.name;
+		const invoke = site("return fn(1)");
+		expect(interpreted.calls[invoke]?.targetInstrumented).toBe(true);
+		expect(counts.calls[invoke]).toBe(10n);
+		expect(counts.targets[invoke]?.truncated).toBe(true);
+		expect(
+			counts.targets[invoke]?.entries.map((entry) => [
+				name(entry.functionIndex),
+				entry.count,
+			]),
+		).toEqual([
+			["a", 2n],
+			["b", 2n],
+			["throwsAfterGuard", 1n],
+			["c", 1n],
+		]);
+		const changed = site("assigned(change())");
+		expect(
+			counts.targets[changed]?.entries.map((entry) => name(entry.functionIndex)),
+		).toEqual(["a"]);
+		const failed = site("assigned(fails())");
+		expect(counts.calls[failed]).toBe(0n);
+		expect(counts.targets[failed]?.entries).toEqual([]);
+	});
 });

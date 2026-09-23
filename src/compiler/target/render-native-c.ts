@@ -4253,7 +4253,9 @@ function emitInstruction(
 	}
 	switch (instruction.opcode) {
 		case "PGO_CALL":
-			return [`mal_pgo_call(vm, ${instruction.site});`];
+			return [
+				`mal_pgo_call(vm, ${instruction.site}, ${instruction.callee < 0 || reps[instruction.callee] !== "boxed" ? "MAL_VALUE_UNDEFINED" : `r${instruction.callee}`}, ${instruction.callee >= 0});`,
+			];
 		case "MOVE": {
 			if (staticPropertyNumericAction?.role === "skip") {
 				const fallback = emitGenericInstruction();

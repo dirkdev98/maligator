@@ -568,15 +568,18 @@ function compileAndBuild(
 	if (pgoQueryCoverage.length > 0) {
 		const functions = new Map<string, number>();
 		const calls = new Map<string, number>();
+		const targets = new Map<string, number>();
 		for (const coverage of pgoQueryCoverage) {
 			for (const [kind, count] of Object.entries(coverage.functions))
 				functions.set(kind, (functions.get(kind) ?? 0) + count);
 			for (const [kind, count] of Object.entries(coverage.calls))
 				calls.set(kind, (calls.get(kind) ?? 0) + count);
+			for (const [kind, count] of Object.entries(coverage.targets))
+				targets.set(kind, (targets.get(kind) ?? 0) + count);
 		}
 		reporter.detail(
 			"PGO query coverage",
-			`functions ${[...functions].map(([kind, count]) => `${kind}=${count}`).join(", ")}; calls ${[...calls].map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
+			`functions ${[...functions].map(([kind, count]) => `${kind}=${count}`).join(", ")}; calls ${[...calls].map(([kind, count]) => `${kind}=${count}`).join(", ")}; guarded targets ${[...targets].map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
 		);
 	}
 	if (frontend.coreModules !== undefined) {

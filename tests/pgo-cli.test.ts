@@ -29,11 +29,12 @@ function trainingBinary(): string {
 			`  const functions = Number(process.env.MAL_PGO_FUNCTIONS);\n` +
 			`  const calls = Number(process.env.MAL_PGO_CALL_SITES);\n` +
 			`  const bytes = Buffer.alloc(64 + (functions + calls) * 8);\n` +
-			`  bytes.write('MALPGO1\\0');\n` +
-			`  bytes.writeUInt32LE(1, 8);\n` +
-			`  bytes.writeUInt32LE(1, 12);\n` +
+			`  bytes.write('MALPGO2\\0');\n` +
+			`  bytes.writeUInt32LE(2, 8);\n` +
+			`  bytes.writeUInt32LE(2, 12);\n` +
 			`  bytes.writeUInt32LE(functions, 16);\n` +
 			`  bytes.writeUInt32LE(calls, 20);\n` +
+			`  bytes.writeUInt32LE(4, 28);\n` +
 			`  Buffer.from(process.env.MAL_PGO_IDENTITY, 'hex').copy(bytes, 32);\n` +
 			`  bytes.writeBigUInt64LE(BigInt(process.argv[2] === 'fail' ? 1 : process.argv[2]), 64);\n` +
 			`  fs.writeFileSync(process.env.MAL_PGO_CAPTURE, bytes);\n` +
@@ -42,8 +43,8 @@ function trainingBinary(): string {
 	);
 	chmodSync(binary, 0o755);
 	const prepared: PreparedPgo = {
-		schema: 1,
-		semantics: 1,
+		schema: 2,
+		semantics: 2,
 		producer: "synthetic-training",
 		semanticKey: "a".repeat(64),
 		image: hash("sha256", readFileSync(binary), "hex"),

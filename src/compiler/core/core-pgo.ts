@@ -5,6 +5,11 @@ export interface CorePgoHints {
 	readonly digest: string;
 	functionEntries(id: CoreFunctionId): number | undefined;
 	callAttempts(id: CoreFunctionId, instruction: CoreInstructionId): number | undefined;
+	guardedCallHits?(
+		id: CoreFunctionId,
+		instruction: CoreInstructionId,
+		targets: ReadonlyArray<CoreFunctionId>,
+	): number | undefined;
 	/** Counts only distinct identities the optimizer queried. */
 	queryCoverage?(): CorePgoQueryCoverage;
 }
@@ -32,6 +37,7 @@ export interface CorePgoQueryCoverage {
 			number
 		>
 	>;
+	readonly targets: Readonly<Record<"positive" | "zero" | "unknown", number>>;
 }
 
 export interface CorePgoInput {

@@ -1676,6 +1676,7 @@ describe("late Core specialization plan", () => {
 							return {
 								digest: "a".repeat(64),
 								functionEntries: () => counts.targetEntries,
+								guardedCallHits: () => undefined,
 								callAttempts(caller, instruction) {
 									const function_ = compilation.program.function(caller);
 									const position = function_.instructionSourcePosition(instruction);

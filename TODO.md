@@ -281,8 +281,14 @@ iterator cursor is not, by itself, permission to delete its language object.
       exposure before adding more similar training slices. D051 removes false
       measured exposure from open hinted regions: the binary shrinks 0.88% and
       native output still matches Node, but two trained and two held-out
-      comparisons establish no runtime gain. Keep PGO opt-in; pursue bounded
-      successful-target observations or a costed unknown allowance next.
+      comparisons establish no runtime gain. D054 captures bounded exact guard
+      matches and rejects shared source-site attribution. Promoting every
+      positive open target selected 1,763 extra recipes, grew the binary 1.24%,
+      and slowed both trained inputs in two pairs; two holdouts were roughly
+      neutral. The retained zero-only policy produces the same frozen compiler
+      wire as the target-unknown control. Keep PGO opt-in; test ranking positive
+      targets within the existing optional allowance or a calibrated marginal
+      benefit/cost model before spending a larger budget.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

@@ -349,8 +349,8 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 	const callIdentity = identities.callIdentity(baselineSite);
 	if (callIdentity.status !== "known") throw new Error(callIdentity.reason);
 	const profile: MergedPgoProfile = {
-		schema: 1,
-		semantics: 1,
+		schema: 2,
+		semantics: 2,
 		semanticKey: "a".repeat(64),
 		digest: "b".repeat(64),
 		overflow: false,
@@ -361,6 +361,7 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 			uninstrumentedCalls: 0,
 			observedZeroFunctions: 0,
 			observedZeroCalls: 0,
+			incompleteTargetCalls: 0,
 		},
 		functions: [
 			{
@@ -370,6 +371,8 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 			},
 		],
 		calls: [{ key: callIdentity.key, count: "17" }],
+		targets: [],
+		targetUnknownCalls: [],
 	};
 	const origins = collectSourceFunctionOrigins(semantic, sourceOptions);
 	const prefix = Array.from({ length: 7 }, () => ({

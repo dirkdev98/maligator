@@ -9,14 +9,30 @@
 #include <string.h>
 #include <unistd.h>
 #include "vm.h"
+#include "vm_ops.h"
 
 #define MAL_PGO_MAX_COUNTERS 1048576u
+#define MAL_PGO_MAX_MEMORY (64u * 1024u * 1024u)
+#define MAL_PGO_TARGET_SLOTS 4u
 #define MAL_PGO_OVERFLOW 1u
 #define MAL_PGO_INVALID 2u
+
+typedef struct MalPgoTargetSlot {
+    u32 function_index;
+    u64 count;
+} MalPgoTargetSlot;
+
+typedef struct MalPgoTargetSite {
+    MalPgoTargetSlot slots[MAL_PGO_TARGET_SLOTS];
+    u32 truncated;
+} MalPgoTargetSite;
+
+_Static_assert(sizeof(MalPgoTargetSite) == 72);
 
 typedef struct MalPgoState {
     char *path;
     u64 *counts;
+    MalPgoTargetSite *targets;
     u32 functions;
     u32 calls;
     u32 flags;
@@ -64,6 +80,8 @@ void mal_pgo_init(MalVm *vm) {
         !mal_pgo_number(getenv("MAL_PGO_CALL_SITES"), &calls) ||
         functions != (u32) vm->runtime_image->function_count ||
         functions + calls > MAL_PGO_MAX_COUNTERS ||
+        ((u64) functions + calls) * sizeof(u64) +
+            (u64) calls * sizeof(MalPgoTargetSite) > MAL_PGO_MAX_MEMORY ||
         !mal_pgo_identity(getenv("MAL_PGO_IDENTITY"), identity)) {
         fprintf(stderr, "PGO capture rejected incompatible metadata\n");
         return;
@@ -72,7 +90,9 @@ void mal_pgo_init(MalVm *vm) {
     if (state == nullptr) return;
     state->path = strdup(path);
     state->counts = calloc((usize) functions + calls, sizeof(u64));
-    if (state->path == nullptr || state->counts == nullptr) {
+    state->targets = calloc(calls == 0 ? 1 : calls, sizeof(MalPgoTargetSite));
+    if (state->path == nullptr || state->counts == nullptr || state->targets == nullptr) {
+        free(state->targets);
         free(state->counts);
         free(state->path);
         free(state);
@@ -85,9 +105,9 @@ void mal_pgo_init(MalVm *vm) {
     active_pgo = state;
 }
 
-static void mal_pgo_increment(MalPgoState *state, u32 slot) {
-    if (state->counts[slot] == UINT64_MAX) state->flags |= MAL_PGO_OVERFLOW;
-    else state->counts[slot]++;
+static void mal_pgo_increment(MalPgoState *state, u64 *count) {
+    if (*count == UINT64_MAX) state->flags |= MAL_PGO_OVERFLOW;
+    else (*count)++;
 }
 
 void mal_pgo_entry(MalVm *vm, i32 function_index) {
@@ -97,17 +117,42 @@ void mal_pgo_entry(MalVm *vm, i32 function_index) {
         state->flags |= MAL_PGO_INVALID;
         return;
     }
-    mal_pgo_increment(state, (u32) function_index);
+    mal_pgo_increment(state, &state->counts[(u32) function_index]);
 }
 
-void mal_pgo_call(MalVm *vm, i32 site) {
+void mal_pgo_call(MalVm *vm, i32 site, MalValue callee, bool observe_target) {
     MalPgoState *state = vm->pgo_state;
     if (state == nullptr) return;
     if (site < 0 || (u32) site >= state->calls) {
         state->flags |= MAL_PGO_INVALID;
         return;
     }
-    mal_pgo_increment(state, state->functions + (u32) site);
+    mal_pgo_increment(state, &state->counts[state->functions + (u32) site]);
+    if (!observe_target || !mal_value_is_heap_type(callee, MAL_HEAP_FUNCTION_OBJECT)) return;
+    const MalFunctionObject *function = (const MalFunctionObject *) mal_value_to_heap(callee);
+    i32 function_index = mal_function_object_function_index(function);
+    if (function_index < 0 || (u32) function_index >= state->functions) {
+        state->flags |= MAL_PGO_INVALID;
+        return;
+    }
+    if (!mal_vm_callee_has_index(vm, callee, function_index)) return;
+    MalPgoTargetSite *target_site = &state->targets[site];
+    for (u32 slot = 0; slot < MAL_PGO_TARGET_SLOTS; slot++) {
+        MalPgoTargetSlot *target = &target_site->slots[slot];
+        if (target->count > 0 && target->function_index == (u32) function_index) {
+            mal_pgo_increment(state, &target->count);
+            return;
+        }
+    }
+    for (u32 slot = 0; slot < MAL_PGO_TARGET_SLOTS; slot++) {
+        MalPgoTargetSlot *target = &target_site->slots[slot];
+        if (target->count == 0) {
+            target->function_index = (u32) function_index;
+            target->count = 1;
+            return;
+        }
+    }
+    target_site->truncated = 1;
 }
 
 static bool mal_pgo_write_integer(FILE *file, u64 value, usize width) {
@@ -128,14 +173,25 @@ void mal_pgo_finish(MalVm *vm) {
         FILE *file = descriptor < 0 ? nullptr : fdopen(descriptor, "wb");
         if (file == nullptr && descriptor >= 0) close(descriptor);
         if (file != nullptr) {
-            bool ok = fwrite("MALPGO1\0", 1, 8, file) == 8 &&
-                mal_pgo_write_integer(file, 1, 4) && mal_pgo_write_integer(file, 1, 4) &&
+            bool ok = fwrite("MALPGO2\0", 1, 8, file) == 8 &&
+                mal_pgo_write_integer(file, 2, 4) && mal_pgo_write_integer(file, 2, 4) &&
                 mal_pgo_write_integer(file, state->functions, 4) &&
                 mal_pgo_write_integer(file, state->calls, 4) &&
-                mal_pgo_write_integer(file, state->flags, 4) && mal_pgo_write_integer(file, 0, 4) &&
+                mal_pgo_write_integer(file, state->flags, 4) &&
+                mal_pgo_write_integer(file, MAL_PGO_TARGET_SLOTS, 4) &&
                 fwrite(state->identity, 1, 32, file) == 32;
             for (u32 index = 0; ok && index < state->functions + state->calls; index++)
                 ok = mal_pgo_write_integer(file, state->counts[index], 8);
+            for (u32 site = 0; ok && site < state->calls; site++) {
+                const MalPgoTargetSite *target_site = &state->targets[site];
+                ok = mal_pgo_write_integer(file, target_site->truncated, 4);
+                for (u32 slot = 0; ok && slot < MAL_PGO_TARGET_SLOTS; slot++) {
+                    const MalPgoTargetSlot *target = &target_site->slots[slot];
+                    ok = mal_pgo_write_integer(file,
+                             target->count == 0 ? UINT32_MAX : target->function_index, 4) &&
+                        mal_pgo_write_integer(file, target->count, 8);
+                }
+            }
             if (fclose(file) != 0) ok = false;
             if (ok) published = rename(temporary, state->path) == 0;
         }
@@ -145,6 +201,7 @@ void mal_pgo_finish(MalVm *vm) {
     if (!published) fprintf(stderr, "PGO capture could not be published\n");
     vm->pgo_state = nullptr;
     active_pgo = nullptr;
+    free(state->targets);
     free(state->counts);
     free(state->path);
     free(state);

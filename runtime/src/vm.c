@@ -3089,7 +3089,11 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_PGO_CALL:
-                mal_pgo_call(vm, instruction->as.pgo_call.site);
+                mal_pgo_call(vm, instruction->as.pgo_call.site,
+                    instruction->as.pgo_call.callee < 0
+                        ? MAL_VALUE_UNDEFINED
+                        : registers[instruction->as.pgo_call.callee],
+                    instruction->as.pgo_call.callee >= 0);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             case MAL_OP_THROW:

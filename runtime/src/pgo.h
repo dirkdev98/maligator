@@ -1,6 +1,7 @@
 #pragma once
 
 #include "defaults.h"
+#include "value.h"
 
 typedef struct MalVm MalVm;
 
@@ -8,10 +9,12 @@ typedef struct MalVm MalVm;
 void mal_pgo_init(MalVm *vm);
 void mal_pgo_finish(MalVm *vm);
 void mal_pgo_entry(MalVm *vm, i32 function_index);
-void mal_pgo_call(MalVm *vm, i32 site);
+void mal_pgo_call(MalVm *vm, i32 site, MalValue callee, bool observe_target);
 #else
 static inline void mal_pgo_init(MalVm *vm) { (void) vm; }
 static inline void mal_pgo_finish(MalVm *vm) { (void) vm; }
 static inline void mal_pgo_entry(MalVm *vm, i32 function_index) { (void) vm; (void) function_index; }
-static inline void mal_pgo_call(MalVm *vm, i32 site) { (void) vm; (void) site; }
+static inline void mal_pgo_call(MalVm *vm, i32 site, MalValue callee, bool observe_target) {
+    (void) vm; (void) site; (void) callee; (void) observe_target;
+}
 #endif
