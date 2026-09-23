@@ -1315,6 +1315,42 @@ function directEntryOpportunities(
 		);
 	};
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
+	const exposureBySite =
+		pgo === undefined
+			? undefined
+			: new Map<CoreFunctionId, Map<CoreInstructionId, number | undefined>>();
+	const exactCallExposure = (
+		target: CoreFunctionId,
+		call: CoreDirectEntryCallSite,
+	): number | undefined => {
+		if (
+			pgo === undefined ||
+			call.guarded === true ||
+			call.numericSortCallback !== undefined
+		)
+			return undefined;
+		const site = summaries.targets.site(call.caller, call.instruction);
+		if (
+			site?.open !== false ||
+			site.targets.functions.length !== 1 ||
+			site.targets.functions[0] !== target
+		)
+			return undefined;
+		let callerSites = exposureBySite!.get(call.caller);
+		if (callerSites === undefined) {
+			callerSites = new Map();
+			exposureBySite!.set(call.caller, callerSites);
+		}
+		if (!callerSites.has(call.instruction))
+			callerSites.set(call.instruction, pgo.callAttempts(call.caller, call.instruction));
+		return callerSites.get(call.instruction);
+	};
+	const exposureKey = (call: CoreDirectEntryCallSite): number | string => {
+		const site = program
+			.function(call.caller)
+			.instructionAttributes(call.instruction).sourceCall;
+		return typeof site === "number" ? site : `ir:${call.caller}:${call.instruction}`;
+	};
 	const methods = new Map<number, Array<CoreFunctionId>>();
 	for (const target of live) {
 		const fn = program.function(target);
@@ -1439,11 +1475,18 @@ function directEntryOpportunities(
 	for (const [target, callSites] of [...callsByTarget].sort(
 		([left], [right]) => left - right,
 	)) {
+		const targetExposure = pgo?.functionEntries(target);
+		if (
+			pgo !== undefined &&
+			targetExposure !== 0 &&
+			callSites.every((call) => exactCallExposure(target, call) === 0)
+		)
+			continue;
 		const fn = program.function(target);
 		const generatedCodeCost = Math.max(8, [...fn.instructionIds()].length);
 		candidates.push({
 			kind: "direct-entry",
-			exposure: pgo?.functionEntries(target),
+			exposure: targetExposure,
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
@@ -1585,6 +1628,7 @@ function directEntryOpportunities(
 							scalars: number;
 							weight: number;
 							measuredExposure: number;
+							measuredSites: Set<number | string>;
 							unknownExposure: boolean;
 						}
 					>();
@@ -1618,6 +1662,7 @@ function directEntryOpportunities(
 							calls: [],
 							weight: 0,
 							measuredExposure: 0,
+							measuredSites: new Set<number | string>(),
 							unknownExposure: false,
 							scalars:
 								representations.filter((representation) => representation !== "boxed")
@@ -1625,17 +1670,15 @@ function directEntryOpportunities(
 						};
 						signature.calls.push(call);
 						signature.weight += callWeight(call);
-						const measured =
-							pgo !== undefined &&
-							call.guarded !== true &&
-							call.numericSortCallback === undefined &&
-							site?.open === false &&
-							site.targets.functions.length === 1 &&
-							site.targets.functions[0] === target
-								? pgo.callAttempts(call.caller, call.instruction)
-								: undefined;
+						const measured = exactCallExposure(target, call);
 						if (measured === undefined) signature.unknownExposure = true;
-						else signature.measuredExposure += measured;
+						else {
+							const source = exposureKey(call);
+							if (!signature.measuredSites.has(source)) {
+								signature.measuredSites.add(source);
+								signature.measuredExposure += measured;
+							}
+						}
 						signatures.set(key, signature);
 					}
 					const eligibleSignatures = [...signatures.values()].filter(
@@ -1721,6 +1764,23 @@ function directEntryOpportunities(
 					(resultRepresentation === "boxed" && valueRepresentations === undefined)
 				)
 					return [];
+				let measuredExposure = 0;
+				let unknownExposure = false;
+				if (pgo !== undefined) {
+					const measuredSites = new Set<number | string>();
+					for (const call of selectedCalls) {
+						const measured = exactCallExposure(target, call);
+						if (measured === undefined) unknownExposure = true;
+						else {
+							const source = exposureKey(call);
+							if (!measuredSites.has(source)) {
+								measuredSites.add(source);
+								measuredExposure += measured;
+							}
+						}
+					}
+					if (measuredExposure === 0 && !unknownExposure) return [];
+				}
 				const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 				const compilerWork = generatedCode + fn.valueCapacity;
 				const runtimeBenefit =
@@ -1744,6 +1804,11 @@ function directEntryOpportunities(
 						...(fieldParameters === undefined ? {} : { fieldParameters }),
 						budget: {
 							kind: "direct-entry",
+							...(pgo === undefined
+								? {}
+								: {
+										exposure: measuredExposure > 0 ? measuredExposure : undefined,
+									}),
 							caller: target,
 							site: callSites[0]!.instruction,
 							revision: 0,
@@ -1998,7 +2063,13 @@ export function buildCoreOptimizationPlan(
 			const budget =
 				options.pgo === undefined
 					? candidate.budget
-					: { ...candidate.budget, exposure: opportunity.exposure };
+					: {
+							...candidate.budget,
+							exposure:
+								candidate.budget.kind === "direct-entry"
+									? candidate.budget.exposure
+									: opportunity.exposure,
+						};
 			if (service.offer(budget)) byBudget.set(budget, candidate);
 		}
 

@@ -36,6 +36,7 @@ import {
 	projectCoreSpecializationRecipes,
 } from "../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { CoreTransformCandidateService } from "../src/compiler/core/core-transform-candidates.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
@@ -276,7 +277,10 @@ function stackObjectProgram(
 	return { program, function: functionId };
 }
 
-function directEntryProgram(callCount = 1): {
+function directEntryProgram(
+	callCount = 1,
+	sourceCall?: number,
+): {
 	readonly program: CoreProgram;
 	readonly caller: CoreFunctionId;
 	readonly callee: CoreFunctionId;
@@ -305,12 +309,16 @@ function directEntryProgram(callCount = 1): {
 		{
 			attributes: {
 				directFunctionIndex: 1,
+				...(sourceCall === undefined ? {} : { sourceCall }),
 			},
 		},
 	);
 	for (let index = 1; index < callCount; index++) {
 		callerBuilder.appendInstruction(callerEntry, "call", [calleeValue!, receiver!], {
-			attributes: { directFunctionIndex: 1 },
+			attributes: {
+				directFunctionIndex: 1,
+				...(sourceCall === undefined ? {} : { sourceCall }),
+			},
 		});
 	}
 	callerBuilder.setTerminator(callerEntry, { kind: "return", value: result! });
@@ -1200,6 +1208,83 @@ describe("late Core specialization plan", () => {
 		expect(localScans).toBe(0);
 		expect(plan.statistics.discovery.attempted).toBe(1);
 		verifyCoreOptimizationPlan(program.seal(), plan, context);
+	});
+
+	it.each([
+		{ attempts: [0, 0], selected: 0, skippedDiscovery: true },
+		{ attempts: [0, undefined], selected: 0 },
+		{ attempts: [100, undefined], selected: 1 },
+	])(
+		"charges a typed entry to its selected call exposure: $attempts",
+		({ attempts, selected, skippedDiscovery }) => {
+			const { program, caller, callee, omittedCall } = directEntryProgram(2);
+			const prepared = planning(program, [caller, callee]);
+			const calls = [...program.function(caller).instructionIds()].filter(
+				(instruction) =>
+					instruction !== omittedCall &&
+					program.function(caller).instructionKind(instruction) === "operation" &&
+					program.function(caller).instructionOpcodeName(instruction) === "call",
+			);
+			const counts = new Map(
+				calls.map((instruction, index) => [instruction, attempts[index]]),
+			);
+			const plan = buildCoreOptimizationPlan(
+				program,
+				prepared.analyses,
+				prepared.summaries,
+				[caller, callee],
+				{
+					context: prepared.context,
+					pgo: {
+						digest: "typed-entry-exposure",
+						functionEntries: (id) => (id === callee ? 100 : undefined),
+						callAttempts: (_caller, instruction) => counts.get(instruction),
+					},
+					budgets: {
+						perSiteExpansions: 1,
+						perCallerExpansions: 4,
+						perCallerGeneratedCode: 8,
+						perCallerCompilerWork: 32,
+						programGeneratedCode: 10,
+						programCompilerWork: 60,
+					},
+				},
+			);
+			expect(plan.directEntries).toHaveLength(selected);
+			if (skippedDiscovery) expect(plan.statistics.discovery.attempted).toBe(1);
+			verifyCoreOptimizationPlan(program.seal(), plan, prepared.context);
+		},
+	);
+
+	it("charges a cloned call-site counter once for a typed entry", () => {
+		const { program, caller, callee } = directEntryProgram(2, 7);
+		const prepared = planning(program, [caller, callee]);
+		const exposures: Array<number | undefined> = [];
+		class RecordingService extends CoreTransformCandidateService {
+			override offer(candidate: Parameters<CoreTransformCandidateService["offer"]>[0]) {
+				if (candidate.kind === "direct-entry") exposures.push(candidate.exposure);
+				return super.offer(candidate);
+			}
+		}
+		const plan = buildCoreOptimizationPlan(
+			program,
+			prepared.analyses,
+			prepared.summaries,
+			[caller, callee],
+			{
+				context: prepared.context,
+				candidateService: new RecordingService(),
+				pgo: {
+					digest: "cloned-call-exposure",
+					functionEntries: (id) => (id === callee ? 100 : undefined),
+					callAttempts: () => 4,
+				},
+			},
+		);
+		expect(plan.directEntries).toHaveLength(1);
+		expect(plan.directEntries[0]!.callSites).toHaveLength(2);
+		expect(exposures).toEqual([4]);
+		verifyCoreOptimizationPlan(program.seal(), plan, prepared.context);
 	});
 
 	it("binds native-body omission to the proved calls and preserves it through verification", () => {
