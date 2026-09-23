@@ -361,7 +361,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       reachability, since method names and immutable bindings alone are unsafe.
       The 19 property receivers currently yield `unsupported-producer` in
       the targeted static-value query; a witness also needs memory/fact-aware
-      invalidation before call-target caching can reuse it.
+      invalidation before call-target caching can reuse it. D061–D064 price
+      further leaf-recipe and post-primary function reuse: restricted local-only
+      receipts cover just 1.5–2.0 ms of 550 ms gross residual work on the
+      frozen self-hosted frontend. A useful post-primary artifact must preserve
+      facts, effect refinements, and nonboxed representations with explicit
+      dependency witnesses; measure its restore cost before adoption.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

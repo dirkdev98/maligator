@@ -2398,3 +2398,95 @@ Avoiding roughly 0.3 ms cannot repay a larger receipt, extra validation and
 invalidation rules. The temporary hooks and their generated cache were removed;
 compact census results remain under
 `.cache/pgo-cache-next-20260923/recipe-applicability/`.
+
+## D062 — 2026-09-23 — Keep canonical block-parameter work out of leaf receipts
+
+**Status:** Warm imported-function cost measured; recipe extension rejected.
+**Refines:** D053, D061.
+
+`canonical-block-parameter-elimination` is local enough to run in the existing
+structural construction component, but adding it to the receipt only avoids
+the primary initial seed while the imported function's completion witness
+survives. A temporary scheduler census on the frozen self-hosted frontend
+counted 605 imported functions and 331 initial runs taking 5.162 ms in a warm
+build. All 566 runs, including later wakeups, took 6.726 ms and only eight
+made edits. Both cold and warm diagnostic wires matched the prior static wire
+SHA-256 `cd1909fa3e2f6e4910688a075a1cfc211445901cf57756f90f2f42f05a375019`.
+The source hook and disposable cache were removed. Five milliseconds of
+potentially avoidable primary work does not justify changing this recipe or
+claiming a useful warm-build gain. Compact census reports are under
+`.cache/pgo-cache-next-20260923/canonical-applicability/`.
+
+## D063 — 2026-09-23 — Reject exact-target tie breaking without native gain
+
+**Status:** Early cross-call tie-break pilot rejected and removed. **Refines:**
+D054–D055, D060.
+
+The current training profile does not distinguish low-selectivity guarded
+targets: all 7,398 complete positive target rows have hits equal to call
+attempts. A filter charging one guard per attempt and crediting six units per
+successful target therefore rejects none. A narrower pilot instead preserved
+the existing exposure class, static priority class and score, using exact
+target benefit only to break equal static priorities in early cross-call
+selection. It queried only otherwise admissible ordinary calls with one exact
+target and measured attempts.
+
+The same frozen self-hosted source and warm 34-leaf Core cache produced 1,285
+positive target queries and one unknown. The tie-break selected the same 871
+guarded and 124 ordinary inlines as its target-unknown control, but introduced
+16 fewer instructions. Its wire was 421 bytes smaller; generated C was 3,549
+bytes larger and the native binary eight bytes larger. The two warm frontend
+diagnostics took 19.995 and 19.989 seconds for candidate and control, which
+does not establish a frontend-time difference.
+
+Three interleaved native pairs per compiler slice matched the frozen Node wire
+exactly. Candidate time changes were −0.16% for summaries, −0.44% for shape,
+−0.09% for pass manager and +0.10% for region selection. Total measured time
+changed −0.14%, with mixed pair directions. That does not repay the extra
+target queries or establish a useful runtime win. The pilot code and test were
+removed; the focused cross-call suite passed before removal. The comparison
+report and compact diagnostic summaries are under
+`.cache/pgo-crosscall-tie-20260923/`.
+
+## D064 — 2026-09-23 — Price post-primary reuse by eligible function class
+
+**Status:** A primitive-only post-primary receipt is rejected; a proof-capable
+function artifact remains a design and measured-cost task. **Refines:** D042,
+D057, D061–D062.
+
+A temporary scheduler census on the same frozen self-hosted frontend measured
+the 605 functions restored from 34 warm module receipts. They consumed 561 ms of
+primary optimization, of which 550 ms was in the phases a completed post-primary
+function receipt could potentially bypass. Memory/provenance alone took 335 ms;
+advanced CFG, post-barrier local, proof/representation, and late cleanup took
+82, 69, 43, and 20 ms. The cold and warm diagnostic wires both matched the
+previous static SHA-256
+`cd1909fa3e2f6e4910688a075a1cfc211445901cf57756f90f2f42f05a375019`.
+These are gross pass times, not a projected net build saving.
+
+A conservative input whitelist with only local primitive operations admitted
+21 functions and 1.5 ms of that potential saving. Even a broader class without
+explicit calls, globals, captured cells, property operations, iterators, or
+guards admitted only 32 functions and 2.0 ms. The expensive classes overlap:
+438 functions with call transfers account for 513 ms, 512 with global or
+captured operations for 537 ms, and 540 with property or iterator operations
+for 546 ms. At the post-primary boundary, 347 imported functions had facts,
+346 effect refinements, and 442 nonboxed representations. The current module
+artifact deliberately excludes these annotations and nonboxed parameters, so
+moving it to a later boundary would silently lose required optimizer state.
+
+The next cache format should be a separately versioned, independently owned
+function artifact captured after `optimizePrimary` and before initial program
+flow. Its key must include a stable function locator, normalized input Core
+body, optimization mode and recipe, source revision, and explicit dependency
+witnesses for every world or private-cell fact used by the recipe. Restore must
+rebind source positions and call origins through stable locators, not persist
+raw function or source-call indices. This is a proposed acceptance contract,
+not an assertion that the necessary dependency witnesses already exist.
+Start with a codec round trip and same-build replay across one representative
+edited entry; require exact Node output and cache-off/cold/warm native behavior,
+then price hashing, lookup, decode, relocation, and validation against the
+roughly 550 ms gross ceiling. Do not add a restricted recipe merely because it
+is easy to serialize. The temporary source hook and disposable cache were
+removed; compact census reports remain under
+`.cache/pgo-cache-next-20260923/primary-class-census/`.
