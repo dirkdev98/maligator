@@ -1904,3 +1904,138 @@ This audit ran no new native tests or performance comparisons. Its report eviden
 remains under `.cache/pgo-selfhost-frontend-20260923/native-acceptance/`; fresh
 validation is required for subsequent changes, and neither saved baselines nor
 earlier decision statuses are altered by this reassessment.
+
+## D050 — 2026-09-23 — Accept two cache wire executions, retain build-cost gate
+
+**Status:** Frozen compiler wire execution matched Node for two inputs; Core
+cache performance acceptance remains open. **Refines:** D048–D049.
+
+The cache-off and cache-on runtime wires retained by D048 were each executed
+through the development VM runner against the same frozen input and Node
+oracle. Both variants exited successfully and produced the exact Node output
+hash for `compiler-summaries` (`b92a2d83b52cdf7655aeffec2157705b5b49b281bc3a08ed336f78c82f73afc9`)
+and `compiler-shape` (`5f9ec243eea44f07f8ed5f87db3f7856af21a751a8d2be73e1470ea6d9576f8c`).
+The reports are under `.cache/pgo-cache-followup-20260923/` as
+`compiler-summaries-saved-wire-execution.json` and
+`compiler-shape-saved-wire-execution.json`. Their single off/on execution
+times are diagnostics, not evidence of a speed difference.
+
+The 34 additional anonymous functions in the cache-on image have an explicit
+construction path: importing a cached module retains its `initializer`, then
+the importer creates and calls that function between module evaluation states
+1 and 2. Fresh modules instead share a merged initializer body. This explains
+why identical runtime wire bytes are the wrong acceptance requirement for this
+cache recipe. It does not prove all module initialization behavior equivalent;
+the native cache fixtures still need focused cold/warm coverage for ordering,
+once-only effects, throws, and independent state.
+
+The D048 changed-entry pairs showed no net frontend-time saving. Keep this
+leaf recipe opt-in while measuring load, decode, relocation and residual
+optimization costs against work avoided. Do not widen the reuse boundary or
+claim a build win from hit counts or these two execution-parity results alone.
+
+## D051 — 2026-09-23 — Keep open guarded targets unmeasured in late planning
+
+**Status:** Attribution correction implemented and frozen-binary diagnostic
+completed; PGO remains opt-in without a runtime-win claim. **Refines:** D046,
+D049.
+
+Late guarded-region planning used total source-call attempts as the exposure
+of hinted targets even when the target set was open. Those attempts do not
+measure successful target guards. Positive open attempts now enter the unknown
+allowance; exact zero still skips optional work, and a closed finite target
+set may use total attempts for its combined dispatch. The canonical guarded
+fallback and no-profile ordering remain unchanged. Focused planner tests cover
+competition with a measured closed call, positive/unknown eligibility, and
+exact-zero omission.
+
+The candidate and previous PGO control were built from the same frozen source
+capture (`be59bc4be67d1d168fbdb072abd8302ff45f93de9a4624041f4582ef426d9fbc`),
+closure (`aed6f534e59f5bfb0ce64b31736a43bd10547f2551d1d006a2235aa64de323d5`),
+and summaries-plus-shape profile (`a4304a55ed5d727a6d1fb7fc2c94b67a6e0cdac09bc386d3838e8c235e25afdc`).
+The runner's `static` label refers to the **previous PGO binary**, not a
+no-profile control. Both binaries matched the exact frozen Node wire on all
+four comparison inputs. The candidate selected 2,378 rather than 4,080 late
+recipes and its binary was 51,900,696 rather than 52,363,096 bytes. Charged
+compiler work was essentially unchanged (260,102 versus 260,101), so fewer
+recipes and smaller output do not establish a compile-time saving.
+
+| Input                       | Actual profile role | Candidate versus control, paired wall-time change |
+| --------------------------- | ------------------- | ------------------------------------------------- |
+| `compiler-summaries`        | trained             | +5.03%, +0.58%                                    |
+| `compiler-shape`            | trained             | -0.28%, +0.33%                                    |
+| `compiler-pass-manager`     | held out            | -0.30%, -0.49%                                    |
+| `compiler-region-selection` | held out            | +1.44%, +0.81%                                    |
+
+Positive percentages mean the candidate was slower. Two interleaved pairs
+show no consistent runtime benefit, and the region holdout was slower twice;
+they are insufficient to quantify a stable regression. Retain the narrower
+attribution rule because the previous measured-target claim was false, but do
+not promote this PGO policy by default. A useful next PGO mechanism needs
+bounded successful-target observations or a separately costed unknown
+allowance, followed by genuinely held-out performance acceptance. The report,
+binary hashes, exact output hashes and role mapping are under
+`.cache/pgo-cache-followup-20260923/compare-region-open-policy/`.
+
+## D052 — 2026-09-23 — Price leaf Core receipts before widening reuse
+
+**Status:** Warm leaf reuse has a small positive diagnostic in a missed
+whole-build cache; changed-entry and broader cache acceptance remain open.
+**Refines:** D049–D050.
+
+An opt-in phase counter now separates receipt keying, storage read, decode,
+standalone construction, local optimization, capture, publish and relocation
+into the importing Core program. A frozen self-hosted frontend snapshot built
+with the same production configuration and explicit wire serialization reused
+34 leaves and 670 functions on the warm path. The cold instrumented build
+spent 372.0 ms constructing those leaves, 195.5 ms optimizing them, 245.9 ms
+capturing receipts and 21.6 ms publishing them. The warm instrumented build
+spent 5.1 ms keying, 13.5 ms reading, 200.6 ms decoding and validating, and
+30.7 ms importing. These are subphase timers, not an additive partition of
+the whole 22-second build; import excludes later program-level optimization.
+
+Uninstrumented off/on/on/off wall times were 22,199.0/21,992.7 and
+22,075.2/22,217.1 ms, respectively. The warm cache won its two matched
+pairs by 206.3 and 141.9 ms (0.93% and 0.64%). Both cache-on wires had the
+same digest, as did both cache-off wires; the two modes differ structurally
+because cached initializers are retained separately. The native cache fixture
+is the behavioral check for that difference. This probe forces frontend work
+against unchanged source and therefore does not yet measure a genuine
+changed-entry edit. Its two pairs are useful cost attribution, not a stable
+build-speed acceptance or a reason to broaden the cache boundary.
+
+The 200.6 ms decode bill is the largest warm leaf phase. The next bounded
+experiment may skip structural normalization already completed by an imported
+receipt, provided edits after import invalidate its version witness and wake
+the same passes. Keep that skip conditional on the witness; do not remove the
+passes from the post-barrier scheduler. The probe and phase evidence are in
+`.cache/pgo-cache-followup-20260923/cache-cost-probe/report.json`.
+
+## D053 — 2026-09-23 — Reuse the completed structural construction recipe
+
+**Status:** Conditional seed skip implemented and focused behavior verified;
+its isolated performance contribution remains unmeasured. **Refines:** D052.
+
+The cached leaf receipt certifies four structural construction passes as well
+as local scalar work. For an imported function whose saved version witness
+survives annotation and platform pruning, the post-barrier scheduler no longer
+seeds those four passes a second time. It keeps every pass registered: a later
+Core edit still wakes the relevant pass. The witness is checked after both
+pruners and before the dense generation barrier, whose version changes would
+otherwise make the certificate unusable. The mandatory scalar ablation path
+retains its existing pass set.
+
+A scheduler regression creates an unreachable block after the initial skip and
+checks that the real unreachable-block pass removes it. Focused frontend unit
+tests, type checking, lint/formatting and the four-case native Core-module
+fixture passed. The latter includes cold/warm execution, changed application
+entry, module state and throwing initialization. The frozen frontend's
+cache-on wire remained byte-identical to its earlier cache-on wire; the
+cache-off wire likewise remained unchanged.
+
+The post-change off/on/on/off probe measured 22,908.9/22,158.2 and
+22,530.5/22,960.0 ms, so warm reuse won its two pairs by 750.7 and
+429.5 ms. That is not an isolated before/after test of this seed skip; host
+variation is visible against D052's earlier timings. No speedup is assigned
+to the new skip alone. The report is in
+`.cache/pgo-cache-followup-20260923/cache-structural-skip-probe/report.json`.

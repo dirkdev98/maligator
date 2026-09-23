@@ -18,6 +18,7 @@ import type { CoreFunctionId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import {
 	CORE_LATE_CANONICALIZATION_PASSES,
+	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 	CORE_MANDATORY_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
@@ -42,7 +43,7 @@ export type CoreFunctionOptimizationPhaseRunner = <Result>(
 ) => Result;
 
 export interface CoreFunctionOptimizationSessionOptions {
-	readonly localOptimizationCompleted?: boolean;
+	readonly constructionRecipeCompleted?: boolean;
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly crossCallWave?: number;
@@ -111,6 +112,7 @@ export class CoreFunctionOptimizationSession {
 	readonly #verification: CoreVerificationProfile;
 	readonly #crossCall: boolean;
 	readonly #benchmarkAblation: CoreOptimizationFamily | undefined;
+	readonly #constructionRecipeCompleted: boolean;
 	#optimized = false;
 
 	constructor(
@@ -130,6 +132,7 @@ export class CoreFunctionOptimizationSession {
 		this.#analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
 		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
 		this.#benchmarkAblation = options.benchmarkAblation;
+		this.#constructionRecipeCompleted = options.constructionRecipeCompleted === true;
 		const ablateLocalOptimization = this.#ablates("o1-scalar-structural");
 		this.#localRules = ablateLocalOptimization
 			? resources.mandatoryLocalRules
@@ -147,7 +150,7 @@ export class CoreFunctionOptimizationSession {
 				verification: options.verification,
 				optionalMaxRunsPerWorkItem: options.optionalMaxRunsPerWorkItem,
 				localOptimization: true,
-				localOptimizationCompleted: options.localOptimizationCompleted,
+				localOptimizationCompleted: options.constructionRecipeCompleted,
 				localOptimizationReportName: ablateLocalOptimization
 					? "mandatory-local-cleanup"
 					: undefined,
@@ -175,7 +178,14 @@ export class CoreFunctionOptimizationSession {
 						"canonicalize",
 						CORE_MANDATORY_CANONICALIZATION_PASSES,
 					)
-				: this.#passes.runComponent("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
+				: this.#passes.runComponent(
+						"canonicalize",
+						CORE_LOCAL_CANONICALIZATION_PASSES,
+						undefined,
+						this.#constructionRecipeCompleted
+							? { completedInitialPasses: CORE_CONSTRUCTION_NORMALIZATION_PASSES }
+							: undefined,
+					),
 		);
 		runPhase("advanced-cfg-optimization", () =>
 			this.#ablates("cfg-loop-licm-pre")
@@ -209,25 +219,22 @@ export class CoreFunctionOptimizationSession {
 						"control-flow",
 						CORE_LATE_REPRESENTATION_PASSES,
 						lateCanonicalizationChanges,
-						false,
+						{ seedLocalFromInitialChanges: false },
 					),
 				);
 			}
 			if (memoryChanges.length > 0 && !this.#ablates("proof-value-kind-representation")) {
 				lateCanonicalizationChanges.push(
-					...this.#passes.runComponent(
-						"proofs",
-						CORE_LATE_PROOF_PASSES,
-						memoryChanges,
-						false,
-					),
+					...this.#passes.runComponent("proofs", CORE_LATE_PROOF_PASSES, memoryChanges, {
+						seedLocalFromInitialChanges: false,
+					}),
 				);
 			}
 			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
 				lateCanonicalizationChanges,
-				false,
+				{ seedLocalFromInitialChanges: false },
 			);
 		});
 		return runPhase("specialization-discovery", () =>
@@ -280,34 +287,35 @@ export class CoreFunctionOptimizationSession {
 		}
 		if (result.changes !== undefined && result.changes.edits > 0) {
 			const initial = [result.changes];
-			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, false);
-			this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, false);
+			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, {
+				seedLocalFromInitialChanges: false,
+			});
+			this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, {
+				seedLocalFromInitialChanges: false,
+			});
 			const memoryChanges = this.#passes.runComponent(
 				"memory",
 				CORE_MEMORY_PASSES,
 				initial,
-				false,
+				{ seedLocalFromInitialChanges: false },
 			);
 			const representationChanges = this.#passes.runComponent(
 				"control-flow",
 				CORE_LATE_REPRESENTATION_PASSES,
 				memoryChanges,
-				false,
+				{ seedLocalFromInitialChanges: false },
 			);
 			const proofChanges =
 				memoryChanges.length === 0
 					? []
-					: this.#passes.runComponent(
-							"proofs",
-							CORE_LATE_PROOF_PASSES,
-							memoryChanges,
-							false,
-						);
+					: this.#passes.runComponent("proofs", CORE_LATE_PROOF_PASSES, memoryChanges, {
+							seedLocalFromInitialChanges: false,
+						});
 			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
 				[...memoryChanges, ...representationChanges, ...proofChanges],
-				false,
+				{ seedLocalFromInitialChanges: false },
 			);
 		}
 		return Object.freeze({

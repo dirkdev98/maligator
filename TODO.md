@@ -278,7 +278,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       binary and mixed held-out runtime. D047 finds that a third compiler-phase
       capture changes only one applied transform and has no isolated runtime
       gain; measure successful guard targets and fix open hinted region-candidate
-      exposure before adding more similar training slices.
+      exposure before adding more similar training slices. D051 removes false
+      measured exposure from open hinted regions: the binary shrinks 0.88% and
+      native output still matches Node, but two trained and two held-out
+      comparisons establish no runtime gain. Keep PGO opt-in; pursue bounded
+      successful-target observations or a costed unknown allowance next.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -328,8 +332,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       the added self-hosted receipts and changed-entry compile saving. D048's
       alternating changed-entry probe reused 34 leaves and 605 functions but
       showed no frontend-time saving and produced structurally different
-      cache-on/off wires. Establish native output and initializer parity, then
-      attribute retained functions and compile phases before widening reuse.
+      cache-on/off wires. D050 executes both variants on two frozen compiler
+      inputs with exact Node output parity and traces the extra functions to
+      retained imported-module initializers. D052 prices warm leaf restore at
+      about 250 ms and measures a small cache-on gain in a missed whole-build
+      cache; D053 conditionally skips completed structural seeds with native
+      behavior intact. Measure a real changed-entry edit and the skip's isolated
+      contribution before widening reuse.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

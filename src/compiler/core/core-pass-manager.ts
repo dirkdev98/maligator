@@ -36,6 +36,11 @@ interface PassConsumption {
 	exhausted: boolean;
 }
 
+interface CoreFunctionPassSeedOptions {
+	readonly seedLocalFromInitialChanges?: boolean;
+	readonly completedInitialPasses?: ReadonlyArray<CoreFunctionPass>;
+}
+
 export interface CoreFunctionPassSchedulerOptions {
 	/** A completed scalar recipe skips the initial seed; edits still wake work. */
 	readonly localOptimizationCompleted?: boolean;
@@ -135,7 +140,7 @@ export class CoreFunctionPassScheduler {
 		stage: CoreOptimizationStage,
 		passes: ReadonlyArray<CoreFunctionPass>,
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
-		seedLocalFromInitialChanges = true,
+		seed: CoreFunctionPassSeedOptions = {},
 	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const localKey = passes.length;
@@ -213,7 +218,8 @@ export class CoreFunctionPassScheduler {
 		};
 		if (initialChanges === undefined) {
 			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
-				enqueuePass(passIndex);
+				if (!seed.completedInitialPasses?.includes(passes[passIndex]!))
+					enqueuePass(passIndex);
 			}
 			if (stage === "canonicalize" && !this.#localSeeded) {
 				enqueueLocal();
@@ -221,7 +227,7 @@ export class CoreFunctionPassScheduler {
 			}
 		} else {
 			for (const changes of initialChanges) {
-				enqueueChanges(changes, seedLocalFromInitialChanges);
+				enqueueChanges(changes, seed.seedLocalFromInitialChanges !== false);
 			}
 		}
 		while (queueIndex < queue.length) {

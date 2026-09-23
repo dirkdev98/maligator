@@ -13,6 +13,7 @@ import {
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -275,6 +276,61 @@ describe("Core optimizer infrastructure", () => {
 			report.finish(program, { directEntries: [], specializations: [] }).counters
 				.localRulesConsidered,
 		).toBeGreaterThan(before.counters.localRulesConsidered);
+	});
+	it("skips completed structural seeds but wakes them after a Core edit", () => {
+		const makeProgram = () => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const value = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			})[0]!;
+			builder.setTerminator(entry, { kind: "return", value });
+			return { program, functionId: builder.finish(entry).function };
+		};
+		const run = (addUnreachableBlock: boolean) => {
+			const { program, functionId } = makeProgram();
+			const report = new CoreOptimizationReportBuilder(program, "full");
+			const scheduler = new CoreFunctionPassScheduler(
+				program,
+				context(),
+				new CoreAnalysisManager(program, context(), report),
+				report,
+				functionId,
+			);
+			const mutation: CoreFunctionPass = {
+				...noOpPass("introduce-unreachable-block", []),
+				wakesOn: [],
+				changes: { cfg: true, calls: false, facts: false, representations: false },
+				run() {
+					if (!addUnreachableBlock) return undefined;
+					const editor = CoreEditor.open(program, functionId);
+					const block = editor.createBlock();
+					const value = editor.appendInstruction(block, "createNumber", [], {
+						attributes: { value: 2 },
+					}).outputs[0]!;
+					editor.setTerminator(block, { kind: "return", value });
+					return editor.commit();
+				},
+			};
+			scheduler.runComponent(
+				"canonicalize",
+				[...CORE_CONSTRUCTION_NORMALIZATION_PASSES, mutation],
+				undefined,
+				{ completedInitialPasses: CORE_CONSTRUCTION_NORMALIZATION_PASSES },
+			);
+			verifyCoreProgram(program, { stage: "canonicalize" }, context());
+			return {
+				passes: report
+					.finish(program, { directEntries: [], specializations: [] })
+					.passes.map(({ pass }) => pass),
+				blocks: [...program.function(functionId).blockIds()].length,
+			};
+		};
+		expect(run(false).passes).toEqual(["introduce-unreachable-block"]);
+		const edited = run(true);
+		expect(edited.passes).toContain("unreachable-block-removal");
+		expect(edited.blocks).toBe(1);
 	});
 
 	it("charges nested owner scopes exclusively", () => {
@@ -589,7 +645,9 @@ describe("Core optimizer infrastructure", () => {
 			{
 				localOptimization: true,
 			},
-		).runComponent("canonicalize", [noOpPass("late", runs)], [changes], false);
+		).runComponent("canonicalize", [noOpPass("late", runs)], [changes], {
+			seedLocalFromInitialChanges: false,
+		});
 
 		expect(runs).toEqual([1]);
 		expect(
