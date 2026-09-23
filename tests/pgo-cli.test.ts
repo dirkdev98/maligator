@@ -24,7 +24,7 @@ function trainingBinary(): string {
 		binary,
 		`#!${process.execPath}\n` +
 			`const fs = require('node:fs');\n` +
-			`if (process.env.MAL_INTERP !== '1') process.exit(3);\n` +
+			`if (process.env.MAL_INTERP === '1') process.exit(3);\n` +
 			`if (process.argv[2] !== 'missing') {\n` +
 			`  const functions = Number(process.env.MAL_PGO_FUNCTIONS);\n` +
 			`  const calls = Number(process.env.MAL_PGO_CALL_SITES);\n` +
@@ -81,7 +81,11 @@ function runPrepared(binary: string, workload: string, argument: string) {
 		{
 			cwd: directory,
 			encoding: "utf8",
-			env: { ...process.env, MALIGATOR_CACHE_DIR: path.join(directory, "user-cache") },
+			env: {
+				...process.env,
+				MAL_INTERP: "0",
+				MALIGATOR_CACHE_DIR: path.join(directory, "user-cache"),
+			},
 		},
 	);
 }

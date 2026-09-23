@@ -114,6 +114,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "value_ops.h"',
 	'#include "perf_stats.h"',
 	'#include "profile.h"',
+	'#include "pgo.h"',
 	'#include "builtin_array.h"',
 	'#include "builtin_boolean.h"',
 	'#include "builtin_date.h"',
@@ -735,6 +736,7 @@ function emitNativeFunctions(
 			options.relocatable === true,
 			strictCompiledTargets,
 			image.runtime.stringConstants,
+			image.diagnostics.pgoTraining === true,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		const entries = emitted.directEntries.filter((entry) => fits(entry.source));

@@ -1,5 +1,7 @@
 export { MALIGATOR_VERSION } from "./version.ts";
 
+import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
+
 export interface InternalBuildOptions {
 	name?: string;
 	serializePath?: string;
@@ -7,6 +9,7 @@ export interface InternalBuildOptions {
 	verbose: boolean;
 	compiled: boolean;
 	dumpCore: boolean;
+	coreReport?: CoreInstrumentationMode;
 }
 
 export interface BuildCommand {
@@ -114,6 +117,7 @@ Options:
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
   --core-cache                 Reuse supported dependency Core (production build only)
+  --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
   --pgo-use <profile>    Use a validated merged PGO profile for optimization
   --pgo-train                  Build or run with compact VM training counters
@@ -220,6 +224,15 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--core-cache") {
 			command.coreCache = true;
+			continue;
+		}
+		if (argument === "--core-report") {
+			const mode = optionValue(args, index, argument);
+			if (mode !== "phases" && mode !== "counters" && mode !== "full")
+				throw new CliUsageError("--core-report requires phases, counters, or full");
+			command.internal.coreReport = mode;
+			command.internal.verbose = true;
+			index++;
 			continue;
 		}
 		if (argument === "--profile" || argument === "--profile=compiler") {

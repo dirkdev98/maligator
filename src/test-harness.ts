@@ -242,7 +242,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		options,
 		config,
 		programImage,
-		options.pgoTraining ? false : (options.compiled ?? true),
+		options.compiled ?? true,
 		options.name,
 	);
 	return { ...linked, programImage };
@@ -273,7 +273,7 @@ export function buildNativeProgramImageResult(
 		harnessOptions,
 		config,
 		image,
-		options.pgoTraining ? false : (options.compiled ?? true),
+		options.compiled ?? true,
 		options.name,
 	);
 	return { ...linked, programImage: image };

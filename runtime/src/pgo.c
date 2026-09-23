@@ -81,10 +81,6 @@ void mal_pgo_init(MalVm *vm) {
     state->functions = functions;
     state->calls = calls;
     memcpy(state->identity, identity, sizeof(identity));
-    for (u32 index = 0; index < functions; index++) {
-        if (vm->runtime_image->functions[index].compiled != nullptr)
-            state->flags |= MAL_PGO_INVALID;
-    }
     vm->pgo_state = state;
     active_pgo = state;
 }

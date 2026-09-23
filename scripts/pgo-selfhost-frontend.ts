@@ -311,7 +311,7 @@ function execute(options: Options): void {
 						path.join(output, `${workload.name}-training.log`),
 						deadline,
 						options.childTimeoutSeconds,
-						{ ...env, ...capture.environment, MAL_INTERP: "1" },
+						{ ...env, ...capture.environment },
 					);
 					assertWire(actual, oracle);
 					rmSync(actual);

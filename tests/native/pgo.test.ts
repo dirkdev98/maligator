@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
 import {
 	preparePgoTraining,
 	createPgoCapture,
@@ -10,25 +11,31 @@ import {
 	parsePgoCounts,
 	mergePgoCaptures,
 } from "../../src/pgo-artifact.ts";
-import { buildNativeBinaryResult } from "../../src/test-harness.ts";
+import {
+	buildNativeBinaryResult,
+	buildNativeProgramImageResult,
+} from "../../src/test-harness.ts";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-pgo-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 describe("VM PGO training", () => {
 	it("counts original dispatch attempts and fresh entries across throws and resumptions", () => {
-		const built = buildNativeBinaryResult({
-			fixture: "tests/local/pgo.mjs",
-			name: "pgo",
+		const options = {
 			outDir: directory,
-			compiled: false,
-			pgoTraining: true,
+			pgoTraining: true as const,
 			evalEnabled: false,
 			realmsEnabled: false,
 			intlEnabled: false,
 			temporalEnabled: false,
 			regexpEnabled: false,
 			webPlatformEnabled: false,
+		};
+		const built = buildNativeBinaryResult({
+			...options,
+			fixture: "tests/local/pgo.mjs",
+			name: "pgo-interpreted",
+			compiled: false,
 		});
 		const prepared = preparePgoTraining(
 			built.binaryPath,
@@ -47,6 +54,39 @@ describe("VM PGO training", () => {
 		const counts = parsePgoCounts(
 			readFileSync(path.join(capture.directory, "counts.bin")),
 		);
+		const compiledSource = emitProgramImage(built.programImage, { compiled: true });
+		expect(compiledSource).toContain("mal_pgo_entry(vm,");
+		expect(compiledSource).toContain("mal_pgo_call(vm,");
+		const compiled = buildNativeProgramImageResult(built.programImage, {
+			...options,
+			name: "pgo-compiled",
+			compiled: true,
+		});
+		const compiledPrepared = preparePgoTraining(
+			compiled.binaryPath,
+			compiled.programImage,
+			"a".repeat(64),
+		);
+		expect(compiledPrepared.functions).toEqual(prepared.functions);
+		expect(compiledPrepared.calls).toEqual(prepared.calls);
+		const compiledCapture = createPgoCapture(
+			compiledPrepared,
+			"event-semantics-compiled",
+			directory,
+		);
+		const compiledResult = spawnSync(compiled.binaryPath, [], {
+			encoding: "utf8",
+			env: { ...process.env, ...compiledCapture.environment, MAL_INTERP: "0" },
+		});
+		expect(compiledResult.stderr).toBe("");
+		expect(compiledResult.status).toBe(0);
+		expect(compiledResult.stdout).toBe(result.stdout);
+		finalizePgoCapture(compiledCapture, true);
+		const compiledCounts = parsePgoCounts(
+			readFileSync(path.join(compiledCapture.directory, "counts.bin")),
+		);
+		expect(compiledCounts.functions).toEqual(counts.functions);
+		expect(compiledCounts.calls).toEqual(counts.calls);
 		const entries = (name: string) =>
 			prepared.functions.reduce(
 				(sum, fn, i) => sum + (fn.name === name ? counts.functions[i]! : 0n),

@@ -484,9 +484,8 @@ function compileAndBuild(
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
 	const execution = resolveExecution(command, buildConfig, {
-		compiled: command.pgoTrain
-			? false
-			: command.kind === "build"
+		compiled:
+			command.kind === "build"
 				? command.internal.compiled && command.internal.serializePath === undefined
 				: command.profile,
 		optimization: production ? "full" : "development",
@@ -531,6 +530,8 @@ function compileAndBuild(
 					profile: command.profile,
 					pgoTraining: command.pgoTrain,
 					pgo,
+					coreInstrumentation:
+						command.kind === "build" ? command.internal.coreReport : undefined,
 					coreModuleCache: command.kind === "build" && command.coreCache,
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
@@ -843,8 +844,7 @@ function compileAndBuild(
 	const output = reporter.phase("Generate native code", () =>
 		emitProgramTranslationUnits(programImage, {
 			sourcePath: nativeSourcePath,
-			compiled:
-				!command.pgoTrain && (command.kind !== "build" || command.internal.compiled),
+			compiled: command.kind !== "build" || command.internal.compiled,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
 		}),
@@ -1008,7 +1008,6 @@ function executePgoTrainingRun(
 	const outcome = executeBinary(binaryPath, args, {
 		...runEnv(),
 		...training.environment,
-		MAL_INTERP: "1",
 	});
 	try {
 		finalizePgoCapture(training, outcome.status === 0 && outcome.signal === undefined);

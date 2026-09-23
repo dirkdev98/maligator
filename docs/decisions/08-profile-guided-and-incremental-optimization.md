@@ -1441,3 +1441,60 @@ these three pairs do not establish a reliable runtime win. The PGO build reused
 unreused shared optimizer work and measure a lower-cost training route before
 using PGO by default. Evidence is under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.
+
+## D039 — 2026-09-23 — Train compiled functions with the same PGO counters
+
+**Status:** Implemented; focused native parity and one frozen self-hosted capture
+passed. Broader native gates and repeatability remain open. **Refines:** D014,
+D038.
+
+PGO training no longer forces every function through the interpreter. The
+ordinary compiled function entry increments the same dense function counter
+before parameter initialization, and a compiled `PGO_CALL` increments the same
+source-site counter after argument evaluation. Generator and async functions
+remain interpreted during training so their fresh-entry versus resume behavior
+continues to use the existing VM frame boundary. Typed direct-entry variants
+are disabled for training; the compiled canonical ABI carries the counters.
+The runtime still rejects mismatched capture metadata and overflow, but no
+longer rejects a training image merely because it has compiled entries.
+`--no-compiled` remains available for interpreter training comparisons.
+
+The focused native fixture compares the complete function and call arrays and
+stdout between interpreted and compiled training across throws, recursion,
+callbacks, constructors, optional calls, spreads, generator resumes, and async
+continuation. Both arrays matched exactly. A single compiled training capture
+from the D038 frozen source produced the same Node wire hash and the same
+32,640 raw counters as the previous interpreted capture. The capture files and
+merged-profile digests differ because binary and run identities are part of
+their provenance. Training the summaries workload took 26.1 seconds compiled
+versus 243.7 seconds interpreted, about 9.3 times faster for this one pair.
+The compiled training build took 56.0 seconds cold, so the build cost still
+matters when there is only one training run. Evidence is in
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/train-compiled/`.
+
+## D040 — 2026-09-23 — Attribute the remaining changed-entry Core work
+
+**Status:** Diagnostic attribution completed; broader Core reuse remains open.
+**Refines:** D035, D038.
+
+An ordinary identical build restored the final frontend artifact in 7 ms; the
+Core cost occurs when an entry or input change forces frontend compilation.
+On the frozen PGO compiler graph, 28 reusable leaf modules supplied 475 of
+4,564 functions. A warm, forced rebuild still spent 14.3 seconds in Core
+optimization. Detailed instrumentation measured 15.1 seconds, including 4.77
+seconds in memory/provenance, 2.24 seconds in cross-call transforms, 1.93
+seconds in structural CFG work, and 1.03 seconds in post-barrier local work.
+The detailed report is diagnostic overhead, not a timing comparison.
+
+Memory/provenance work is distributed across functions outside the current
+leaf-only receipt boundary. Its largest reported pass was static-property
+folding: 5,648 runs, 16 changed runs, 1.22 seconds. Extending the current
+receipt to arbitrary importing modules would require proving import-binding
+and initialization semantics; it is not a safe cache-key tweak. The next cache
+pilot should capture only function-local completed stages from the full graph,
+keyed by function/source revision, semantic closure, execution facts, and the
+optimizer recipe. Program-flow, cross-call transforms, and final verification
+still run against the assembled current graph. Measure the share of local work
+actually reused before expanding the receipt to modules with imports. The
+phase and pass evidence is under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/core-full-report.log`.

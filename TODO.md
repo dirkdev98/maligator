@@ -260,9 +260,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       train and measure a bounded self-hosted frontend workload before full
       self-compile, with separate source-cone holdouts and exact wire parity.
       D038 records frozen-source native parity and positive current-build PGO
-      query matches. The three-pair comparison did not establish a runtime win;
-      lower training cost, isolate the remaining shared optimizer work, and
-      repeat the static/PGO comparison before enabling PGO by default.
+      query matches. D039 makes compiled training preserve the raw counters and
+      reduces the single frozen training run from 244 to 26 seconds. The
+      three-pair comparison did not establish a runtime win; repeat static/PGO
+      comparison before enabling PGO by default.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -301,7 +302,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       semantic analysis and selected-module decoding remain current-build work.
       D035 admits independent leaves beside host imports and cyclic consumers;
       D037's frontend probe saw 28 hits and 475 imported functions, but native
-      parity and matched application-edit timing remain to be established.
+      parity and matched application-edit timing remain to be established. D040
+      attributes the changed-entry Core work; pilot completed function-local
+      stages from the full graph before widening module import support.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
