@@ -2525,3 +2525,51 @@ runner's `static` and `pgo` labels mean **current PGO control** and **candidate
 PGO**, respectively. The patch and compact comparison evidence are under
 `.cache/pgo-local-roi-20260923/`; disposable binaries and build caches were
 removed.
+
+## D066 — 2026-09-23 — Do not rank typed-entry discovery by unrelated entries
+
+**Status:** Corrected-heat pilot was output-inert on the frozen compiler and
+removed. **Refines:** D044, D065.
+
+The typed-entry opportunity still uses all target-function entries to order
+its discovery proof, although the later emitted entry is charged only to its
+selected calls. A demotion-only pilot capped positive function-entry heat by
+the deduplicated sum of known exact call attempts when every candidate call
+was measured. Unknown calls, zero entries and all-zero calls retained their
+existing behavior; the pilot added no guard relaxation or budget.
+
+The same frozen self-hosted frontend selected 2,378 late recipes with or
+without the cap. Early cross-call counts, the portable wire, 78,991,181
+generated C bytes and the native binary SHA-256
+`181b32092a518105af69578a20a2fa4017d14e4a23ec2077ebfedb9c58ae0773`
+were identical. This profile and candidate mix give the proposed correction
+no output leverage. The pilot was removed without a native comparison; its
+patch and diagnostic log remain under `.cache/pgo-entry-heat-20260923/`.
+
+## D067 — 2026-09-23 — Rebase PGO acceptance on the current static binary
+
+**Status:** Current-source four-slice native comparison completed with exact
+Node parity; PGO remains opt-in. **Refines:** D045–D047, D065–D066.
+
+Fresh static and PGO binaries used the same clean compiler source, frozen
+self-hosted frontend input, production options and 34-leaf Core cache mode.
+PGO used the two-slice summaries-plus-shape profile. The static binary was
+52,983,904 bytes and generated 81,932,786 C bytes; PGO was 51,900,672 bytes
+and generated 78,991,181 C bytes, reductions of 1,083,232 and 2,941,605
+bytes. One frontend build took 19.829 seconds static and 20.513 seconds PGO;
+that single pair is not a repeatable build-time comparison. PGO's early
+cross-call plan applied 1,034 transforms versus 1,093 static, while its late
+plan selected 2,378 recipes versus 2,593 static.
+
+Three interleaved pairs per slice all matched the frozen Node wire. PGO time
+changes against static were −0.26%, −1.11%, −0.88% on trained summaries;
++1.09%, +0.07%, −0.04% on trained shape; +0.30%, −1.36%, +0.33% on held-out
+pass-manager; and −0.67%, −0.83%, +0.56% on held-out region selection. Across
+the twelve pairs, measured time was 326.652 seconds static and 326.182
+seconds PGO, a 0.14% reduction. This is useful evidence of lower output size
+without an observed large runtime penalty, not a stable native speedup. In
+particular, D045's 5–11% pass-manager regression did not reproduce on the
+current source, so it should not anchor another policy change. Full
+self-compile, broader holdouts, training economics and the normal gate remain
+open before changing the default. Build logs and the exact-output comparison
+report are under `.cache/pgo-acceptance-20260923/`.

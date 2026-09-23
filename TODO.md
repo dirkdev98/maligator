@@ -291,6 +291,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       guarded-target queries behind admission, eliminating 7,279 unused queries
       on that frozen input. Keep PGO opt-in; use a calibrated marginal benefit/cost
       model and trained plus held-out runtime evidence before spending more code.
+      D060, D063 and D065 reject ranking pilots without a reliable runtime win;
+      D066's typed-entry discovery cap was output-inert. D067's current-source
+      three-pair comparison makes PGO 1.08 MB smaller than static but only 0.14%
+      faster in total measured time, with mixed holdouts. Set a concrete runtime
+      or build-cost acceptance target before changing the default; do not tune
+      against D045's old pass-manager slowdown, which did not reproduce now.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
