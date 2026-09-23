@@ -2148,3 +2148,162 @@ is in `.cache/pgo-cache-followup-20260923/target-v2-budget-diagnostic.log`
 and `target-v2-lazy-guard-diagnostic.log`. Further target guidance needs a
 calibrated benefit/cost decision with trained and held-out runtime evidence;
 target capture alone has not earned additional generated code.
+
+## D056 — 2026-09-23 — Confirm ordinary entry-edit invalidation, keep cache-speed gate open
+
+**Status:** Natural changed-entry misses, unchanged-entry hits, and cached-wire
+execution parity verified. Net changed-entry speed benefit remains inconclusive.
+**Refines:** D048, D050, D052, D053.
+
+An isolated copy of the frozen self-hosted compiler entry was first built in
+both cache modes. Its leaf sources stayed byte-identical. A subsequent entry
+edit appended a deterministic output marker `B`; a second edit changed that
+marker to `C`. These are observable edits, and the normal build path used no
+verbose, profile or Core diagnostic flag that forces frontend recompilation.
+Both modes reported frontend cache misses for each edited entry. Repeating `B`
+unchanged reported whole-frontend cache hits, taking 264 ms with Core reuse off
+and 252 ms with it on. Those unchanged hits are a separate, faster mechanism;
+they are not Core receipt savings.
+
+| Entry edit | Build order | Core cache off | Core cache on | On minus off |
+| ---------- | ----------- | -------------- | ------------- | ------------ |
+| A to B     | off, on     | 20.405 s       | 20.415 s      | +0.010 s     |
+| B to C     | on, off     | 20.637 s       | 20.345 s      | -0.292 s     |
+
+The `C` cache-off and cache-on saved wires differ structurally, as in D048,
+but both executed the compiler-summaries input to the exact Node output digest
+`b92a2d83b52cdf7655aeffec2157705b5b49b281bc3a08ed336f78c82f73afc9`.
+Both also wrote the expected `C` marker. A separate forced changed-source
+diagnostic reused 34 leaf receipts containing 605 functions and skipped their
+construction/scalar recipes; its two off/on pairs favored reuse by 53 and
+239 ms. That diagnostic used `--verbose`, which deliberately bypasses the
+whole-frontend cache, so it is not evidence for natural invalidation. The
+first saved-wire execution attempt used a retained v59 development runner and
+failed its version check; a freshly built v60 runner with the matching host
+features passed both variants. The temporary entry copies were removed.
+
+The two natural edits establish the intended cache path and behavioral parity,
+but one tie and one small win do not establish a repeatable net build-speed
+benefit. The 34-receipt decode microcorpus comprises 605 functions, 33,376
+operations and 7.83 MB of JSON. Isolated, pre-read decode/verify/freeze
+probe medians were 0.142 s without forced GC and 0.190 s with it; D052 measured
+about 0.20 s in the build.
+The CPU work is distributed across parsing, restoration, validation and freezing;
+only 11.6% of operations have empty attributes, so sharing those objects is
+unlikely to deliver a meaningful win by itself. Further cache implementation
+should either remove a measured residual cost or make function bodies genuinely
+demand-loaded under an explicit summary/body and ownership contract. The
+forced and natural reports are in
+`.cache/pgo-cache-followup-20260923/changed-entry-probe/report.json` and
+`natural-entry-edit-probe/report.json`. The microprobe results and CPU profile
+are `decode-default.json`, `decode-expose-gc.json` and
+`decode-before.cpuprofile` in the same task directory. The isolated timings
+exclude disk reads and import relocation.
+
+## D057 — 2026-09-23 — Price imported-body work before demand loading
+
+**Status:** Temporary per-function timing census completed and removed;
+function-demand loading remains a design task. **Refines:** D009, D056.
+
+The first program-flow reachability is computed only after every function's
+primary local, CFG, proof and memory optimization. A temporary census timed
+that primary work per function in one frozen cache-on self-hosted frontend
+compile, tagged functions restored from receipts, then compared each tag with
+the initial and final live sets. The build reused 34 receipts containing 605
+functions and 42,021 live instructions before primary optimization. All 605
+were live in both sets; the other 3,965 functions were also live. The census
+wire matched an uninstrumented cache-on build byte for byte. The timing probe
+was removed from source after collection.
+
+The reused functions spent 618 ms in primary optimization, including 344 ms
+in memory/provenance, 111 ms in advanced CFG, 76 ms in post-barrier local work,
+45 ms in proofs, 27 ms in late cleanup and 13 ms in specialization discovery.
+These are sampled in-process phase totals with probe overhead, not an isolated
+before/after saving. The 618 ms is gross observed work before the cost of any
+richer receipt or validation; it is not a net-speed ceiling or permission to
+skip these passes. The current reachability result offers no imported-function
+omissions, but does not prove that all 605 bodies truly need eager optimization.
+
+A second temporary reason census explained that limit. The source is closed
+and has one program-entry root. The initial flow counts 2,615 reachable
+wildcard callers and the final flow counts 2,617, but these counts are taken
+after conservative expansion: one reached wildcard is sufficient to mark all
+4,570 functions `any-script`. A separate temporary trigger trace found that
+the program-entry function itself has 20 call sites classified as opaque
+`any-script` targets, so filtering wildcard callers that are unreachable from
+the root cannot avoid this expansion. A producer trace classified one
+callee as a direct global load, 18 as static property loads (mostly from
+globals), and one as a property of an `Object.entries` result. All 20
+currently have the fully open target state. The root function contains
+merged module initializers, and its call-site positions do not identify
+reliable original source locations across inlining. Temporary tracing
+changed the Core receipt identity and reused no leaves, but both traced
+wires still matched the uninstrumented cache-on wire byte for byte.
+The final flow retains all functions; 599 of the 605 reused functions also have a
+`runtime-identity` reason and 416 have a finite-call reason. These reasons
+are non-exclusive. Removing a body based on observed profile traffic or on
+the absence of a finite call would be unsound under the current call and
+identity contracts. The reason-census wire also matched the cache-on wire
+byte for byte, and its instrumentation was removed.
+
+The useful architectural question is whether a selected receipt can carry a
+completed advanced per-function recipe whose program-dependent assumptions
+are explicit and cheaply revalidated. Memory and representation proofs may
+depend on whole-program facts, so a version witness for local edits alone is
+insufficient. An upgrade must measure receipt size, cold creation, warm
+validation/import, later cross-call wakeups and emitted output quality. Native
+product stability remains a separate stage. Demand loading additionally needs
+an earlier, sound distinction between an identity retained for arbitrary
+calls and a body that can safely be omitted or deferred. The census, reason
+log, trigger trace and equal wire digests are under
+`.cache/pgo-cache-followup-20260923/primary-census/`.
+
+## D058 — 2026-09-23 — Require producer proofs before narrowing wildcard reachability
+
+**Status:** Root wildcard producers classified; no call-target rule changed.
+**Refines:** D057.
+
+The first reached wildcard in the frozen self-hosted frontend belongs to Core
+function 0, the program entry with merged module initializers. It has 20
+`any-script` call sites. Their callee producers are one direct global load,
+18 static property loads (mostly from globals), and one static property load
+from an `Object.entries` result. The property names are `map` (seven), `has`
+(five), `set` (three), `get` (two), `define` and `push`. All 20 resolve to
+the fully open `{anyScript, opaque, nonCallable}` target state in both initial
+and final reachability solves.
+
+All observed global receiver slots are marked single-assignment by the
+frontend, but the property receivers are objects from literal, constructor
+or known-call producers. A single-assignment object binding is not an
+immutable property-method proof. The direct global slot has no Core store; the
+frontend identifies it as `node:fs`'s `writeFileSync` host export installed by
+`mal_host_install_node_fs`. Its runtime installer creates a native function,
+but the Core host-install contract does not yet carry a per-export
+native-callable witness. The installer can also publish a cached mutable
+module object, so the installer name and absence of Core stores do not prove
+the value's identity at a later call. Reclassifying a `loadGlobal` or a method named
+`map`, `has`, or `get` from its opcode or spelling would be unsound: a mutable
+receiver may supply a script function. Existing call-target coverage requires
+an unknown static property to remain `any-script`.
+
+The next precision change should start with an explicit producer contract,
+not a name table in the call graph. A native-only host export would need a
+verified per-export installer guarantee, closed single-assignment slot, and
+proof that publication cannot take a mutated cached export, plus invalidation
+if an alternate writer appears. It may remove one wildcard here
+but cannot make the entire program finite while 19 other root sites remain
+open. A temporary, targeted query through the existing known-operation pass
+returned `unknown: unsupported-producer` for the base of all 19 property
+loads, on each of three observed pass sweeps. The static cell analyzer ignores
+the `createEmpty` initialization, but its current whole-cell read check does
+not establish that inherited methods remain stable through calls. The useful
+next design is an observation-bound property/identity witness from static-value
+analysis, with a verified canonical callable and version dependencies covering
+memory and facts as well as body and CFG. The present call-target cache does
+not track all those dependencies. Any such proof must preserve opaque call
+effects and callback publication, and should run only on demanded open sites.
+This is separate
+from caching completed advanced
+recipes, whose warm-build net cost and program-fact witnesses are still open.
+The temporary diagnostics were removed. Logs and equal output-wire digests
+are under `.cache/pgo-cache-followup-20260923/primary-census/`.

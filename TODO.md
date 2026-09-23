@@ -345,8 +345,23 @@ iterator cursor is not, by itself, permission to delete its language object.
       retained imported-module initializers. D052 prices warm leaf restore at
       about 250 ms and measures a small cache-on gain in a missed whole-build
       cache; D053 conditionally skips completed structural seeds with native
-      behavior intact. Measure a real changed-entry edit and the skip's isolated
-      contribution before widening reuse.
+      behavior intact. D056 verifies ordinary frontend invalidation on two
+      observable entry edits, unchanged-entry hits, and exact Node/VM output
+      parity, but the two cache-on/off edit pairs show a tie and a small win.
+      Establish a repeatable net edit benefit and isolate the seed skip's cost
+      before widening reuse. D057 finds all 605 reused functions retained by
+      conservative reachability and 618 ms of residual primary optimization
+      on them. One root and 2,615 reachable wildcard callers mark every
+      function `any-script`; the root itself has 20 fully open call targets,
+      mostly property loads from globals. These are not proofs that every body
+      runs. A completed advanced recipe needs explicit program-fact witnesses;
+      body omission needs a stronger call, identity and ownership contract.
+      D058 traces the 20 root wildcard calls to one host import and 19
+      property loads; add a producer-backed target proof before narrowing
+      reachability, since method names and immutable bindings alone are unsafe.
+      The 19 property receivers currently yield `unsupported-producer` in
+      the targeted static-value query; a witness also needs memory/fact-aware
+      invalidation before call-target caching can reuse it.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
