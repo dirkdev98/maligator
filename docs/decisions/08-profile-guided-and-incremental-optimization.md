@@ -1250,3 +1250,30 @@ parity, PGO rebinding, missing and reconstructed canonical bytes, changed
 inputs with an alternate valid receipt, descriptor preservation on republish,
 and publication failure. The cold Rust/ICU build prevented a current native
 test result.
+
+## D032 — 2026-09-23 — Select native entry signatures with attributable call heat
+
+**Status:** Implemented with focused output verification; representative native
+performance acceptance remains open. **Refines:** D004 and D015.
+
+Function-entry heat already controls whether a direct-entry opportunity is
+examined, but its single parameter/arity signature was chosen only by capped
+static loop weights. When several signatures are proven, measured call attempts
+now rank signatures only for closed, single-target sites. Positive measured
+exposure wins before unmeasured exposure, which wins before exclusively
+observed-zero exposure. Measured counts are compared on their own scale and
+weighted by the existing scalar count; static weights break ties and retain the
+exact no-profile choice. A signature with unmeasured sites is never labeled
+observed-zero. If every eligible scalar signature is fully observed zero, no
+native entry is emitted, even when the target has entry heat from other callers.
+Open or guarded calls and sort callbacks keep static ranking:
+their call-attempt count does not identify this target or callback invocation.
+
+The selected signature still runs the existing representation analysis and
+native-entry verifier, shares the same single-entry and generated-code budgets,
+and retains the canonical fallback. Focused tests cover a hot straight-line
+numeric call beating a cold syntactic-loop string call in both source orders,
+observed-zero versus unknown exposure, no-profile selection, guarded/open
+attribution, an all-zero decline, and the corresponding lowered call entry. This verifies that PGO
+can change selected output, but does not demonstrate a native runtime win;
+training and holdout workloads still need matched measurement.

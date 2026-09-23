@@ -1584,6 +1584,8 @@ function directEntryOpportunities(
 							calls: Array<CoreDirectEntryCallSite>;
 							scalars: number;
 							weight: number;
+							measuredExposure: number;
+							unknownExposure: boolean;
 						}
 					>();
 					for (const call of selectedCalls) {
@@ -1615,19 +1617,52 @@ function directEntryOpportunities(
 							representations,
 							calls: [],
 							weight: 0,
+							measuredExposure: 0,
+							unknownExposure: false,
 							scalars:
 								representations.filter((representation) => representation !== "boxed")
 									.length + (needsArity ? 1 : 0),
 						};
 						signature.calls.push(call);
 						signature.weight += callWeight(call);
+						const measured =
+							pgo !== undefined &&
+							call.guarded !== true &&
+							call.numericSortCallback === undefined &&
+							site?.open === false &&
+							site.targets.functions.length === 1 &&
+							site.targets.functions[0] === target
+								? pgo.callAttempts(call.caller, call.instruction)
+								: undefined;
+						if (measured === undefined) signature.unknownExposure = true;
+						else signature.measuredExposure += measured;
 						signatures.set(key, signature);
 					}
-					const signature = [...signatures.values()]
-						.filter(({ scalars }) => scalars > 0)
-						.sort(
-							(left, right) => right.weight * right.scalars - left.weight * left.scalars,
-						)[0];
+					const eligibleSignatures = [...signatures.values()].filter(
+						({ scalars }) => scalars > 0,
+					);
+					if (
+						pgo !== undefined &&
+						eligibleSignatures.length > 0 &&
+						eligibleSignatures.every(
+							(signature) =>
+								signature.measuredExposure === 0 && !signature.unknownExposure,
+						)
+					)
+						return [];
+					const signature = eligibleSignatures.sort((left, right) => {
+						const exposureClass = (entry: typeof left) =>
+							entry.measuredExposure > 0 ? 2 : entry.unknownExposure ? 1 : 0;
+						const classDifference = exposureClass(right) - exposureClass(left);
+						if (classDifference !== 0) return classDifference;
+						if (left.measuredExposure > 0 || right.measuredExposure > 0) {
+							const measuredDifference =
+								right.measuredExposure * right.scalars -
+								left.measuredExposure * left.scalars;
+							if (measuredDifference !== 0) return measuredDifference;
+						}
+						return right.weight * right.scalars - left.weight * left.scalars;
+					})[0];
 					if (signature !== undefined) {
 						argumentRepresentations = needsArity ? signature.representations : undefined;
 						parameterRepresentations = Array.from(

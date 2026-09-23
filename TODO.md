@@ -251,7 +251,9 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Complete representative PGO training and performance acceptance; tune the
       measured/unknown allowances and make remaining cross-call proof discovery
       incremental with application-work and output-growth reservations. D030
-      records why a fixed proof-work cap did not help Meriyah.
+      records why a fixed proof-work cap did not help Meriyah. D032 makes
+      attributable call heat choose the emitted native entry signature; verify
+      runtime benefit on training and holdout inputs before tuning its policy.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

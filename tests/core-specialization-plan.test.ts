@@ -28,6 +28,7 @@ import type {
 	CoreInstructionId,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import type { CorePgoInput } from "../src/compiler/core/core-pgo.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
 	buildCoreSpecializationRecipeTable,
@@ -1557,4 +1558,136 @@ describe("late Core specialization plan", () => {
 			expect(calls).toHaveLength(1);
 		},
 	);
+
+	function compileSignatureChoice(
+		loopArgument: string,
+		straightArgument: string,
+		reversed: boolean,
+		counts?: {
+			loop: number | undefined;
+			straight: number | undefined;
+			targetEntries?: number;
+		},
+		openTarget = false,
+	) {
+		const loop = `for (let i = 0; i < 10; i++) globalThis.loop = helper(${loopArgument});`;
+		const straight = `globalThis.straight = helper(${straightArgument});`;
+		const lines = [
+			openTarget
+				? "function helper(value) { let sum = value; for (let j = 0; j < 3; j++) sum = sum + value; return sum; }"
+				: "const helper = (value) => { let sum = value; for (let j = 0; j < 3; j++) sum = sum + value; return sum; };",
+			...(reversed ? [straight, loop] : [loop, straight]),
+		];
+		const loopLine = lines.indexOf(loop) + 1;
+		const straightLine = lines.indexOf(straight) + 1;
+		let selectedLines: Array<number | undefined> = [];
+		const pgo: CorePgoInput | undefined =
+			counts === undefined
+				? undefined
+				: {
+						digest: "a".repeat(64),
+						policy: "direct-entry-signature-test",
+						bind(compilation) {
+							return {
+								digest: "a".repeat(64),
+								functionEntries: () => counts.targetEntries,
+								callAttempts(caller, instruction) {
+									const function_ = compilation.program.function(caller);
+									const position = function_.instructionSourcePosition(instruction);
+									const line =
+										position === undefined
+											? undefined
+											: compilation.program.sourcePositions[position]?.line;
+									return line === loopLine
+										? counts.loop
+										: line === straightLine
+											? counts.straight
+											: undefined;
+								},
+							};
+						},
+					};
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(lines.join("\n"), "signature.js"),
+			{
+				...(pgo === undefined ? {} : { pgo }),
+				afterCoreOptimization(program, _context, _report, plan) {
+					selectedLines = plan.directEntries.flatMap((entry) =>
+						entry.callSites.map((call) => {
+							const position = program
+								.function(call.caller)
+								.instructionSourcePosition(call.instruction);
+							return position === undefined
+								? undefined
+								: program.sourcePositions[position]?.line;
+						}),
+					);
+				},
+			},
+		);
+		const entries = image.native.functions.flatMap((fn) => fn.directEntries);
+		const loweredCalls = image.native.functions.flatMap((fn) =>
+			fn.instructions.filter(
+				(instruction) =>
+					instruction?.kind === "call" && instruction.directEntryId !== undefined,
+			),
+		);
+		return { entries, loweredCalls, selectedLines, loopLine, straightLine };
+	}
+
+	it.each([false, true])(
+		"uses measured exact-call exposure for the native signature: reversed=%s",
+		(reversed) => {
+			const staticChoice = compileSignatureChoice('"cold"', "1.5", reversed);
+			expect(staticChoice.entries).toHaveLength(1);
+			expect(staticChoice.entries[0]!.parameterRepresentations).toEqual(["string"]);
+			expect(staticChoice.selectedLines).toEqual([staticChoice.loopLine]);
+			const profiled = compileSignatureChoice('"cold"', "1.5", reversed, {
+				loop: 1,
+				straight: 1000,
+			});
+			expect(profiled.entries).toHaveLength(1);
+			expect(profiled.entries[0]!.parameterRepresentations).toEqual(["number"]);
+			expect(profiled.selectedLines).toEqual([profiled.straightLine]);
+			expect(profiled.loweredCalls).toHaveLength(1);
+		},
+	);
+
+	it("keeps an unmeasured signature ahead of an observed-zero signature", () => {
+		const staticChoice = compileSignatureChoice("i + 0.5", '"unknown"', false);
+		expect(staticChoice.entries[0]!.parameterRepresentations).toEqual(["number"]);
+		const profiled = compileSignatureChoice("i + 0.5", '"unknown"', false, {
+			loop: 0,
+			straight: undefined,
+		});
+		expect(profiled.entries[0]!.parameterRepresentations).toEqual(["string"]);
+		expect(profiled.selectedLines).toEqual([profiled.straightLine]);
+		expect(profiled.loweredCalls).toHaveLength(1);
+	});
+
+	it("does not attribute open call attempts to a native target signature", () => {
+		const profiled = compileSignatureChoice(
+			'"cold"',
+			"1.5",
+			false,
+			{
+				loop: 1,
+				straight: 1000,
+			},
+			true,
+		);
+		expect(profiled.entries[0]!.parameterRepresentations).toEqual(["string"]);
+		expect(profiled.selectedLines).toEqual([profiled.loopLine]);
+	});
+
+	it("declines fully observed-zero scalar signatures despite target entry heat", () => {
+		const profiled = compileSignatureChoice('"cold"', "1.5", false, {
+			loop: 0,
+			straight: 0,
+			targetEntries: 100,
+		});
+		expect(profiled.entries).toHaveLength(0);
+		expect(profiled.selectedLines).toEqual([]);
+		expect(profiled.loweredCalls).toHaveLength(0);
+	});
 });
