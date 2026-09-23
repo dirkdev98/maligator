@@ -43,6 +43,11 @@ const WORKLOADS = [
 		source: "src/compiler/core/core-ir-region-selection.ts",
 		train: false,
 	},
+	{
+		name: "compiler-full",
+		source: "src/selfhost-frontend-entry.mts",
+		train: false,
+	},
 ] as const;
 
 interface Options {
@@ -77,6 +82,7 @@ This runner never builds a binary. Train merges only exact-wire-matching capture
 compare checks both training inputs and separate holdouts against the frozen Node oracle.
 Comparison reports call every input evaluation because the binaries do not identify their training corpus.
 Output directories must be new. Incomplete reports and captures are retained.
+compiler-full compiles the entire frozen frontend and runs only when explicitly selected.
 `;
 
 function parseOptions(args: Array<string>): Options | undefined {
@@ -91,7 +97,9 @@ function parseOptions(args: Array<string>): Options | undefined {
 		budgetSeconds: 300,
 		childTimeoutSeconds: 60,
 		pairs: 3,
-		workloads: WORKLOADS.map((item) => item.name),
+		workloads: WORKLOADS.filter(
+			(item) => item.name !== "compiler-full" && (command !== "train" || item.train),
+		).map((item) => item.name),
 		plan: false,
 	};
 	for (let index = 1; index < args.length; index++) {
@@ -111,9 +119,22 @@ function parseOptions(args: Array<string>): Options | undefined {
 		else if (option === "--child-timeout-seconds")
 			options.childTimeoutSeconds = Number(value);
 		else if (option === "--pairs") options.pairs = Number(value);
-		else if (option === "--workloads") options.workloads = value.split(",");
-		else throw new Error(HELP);
+		else if (option === "--workloads") {
+			options.workloads = value.split(",");
+		} else throw new Error(HELP);
 	}
+	if (
+		options.workloads.length === 0 ||
+		options.workloads.some((name) => !WORKLOADS.some((item) => item.name === name))
+	)
+		throw new Error("unknown self-hosted frontend workload");
+	if (
+		command === "train" &&
+		options.workloads.some(
+			(name) => !WORKLOADS.some((item) => item.name === name && item.train),
+		)
+	)
+		throw new Error("the selected self-hosted frontend workload is evaluation-only");
 	if (
 		!options.snapshot ||
 		!options.output ||
@@ -125,9 +146,6 @@ function parseOptions(args: Array<string>): Options | undefined {
 		options.pairs < 1 ||
 		options.workloads.length === 0 ||
 		new Set(options.workloads).size !== options.workloads.length ||
-		options.workloads.some((name) => !WORKLOADS.some((item) => item.name === name)) ||
-		(command === "train" &&
-			!WORKLOADS.some((item) => item.train && options.workloads.includes(item.name))) ||
 		(command === "train" && !options.trainingBinary) ||
 		(command === "compare" && (!options.staticBinary || !options.pgoBinary))
 	)

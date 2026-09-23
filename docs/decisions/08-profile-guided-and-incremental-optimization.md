@@ -2573,3 +2573,69 @@ current source, so it should not anchor another policy change. Full
 self-compile, broader holdouts, training economics and the normal gate remain
 open before changing the default. Build logs and the exact-output comparison
 report are under `.cache/pgo-acceptance-20260923/`.
+
+## D068 — 2026-09-23 — Make the full frontend input a PGO holdout and require an equal-size control
+
+**Status:** Full-input evaluation is available; acceptance target adopted, but PGO
+remains opt-in. **Refines:** D043, D067.
+
+The frontend runner now exposes `compiler-full` only by explicit selection. It
+compiles the entire frozen `src/selfhost-frontend-entry.mts`, cannot be used as
+a training slice, and leaves the four short compiler slices as the default.
+This is a full frontend compile to wire, not a C-emitting self-build. It keeps
+a representative input in the acceptance path without making every policy
+experiment a two-minute native run. A frozen Node oracle and both
+current-source native binaries emitted the same full-input wire SHA-256
+`19949d96df52aea4965f90d8fc859c7b051605bdbc55846da4be71894020c428`.
+In one measured static/PGO pair after one warmup pair, the static binary took
+120.656 seconds and PGO took 121.013 seconds (+0.30%). That pair establishes
+full-input parity and rules out a large obvious speed win; it cannot establish
+a stable regression or equivalence. A separate three-pair run with the same
+binaries and source remained byte-identical to Node. Its PGO time changes were
++0.61%, +0.04%, and −0.57%, summing to +0.03% across 365.6 seconds per
+variant. This is effectively neutral at the resolution of these runs, with no
+repeatable speed gain. Reports are under `.cache/pgo-full-holdout-20260923/`.
+
+PGO's 2.04% smaller binary is a real output difference, but PGO selected fewer
+cross-call and late transforms than static. A smaller binary alone does not
+show that profile counts chose better work; a static build with a smaller
+transform budget might achieve the same size and speed without training. The
+next decisive control is a **size-matched static build** of the same frozen
+frontend, changing only its optional transform budgets until native binary
+size is near the PGO binary. Compare static default, size-matched static and PGO on
+the four short slices, then use the full frontend input for a promising policy.
+The current reports show 40,920 generated-code cost units consumed by static
+cross-call plus late selection versus 27,543 by PGO. Start the diagnostic
+static control near two-thirds of the current program generated-code cap, then
+calibrate against actual native bytes; cost units are not binary bytes.
+Exact output parity is mandatory. PGO is useful if it improves runtime at the
+same code size or produces less code at the same runtime on both trained and
+held-out work; a tiny mixed timing change against the larger default binary is
+not enough. Charge the roughly 90 seconds of observed training execution,
+plus training build and merge, separately when considering repeated use. Do
+not make PGO the default from these measurements or tune another score before
+the equal-size control.
+
+## D069 — 2026-09-23 — First near-size static control is diagnostic only
+
+**Status:** Pilot completed with exact output parity; equal-size runtime
+acceptance remains open. **Refines:** D068.
+
+A first attempt changed the compiler source fed to the normal host compiler,
+which left host optimization budgets unchanged and produced a 52,983,808-byte
+binary. It was discarded. The valid control temporarily changed only the host
+optimizer's default program generated-code budget from 4,096 to 2,750 before
+building the unchanged frozen frontend. Its first build populated the newly
+keyed Core cache; the second build reused the same 34 module leaves as the
+static and PGO reference builds. The temporary host change was then reverted.
+The resulting binary was 52,269,696 bytes: 714,208 bytes below default static,
+but still 369,024 bytes (0.71%) above PGO. It is near-sized, not size-matched.
+
+One interleaved measured pair after warmups on each of a trained and a held-out
+slice matched the frozen Node wires exactly. Against this control, PGO took
+14.861 versus 14.886 seconds on summaries (0.16% faster) and 14.275 versus
+14.492 seconds on pass-manager (1.50% faster). One pair and the remaining size
+gap do not establish a PGO advantage. Calibrate the static budget closer to
+51,900,672 native bytes and repeat trained plus held-out pairs before judging
+profile value. The diagnostic build logs and comparison report are under
+`.cache/pgo-size-control-20260923/`.
