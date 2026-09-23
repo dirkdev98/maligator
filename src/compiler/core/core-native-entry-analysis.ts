@@ -74,9 +74,11 @@ export function analyzeCoreNativeEntry(
 			return undefined;
 		},
 	});
+	const instructions = cfg.reversePostorder.flatMap((block) => [
+		...fn.bodyInstructionIds(block),
+	]);
 	const inputs = Object.freeze(
-		[...fn.instructionIds()].flatMap((instruction) => {
-			if (fn.instructionKind(instruction) !== "operation") return [];
+		instructions.flatMap((instruction) => {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "unary" && opcode !== "binary") return [];
 			const start = fn.kernel.instructionOperandStart(instruction);
@@ -97,7 +99,7 @@ export function analyzeCoreNativeEntry(
 	const constants =
 		arguments_ === undefined
 			? []
-			: coreFixedArityComparisons(fn, kinds, arguments_.length);
+			: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
 	const constantBooleans =
 		constants.length === 0
 			? undefined
@@ -197,8 +199,9 @@ export function coreNativeEntryProofIsCurrent(
 	);
 }
 
-export function coreFixedArityComparisons(
+function coreFixedArityComparisons(
 	fn: CoreFunctionStore,
+	instructions: ReadonlyArray<CoreInstructionId>,
 	kinds: CoreValueKindAnalysis,
 	argumentCount: number,
 ): ReadonlyArray<{
@@ -228,12 +231,8 @@ export function coreFixedArityComparisons(
 		return numeric;
 	};
 	const constants: Array<{ instruction: CoreInstructionId; value: boolean }> = [];
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "binary"
-		)
-			continue;
+	for (const instruction of instructions) {
+		if (fn.instructionOpcodeName(instruction) !== "binary") continue;
 		const start = fn.kernel.instructionOperandStart(instruction);
 		const left = fn.kernel.operandAt(start);
 		const right = fn.kernel.operandAt(start + 1);

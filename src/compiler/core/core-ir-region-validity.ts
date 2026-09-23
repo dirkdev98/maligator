@@ -1955,6 +1955,19 @@ export function verifyCoreOptimizationPlan(
 			fail(`direct entry targets dead function ${entry.function}`);
 		}
 		const fn = program.function(entry.function);
+		const emittedInstructions = blockProofs.get(entry.function)!.instructionOrder;
+		for (const records of [
+			entry.operatorInputs,
+			entry.constantBooleans,
+			entry.fieldParameters?.loads,
+		]) {
+			for (const { instruction } of records ?? []) {
+				if (!emittedInstructions.has(instruction))
+					fail(
+						`direct entry ${entry.function}:${entry.id} metadata names an instruction omitted from target lowering`,
+					);
+			}
+		}
 		if (!coreNativeEntryProofIsCurrent(fn, entry))
 			fail(
 				`direct entry ${entry.function}:${entry.id} has no current representation proof`,

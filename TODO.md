@@ -456,11 +456,6 @@ only reproducible input.
 
 ## Active correctness clusters
 
-- [ ] Fix native direct-entry operator metadata rejected while serializing
-      `tests/local/direct-entry-abi.js` through `compileBuildFrontend`. It raises
-      `Invalid native operator input kinds` before backend execution; trace the
-      producer and preserve the artifact validator's exact-semantics requirement.
-
 - [ ] Apply computed object-literal accessor names at runtime. For
       `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's
       name is currently empty instead of `get [field]`. Reuse the evaluated

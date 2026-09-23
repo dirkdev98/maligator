@@ -304,6 +304,44 @@ describe("certified primitive numeric lowering", () => {
 		},
 	);
 
+	it("serializes native-entry proofs after inlining leaves unreachable branches", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(`
+				function leaf(value, flag) { return flag ? value * 2 : value - 3; }
+				function middle(value, flag) { return leaf(value + 1, !flag); }
+				function root(value) { return middle(value, true) + middle(value + 2, false); }
+				console.log(root(5));
+			`),
+			),
+		);
+		const index = image.runtime.functions.findIndex(
+			(fn) =>
+				String.fromCodePoint(
+					...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "root",
+		);
+		expect(index).toBeGreaterThanOrEqual(0);
+		const native = image.native.functions[index]!;
+		expect(native.directEntries.length).toBeGreaterThan(0);
+		for (const entry of native.directEntries) {
+			expect(entry.operatorInputs?.length).toBeGreaterThan(0);
+			for (const { instructionIp } of entry.operatorInputs!) {
+				expect(["UNARY", "BINARY"]).toContain(
+					image.runtime.functions[index]!.instructions[instructionIp]?.opcode,
+				);
+			}
+		}
+		const emitted = emitCompiledFunction(
+			image.runtime.functions[index]!,
+			native,
+			index,
+			"",
+			false,
+		)!;
+		expect(emitted.directEntries).toHaveLength(1);
+	});
+
 	it("transports call-specific numeric unions into native entries and rejects forged masks", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(

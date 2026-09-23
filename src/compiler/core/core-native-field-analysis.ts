@@ -32,6 +32,7 @@ export function coreReadOnlyNumericParameterFields(
 	const mathLoads: Array<CoreValueId> = [];
 	const callees = new Set<CoreValueId>();
 	for (const instruction of fn.instructionIds()) {
+		if (!cfg.reachable.has(fn.instructionBlock(instruction))) continue;
 		const operands = Array.from(
 			{ length: fn.kernel.instructionOperandCount(instruction) },
 			(_, i) => fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + i),
