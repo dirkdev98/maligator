@@ -15,6 +15,7 @@ import type {
 } from "./core-optimization-owners.ts";
 import type { CorePgoQueryCoverage } from "./core-pgo.ts";
 import type { CoreConstructionStatistics, CoreProgram } from "./core-store.ts";
+import type { CoreProfileBudgetStatistics } from "./core-transform-candidates.ts";
 
 export type CoreInstrumentationMode = "off" | "phases" | "counters" | "full";
 
@@ -190,6 +191,7 @@ export interface CorePlanWorkReport {
 	readonly declinedByReason: Readonly<Record<string, number>>;
 	readonly generatedCodeConsumed: number;
 	readonly compilerWorkConsumed: number;
+	readonly profileBudget?: CoreProfileBudgetStatistics;
 	readonly verificationMs: number;
 }
 
@@ -201,6 +203,7 @@ export interface CoreTransformWorkReport {
 	readonly declinedByReason: Readonly<Record<string, number>>;
 	readonly generatedCodeConsumed: number;
 	readonly compilerWorkConsumed: number;
+	readonly profileBudget?: CoreProfileBudgetStatistics;
 	readonly waves: number;
 	readonly callerEditSessions: number;
 	readonly callerLocalOptimizations: number;
@@ -1116,6 +1119,7 @@ export class CoreOptimizationReportBuilder {
 				: Object.freeze({}),
 			generatedCodeConsumed: report.generatedCodeConsumed,
 			compilerWorkConsumed: report.compilerWorkConsumed,
+			profileBudget: report.profileBudget,
 			verificationMs: report.verificationMs,
 		});
 	}
@@ -1354,6 +1358,11 @@ export function formatCoreOptimizationReport(
 							`${analysis.analysis} ${analysis.queries} queries/${analysis.hits} hits/${analysis.recomputations} recomputes/${analysis.invalidations} invalidations/${analysis.elapsedMs.toFixed(1)}ms`,
 					)
 					.join("; ");
+	const crossCallProfile = report.transforms.profileBudget;
+	const planProfile = report.plan.profileBudget;
+	const pgoBudget = crossCallProfile ?? planProfile;
+	const formatProfileUse = (usage: CoreProfileBudgetStatistics | undefined): string =>
+		`unknown ${usage?.unknown.compilerWorkConsumed ?? 0} work/${usage?.unknown.generatedCodeConsumed ?? 0} code, measured ${usage?.measured.compilerWorkConsumed ?? 0} work/${usage?.measured.generatedCodeConsumed ?? 0} code`;
 	return [
 		{
 			label: "Core construction",
@@ -1427,5 +1436,13 @@ export function formatCoreOptimizationReport(
 			label: "Core optimizer budget",
 			value: `${report.budget.workItems} work items, ${report.budget.edits} edits, exhausted ${report.budget.exhaustedPasses.join(", ") || "none"}`,
 		},
+		...(pgoBudget === undefined
+			? []
+			: [
+					{
+						label: "Core optimizer PGO budget",
+						value: `cross-call ${formatProfileUse(crossCallProfile)}; plan ${formatProfileUse(planProfile)}; remaining unknown ${pgoBudget.unknownWorkLimit - (crossCallProfile?.unknown.compilerWorkConsumed ?? 0) - (planProfile?.unknown.compilerWorkConsumed ?? 0)} work/${pgoBudget.unknownCodeLimit - (crossCallProfile?.unknown.generatedCodeConsumed ?? 0) - (planProfile?.unknown.generatedCodeConsumed ?? 0)} code, measured ${pgoBudget.measuredWorkLimit - (crossCallProfile?.measured.compilerWorkConsumed ?? 0) - (planProfile?.measured.compilerWorkConsumed ?? 0)} work/${pgoBudget.measuredCodeLimit - (crossCallProfile?.measured.generatedCodeConsumed ?? 0) - (planProfile?.measured.generatedCodeConsumed ?? 0)} code`,
+					},
+				]),
 	];
 }

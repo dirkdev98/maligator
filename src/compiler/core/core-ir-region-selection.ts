@@ -131,6 +131,7 @@ type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
 interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
 	readonly kind: "local" | "direct-entry" | "guarded-call";
 	readonly priorityScore: number;
+	readonly observedZero?: () => boolean;
 	readonly resolve: () => ReadonlyArray<PendingCandidate>;
 }
 
@@ -1209,16 +1210,16 @@ function guardedCallOpportunities(
 				continue;
 			}
 			const attempts = pgo?.callAttempts(caller, site.instruction);
-			const exposure = site.open
-				? attempts === 0
-					? 0
-					: pgo?.guardedCallHits?.(caller, site.instruction, targetFunctions) === 0
-						? 0
-						: undefined
-				: attempts;
+			const exposure = site.open ? (attempts === 0 ? 0 : undefined) : attempts;
 			candidates.push({
 				kind: "guarded-call",
 				exposure,
+				...(site.open && attempts !== 0 && pgo?.guardedCallHits !== undefined
+					? {
+							observedZero: () =>
+								pgo.guardedCallHits?.(caller, site.instruction, targetFunctions) === 0,
+						}
+					: {}),
 				caller,
 				generatedCodeCost: targetFunctions.length,
 				compilerWorkCost: 1,
@@ -2061,6 +2062,11 @@ export function buildCoreOptimizationPlan(
 		if (reason !== undefined) {
 			discovery.skipped++;
 			increment(discovery.skippedByReason, reason);
+			continue;
+		}
+		if (opportunity.observedZero?.() === true) {
+			discovery.skipped++;
+			increment(discovery.skippedByReason, "observed-zero");
 			continue;
 		}
 		service.recordDiscovery(cost);

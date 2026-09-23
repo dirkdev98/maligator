@@ -286,9 +286,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       positive open target selected 1,763 extra recipes, grew the binary 1.24%,
       and slowed both trained inputs in two pairs; two holdouts were roughly
       neutral. The retained zero-only policy produces the same frozen compiler
-      wire as the target-unknown control. Keep PGO opt-in; test ranking positive
-      targets within the existing optional allowance or a calibrated marginal
-      benefit/cost model before spending a larger budget.
+      wire as the target-unknown control. D055 finds that cross-call work exhausts
+      the unknown generated-code allowance before late planning, and moves
+      guarded-target queries behind admission, eliminating 7,279 unused queries
+      on that frozen input. Keep PGO opt-in; use a calibrated marginal benefit/cost
+      model and trained plus held-out runtime evidence before spending more code.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

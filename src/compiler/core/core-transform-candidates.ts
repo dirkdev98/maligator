@@ -115,6 +115,22 @@ export interface CoreTransformBudgetStatistics {
 	readonly declinedByReason: Readonly<Record<CoreTransformDeclineReason, number>>;
 	readonly generatedCodeConsumed: number;
 	readonly compilerWorkConsumed: number;
+	readonly profileBudget?: CoreProfileBudgetStatistics;
+}
+
+export interface CoreProfileBudgetStatistics {
+	readonly unknown: Readonly<{
+		compilerWorkConsumed: number;
+		generatedCodeConsumed: number;
+	}>;
+	readonly measured: Readonly<{
+		compilerWorkConsumed: number;
+		generatedCodeConsumed: number;
+	}>;
+	readonly unknownWorkLimit: number;
+	readonly unknownCodeLimit: number;
+	readonly measuredWorkLimit: number;
+	readonly measuredCodeLimit: number;
 }
 
 interface CallerConsumption {
@@ -468,6 +484,8 @@ export class CoreTransformCandidateService {
 	}
 
 	statistics(): CoreTransformBudgetStatistics {
+		const unknownWorkLimit = Math.floor(this.#limits.programCompilerWork * 0.2);
+		const unknownCodeLimit = Math.floor(this.#limits.programGeneratedCode * 0.2);
 		return Object.freeze({
 			considered: this.#considered,
 			applied: this.#applied,
@@ -476,6 +494,24 @@ export class CoreTransformCandidateService {
 			declinedByReason: Object.freeze({ ...this.#declinedByReason }),
 			generatedCodeConsumed: this.#generatedCode,
 			compilerWorkConsumed: this.#compilerWork,
+			...(this.#profileScheduling
+				? {
+						profileBudget: Object.freeze({
+							unknown: Object.freeze({
+								compilerWorkConsumed: this.#unknownUse.work,
+								generatedCodeConsumed: this.#unknownUse.code,
+							}),
+							measured: Object.freeze({
+								compilerWorkConsumed: this.#measuredUse.work,
+								generatedCodeConsumed: this.#measuredUse.code,
+							}),
+							unknownWorkLimit,
+							unknownCodeLimit,
+							measuredWorkLimit: this.#limits.programCompilerWork - unknownWorkLimit,
+							measuredCodeLimit: this.#limits.programGeneratedCode - unknownCodeLimit,
+						}),
+					}
+				: {}),
 		});
 	}
 
@@ -507,6 +543,32 @@ export class CoreTransformCandidateService {
 			generatedCodeConsumed:
 				current.generatedCodeConsumed - baseline.generatedCodeConsumed,
 			compilerWorkConsumed: current.compilerWorkConsumed - baseline.compilerWorkConsumed,
+			...(current.profileBudget === undefined
+				? {}
+				: {
+						profileBudget: Object.freeze({
+							unknown: Object.freeze({
+								compilerWorkConsumed:
+									current.profileBudget.unknown.compilerWorkConsumed -
+									(baseline.profileBudget?.unknown.compilerWorkConsumed ?? 0),
+								generatedCodeConsumed:
+									current.profileBudget.unknown.generatedCodeConsumed -
+									(baseline.profileBudget?.unknown.generatedCodeConsumed ?? 0),
+							}),
+							measured: Object.freeze({
+								compilerWorkConsumed:
+									current.profileBudget.measured.compilerWorkConsumed -
+									(baseline.profileBudget?.measured.compilerWorkConsumed ?? 0),
+								generatedCodeConsumed:
+									current.profileBudget.measured.generatedCodeConsumed -
+									(baseline.profileBudget?.measured.generatedCodeConsumed ?? 0),
+							}),
+							unknownWorkLimit: current.profileBudget.unknownWorkLimit,
+							unknownCodeLimit: current.profileBudget.unknownCodeLimit,
+							measuredWorkLimit: current.profileBudget.measuredWorkLimit,
+							measuredCodeLimit: current.profileBudget.measuredCodeLimit,
+						}),
+					}),
 		});
 	}
 }

@@ -2108,3 +2108,43 @@ training and comparison, binary/profile provenance and diagnostic counters are
 under `.cache/pgo-cache-followup-20260923/target-v2-training/`,
 `target-v2-compare/`, `target-v2-variants.json` and the `target-v2-*-diagnostic.log`
 files. The local native and focused checks do not replace the normal gate.
+
+## D055 — 2026-09-23 — Demand guarded-target queries after budget admission
+
+**Status:** Phase-budget diagnostics and lazy target-zero query implemented;
+the frozen frontend preserved its output. PGO remains opt-in. **Refines:** D054.
+
+An isolated ranking pilot broke ties among late candidates by exact target-hit
+count after static priority and cost. On the frozen self-hosted frontend it
+selected the same 2,367 recipes and produced the same wire as the zero-only
+policy, so the extra ranking rule was removed. The absence of output change
+did not by itself prove a budget limit.
+
+The shared candidate service now reports measured and unknown work/code use
+separately for cross-call transforms and late planning. Limits remain those of
+the whole program, and remaining allowance includes both phases. The frozen
+frontend showed cross-call transforms consume all 8,172 unknown generated-code
+units, while late planning spends no unknown units. Late planning consumes the
+rest of the measured compiler-work allowance. Its open guarded candidates
+therefore cannot use the optional unknown-code pool on this input, regardless
+of their target-hit ranking.
+
+Open guarded candidates still skip immediately when source-call attempts are
+exactly zero. For other open candidates, an exact target-zero query now runs
+only after discovery admission succeeds and before discovery work is charged.
+A zero result still skips the candidate without charging or modifying Core.
+On the same frozen source and profile, guarded-target queries fell from 7,279
+(3,456 positive, 755 zero, 3,068 unknown) to zero. Both builds selected 2,367
+recipes, consumed the same budgets, and serialized the identical 7,245,982-byte
+wire with SHA-256 `e827b6a433b51f5acf8be67d8432b74522429f38c6d62b7e5eccd98ea2d63a41`.
+Their 20.7/20.6-second frontend times are a single diagnostic pair, not a
+measured speedup.
+
+Focused unit coverage checks that exhausted unknown allowance avoids the
+target query while a measured closed guard remains selectable, that an admitted
+exact zero spends no discovery work, and that phase statistics preserve shared
+limits. Type checking, lint and formatting passed. The before/after evidence
+is in `.cache/pgo-cache-followup-20260923/target-v2-budget-diagnostic.log`
+and `target-v2-lazy-guard-diagnostic.log`. Further target guidance needs a
+calibrated benefit/cost decision with trained and held-out runtime evidence;
+target capture alone has not earned additional generated code.

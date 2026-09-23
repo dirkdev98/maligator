@@ -241,6 +241,67 @@ describe("bounded Core cross-call transforms", () => {
 		expect(service.statistics().generatedCodeConsumed).toBe(0);
 		expect(service.statistics().compilerWorkConsumed).toBe(8);
 	});
+	it("reports PGO budget use separately by phase while preserving shared limits", () => {
+		const service = new CoreTransformCandidateService({
+			perSiteExpansions: 2,
+			perCallerExpansions: 8,
+			perCallerGeneratedCode: 100,
+			perCallerCompilerWork: 100,
+			programGeneratedCode: 100,
+			programCompilerWork: 100,
+		});
+		const firstPhase = service.statistics();
+		service.enablePgoScheduling();
+		service.recordDiscovery({
+			caller: 0 as never,
+			generatedCodeCost: 4,
+			compilerWorkCost: 3,
+		});
+		const unknown = {
+			kind: "inline" as const,
+			caller: 2 as never,
+			site: 0 as never,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore: 0,
+			targets: [],
+			generatedCodeCost: 20,
+			compilerWorkCost: 1,
+			expansive: true,
+		};
+		expect(service.admit(unknown)).toBeUndefined();
+		service.recordApplied(unknown);
+		service.beginPhase();
+		const secondPhase = service.statistics();
+		const measured = {
+			kind: "inline",
+			caller: 1 as never,
+			site: 0 as never,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore: 0,
+			targets: [],
+			generatedCodeCost: 5,
+			compilerWorkCost: 2,
+			expansive: true,
+			exposure: 1,
+		} as const;
+		expect(service.admit({ ...unknown, caller: 3 as never, generatedCodeCost: 1 })).toBe(
+			"generated-code-cost",
+		);
+		expect(service.admit(measured)).toBeUndefined();
+		service.recordApplied(measured);
+		expect(service.statisticsSince(firstPhase).profileBudget).toMatchObject({
+			unknown: { compilerWorkConsumed: 4, generatedCodeConsumed: 20 },
+			measured: { compilerWorkConsumed: 2, generatedCodeConsumed: 5 },
+			unknownWorkLimit: 20,
+			measuredWorkLimit: 80,
+		});
+		expect(service.statisticsSince(secondPhase).profileBudget).toMatchObject({
+			unknown: { compilerWorkConsumed: 0, generatedCodeConsumed: 0 },
+			measured: { compilerWorkConsumed: 2, generatedCodeConsumed: 5 },
+		});
+	});
 	it("owns exactly two deliberate waves without driving pass stages", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),
@@ -508,6 +569,7 @@ describe("bounded Core cross-call transforms", () => {
 		});
 		expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
 		expect(summaries.targets.site(closed.function, closed.call)?.open).toBe(false);
+		let guardedQueries = 0;
 		const plan = buildCoreOptimizationPlan(
 			program,
 			analyses,
@@ -519,6 +581,10 @@ describe("bounded Core cross-call transforms", () => {
 					digest: "guarded-region-attempts",
 					functionEntries: () => 0,
 					callAttempts: (caller) => (caller === open.function ? 1_000 : 1),
+					guardedCallHits: () => {
+						guardedQueries++;
+						return 100;
+					},
 				},
 				budgets: {
 					perSiteExpansions: 1,
@@ -530,6 +596,7 @@ describe("bounded Core cross-call transforms", () => {
 				},
 			},
 		);
+		expect(guardedQueries).toBe(0);
 		expect(
 			projectCoreSpecializationRecipes(plan.recipes).filter(
 				(recipe) => recipe.kind === "guarded-direct-call",
@@ -608,6 +675,7 @@ describe("bounded Core cross-call transforms", () => {
 				scope: "program",
 			});
 			expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
+			let guardedQueries = 0;
 			const plan = buildCoreOptimizationPlan(
 				program,
 				analyses,
@@ -619,7 +687,10 @@ describe("bounded Core cross-call transforms", () => {
 						digest: "open-region-attempts",
 						functionEntries: () => 0,
 						callAttempts: () => attempts,
-						guardedCallHits: () => targetHits,
+						guardedCallHits: () => {
+							guardedQueries++;
+							return targetHits;
+						},
 					},
 					budgets: {
 						perSiteExpansions: 1,
@@ -631,6 +702,10 @@ describe("bounded Core cross-call transforms", () => {
 					},
 				},
 			);
+			expect(guardedQueries).toBe(attempts === 0 ? 0 : 1);
+			if (targetHits === 0) {
+				expect(plan.statistics.discovery.attempted).toBe(0);
+			}
 			const regions = projectCoreSpecializationRecipes(plan.recipes).filter(
 				(recipe) => recipe.kind === "guarded-direct-call",
 			);
