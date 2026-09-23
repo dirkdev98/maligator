@@ -12,13 +12,17 @@ import {
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import type { CorePgoHints } from "../src/compiler/core/core-pgo.ts";
-import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import {
+	CORE_PROGRAM_SUMMARIES_ANALYSIS,
+	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
+} from "../src/compiler/core/core-program-flow-analysis.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
@@ -487,6 +491,110 @@ describe("bounded Core cross-call transforms", () => {
 		expect(transformed.statistics.appliedByKind.inline).toBe(1);
 		verifyCoreProgram(program, { stage: "pre-target" });
 	});
+
+	it("keeps an open guarded region behind a measured closed call", () => {
+		const program = analysisProgram();
+		const open = appendBudgetCaller(program, 2, false, true);
+		const closed = appendBudgetCaller(program, 2, false);
+		appendLeaf(program);
+		const context = programAnalysisContext();
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
+		expect(summaries.targets.site(closed.function, closed.call)?.open).toBe(false);
+		const plan = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			summaries,
+			[...program.functionIds()],
+			{
+				context,
+				pgo: {
+					digest: "guarded-region-attempts",
+					functionEntries: () => 0,
+					callAttempts: (caller) => (caller === open.function ? 1_000 : 1),
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 4,
+					perCallerCompilerWork: 100,
+					programGeneratedCode: 1,
+					programCompilerWork: 100,
+				},
+			},
+		);
+		expect(
+			projectCoreSpecializationRecipes(plan.recipes).filter(
+				(recipe) => recipe.kind === "guarded-direct-call",
+			),
+		).toEqual([
+			expect.objectContaining({ function: closed.function, anchors: [closed.call] }),
+		]);
+		verifyCoreOptimizationPlan(program.seal(), plan, context);
+	});
+
+	it.each([
+		{ attempts: undefined, selected: 1 },
+		{ attempts: 1_000, selected: 1 },
+		{ attempts: 0, selected: 0 },
+	])(
+		"keeps open guarded regions optional under $attempts source attempts",
+		({ attempts, selected }) => {
+			const program = analysisProgram();
+			const open = appendBudgetCaller(program, 1, false, true);
+			appendLeaf(program);
+			const context = programAnalysisContext();
+			const analyses = new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
+			const plan = buildCoreOptimizationPlan(
+				program,
+				analyses,
+				summaries,
+				[...program.functionIds()],
+				{
+					context,
+					pgo: {
+						digest: "open-region-attempts",
+						functionEntries: () => 0,
+						callAttempts: () => attempts,
+					},
+					budgets: {
+						perSiteExpansions: 1,
+						perCallerExpansions: 4,
+						perCallerGeneratedCode: 4,
+						perCallerCompilerWork: 100,
+						programGeneratedCode: 20,
+						programCompilerWork: 100,
+					},
+				},
+			);
+			const regions = projectCoreSpecializationRecipes(plan.recipes).filter(
+				(recipe) => recipe.kind === "guarded-direct-call",
+			);
+			expect(regions).toHaveLength(selected);
+			if (selected > 0)
+				expect(regions[0]).toMatchObject({
+					function: open.function,
+					anchors: [open.call],
+					fallback: "canonical-core",
+				});
+			verifyCoreOptimizationPlan(program.seal(), plan, context);
+		},
+	);
 
 	it("preserves representation joins when inlining represented returns", () => {
 		const program = analysisProgram();
