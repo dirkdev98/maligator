@@ -259,6 +259,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       D034 permits repeated named captures from one validated training binary;
       train and measure a bounded self-hosted frontend workload before full
       self-compile, with separate source-cone holdouts and exact wire parity.
+      D036 provides frozen training and holdout inputs and a prepared-binary
+      runner; build matching training/static/PGO binaries, inspect current-build
+      profile query coverage, then run the native comparison.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -295,6 +298,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       complete repeated representative application-edit performance acceptance. Current
       `build --production --core-cache` reuses supported leaves, while graph parsing,
       semantic analysis and selected-module decoding remain current-build work.
+      D035 admits independent leaves beside host imports and cyclic consumers;
+      D037's frontend probe saw 28 hits and 475 imported functions, but native
+      parity and matched application-edit timing remain to be established.
 
 - [ ] Implement reusable optimized Core modules, then stable native products and
       bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).

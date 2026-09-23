@@ -27,6 +27,7 @@
 		"bench:compiler-scale": "node ./scripts/bench-compiler-scale.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
 		"bench:performance": "node ./scripts/performance.ts",
+		"bench:pgo-selfhost-frontend": "node ./scripts/pgo-selfhost-frontend.ts",
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
 		"bench:quick": "node ./scripts/bench-quick.ts",
 		"bench:self-compile-experiment": "node ./scripts/self-compile-experiment.ts",

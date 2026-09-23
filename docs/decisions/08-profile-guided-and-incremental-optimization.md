@@ -1353,3 +1353,57 @@ Focused builds show unchanged cold/warm wire bytes and cache hits across a
 host importer and a cyclic consumer, including a changed application entry.
 These checks establish cache admission and deterministic frontend output, not
 native execution parity or a speedup for the self-hosted compiler.
+
+## D036 — 2026-09-23 — Use the self-hosted frontend as the short PGO acceptance tier
+
+**Status:** Oracle corpus and prepared-binary runner implemented; native training,
+static/PGO comparison and full self-compile acceptance remain open. **Refines:**
+D014, D034.
+
+Meriyah is a useful cache pilot but does not represent the compiler's own
+execution. Full C-emitting self-compile is too costly for every PGO iteration,
+and its quick mode still builds that whole compiler. The intermediate workload
+uses the existing `selfhost-frontend-entry.mts`: it runs the real parser,
+semantic analysis, Core optimizer and wire serializer, but stops before C
+emission. A source-only self-compile capture freezes the compiler source path.
+
+Train on `core-ir-summaries.ts` and `core-ir-shape-provenance.ts`; hold out
+`core-pass-manager.ts` and `core-ir-region-selection.ts`. The new
+`bench:pgo-selfhost-frontend` runner has read-only plans, a Node oracle mode,
+prepared-binary training with explicit merge, and interleaved static/PGO
+comparison. It validates the source capture and hashes the resolved compiler
+module closure, including loaded dependency sources behind the live
+`node_modules` symlink. Each child has a 60-second limit within a total budget.
+Failed training or byte-different wire output leaves its capture incomplete.
+Runtime comparisons exclude builds, oracle generation and hashing, and require
+exact wire bytes on both training and holdout inputs.
+
+One frozen-source Node oracle run completed all four inputs in 3.1, 7.2, 3.3
+and 9.5 seconds respectively, producing 0.69, 2.86, 2.10 and 3.29 MB wire
+files. These are single-run feasibility observations on this laptop, not native
+performance acceptance. Binaries must be built from the same frozen compiler
+path and source form; wire parity alone cannot prove matching PGO source-site
+identities, so build provenance and PGO query coverage remain required for
+acceptance. Persistent Core reuse applies to building the compiler binary,
+not to the compiler execution inside this frontend workload.
+
+## D037 — 2026-09-23 — Preserve executable global-object loads under Core reuse
+
+**Status:** Implemented with focused static-value tests and one cached
+self-hosted frontend probe; native execution remains open. **Refines:** D035.
+
+The first cached self-hosted frontend probe failed Core verification on a
+`loadPrimordial` for the `globalThis` catalog node. That node is an identity
+reference, not an executable primordial load. The whole-program control build
+without Core reuse succeeded, making this a cache-exposed optimizer defect.
+Known-operation folding now declines a canonical global load unless the catalog
+node supports executable loading. Static descriptor selection observes the
+same loadability condition. The verifier identifies the node and source when
+this invariant is violated.
+
+The corrected cached frontend probe completed with 28 module hits, 475
+imported functions, and zero standalone function construction or scalar-recipe
+runs on those hits. Ten candidates remained unsupported. A single uncached
+control and cached probe are neither matched timing evidence nor proof of
+native output parity; their wire bytes differed, so acceptance requires
+executing both prepared compilers against the frozen Node oracle.
