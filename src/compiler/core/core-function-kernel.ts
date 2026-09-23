@@ -61,12 +61,20 @@ export interface CoreFunctionKernelColumns {
 }
 
 export class CoreFunctionKernel {
-	readonly #columns: CoreFunctionKernelColumns;
+	#columns: CoreFunctionKernelColumns;
 	readonly #onUseVisit: () => void;
 
 	constructor(columns: CoreFunctionKernelColumns, onUseVisit: () => void = () => {}) {
 		this.#columns = columns;
 		this.#onUseVisit = onUseVisit;
+	}
+
+	_retireGeneration(generation: number): void {
+		this.#columns = new Proxy({} as CoreFunctionKernelColumns, {
+			get() {
+				throw new Error(`Core kernel belongs to retired generation ${generation}`);
+			},
+		});
 	}
 
 	blockLive(block: CoreBlockId): number {

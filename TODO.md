@@ -272,9 +272,6 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [x] Restrict global type transfers to the dependencies of return values, consumed
       call inputs and type observations. Keep local integer proofs complete and
       distinguish unrequested values from lattice bottom in published snapshots.
-- [ ] Transfer already-dense function storage across construction generations without
-      copying its columns. Preserve retired-handle and iterator failures, kernel
-      ownership, version accounting and compaction for functions with holes.
 - [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
       bookkeeping. Sharing across verification or frame-exit consumers requires an
       explicit body-ownership contract; mutable function identity is insufficient.

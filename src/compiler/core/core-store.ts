@@ -674,6 +674,7 @@ export class CoreFunctionStore {
 		id: CoreFunctionId,
 		options: CoreFunctionOptions,
 		generation = program.generation,
+		storage?: CoreFunctionStore,
 	) {
 		this.#requireMutation(mutation);
 		this.#program = program;
@@ -691,6 +692,84 @@ export class CoreFunctionStore {
 			...options.metadata,
 			mappedArgumentSlots: [...(options.metadata?.mappedArgumentSlots ?? [])],
 		});
+		if (storage !== undefined) {
+			this.#parameters = storage.#parameters;
+			this.#entry = storage.#entry;
+			this.#bodyEntry = storage.#bodyEntry;
+			this.#liveBlocks = storage.#liveBlocks;
+			this.#liveInstructions = storage.#liveInstructions;
+			this.#liveInstructionResults = storage.#liveInstructionResults;
+			this.#liveOperands = storage.#liveOperands;
+			this.#liveBlockParameters = storage.#liveBlockParameters;
+			this.#liveTerminatorEdges = storage.#liveTerminatorEdges;
+			this.#liveTerminatorArguments = storage.#liveTerminatorArguments;
+			this.#liveHandlerArguments = storage.#liveHandlerArguments;
+			this.#liveFacts = storage.#liveFacts;
+			this.#liveEffectRefinements = storage.#liveEffectRefinements;
+			this.#blockLive = storage.#blockLive;
+			this.#blockFirstInstruction = storage.#blockFirstInstruction;
+			this.#blockLastInstruction = storage.#blockLastInstruction;
+			this.#blockParameterStart = storage.#blockParameterStart;
+			this.#blockParameterCount = storage.#blockParameterCount;
+			this.#blockHandlerBlock = storage.#blockHandlerBlock;
+			this.#blockHandlerArgumentStart = storage.#blockHandlerArgumentStart;
+			this.#blockHandlerArgumentCount = storage.#blockHandlerArgumentCount;
+			this.#handlerBlocks = storage.#handlerBlocks;
+			this.#handlerBlockIndexes = storage.#handlerBlockIndexes;
+			this.#blockParameterValues = storage.#blockParameterValues;
+			this.#blockParameterRoles = storage.#blockParameterRoles;
+			this.#blockParameterFreeBySize = storage.#blockParameterFreeBySize;
+			this.#handlerArguments = storage.#handlerArguments;
+			this.#handlerArgumentBlock = storage.#handlerArgumentBlock;
+			this.#handlerArgumentPreviousUse = storage.#handlerArgumentPreviousUse;
+			this.#handlerArgumentNextUse = storage.#handlerArgumentNextUse;
+			this.#handlerArgumentFreeBySize = storage.#handlerArgumentFreeBySize;
+			this.#instructionLive = storage.#instructionLive;
+			this.#instructionOpcode = storage.#instructionOpcode;
+			this.#instructionBlock = storage.#instructionBlock;
+			this.#instructionPrevious = storage.#instructionPrevious;
+			this.#instructionNext = storage.#instructionNext;
+			this.#instructionOperandStart = storage.#instructionOperandStart;
+			this.#instructionOperandCount = storage.#instructionOperandCount;
+			this.#instructionResultStart = storage.#instructionResultStart;
+			this.#instructionResultCount = storage.#instructionResultCount;
+			this.#instructionSourcePosition = storage.#instructionSourcePosition;
+			this.#instructionEffectRefinementRef = storage.#instructionEffectRefinementRef;
+			this.#instructionTerminatorEdgeStart = storage.#instructionTerminatorEdgeStart;
+			this.#instructionTerminatorEdgeCount = storage.#instructionTerminatorEdgeCount;
+			this.#instructionTerminatorFact = storage.#instructionTerminatorFact;
+			this.#instructionPayload = storage.#instructionPayload;
+			this.#operands = storage.#operands;
+			this.#operandUses = storage.#operandUses;
+			this.#operandFreeBySize = storage.#operandFreeBySize;
+			this.#results = storage.#results;
+			this.#terminatorEdgeBlock = storage.#terminatorEdgeBlock;
+			this.#terminatorEdgeArgumentStart = storage.#terminatorEdgeArgumentStart;
+			this.#terminatorEdgeArgumentCount = storage.#terminatorEdgeArgumentCount;
+			this.#terminatorEdgeCaseValue = storage.#terminatorEdgeCaseValue;
+			this.#terminatorEdgeFreeBySize = storage.#terminatorEdgeFreeBySize;
+			this.#valueLive = storage.#valueLive;
+			this.#valueRepresentation = storage.#valueRepresentation;
+			this.#valueDefinitionKind = storage.#valueDefinitionKind;
+			this.#valueDefinitionOwner = storage.#valueDefinitionOwner;
+			this.#valueDefinitionIndex = storage.#valueDefinitionIndex;
+			this.#valueFirstUse = storage.#valueFirstUse;
+			this.#valueUseCount = storage.#valueUseCount;
+			this.#valueFirstHandlerUse = storage.#valueFirstHandlerUse;
+			this.#valueHandlerUseCount = storage.#valueHandlerUseCount;
+			this.#useLive = storage.#useLive;
+			this.#useValue = storage.#useValue;
+			this.#useInstruction = storage.#useInstruction;
+			this.#useOperand = storage.#useOperand;
+			this.#usePrevious = storage.#usePrevious;
+			this.#useNext = storage.#useNext;
+			this.#freeUses = storage.#freeUses;
+			this.#facts = storage.#facts;
+			this.#effectRefinements = storage.#effectRefinements;
+			for (const domain of FUNCTION_DOMAINS)
+				this.#versions[domain] = storage.#versions[domain] + 1;
+			this.#featureVersion = storage.#featureVersion + 1;
+		}
 		this.kernel = new CoreFunctionKernel(
 			{
 				blockLive: this.#blockLive,
@@ -931,6 +1010,7 @@ export class CoreFunctionStore {
 
 	*#liveBlockIds(): Iterable<CoreBlockId> {
 		for (let id = 0; id < this.#blockLive.length; id++) {
+			if (this.#retired) this.#throwRetiredGeneration();
 			if (this.#blockLive[id] === 1) yield coreBlockId(id);
 		}
 	}
@@ -955,6 +1035,7 @@ export class CoreFunctionStore {
 	*#liveInstructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
 		if (block === undefined) {
 			for (let id = 0; id < this.#instructionLive.length; id++) {
+				if (this.#retired) this.#throwRetiredGeneration();
 				if (this.#instructionLive[id] === 1) yield coreInstructionId(id);
 			}
 			return;
@@ -965,6 +1046,7 @@ export class CoreFunctionStore {
 			instruction >= 0;
 			instruction = this.#instructionNext[instruction] ?? -1
 		) {
+			if (this.#retired) this.#throwRetiredGeneration();
 			yield coreInstructionId(instruction);
 		}
 	}
@@ -974,6 +1056,7 @@ export class CoreFunctionStore {
 			const start = this.#blockParameterStart[block]!;
 			const count = this.#blockParameterCount[block]!;
 			for (let index = 0; index < count; index++) {
+				if (this.#retired) this.#throwRetiredGeneration();
 				yield this.#blockParameterValues[start + index]!;
 			}
 		}
@@ -981,6 +1064,7 @@ export class CoreFunctionStore {
 			const start = this.#instructionResultStart[instruction]!;
 			const count = this.#instructionResultCount[instruction]!;
 			for (let index = 0; index < count; index++) {
+				if (this.#retired) this.#throwRetiredGeneration();
 				yield this.#results[start + index]!;
 			}
 		}
@@ -1008,6 +1092,7 @@ export class CoreFunctionStore {
 	*factIds(): Iterable<CoreFactId> {
 		if (this.#retired) this.#throwRetiredGeneration();
 		for (let id = 0; id < this.#facts.length; id++) {
+			if (this.#retired) this.#throwRetiredGeneration();
 			if (this.#facts[id] !== undefined) yield coreFactId(id);
 		}
 	}
@@ -1184,6 +1269,50 @@ export class CoreFunctionStore {
 			facts: this.#liveFacts,
 			effectRefinements: this.#liveEffectRefinements,
 		};
+	}
+
+	_denseConstructionGenerationTransfer(
+		mutation: CoreStoreMutation,
+		generation: number,
+	): CoreFunctionStore | undefined {
+		this.#requireMutation(mutation);
+		if (this.#activeEditor || this.#sealed || this.#retired || !this.finished)
+			throw new Error(
+				`Cannot transfer unfinished or unavailable Core function ${this.id}`,
+			);
+		if (
+			this.#blockLive.length !== this.#liveBlocks ||
+			this.#instructionLive.length !== this.#liveInstructions ||
+			this.#valueLive.length !==
+				this.#liveBlockParameters + this.#liveInstructionResults ||
+			this.#results.length !== this.#liveInstructionResults ||
+			this.#useLive.length !== this.#liveOperands ||
+			this.#operands.length !== this.#liveOperands ||
+			this.#blockParameterValues.length !== this.#liveBlockParameters ||
+			this.#terminatorEdgeBlock.length !== this.#liveTerminatorEdges ||
+			this.#handlerArguments.length !== this.#liveHandlerArguments ||
+			this.#facts.length !== this.#liveFacts ||
+			this.#effectRefinements.length !== this.#liveEffectRefinements
+		)
+			return undefined;
+		let seenTerminator = false;
+		for (const opcode of this.#instructionOpcode) {
+			if (opcode < 0) seenTerminator = true;
+			else if (seenTerminator) return undefined;
+		}
+		return new CoreFunctionStore(
+			mutation,
+			this.#program,
+			this.id,
+			{
+				isGenerator: this.#isGenerator,
+				isAsync: this.#isAsync,
+				parameterCount: this.#parameterCount,
+				metadata: this.#metadata,
+			},
+			generation,
+			this,
+		);
 	}
 
 	_denseConstructionGenerationCopy(
@@ -1546,9 +1675,11 @@ export class CoreFunctionStore {
 			throw new Error(`Core function ${this.id} has an active editor`);
 		}
 		this.#retired = true;
+		this.kernel._retireGeneration(this.generation);
 	}
 
 	fact(id: CoreFactId): CoreFact {
+		if (this.#retired) this.#throwRetiredGeneration();
 		const fact = this.#facts[id];
 		if (fact === undefined || fact.id !== id) throw new Error(`Unknown Core fact ${id}`);
 		return fact;
@@ -1556,6 +1687,7 @@ export class CoreFunctionStore {
 
 	_beginEdit(mutation: CoreStoreMutation): void {
 		this.#requireMutation(mutation);
+		if (this.#retired) this.#throwRetiredGeneration();
 		if (this.#sealed || this.#program.sealed) {
 			throw new Error(`Core function ${this.id} is sealed`);
 		}
@@ -2892,10 +3024,9 @@ export class CoreProgram {
 		for (let id = 0; id < this.#functions.length; id++) {
 			const fn = this.#functions[id];
 			if (fn !== undefined) {
-				const dense = fn._denseConstructionGenerationCopy(
-					CORE_STORE_MUTATION,
-					generation,
-				);
+				const dense =
+					fn._denseConstructionGenerationTransfer(CORE_STORE_MUTATION, generation) ??
+					fn._denseConstructionGenerationCopy(CORE_STORE_MUTATION, generation);
 				fn._retireConstructionGeneration(CORE_STORE_MUTATION);
 				this.#functions[id] = dense;
 			}

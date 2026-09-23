@@ -543,6 +543,34 @@ describe("Core store", () => {
 		},
 	);
 
+	it("transfers compact storage to a fresh owner and retires the old kernel", () => {
+		const { program, fn, entry, parameter, copied } = oneFunction();
+		const before = formatCoreFunction(program, fn.id);
+		const oldKernel = fn.kernel;
+		const oldValues = fn.valueIds()[Symbol.iterator]();
+		const oldInstructions = fn.instructionIds(entry)[Symbol.iterator]();
+		const oldVersions = fn.versions;
+		expect(oldValues.next().value).toBe(parameter);
+		expect(oldInstructions.next().done).toBe(false);
+		expect(oldKernel.functionParameter(0)).toBe(parameter);
+		program.finalizeConstructionGeneration();
+		const transferred = program.function(fn.id);
+		expect(transferred).not.toBe(fn);
+		expect(formatCoreFunction(program, fn.id)).toBe(before);
+		expect(transferred.kernel.functionParameter(0)).toBe(parameter);
+		expect(transferred.kernel.blockFirstInstruction(entry)).toBe(0);
+		expect(transferred.version("body")).toBe(oldVersions.body + 1);
+		expect(() => oldKernel.blockFirstInstruction(entry)).toThrow("retired generation 0");
+		expect(() => oldValues.next()).toThrow("retired generation 0");
+		expect(() => oldInstructions.next()).toThrow("retired generation 0");
+		expect(() => fn.fact(0 as never)).toThrow("retired generation 0");
+		const edit = CoreEditor.open(program, fn.id);
+		edit.appendInstruction(entry, "sink", [copied]);
+		edit.commit();
+		verifyCoreProgram(program);
+		expect(() => oldKernel.instructionNext(0 as never)).toThrow("retired generation 0");
+	});
+
 	it("checks function identities without enumerating the program", () => {
 		const { program, fn } = oneFunction();
 		Object.defineProperty(program, "functionIds", {

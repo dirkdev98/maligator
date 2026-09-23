@@ -1103,3 +1103,28 @@ that numeric roots disappear while string roots remain, rejects forged entry map
 and exercises native and portable execution under GC stress. Matched MALW and C
 parity covers both portable roots and native entry masks. Removed solves establish
 the work reduction; end-to-end performance acceptance remains separate.
+
+## D027 — 2026-09-23 — Transfer compact Core storage across construction generations
+
+**Status:** Implemented with focused verification; representative performance
+acceptance remains open. **Refines:** Persistent optimized Core import in stage 4.
+
+Finalizing a construction generation previously rebuilt every function, including
+imported optimized functions whose columns contain no deleted rows. Transfer their
+column ownership to a fresh function wrapper and kernel when all storage capacities
+match live counts and operations precede terminators. Functions with holes or
+interleaved terminators retain the existing compaction and relocation path. The
+new wrapper keeps the same Core IDs and receives the usual version increments.
+
+Old function handles remain retired. An old kernel loses access to its columns
+when its owner retires, avoiding a per-read check in active kernels. Suspended
+iterators reject retirement before reading transferred storage. The transfer does
+not promise the compactor's topological renumbering: later optimization can choose
+a different but verified instruction layout. Compare execution and output size as
+well as construction cost.
+
+The warm Meriyah probe found 243 compact functions among 244 and reduced the
+generation-finalization interval from roughly 25–30 ms to 1–2 ms. Four native
+Core-cache tests passed, including Node output parity on Meriyah. One emitted
+function changed layout and the wire was three bytes smaller. Warm frontend timing
+on battery is provisional; cache-disabled controls also moved during the samples.
