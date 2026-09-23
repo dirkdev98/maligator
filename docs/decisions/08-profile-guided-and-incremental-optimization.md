@@ -1128,3 +1128,33 @@ generation-finalization interval from roughly 25–30 ms to 1–2 ms. Four nativ
 Core-cache tests passed, including Node output parity on Meriyah. One emitted
 function changed layout and the wire was three bytes smaller. Warm frontend timing
 on battery is provisional; cache-disabled controls also moved during the samples.
+
+## D028 — 2026-09-23 — Rebind PGO identities when importing conservative Core
+
+**Status:** Implemented with focused native verification; representative runtime
+and compile-time performance acceptance remains open. **Refines:** D003, D004,
+D015 and stage 4 of D009.
+
+A PGO-use build may reuse the same completed conservative Core module as a static
+build. The module cache stays independent of the profile: it stores source-function
+spans and module-local call-site spans, never profile counts or producer-process
+origin objects. Import matches those locators against the current semantic graph
+and attaches the graph's exact origin objects and global call-site IDs. Unknown,
+ambiguous or unmatched locators receive no heat. Training still constructs fresh
+Core so its instrumentation remains complete.
+
+Artifact schema 4 and recipe v3 validate call owner, kind, span and opcode before
+import; the receipt and cache boundary change with them. The whole-program
+frontend key still includes profile digest and policy, so another profile can reuse
+conservative module work while producing a distinct final image. Imports without
+PGO drop module-local call references. Source-locator lookup tables are built only
+when a cached function or call actually asks for them, avoiding extra indexing in
+ordinary PGO builds.
+
+The focused native test trains in the VM, merges the capture, then confirms
+nonzero imported function and call heat in cold and warm cached builds. Both
+compiled outputs match Node after an application edit. Unit coverage checks two
+functions with identical relative call offsets, repeated imports with shifted
+function IDs, imports without PGO, and corrupt cross-owner references. This makes
+PGO and conservative Core reuse composable; it does not persist a PGO-upgraded
+variant or establish that the profile improved native runtime on a holdout.

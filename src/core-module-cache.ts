@@ -30,8 +30,8 @@ import type { ModuleRecord } from "./compiler/frontend/module-graph.ts";
 import { parseModule } from "./compiler/frontend/parser.ts";
 import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 
-const BOUNDARY = "strict-esm-private-cells-boxed-local-v3";
-const RECEIPT_SCHEMA = 2;
+const BOUNDARY = "strict-esm-private-cells-boxed-local-v4";
+const RECEIPT_SCHEMA = 3;
 export interface CoreModuleCacheOptions {
 	source: string;
 	sourcePath: string;
@@ -240,6 +240,7 @@ export function loadOrCompileCoreModule(
 		const core = lowerSemanticProgramToCore(runSemanticAnalysisForGraph(graph), {
 			facts: conservativeCompilerProgramFacts(),
 			captureModuleExports: true,
+			sourceOrigins: { moduleKeys: new Map([[options.sourcePath, options.moduleKey]]) },
 		});
 		const functions = [...core.program.functionIds()];
 		options.onWork?.("construct", functions.length);

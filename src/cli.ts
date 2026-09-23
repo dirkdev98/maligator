@@ -472,13 +472,10 @@ function validatePgoTraining<T extends BuildCommand | RunCommand | DevCommand>(
 	if (
 		command.kind === "build" &&
 		command.coreCache &&
-		(!command.production ||
-			command.profile ||
-			command.pgoTrain ||
-			command.pgoUse !== undefined)
+		(!command.production || command.profile || command.pgoTrain)
 	)
 		throw new CliUsageError(
-			"--core-cache requires --production without profiling or PGO",
+			"--core-cache requires --production without profiling or PGO training",
 		);
 	if (command.pgoTrain && command.pgoUse !== undefined)
 		throw new CliUsageError("PGO training and profile use are mutually exclusive");

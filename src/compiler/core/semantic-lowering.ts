@@ -92,6 +92,7 @@ interface CoreFrontendContext {
 	pgoTraining: boolean;
 	captureModuleExports: boolean;
 	sourceOrigins?: SourceFunctionOrigins;
+	sourceFilesByPath?: Map<string, SemanticFile>;
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -1094,7 +1095,21 @@ function emitReusableModuleInit(
 		literalTemplateData: program.literalTemplateData,
 		globalCount: program.nextGlobalIndex,
 	});
-	const imported = importCoreModule(program.core, reusable.artifact, modulePath);
+	let file: SemanticFile | undefined;
+	if (program.sourceOrigins !== undefined) {
+		program.sourceFilesByPath ??= new Map(
+			program.semantic.files.map((item) => [item.path, item]),
+		);
+		file = program.sourceFilesByPath.get(modulePath);
+	}
+	const imported = importCoreModule(
+		program.core,
+		reusable.artifact,
+		modulePath,
+		program.sourceOrigins === undefined || file === undefined
+			? undefined
+			: { origins: program.sourceOrigins, file },
+	);
 	program.nextFunctionIndex = program.core.functionCapacity;
 	program.nextGlobalIndex = program.core.globalCount;
 	for (const units of program.core.stringConstants.slice(program.stringConstants.length))

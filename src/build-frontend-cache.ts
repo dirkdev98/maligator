@@ -826,7 +826,6 @@ function compileProgramImage(
 		if (
 			options.profile ||
 			options.pgoTraining ||
-			options.pgo !== undefined ||
 			options.optimization === "development"
 		) {
 			coreModules.fallback =

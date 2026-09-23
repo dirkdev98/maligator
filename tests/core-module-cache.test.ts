@@ -13,6 +13,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { coreValueId } from "../src/compiler/core/core-ir.ts";
@@ -24,11 +25,17 @@ import {
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { collectSourceFunctionOrigins } from "../src/compiler/frontend/source-function-origins.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { loadOrCompileCoreModule } from "../src/core-module-cache.ts";
+import { pgoOptimizationInput } from "../src/pgo-artifact.ts";
+import type { MergedPgoProfile } from "../src/pgo-artifact.ts";
+import { SourceProfileIdentities } from "../src/source-profile-identity.ts";
 import { appendLeaf, programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 const source =
@@ -92,6 +99,115 @@ it("loads completed optimized Core without construction or optimizer work in ano
 	expect(second.exports.get("add")).toBe(11);
 	expect(destination.globalCount).toBe(13);
 	verifyCoreProgram(destination, { stage: "pre-target" });
+});
+it("rebinds cached function and call heat for each import and rejects cross-owner calls", () => {
+	const input = {
+		...options(),
+		source:
+			"export function apply(fn, value) { return fn(value); } export function other(fn, value) { return fn(value); }",
+	};
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	const warm = loadOrCompileCoreModule(input);
+	if (warm.status !== "ready") throw new Error(warm.reason);
+	expect(warm.cache).toBe("hit");
+	expect(warm.optimized.calls).toHaveLength(2);
+	const semantic = runSemanticAnalysisForGraph(
+		buildModuleGraph(input.sourcePath, {
+			entrySource: input.source,
+			entryGoal: "module",
+			stripTypes: (source) => source,
+		}),
+	);
+	const sourceOptions = { moduleKeys: new Map([[input.sourcePath, input.moduleKey]]) };
+	const baseline = lowerSemanticProgramToCore(semantic, { sourceOrigins: sourceOptions });
+	const identities = new SourceProfileIdentities();
+	const baselineFunction = [...baseline.program.functionIds()].find(
+		(id) => baseline.program.function(id).metadata.sourceOrigin?.status === "captured",
+	)!;
+	const functionIdentity = identities.functionIdentity(
+		baseline.program.function(baselineFunction).metadata.sourceOrigin,
+	);
+	if ("reason" in functionIdentity) throw new Error(functionIdentity.reason);
+	const baselineSite = baseline.context.data.sourceCallSites!.find(
+		(site) => site.owner?.status === "captured" && site.lowered,
+	)!;
+	const callIdentity = identities.callIdentity(baselineSite);
+	if (callIdentity.status !== "known") throw new Error(callIdentity.reason);
+	const profile: MergedPgoProfile = {
+		schema: 1,
+		semantics: 1,
+		semanticKey: "a".repeat(64),
+		digest: "b".repeat(64),
+		overflow: false,
+		runs: [],
+		coverage: {
+			unknownFunctions: 0,
+			unknownCalls: 0,
+			uninstrumentedCalls: 0,
+			observedZeroFunctions: 0,
+			observedZeroCalls: 0,
+		},
+		functions: [
+			{
+				origin: functionIdentity.origin,
+				revision: functionIdentity.revision,
+				count: "23",
+			},
+		],
+		calls: [{ key: callIdentity.key, count: "17" }],
+	};
+	const origins = collectSourceFunctionOrigins(semantic, sourceOptions);
+	const prefix = Array.from({ length: 7 }, () => ({ ...baselineSite, owner: undefined }));
+	const relocatedOrigins = {
+		...origins,
+		callAt(...args: Parameters<typeof origins.callAt>) {
+			const id = origins.callAt(...args);
+			return id === undefined ? undefined : prefix.length + id;
+		},
+	};
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	appendLeaf(destination);
+	const file = semantic.files[0]!;
+	const first = importCoreModule(destination, warm.optimized, input.sourcePath, {
+		origins: relocatedOrigins,
+		file,
+	});
+	const second = importCoreModule(destination, warm.optimized, input.sourcePath, {
+		origins: relocatedOrigins,
+		file,
+	});
+	const sites = [...prefix, ...origins.callSites()];
+	const hints = pgoOptimizationInput(profile).bind({
+		...baseline,
+		program: destination,
+		context: {
+			...baseline.context,
+			data: { ...baseline.context.data, sourceCallSites: sites },
+		},
+	});
+	for (const imported of [first, second]) {
+		const fn = destination.function(imported.functions[1]!);
+		expect(hints.functionEntries(fn.id)).toBe(23);
+		const call = [...fn.instructionIds()].find(
+			(id) =>
+				fn.instructionKind(id) === "operation" && fn.instructionOpcodeName(id) === "call",
+		)!;
+		expect(fn.instructionAttributes(call).sourceCall).toBe(7);
+		expect(hints.callAttempts(fn.id, call)).toBe(17);
+	}
+	const noProfile = importCoreModule(destination, warm.optimized, input.sourcePath);
+	const plain = destination.function(noProfile.functions[1]!);
+	expect(plain.metadata.sourceOrigin).toBeUndefined();
+	const plainCall = [...plain.instructionIds()].find(
+		(id) =>
+			plain.instructionKind(id) === "operation" &&
+			plain.instructionOpcodeName(id) === "call",
+	)!;
+	expect(plain.instructionAttributes(plainCall).sourceCall).toBeUndefined();
+	const corrupt = JSON.parse(encodeCoreModule(warm.optimized)) as typeof warm.optimized;
+	corrupt.calls[0]!.owner = 2;
+	expect(() => decodeCoreModule(JSON.stringify(corrupt))).toThrow("call owner");
 });
 it("misses after source or recipe changes and repairs a corrupt entry before import", () => {
 	const input = options();

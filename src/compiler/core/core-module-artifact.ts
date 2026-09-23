@@ -1,3 +1,9 @@
+import type { SemanticFile } from "../frontend/semantic-analysis.ts";
+import type {
+	SourceCallSite,
+	SourceFunctionOrigin,
+	SourceFunctionOrigins,
+} from "../frontend/source-function-origins.ts";
 import {
 	remapLiteralTemplateConstants,
 	scanLiteralTemplateSegment,
@@ -108,19 +114,26 @@ interface ModuleBlock {
 }
 interface ModuleFunction {
 	metadata: Omit<CoreFunctionMetadata, "sourcePath" | "sourceOrigin">;
+	sourceLocator?: { start: number; end: number };
 	parameterCount: number;
 	entry: CoreBlockId;
 	bodyEntry?: CoreBlockId;
 	blocks: ReadonlyArray<ModuleBlock>;
 }
 export interface CoreModuleArtifact {
-	schema: 3;
+	schema: 4;
 	globals: number;
 	strings: ReadonlyArray<ReadonlyArray<number>>;
 	bigints: ReadonlyArray<string>;
 	literalTemplates: ReadonlyArray<number>;
 	positions: ReadonlyArray<CoreSourcePosition>;
 	functions: ReadonlyArray<ModuleFunction>;
+	calls: ReadonlyArray<{
+		owner: number;
+		kind: SourceCallSite["kind"];
+		start: number;
+		end: number;
+	}>;
 	initializer: number;
 	exports: ReadonlyArray<{ name: string; slot: number }>;
 	singleAssignmentGlobalSlots: ReadonlyArray<number>;
@@ -130,7 +143,7 @@ export interface CompletedCoreModule {
 	artifact: CoreModuleArtifact;
 	completedRecipe: typeof CORE_MODULE_RECIPE;
 }
-export const CORE_MODULE_RECIPE = "conservative-structural-v2";
+export const CORE_MODULE_RECIPE = "conservative-structural-v3";
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
 const preparedDecodedModules = new WeakMap<CoreModuleArtifact, CoreProgram | undefined>();
 // These admitted operations carry program references; other attributes remain function-local.
@@ -180,18 +193,36 @@ function attributes(
 	templates: number,
 	templateRoots: ReadonlySet<number>,
 	artifact: CoreModuleArtifact,
+	owner?: number,
 ): CoreInstructionAttributes {
 	const allowed = ATTRIBUTES[op.opcode];
 	if (allowed === undefined)
 		unsupported(`Unsupported reusable Core opcode: ${op.opcode}`);
 	if (
 		Object.keys(op.attributes).some(
-			(key) => !allowed.includes(key) && !allowed.includes(`${key}?`),
+			(key) =>
+				!allowed.includes(key) &&
+				!allowed.includes(`${key}?`) &&
+				!(key === "sourceCall" && coreOpcodeRegistry.get(op.opcode)?.callTransfer),
 		)
 	)
 		unsupported(`Unsupported reusable Core attributes: ${op.opcode}`);
 	if (allowed.some((key) => !key.endsWith("?") && !Object.hasOwn(op.attributes, key)))
 		throw new Error("Incomplete Core module attributes");
+	if (op.attributes.sourceCall !== undefined) {
+		const call = artifact.calls[index(op.attributes.sourceCall, artifact.calls.length)]!;
+		if (call.owner !== owner) throw new Error("Core module call owner mismatch");
+		const invocation = coreOpcodeRegistry.get(op.opcode)?.callTransfer?.invocation;
+		if (
+			(call.kind === "construct" && invocation !== "construct") ||
+			(call.kind === "call" && invocation !== "call") ||
+			(call.kind === "super" &&
+				op.opcode !== "constructSuper" &&
+				op.opcode !== "constructSuperExplicit") ||
+			call.kind === "tagged-template"
+		)
+			throw new Error("Core module call kind mismatch");
+	}
 	switch (op.opcode) {
 		case "createBigint":
 			return {
@@ -384,11 +415,39 @@ export function captureCoreModule(
 	initializer: CoreFunctionId,
 	candidates?: Pick<
 		CoreProgramData,
-		"singleAssignmentGlobalSlots" | "singleAssignmentCapturedSlots"
+		"singleAssignmentGlobalSlots" | "singleAssignmentCapturedSlots" | "sourceCallSites"
 	>,
 ): CoreModuleArtifact {
 	const ids = [...program.functionIds()];
 	const ordinals = new Map(ids.map((id, ordinal) => [id, ordinal]));
+	let originOrdinals: Map<SourceFunctionOrigin, number> | undefined;
+	const calls: Array<CoreModuleArtifact["calls"][number]> = [];
+	const callOrdinals = new Map<number, number>();
+	const sourceCall = (sourceId: number, owner: number): number | undefined => {
+		const site = candidates?.sourceCallSites?.[sourceId];
+		if (site?.owner === undefined) return undefined;
+		if (originOrdinals === undefined) {
+			originOrdinals = new Map();
+			for (const [ordinal, id] of ids.entries()) {
+				const origin = program.function(id).metadata.sourceOrigin;
+				if (origin?.status === "captured") originOrdinals.set(origin, ordinal);
+			}
+		}
+		if (
+			originOrdinals.get(site.owner) !== owner ||
+			site.start === undefined ||
+			site.end === undefined ||
+			site.kind === "tagged-template"
+		)
+			return undefined;
+		let local = callOrdinals.get(sourceId);
+		if (local === undefined) {
+			local = calls.length;
+			calls.push({ owner, kind: site.kind, start: site.start, end: site.end });
+			callOrdinals.set(sourceId, local);
+		}
+		return local;
+	};
 	if (ids.length > 100_000 || program.globalCount > 100_000)
 		unsupported("Reusable Core exceeds the module size limit");
 	const functionOrdinal = (value: unknown) => {
@@ -411,12 +470,13 @@ export function captureCoreModule(
 	)
 		unsupported("Reusable Core pilot excludes inlined source chains");
 	const artifact: CoreModuleArtifact = {
-		schema: 3,
+		schema: 4,
 		globals: program.globalCount,
 		strings: program.stringConstants,
 		bigints: program.bigintConstants.map(String),
 		literalTemplates: program.literalTemplateData,
 		positions,
+		calls,
 		initializer: functionOrdinal(initializer),
 		exports,
 		singleAssignmentGlobalSlots: candidates?.singleAssignmentGlobalSlots ?? [],
@@ -426,7 +486,7 @@ export function captureCoreModule(
 				index: slot.index,
 			}),
 		),
-		functions: ids.map((id) => {
+		functions: ids.map((id, ordinal) => {
 			const fn = program.function(id);
 			if (
 				fn.blockCapacity > 1_000_000 ||
@@ -436,7 +496,6 @@ export function captureCoreModule(
 				unsupported("Reusable Core exceeds the function size limit");
 			const { sourcePath: _path, sourceOrigin, ...metadata } = fn.metadata;
 			if (
-				sourceOrigin !== undefined ||
 				fn.isAsync ||
 				fn.isGenerator ||
 				metadata.mappedArguments ||
@@ -448,6 +507,9 @@ export function captureCoreModule(
 				);
 			return {
 				metadata,
+				...(sourceOrigin?.status === "captured"
+					? { sourceLocator: { start: sourceOrigin.start, end: sourceOrigin.end } }
+					: {}),
 				parameterCount: fn.parameterCount,
 				entry: fn.entry,
 				bodyEntry: fn.bodyEntry,
@@ -473,6 +535,15 @@ export function captureCoreModule(
 								);
 							const opcode = fn.instructionOpcodeName(instruction);
 							const attrs = fn.instructionAttributes(instruction);
+							const { sourceCall: sourceId, ...otherAttrs } = attrs;
+							if (sourceId !== undefined && typeof sourceId !== "number")
+								throw new Error("Invalid Core source call");
+							const localCall =
+								sourceId === undefined ? undefined : sourceCall(sourceId, ordinal);
+							const serializedAttrs =
+								localCall === undefined
+									? otherAttrs
+									: { ...otherAttrs, sourceCall: localCall };
 							return {
 								opcode,
 								inputs: coreInstructionOperands(fn, instruction),
@@ -482,10 +553,10 @@ export function captureCoreModule(
 									opcode === "loadCaptured" ||
 									opcode === "storeCaptured"
 										? {
-												...attrs,
+												...serializedAttrs,
 												functionIndex: functionOrdinal(attrs.functionIndex),
 											}
-										: attrs,
+										: serializedAttrs,
 								position: fn.instructionSourcePosition(instruction),
 							};
 						}),
@@ -514,6 +585,7 @@ export function importCoreModule(
 	program: CoreProgram,
 	artifact: CoreModuleArtifact,
 	sourcePath: string,
+	profile?: { origins: SourceFunctionOrigins; file: SemanticFile },
 ) {
 	if (
 		program.registry !== coreOpcodeRegistry ||
@@ -546,6 +618,19 @@ export function importCoreModule(
 		(value) => bigintBase + index(value, artifact.bigints.length),
 	);
 	const imported = importedModule(artifact, functions, globalBase);
+	const origins =
+		profile === undefined
+			? []
+			: artifact.functions.map((fn) => {
+					const locator = fn.sourceLocator;
+					if (locator === undefined) return undefined;
+					const origin = profile.origins.functionAt(
+						profile.file,
+						locator.start,
+						locator.end,
+					);
+					return origin?.status === "captured" ? origin : undefined;
+				});
 	CoreEditor.transferFunctions(program, prepared, {
 		data: {
 			globalCount: globalBase + artifact.globals,
@@ -559,25 +644,42 @@ export function importCoreModule(
 			...fn.metadata,
 			sourcePath,
 			nameStringIndex: stringBase + fn.metadata.nameStringIndex,
+			...(origins[fn.id] === undefined ? {} : { sourceOrigin: origins[fn.id] }),
 		}),
 		attributes(fn, instruction) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			const original = fn.instructionAttributes(instruction);
-			if (!RELOCATED_OPERATIONS.has(opcode)) return original;
-			return attributes(
-				{
-					opcode,
-					attributes: original,
-				},
-				fn.kernel.instructionOperandCount(instruction),
-				functions,
-				globalBase,
-				stringBase,
-				bigintBase,
-				templateBase,
-				templateRoots,
-				artifact,
-			);
+			const localCall = original.sourceCall;
+			const relocatedOperation = RELOCATED_OPERATIONS.has(opcode);
+			if (localCall === undefined && !relocatedOperation) return original;
+			let sourceAttrs = original;
+			if (localCall !== undefined) {
+				const { sourceCall: _sourceCall, ...otherAttrs } = original;
+				sourceAttrs = otherAttrs;
+			}
+			const owner = origins[fn.id];
+			const call =
+				localCall === undefined
+					? undefined
+					: artifact.calls[index(localCall, artifact.calls.length)];
+			const site =
+				profile === undefined || owner === undefined || call === undefined
+					? undefined
+					: profile.origins.callAt(profile.file, owner, call.kind, call.start, call.end);
+			const relocated = relocatedOperation
+				? attributes(
+						{ opcode, attributes: sourceAttrs },
+						fn.kernel.instructionOperandCount(instruction),
+						functions,
+						globalBase,
+						stringBase,
+						bigintBase,
+						templateBase,
+						templateRoots,
+						artifact,
+					)
+				: sourceAttrs;
+			return site === undefined ? relocated : { ...relocated, sourceCall: site };
 		},
 		immediate: (value) =>
 			value.kind === "string"
@@ -595,7 +697,7 @@ function importValidatedCoreModule(
 	sourcePath: string,
 ) {
 	if (
-		artifact.schema !== 3 ||
+		artifact.schema !== 4 ||
 		!Number.isSafeInteger(artifact.globals) ||
 		artifact.globals < 0 ||
 		artifact.globals > 100_000 ||
@@ -604,6 +706,29 @@ function importValidatedCoreModule(
 	)
 		throw new Error("Invalid Core module header");
 	index(artifact.initializer, artifact.functions.length);
+	for (const fn of artifact.functions) {
+		if (fn.sourceLocator === undefined) continue;
+		const { start, end } = fn.sourceLocator;
+		index(start, 0x8000_0000);
+		index(end, 0x8000_0000);
+		if (end <= start || Object.keys(fn.sourceLocator).length !== 2)
+			throw new Error("Invalid Core module function locator");
+	}
+	if (!Array.isArray(artifact.calls) || artifact.calls.length > 1_000_000)
+		throw new Error("Invalid Core module calls");
+	for (const call of artifact.calls as CoreModuleArtifact["calls"]) {
+		const owner = index(call.owner, artifact.functions.length);
+		const locator = artifact.functions[owner]!.sourceLocator;
+		if (
+			locator === undefined ||
+			!["call", "construct", "super"].includes(call.kind) ||
+			Object.keys(call).length !== 4
+		)
+			throw new Error("Invalid Core module call locator");
+		index(call.start, locator.end - locator.start);
+		index(call.end, locator.end - locator.start + 1);
+		if (call.end <= call.start) throw new Error("Invalid Core module call span");
+	}
 	for (const slot of artifact.singleAssignmentGlobalSlots) index(slot, artifact.globals);
 	for (const slot of artifact.singleAssignmentCapturedSlots) {
 		const owner = index(slot.owner, artifact.functions.length);
@@ -779,6 +904,7 @@ function importValidatedCoreModule(
 							templateBase,
 							templateRoots,
 							artifact,
+							ordinal,
 						),
 						sourcePosition: position(operation.position),
 					},

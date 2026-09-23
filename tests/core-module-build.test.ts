@@ -13,6 +13,7 @@ import {
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
+import type { CorePgoInput } from "../src/compiler/core/core-pgo.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
@@ -232,10 +233,71 @@ it("declines dynamic graphs before probing dependency Core", () => {
 	expect(reused?.fallback).toContain("static ESM");
 });
 
+it("uses cached Core with PGO and rebinds imported source sites after an app edit", () => {
+	const { root, write, options } = fixture();
+	const lib = path.join(root, "lib.mjs");
+	const observed: Array<{ functions: number; calls: number }> = [];
+	const pgo: CorePgoInput = {
+		digest: "a".repeat(64),
+		policy: "core-cache-pgo-rebinding-test",
+		bind(compilation) {
+			let functions = 0;
+			let calls = 0;
+			for (const id of compilation.program.functionIds()) {
+				const fn = compilation.program.function(id);
+				if (
+					fn.metadata.sourcePath !== lib ||
+					fn.metadata.sourceOrigin?.status !== "captured"
+				)
+					continue;
+				functions++;
+				for (const instruction of fn.instructionIds()) {
+					if (fn.instructionKind(instruction) !== "operation") continue;
+					const siteId = fn.instructionAttributes(instruction).sourceCall;
+					if (typeof siteId !== "number") continue;
+					expect(compilation.context.data.sourceCallSites?.[siteId]?.owner).toBe(
+						fn.metadata.sourceOrigin,
+					);
+					calls++;
+				}
+			}
+			observed.push({ functions, calls });
+			return {
+				digest: this.digest,
+				functionEntries: () => undefined,
+				callAttempts: () => undefined,
+			};
+		},
+	};
+	const first = compileBuildFrontend({ ...options, pgo, forceCompile: true });
+	expect(first.coreModules?.misses).toBeGreaterThan(0);
+	write(
+		"entry.mjs",
+		"import './first.mjs'; import { snapshot } from './second.mjs'; import * as lib from './lib.mjs'; function extra(fn) { return fn(); } extra(() => 0); console.log(snapshot, lib.n, lib.counter(7)());",
+	);
+	const second = compileBuildFrontend({ ...options, pgo, forceCompile: true });
+	expect(second.coreModules?.hits).toBeGreaterThan(0);
+	expect(observed).toHaveLength(2);
+	for (const sample of observed) {
+		expect(sample.functions).toBeGreaterThan(0);
+		expect(sample.calls).toBeGreaterThan(0);
+	}
+});
+
 it("requires an explicit production build for the experimental CLI path", () => {
 	expect(
 		parseCliArgs(["build", "entry.mjs", "--production", "--core-cache"]),
 	).toMatchObject({ coreCache: true, production: true });
+	expect(
+		parseCliArgs([
+			"build",
+			"entry.mjs",
+			"--production",
+			"--core-cache",
+			"--pgo-use",
+			"profile.json",
+		]),
+	).toMatchObject({ coreCache: true, production: true, pgoUse: "profile.json" });
 	for (const args of [
 		["build", "--core-cache"],
 		["build", "--production", "--core-cache", "--pgo-train"],
