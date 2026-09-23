@@ -1407,3 +1407,37 @@ runs on those hits. Ten candidates remained unsupported. A single uncached
 control and cached probe are neither matched timing evidence nor proof of
 native output parity; their wire bytes differed, so acceptance requires
 executing both prepared compilers against the frozen Node oracle.
+
+## D038 — 2026-09-23 — Accept frozen self-hosted PGO parity, retain performance work
+
+**Status:** Native training, static/PGO output parity, and optimizer-query
+attribution accepted on the bounded frontend workload. A repeatable speed gain
+and full self-compile acceptance remain open. **Refines:** D036.
+
+The development interpreter-training binary, static production binary and PGO
+production binary used the same frozen self-hosted frontend entry and resolved
+Node-surface config. Both production builds enabled persistent Core reuse; only
+the PGO build consumed the merged profile. Training on `core-ir-summaries.ts`
+completed in 244 seconds with exact Node wire parity. Training on
+`core-ir-shape-provenance.ts` exceeded 600 seconds without output, so it became a
+holdout. The successful capture has 1,291 positive function counts and 9,026
+positive call counts, with no counter overflow.
+
+Verbose current-build query coverage found 1,291 positive function matches and
+7,889 positive call matches, no unmatched revisions or call profiles, and
+explicit zero and missing-origin buckets. Enabling those diagnostics reproduced
+the exact PGO binary hash. The PGO binary differed from the static binary, and
+both matched fresh Node wire output on the trained module and all three
+holdouts. The first 900-second comparison completed three modules but expired
+during the last region-selection pair; the same binaries and source capture
+completed that holdout in a targeted three-pair run.
+
+Measured static/PGO medians in seconds were 16.41/16.60 for summaries,
+36.44/36.49 for shape, 16.94/16.64 for pass manager and 57.45/52.91 for region
+selection. The region pairs ranged from PGO 5.7% slower to 7.9% faster, so
+these three pairs do not establish a reliable runtime win. The PGO build reused
+28 Core modules, but its frontend still took about 24 seconds, including about
+15 seconds in Core optimization. The next performance step is to locate the
+unreused shared optimizer work and measure a lower-cost training route before
+using PGO by default. Evidence is under
+`.cache/pgo-selfhost-frontend-20260923/native-acceptance/`.

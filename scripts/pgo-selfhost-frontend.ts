@@ -31,7 +31,7 @@ const WORKLOADS = [
 	{
 		name: "compiler-shape",
 		source: "src/compiler/core/core-ir-shape-provenance.ts",
-		train: true,
+		train: false,
 	},
 	{
 		name: "compiler-pass-manager",
@@ -53,7 +53,9 @@ interface Options {
 	staticBinary?: string;
 	pgoBinary?: string;
 	budgetSeconds: number;
+	childTimeoutSeconds: number;
 	pairs: number;
+	workloads: Array<string>;
 	plan: boolean;
 }
 
@@ -65,9 +67,9 @@ interface SourceCapture {
 	lockfile: string;
 }
 
-const HELP = `Usage: node scripts/pgo-selfhost-frontend.ts train --snapshot CAPTURE --training-binary PATH --out DIR [--budget-seconds N] [--plan=json]
-       node scripts/pgo-selfhost-frontend.ts compare --snapshot CAPTURE --static-binary PATH --pgo-binary PATH --out DIR [--pairs N] [--budget-seconds N] [--plan=json]
-       node scripts/pgo-selfhost-frontend.ts oracle --snapshot CAPTURE --out DIR [--budget-seconds N] [--plan=json]
+const HELP = `Usage: node scripts/pgo-selfhost-frontend.ts train --snapshot CAPTURE --training-binary PATH --out DIR [--workloads NAME,...] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
+       node scripts/pgo-selfhost-frontend.ts compare --snapshot CAPTURE --static-binary PATH --pgo-binary PATH --out DIR [--workloads NAME,...] [--pairs N] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
+       node scripts/pgo-selfhost-frontend.ts oracle --snapshot CAPTURE --out DIR [--workloads NAME,...] [--budget-seconds N] [--child-timeout-seconds N] [--plan=json]
 
 The source-only CAPTURE comes from bench:self-compile-experiment capture DIR --source-only.
 Build all three binaries from that same frozen source/src/selfhost-frontend-entry.mts.
@@ -86,7 +88,9 @@ function parseOptions(args: Array<string>): Options | undefined {
 		snapshot: "",
 		output: "",
 		budgetSeconds: 300,
+		childTimeoutSeconds: 60,
 		pairs: 3,
+		workloads: WORKLOADS.map((item) => item.name),
 		plan: false,
 	};
 	for (let index = 1; index < args.length; index++) {
@@ -103,7 +107,10 @@ function parseOptions(args: Array<string>): Options | undefined {
 		else if (option === "--static-binary") options.staticBinary = value;
 		else if (option === "--pgo-binary") options.pgoBinary = value;
 		else if (option === "--budget-seconds") options.budgetSeconds = Number(value);
+		else if (option === "--child-timeout-seconds")
+			options.childTimeoutSeconds = Number(value);
 		else if (option === "--pairs") options.pairs = Number(value);
+		else if (option === "--workloads") options.workloads = value.split(",");
 		else throw new Error(HELP);
 	}
 	if (
@@ -111,8 +118,15 @@ function parseOptions(args: Array<string>): Options | undefined {
 		!options.output ||
 		!Number.isSafeInteger(options.budgetSeconds) ||
 		options.budgetSeconds < 1 ||
+		!Number.isSafeInteger(options.childTimeoutSeconds) ||
+		options.childTimeoutSeconds < 1 ||
 		!Number.isSafeInteger(options.pairs) ||
 		options.pairs < 1 ||
+		options.workloads.length === 0 ||
+		new Set(options.workloads).size !== options.workloads.length ||
+		options.workloads.some((name) => !WORKLOADS.some((item) => item.name === name)) ||
+		(command === "train" &&
+			!WORKLOADS.some((item) => item.train && options.workloads.includes(item.name))) ||
 		(command === "train" && !options.trainingBinary) ||
 		(command === "compare" && (!options.staticBinary || !options.pgoBinary))
 	)
@@ -177,6 +191,7 @@ function run(
 	args: Array<string>,
 	log: string,
 	deadline: number,
+	childTimeoutSeconds: number,
 	environment: NodeJS.ProcessEnv,
 ): number {
 	const remaining = Math.floor(deadline - Date.now());
@@ -188,7 +203,7 @@ function run(
 		const result = spawnSync(program, args, {
 			env: environment,
 			stdio: ["ignore", descriptor, descriptor],
-			timeout: Math.min(remaining, 60_000),
+			timeout: Math.min(remaining, childTimeoutSeconds * 1000),
 		});
 		if (result.error !== undefined) throw result.error;
 		if (result.status !== 0)
@@ -223,6 +238,7 @@ function execute(options: Options): void {
 		status: "incomplete",
 		command: options.command,
 		budgetSeconds: options.budgetSeconds,
+		childTimeoutSeconds: options.childTimeoutSeconds,
 		pairs: options.command === "compare" ? options.pairs : undefined,
 		capture: identity.capture,
 		compilerClosure: identity.closure,
@@ -257,6 +273,7 @@ function execute(options: Options): void {
 		);
 		const captures: Array<string> = [];
 		for (const workload of WORKLOADS) {
+			if (!options.workloads.includes(workload.name)) continue;
 			if (options.command === "train" && !workload.train) continue;
 			const item: Record<string, unknown> = {
 				name: workload.name,
@@ -273,6 +290,7 @@ function execute(options: Options): void {
 				[script, input, oracle],
 				path.join(output, `${workload.name}-node.log`),
 				deadline,
+				options.childTimeoutSeconds,
 				env,
 			);
 			item.wireSha256 = sha256(readFileSync(oracle));
@@ -292,6 +310,7 @@ function execute(options: Options): void {
 						[input, actual],
 						path.join(output, `${workload.name}-training.log`),
 						deadline,
+						options.childTimeoutSeconds,
 						{ ...env, ...capture.environment, MAL_INTERP: "1" },
 					);
 					assertWire(actual, oracle);
@@ -322,6 +341,7 @@ function execute(options: Options): void {
 							[input, actual],
 							path.join(output, `${label}.log`),
 							deadline,
+							options.childTimeoutSeconds,
 							env,
 						);
 						assertWire(actual, oracle);
@@ -365,14 +385,16 @@ if (import.meta.main) {
 							? sourceIdentity(path.resolve(options.snapshot))
 							: undefined,
 						workloads: WORKLOADS.filter(
-							(item) => options.command !== "train" || item.train,
+							(item) =>
+								options.workloads.includes(item.name) &&
+								(options.command !== "train" || item.train),
 						),
 						runs:
 							options.command === "oracle"
-								? "4 Node oracles"
+								? `${options.workloads.length} Node oracles`
 								: options.command === "train"
-									? "2 Node oracles + 2 instrumented captures + explicit merge"
-									: `4 Node oracles + ${8 * (options.pairs + 1)} native runs including warmups`,
+									? `${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} Node oracles + ${WORKLOADS.filter((item) => item.train && options.workloads.includes(item.name)).length} instrumented captures + explicit merge`
+									: `${options.workloads.length} Node oracles + ${2 * options.workloads.length * (options.pairs + 1)} native runs including warmups`,
 						failureExitCode: 2,
 					},
 					null,

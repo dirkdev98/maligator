@@ -259,9 +259,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       D034 permits repeated named captures from one validated training binary;
       train and measure a bounded self-hosted frontend workload before full
       self-compile, with separate source-cone holdouts and exact wire parity.
-      D036 provides frozen training and holdout inputs and a prepared-binary
-      runner; build matching training/static/PGO binaries, inspect current-build
-      profile query coverage, then run the native comparison.
+      D038 records frozen-source native parity and positive current-build PGO
+      query matches. The three-pair comparison did not establish a runtime win;
+      lower training cost, isolate the remaining shared optimizer work, and
+      repeat the static/PGO comparison before enabling PGO by default.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

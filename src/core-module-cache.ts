@@ -49,7 +49,7 @@ export type CoreModuleCacheResult =
 	| {
 			status: "ready";
 			cache: "hit" | "miss";
-			/** Canonical access only loads published bytes; optimized-only receipts need explicit reconstruction. */
+			/** Canonical access loads published bytes; optimized-only receipts need reconstruction. */
 			canonical: CoreModuleArtifact;
 			optimized: CoreModuleArtifact;
 			completedRecipe: typeof RECIPE;

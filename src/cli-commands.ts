@@ -44,6 +44,7 @@ import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
+import type { CorePgoQueryCoverage } from "./compiler/core/core-pgo.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -499,7 +500,9 @@ function compileAndBuild(
 			? undefined
 			: pgoOptimizationInput(
 					readPgoProfile(path.resolve(command.pgoUse), pgoSemanticIdentity(buildConfig)),
+					{ collectQueryCoverage: reporter.verbose },
 				);
+	const pgoQueryCoverage: Array<CorePgoQueryCoverage> = [];
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontend = reporter.phase(
@@ -546,7 +549,8 @@ function compileAndBuild(
 						compilerPhases.push({ phase, durationMs });
 					},
 					dependencyWorker: context.dependencyWorker,
-					afterCoreOptimization: (core) => {
+					afterCoreOptimization: (core, _context, report) => {
+						if (report.pgoQueries !== undefined) pgoQueryCoverage.push(report.pgoQueries);
 						if (command.kind === "build" && compilerDiagnostics) {
 							log.info(formatCoreProgram(core));
 						}
@@ -560,6 +564,20 @@ function compileAndBuild(
 		(result) => `frontend cache ${result.cache}`,
 	);
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
+	if (pgoQueryCoverage.length > 0) {
+		const functions = new Map<string, number>();
+		const calls = new Map<string, number>();
+		for (const coverage of pgoQueryCoverage) {
+			for (const [kind, count] of Object.entries(coverage.functions))
+				functions.set(kind, (functions.get(kind) ?? 0) + count);
+			for (const [kind, count] of Object.entries(coverage.calls))
+				calls.set(kind, (calls.get(kind) ?? 0) + count);
+		}
+		reporter.detail(
+			"PGO query coverage",
+			`functions ${[...functions].map(([kind, count]) => `${kind}=${count}`).join(", ")}; calls ${[...calls].map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
+		);
+	}
 	if (frontend.coreModules !== undefined) {
 		const modules = frontend.coreModules;
 		reporter.detail(
