@@ -1158,3 +1158,56 @@ functions with identical relative call offsets, repeated imports with shifted
 function IDs, imports without PGO, and corrupt cross-owner references. This makes
 PGO and conservative Core reuse composable; it does not persist a PGO-upgraded
 variant or establish that the profile improved native runtime on a holdout.
+
+## D029 — 2026-09-23 — Retain validated storage for the first cold Core import
+
+**Status:** Implemented with focused unit verification and matched Meriyah
+compile diagnostics; native validation remains pending. **Refines:** D019 and
+D020. **Supersedes:** None.
+
+Cold optimized capture already materialized and verified a scratch Core program,
+then discarded it. The first import of that same artifact rebuilt and verified
+the same functions. The optimized capture now retains its validated storage in
+the private immutable-artifact receipt used by warm decoded payloads. Only an
+owned recursively frozen artifact receives this receipt. Caller-owned export
+rows and global-assignment slot arrays are copied before freezing. Mutable
+copies still undergo full validation before they can change the destination.
+
+Canonical capture continues to discard its scratch program while the local
+recipe runs, avoiding an extra full-module peak allocation. The optimized
+receipt is consumed by its first import; later imports rebuild independent
+storage. The artifact schema, canonical publication, optimization recipe and
+selected output are unchanged.
+
+On a 243-function Meriyah module, three interleaved cold baseline/candidate
+pairs with fresh process-local cache directories measured first-import times
+of 54/52/55 ms versus 8/8/8 ms. Capture times were 637/603/621 ms versus
+631/603/644 ms; capture-plus-import times were 706/669/689 ms versus
+654/624/666 ms. Every encoded optimized artifact had the same 3,005,010-byte
+length and SHA-256 digest. These short battery-host runs show a concrete
+first-import saving; they are not an end-to-end application rebuild or runtime
+speedup claim. Focused units cover zero new function construction at first
+import, immutable ownership, corrupt-copy rejection, and cold PGO rebinding.
+The focused native cache test was stopped when it entered a fresh Rust/ICU
+release build, before it reached a result.
+
+## D030 — 2026-09-23 — Defer cross-call PGO proof caps until selection is incremental
+
+**Status:** Design direction after a rejected experiment. **Refines:** D004.
+**Supersedes:** None.
+
+Cross-call candidate discovery still proves possible inline targets before the
+candidate service applies output budgets. A trial that sorted sites by PGO heat
+and capped discovery at one quarter of remaining compiler work skipped 24
+Meriyah proofs, lost one cross-call inline and one late-plan application, and
+showed no credible cross-call phase-time gain in a single matched diagnostic.
+That code was removed. A separate per-wave proof memo reused 103 of 198 target
+proof requests and preserved the exact wire hash and all 210 late-plan
+applications, but three interleaved pairs showed no phase-time improvement;
+that code was also removed.
+
+The next design must admit proof work and apply selected candidates together,
+reserving application work and generated-code capacity before declining colder
+sites. Unknown-profile allowance, exact target certainty, fallbacks, and
+deterministic static ties remain independent of measured heat. Proof caching
+alone is not a substitute for avoiding unused proof discovery.

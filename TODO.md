@@ -249,7 +249,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       Focused native and unit checks cover attribution, lazy proof admission,
       cache invalidation, relocation, and independent module state.
 - [ ] Complete representative PGO training and performance acceptance; tune the
-      measured/unknown allowances and make remaining cross-call proof discovery lazy.
+      measured/unknown allowances and make remaining cross-call proof discovery
+      incremental with application-work and output-growth reservations. D030
+      records why a fixed proof-work cap did not help Meriyah.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
@@ -259,6 +261,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       SSA and use chains; keep repeated imports independently owned.
 - [x] Split persistent Core manifests and variants; ordinary hits load only optimized
       bodies, while canonical decoding remains explicit and lazy.
+- [x] Reuse the validated optimized Core storage on its first cold import, with
+      immutable owned capture and independent later imports. D029 measures the
+      Meriyah first-import saving without changing emitted artifacts.
 - [x] Reuse Core-owned immutable constant tables and retain their rows through
       frontend import/finalization while snapshotting caller-owned inputs.
 - [x] Materialize decoder operand placeholders only for actual forward references,

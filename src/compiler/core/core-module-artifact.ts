@@ -145,7 +145,10 @@ export interface CompletedCoreModule {
 }
 export const CORE_MODULE_RECIPE = "conservative-structural-v3";
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;
-const preparedDecodedModules = new WeakMap<CoreModuleArtifact, CoreProgram | undefined>();
+const preparedImmutableModules = new WeakMap<
+	CoreModuleArtifact,
+	CoreProgram | undefined
+>();
 // These admitted operations carry program references; other attributes remain function-local.
 const RELOCATED_OPERATIONS = new Set([
 	"createFunction",
@@ -417,6 +420,7 @@ export function captureCoreModule(
 		CoreProgramData,
 		"singleAssignmentGlobalSlots" | "singleAssignmentCapturedSlots" | "sourceCallSites"
 	>,
+	options: { retainPreparedImport?: boolean } = {},
 ): CoreModuleArtifact {
 	const ids = [...program.functionIds()];
 	const ordinals = new Map(ids.map((id, ordinal) => [id, ordinal]));
@@ -478,8 +482,8 @@ export function captureCoreModule(
 		positions,
 		calls,
 		initializer: functionOrdinal(initializer),
-		exports,
-		singleAssignmentGlobalSlots: candidates?.singleAssignmentGlobalSlots ?? [],
+		exports: exports.map(({ name, slot }) => ({ name, slot })),
+		singleAssignmentGlobalSlots: [...(candidates?.singleAssignmentGlobalSlots ?? [])],
 		singleAssignmentCapturedSlots: (candidates?.singleAssignmentCapturedSlots ?? []).map(
 			(slot) => ({
 				owner: functionOrdinal(slot.owner),
@@ -565,7 +569,11 @@ export function captureCoreModule(
 			};
 		}),
 	};
-	validateCoreModule(artifact);
+	const prepared = prepareCoreModule(artifact);
+	if (options.retainPreparedImport === true) {
+		freezeDecodedValue(artifact);
+		preparedImmutableModules.set(artifact, prepared);
+	}
 	return artifact;
 }
 
@@ -576,7 +584,7 @@ export function validateCoreModule(artifact: CoreModuleArtifact): void {
 function prepareCoreModule(artifact: CoreModuleArtifact): CoreProgram {
 	const scratch = new CoreProgram(coreOpcodeRegistry);
 	importValidatedCoreModule(scratch, artifact, "<validation>");
-	if (!preparedDecodedModules.has(artifact))
+	if (!preparedImmutableModules.has(artifact))
 		verifyCoreProgram(scratch, { stage: "pre-target" });
 	return scratch;
 }
@@ -593,7 +601,7 @@ export function importCoreModule(
 		sourcePath.length === 0
 	)
 		throw new Error("Unsupported Core module destination");
-	const prepared = preparedDecodedModules.get(artifact) ?? prepareCoreModule(artifact);
+	const prepared = preparedImmutableModules.get(artifact) ?? prepareCoreModule(artifact);
 	const functions = artifact.functions.map((_, ordinal) =>
 		coreFunctionId(program.functionCapacity + ordinal),
 	);
@@ -686,8 +694,8 @@ export function importCoreModule(
 				? relocateImmediate(value, artifact.strings.length, stringBase)
 				: value,
 	});
-	if (preparedDecodedModules.has(artifact))
-		preparedDecodedModules.set(artifact, undefined);
+	if (preparedImmutableModules.has(artifact))
+		preparedImmutableModules.set(artifact, undefined);
 	return imported;
 }
 
@@ -1062,9 +1070,9 @@ export function decodeCoreModule(encoded: string): CoreModuleArtifact {
 		}
 	}
 	const prepared = prepareCoreModule(artifact);
-	// Only freshly decoded, recursively immutable objects can reuse structural validation.
+	// Validation receipts require an owned immutable artifact, whether decoded or captured.
 	freezeDecodedValue(artifact);
-	preparedDecodedModules.set(artifact, prepared);
+	preparedImmutableModules.set(artifact, prepared);
 	return artifact;
 }
 

@@ -289,6 +289,7 @@ export function loadOrCompileCoreModule(
 			exports,
 			functions[0]!,
 			core.context.data,
+			{ retainPreparedImport: true },
 		);
 		const canonicalBytes = encodeCoreModule(canonical);
 		const optimizedBytes = encodeCoreModule(optimized);

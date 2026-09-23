@@ -18,6 +18,7 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { coreValueId } from "../src/compiler/core/core-ir.ts";
 import {
+	captureCoreModule,
 	decodeCoreModule,
 	encodeCoreModule,
 	importCoreModule,
@@ -100,6 +101,55 @@ it("loads completed optimized Core without construction or optimizer work in ano
 	expect(destination.globalCount).toBe(13);
 	verifyCoreProgram(destination, { stage: "pre-target" });
 });
+it("imports a cold optimized capture from its validated storage", () => {
+	const input = options();
+	const cold = loadOrCompileCoreModule(input);
+	if (cold.status !== "ready") throw new Error(cold.reason);
+	expect(cold.cache).toBe("miss");
+	expect(Reflect.set(cold.optimized.exports[0]!, "slot", 999)).toBe(false);
+	const finish = vi.spyOn(CoreFunctionBuilder.prototype, "finish");
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	const imported = importCoreModule(destination, cold.optimized, input.sourcePath);
+	expect(finish).not.toHaveBeenCalled();
+	expect(imported.exports.get("add")).toBe(1);
+	verifyCoreProgram(destination, { stage: "pre-target" });
+	const copy = structuredClone(cold.optimized);
+	copy.exports[0]!.slot = 999;
+	const before = destination.functionCapacity;
+	expect(() => importCoreModule(destination, copy, input.sourcePath)).toThrow();
+	expect(destination.functionCapacity).toBe(before);
+});
+it("snapshots caller-owned export and assignment inputs before retaining a capture", () => {
+	const input = options();
+	const semantic = runSemanticAnalysisForGraph(
+		buildModuleGraph(input.sourcePath, {
+			entrySource: input.source,
+			entryGoal: "module",
+			stripTypes: (source) => source,
+		}),
+	);
+	const core = lowerSemanticProgramToCore(semantic, { captureModuleExports: true });
+	const exports = (core.context.data.moduleExports ?? []).map(({ name, slot }) => ({
+		name,
+		slot,
+	}));
+	const slots = [...(core.context.data.singleAssignmentGlobalSlots ?? [])];
+	const artifact = captureCoreModule(
+		core.program,
+		exports,
+		[...core.program.functionIds()][0]!,
+		{ ...core.context.data, singleAssignmentGlobalSlots: slots },
+		{ retainPreparedImport: true },
+	);
+	const expected = artifact.exports.map(({ name, slot }) => ({ name, slot }));
+	exports[0]!.slot = 999;
+	slots.push(999);
+	expect(artifact.exports).toEqual(expected);
+	expect(artifact.singleAssignmentGlobalSlots).not.toContain(999);
+	const destination = new CoreProgram(coreOpcodeRegistry);
+	importCoreModule(destination, artifact, input.sourcePath);
+	verifyCoreProgram(destination, { stage: "pre-target" });
+});
 it("rebinds cached function and call heat for each import and rejects cross-owner calls", () => {
 	const input = {
 		...options(),
@@ -169,7 +219,7 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 	const destination = new CoreProgram(coreOpcodeRegistry);
 	appendLeaf(destination);
 	const file = semantic.files[0]!;
-	const first = importCoreModule(destination, warm.optimized, input.sourcePath, {
+	const first = importCoreModule(destination, cold.optimized, input.sourcePath, {
 		origins: relocatedOrigins,
 		file,
 	});
