@@ -2718,3 +2718,62 @@ four compared binaries. More work budget alone cannot remove that cost. Keep
 CPU and measured-work policies explicit while testing whether validated target
 hits can fund already-proved typed entries without broadly promoting guarded
 calls or assuming the sampled safepoint identifies the expensive instruction.
+
+## D072 — 2026-09-24 — Target counts alone do not unlock hot Core store methods
+
+**Status:** Bounded pilot rejected as output-inert. **Refines:** D054, D071.
+
+A pilot allowed complete exact guarded-target hits to fund an existing typed
+entry only when the target had qualified CPU samples and the entry already had
+a proved numeric parameter. The entire frozen frontend's selected Core plan and
+native binary were byte-identical to the combined D071 control. The pilot code
+was removed; its build log is under `.cache/pgo-cpu-work-20260923/`.
+
+Targeted planner diagnostics explain why. `CoreFunctionStore.instructionKind`
+has about 43.1 million measured entries and 310 speculative method
+nominations. Of these, 204 have complete exact-target evidence, with 157
+positive sites totaling about 31.5 million hits. `instructionOpcode` has about
+34.2 million entries, 76 nominations, and 40 positive sites totaling about
+33.3 million hits. The existing instance-method hint agrees with every
+nomination, but every site's static target set is empty. No nominated
+`instructionKind` call has a statically proved numeric argument; the one
+numeric `instructionOpcode` call has no positive exact target hit. The typed
+entry planner therefore selects no calls or scalar signatures for either hot
+method. A positive target count is a scheduling fact, not a numeric argument
+proof.
+
+The next candidate is a guarded numeric-entry path that checks argument kind
+at runtime and retains canonical fallback, with target identity and source-site
+counts used only to choose where to emit it. It must allow only one entry target
+per call instruction under the current lowering map, preserve realm/closure
+identity and exception behavior, and account for guard misses. If that path is
+too costly, improving the static value-kind proof at these callers is the
+smaller alternative. Neither target count nor TypeScript's `CoreInstructionId`
+annotation licenses unboxing by itself.
+
+## D073 — 2026-09-24 — Reject capped CPU-guided guarded dispatch
+
+**Status:** Rejected after exact-output paired native comparison. **Refines:**
+D054, D071–D072.
+
+A bounded alternative avoided new typed-entry bodies: when a class instance
+method had qualified CPU samples, a unique prototype-method hint, complete
+source-call attempts, and exactly as many successful target hits as attempts,
+the existing finite guarded compiled-call recipe could be considered outside
+loops. At most 16 additional sites were chosen by exact hit count. The runtime
+still checked the loaded callee and retained canonical fallback. Focused tests
+covered complete, partial, unknown and saturated counts, same-name ambiguity,
+the 16-site cap, and the guarded plan. The frozen frontend build selected 17
+more late Core decisions and grew by 16,520 native bytes.
+
+On one trained and one held-out short compiler slice, two interleaved pairs per
+slice matched the frozen Node wires exactly. Against D071's combined PGO
+control, guarded dispatch was 0.48% slower on compiler-summaries and 0.39%
+slower on compiler-pass-manager, 0.44% slower in aggregate. That does not
+justify extra branches or binary size; the pilot was removed. The comparison
+report is `.cache/pgo-cpu-work-20260923/compare-guarded16-short/report.json`.
+The larger `instructionOpcode` cohort also has two same-name prototype-method
+hints and was intentionally excluded; broadening to it needs a separate
+single-owner dispatch design and a stronger benefit hypothesis. Existing
+generic VM calls already shortcut compiled functions, so target identity alone
+is not enough to make this path profitable.
