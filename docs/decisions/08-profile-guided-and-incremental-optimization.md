@@ -2639,3 +2639,82 @@ gap do not establish a PGO advantage. Calibrate the static budget closer to
 51,900,672 native bytes and repeat trained plus held-out pairs before judging
 profile value. The diagnostic build logs and comparison report are under
 `.cache/pgo-size-control-20260923/`.
+
+## D070 — 2026-09-24 — Admit validated process-CPU samples as separate PGO evidence
+
+**Status:** Opt-in implementation and focused checks complete; native speed
+acceptance remains open. **Refines:** D014–D015, D067–D069.
+
+Function entries identify exposure but cannot distinguish a cheap invocation from
+a long loop. A production sampling image now carries its PGO semantic identity,
+and `pgo merge` accepts named CPU captures alongside explicit VM counter runs.
+The merged profile retains per-capture interval, payload identity, coverage and
+function sample counts; CPU cost is estimated as attributable samples times the
+capture's process-CPU interval. Counter totals and CPU cost stay separate.
+Core reorders only local-discovery slots with both positive entry counts and
+usable CPU cost. CPU-only evidence can admit measured work without inventing
+entry heat for queue rank. A sampled instruction is not proof of the operation
+that consumed the time.
+
+The importer requires a successful complete capture, matching metadata and raw
+digest, current process-CPU raw schema, no dropped or truncated records, at least
+20 CPU samples, and p99 signal-to-safepoint delay no more than four sample
+intervals. A function needs 20 attributable samples before its CPU cost is
+queried. Unknown and ambiguous samples remain visible, not cold observations.
+The raw sampler now timestamps the first pending signal rather than comparing
+each drain to an ideal cumulative timer schedule, whose drift incorrectly
+classified otherwise useful long captures as biased.
+
+On the frozen self-hosted frontend, the accepted summaries capture at 10 ms has
+1,414 samples, 27.169 ms p99 delay and zero drops; the shape capture at 50 ms
+has 705 samples, 58.715 ms p99 delay and zero drops. A 10 ms shape capture was
+biased by real long safepoint delays and was excluded. The merged two-slice
+profile has 306 CPU-attributed functions, but only 19 clear the per-function
+sample floor; 139 summaries and 88 shape samples are unattributed, and none are
+ambiguous. All 19 eligible function identities match the frozen production
+build. Sampling and training captures have exact Node wire parity. Capture and
+merge reports are under `.cache/pgo-cpu-work-20260923/`.
+
+The 19 functions cover about 48.6% of attributed CPU in these two slices. A
+first broad local ordering displaced counter-hot functions without enough
+samples; the restricted ordering is still an experiment rather than the default
+policy. A CPU sample drained at a safepoint identifies the executing function
+more reliably than the precise expensive instruction; inspect generated code
+before crediting a recipe.
+
+## D071 — 2026-09-24 — Keep the sampled-CPU and measured-work pilots opt-in
+
+**Status:** Exact-output and two-pair runtime pilots complete; repeatability and
+equal-size acceptance remain open. **Refines:** D068–D070.
+
+The frozen self-hosted frontend had identical Node wire output in every pilot.
+The counter-only control was 51,900,672 bytes. Broad CPU ordering produced a
+51,900,688-byte binary and was 0.35% slower in total over two interleaved pairs
+on each of two trained and two held-out short slices. Constraining CPU ordering
+to local opportunities with both a positive entry count and qualified samples
+produced a 51,900,696-byte binary and was 0.62% faster in aggregate. The
+25%-of-original-total compiler-work grant alone made the binary 66,208 bytes
+larger and was 0.45% faster in aggregate, with one held-out slice slower.
+Combining the constrained CPU order with that work grant was 1.09% faster in the
+short-slice aggregate; all eight individual measured pair deltas favored it.
+
+On the entire frozen frontend compile, the combined binary remained exactly
+wire-identical to Node and the counter-only control. Two measured pairs took
+121.437/121.057 seconds for the control and 120.296/120.828 seconds for the
+combined policy: 0.94% and 0.19% faster, or 0.56% in total. The combined binary
+was 0.13% larger. These runs are a useful directional signal, not a durable
+default-policy result or a substitute for the still-missing equal-size static
+control. Training and sampling execution consumed about 124.5 seconds before
+building the training and sampling binaries, so the full-input runtime saving
+would need many repeated builds to amortize capture cost. Reports are under
+`.cache/pgo-cpu-work-20260923/`.
+
+A targeted probe of the hottest eligible function, `matchingOrMinusOne`, found
+1,543 measured entries and 737/806 exact successful targets at its two trained
+call sites. The planner offers one direct entry, but treats the open/guarded
+calls' exposure as unknown. Its only scalar arguments are two constant delimiter
+strings; the loop index and string/array loads remain boxed and generic in all
+four compared binaries. More work budget alone cannot remove that cost. Keep
+CPU and measured-work policies explicit while testing whether validated target
+hits can fund already-proved typed entries without broadly promoting guarded
+calls or assuming the sampled safepoint identifies the expensive instruction.

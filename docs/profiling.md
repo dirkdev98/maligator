@@ -136,6 +136,32 @@ cross-call transforms. Full compilation lets the deterministic worklists converg
 within their declared pass and transform budgets. Compare the two modes only with
 the same source, build config, workload, and warmed measurement protocol.
 
+## CPU samples as PGO input
+
+A completed production sampling capture can supplement VM entry counters when the
+same semantic build configuration produced both images. Merge it by naming the
+workload and capture directory explicitly:
+
+```sh
+node ./src/index.ts pgo merge .cache/pgo/runs/<counter-run-id> \
+  --cpu-profile representative .cache/profiles/<capture-id> \
+  --out .cache/pgo/selected.json
+node ./src/index.ts build app.mjs --production --pgo-use .cache/pgo/selected.json
+```
+
+Only process-CPU samples with a validated capture identity, complete raw payload,
+successful workload, no dropped or truncated records, and acceptable sampling delay
+enter the merged profile. Each function needs at least 20 attributable samples
+before CPU cost can guide local discovery. Missing samples mean unknown cost, not
+zero cost. CPU samples identify functions that consumed time; a sample drained at a
+safepoint does not prove that its reported instruction consumed that time.
+
+For a controlled budget experiment, add `--pgo-measured-work-bonus 25` to the
+production build. This adds 25% of the original total compiler-work grant to
+profile-measured optimization opportunities while keeping the original unknown
+work reserve fixed. It does not raise generated-code limits. Keep the option tied
+to exact-output and paired runtime comparisons before using it for a release build.
+
 ## Report layout
 
 The completeness marker, `manifest.json`, is published last. Its absence means the

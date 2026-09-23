@@ -739,7 +739,7 @@ describe("late Core specialization plan", () => {
 		expect(plan.statistics.discovery.skipped).toBe(1);
 	});
 
-	it("spends a tight local proof budget on sampled CPU cost despite zero entry counts", () => {
+	it("spends a tight local proof budget on CPU cost among counter-measured functions", () => {
 		const first = numericProgram();
 		const second = numericProgram("*", "+", first.program);
 		const prepared = planning(first.program, [first.function]);
@@ -753,7 +753,7 @@ describe("late Core specialization plan", () => {
 			{
 				pgo: {
 					digest: "cpu-fixture",
-					functionEntries: () => 0,
+					functionEntries: (id) => (id === second.function ? 1 : 2),
 					functionCpuCost: (id) => (id === second.function ? 200_000_000 : 20_000_000),
 					callAttempts: () => undefined,
 				},
@@ -774,6 +774,117 @@ describe("late Core specialization plan", () => {
 		expect(plan.statistics.discovery.skippedByReason["observed-zero"] ?? 0).toBe(0);
 		verifyCoreOptimizationPlan(first.program.seal(), plan);
 	});
+
+	it("keeps counter-hot CPU-unknown discovery ahead of a sampled cooler function", () => {
+		const first = numericProgram();
+		const second = numericProgram("*", "+", first.program);
+		const prepared = planning(first.program, [first.function]);
+		const queried: Array<CoreFunctionId> = [];
+		const budget = prepared.plan.statistics.compilerWorkConsumed;
+		const plan = buildCoreOptimizationPlan(
+			first.program,
+			prepared.analyses,
+			prepared.summaries,
+			[first.function, second.function],
+			{
+				pgo: {
+					digest: "cpu-fixture",
+					functionEntries: (id) => (id === second.function ? 2 : 1),
+					functionCpuCost: (id) => (id === first.function ? 200_000_000 : undefined),
+					callAttempts: () => undefined,
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 1000,
+					perCallerCompilerWork: 1000,
+					programGeneratedCode: 1000,
+					programCompilerWork: Math.ceil(budget / 0.8),
+				},
+				onLocalCandidates(id) {
+					queried.push(id);
+				},
+			},
+		);
+		expect(queried).toEqual([second.function]);
+		verifyCoreOptimizationPlan(first.program.seal(), plan);
+	});
+
+	it.each([0, undefined])(
+		"does not promote CPU-only evidence ahead of positive VM entries when raw=%s",
+		(rawEntries) => {
+			const first = numericProgram();
+			const second = numericProgram("*", "+", first.program);
+			const prepared = planning(first.program, [first.function]);
+			const queried: Array<CoreFunctionId> = [];
+			const budget = prepared.plan.statistics.compilerWorkConsumed;
+			const plan = buildCoreOptimizationPlan(
+				first.program,
+				prepared.analyses,
+				prepared.summaries,
+				[first.function, second.function],
+				{
+					pgo: {
+						digest: "cpu-fixture",
+						functionEntries: (id) => (id === first.function ? rawEntries : 1),
+						functionCpuCost: (id) => (id === first.function ? 200_000_000 : undefined),
+						callAttempts: () => undefined,
+					},
+					budgets: {
+						perSiteExpansions: 1,
+						perCallerExpansions: 4,
+						perCallerGeneratedCode: 1000,
+						perCallerCompilerWork: 1000,
+						programGeneratedCode: 1000,
+						programCompilerWork: Math.ceil(budget / 0.8),
+					},
+					onLocalCandidates(id) {
+						queried.push(id);
+					},
+				},
+			);
+			expect(queried).toEqual([second.function]);
+			verifyCoreOptimizationPlan(first.program.seal(), plan);
+		},
+	);
+
+	it.each([0, undefined])(
+		"admits CPU-only local work into the measured budget when entries=%s",
+		(rawEntries) => {
+			const { program, function: functionId } = numericProgram();
+			const prepared = planning(program, [functionId]);
+			const queried: Array<CoreFunctionId> = [];
+			const plan = buildCoreOptimizationPlan(
+				program,
+				prepared.analyses,
+				prepared.summaries,
+				[functionId],
+				{
+					pgo: {
+						digest: "cpu-fixture",
+						functionEntries: () => rawEntries,
+						functionCpuCost: () => 200_000_000,
+						callAttempts: () => undefined,
+					},
+					onLocalCandidates(id) {
+						queried.push(id);
+					},
+				},
+			);
+			expect(queried).toEqual([functionId]);
+			expect(plan.statistics.discovery.skippedByReason["observed-zero"] ?? 0).toBe(0);
+			expect(plan.statistics.applied).toBeGreaterThan(0);
+			expect(
+				plan.statistics.profileBudget?.measured.compilerWorkConsumed ?? 0,
+			).toBeGreaterThan(0);
+			expect(
+				plan.statistics.profileBudget?.measured.generatedCodeConsumed ?? 0,
+			).toBeGreaterThan(0);
+			expect(plan.statistics.profileBudget?.unknown.compilerWorkConsumed).toBe(0);
+			expect(plan.statistics.profileBudget?.unknown.generatedCodeConsumed).toBe(0);
+			verifyCoreOptimizationPlan(program.seal(), plan);
+		},
+	);
 
 	it("reports local discovery from the planner's single query", () => {
 		const { program, function: functionId } = numericProgram();
@@ -1217,7 +1328,9 @@ describe("late Core specialization plan", () => {
 		const context = programAnalysisContext();
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
-		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
 		let localScans = 0;
 		const plan = buildCoreOptimizationPlan(
 			program,

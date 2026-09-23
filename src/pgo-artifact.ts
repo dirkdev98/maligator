@@ -103,7 +103,12 @@ export interface MergedPgoProfile {
 	}>;
 	functions: Array<{ origin: string; revision: string; count: string }>;
 	calls: Array<{ key: string; count: string }>;
-	targets: Array<{ key: string; origin: string; revision: string; count: string }>;
+	targets: Array<{
+		key: string;
+		origin: string;
+		revision: string;
+		count: string;
+	}>;
 	targetUnknownCalls: Array<string>;
 	coverage: {
 		unknownFunctions: number;
@@ -425,7 +430,9 @@ export function finalizePgoCapture(
 export function mergePgoCaptures(
 	inputs: ReadonlyArray<string>,
 	output?: string,
-	options: { cpuProfiles?: ReadonlyArray<{ workload: string; directory: string }> } = {},
+	options: {
+		cpuProfiles?: ReadonlyArray<{ workload: string; directory: string }>;
+	} = {},
 ): { profile: MergedPgoProfile; path: string } {
 	if (inputs.length === 0) throw new Error("PGO merge needs explicit captures");
 	const captures = new Map<
@@ -471,7 +478,12 @@ export function mergePgoCaptures(
 	);
 	const cpuFunctions = new Map<
 		string,
-		{ origin: string; revision: string; samples: bigint; estimatedCpuNs: bigint }
+		{
+			origin: string;
+			revision: string;
+			samples: bigint;
+			estimatedCpuNs: bigint;
+		}
 	>();
 	for (const evidence of orderedCpu) {
 		for (const row of evidence.functions) {
@@ -854,7 +866,10 @@ function publishPgoProfile(file: string, profile: MergedPgoProfile): void {
 
 export function pgoOptimizationInput(
 	profile: MergedPgoProfile,
-	options: { collectQueryCoverage?: boolean; measuredWorkBonusPercent?: number } = {},
+	options: {
+		collectQueryCoverage?: boolean;
+		measuredWorkBonusPercent?: number;
+	} = {},
 ): CorePgoInput {
 	const functions = new Map(
 		profile.functions.map((row) => [
@@ -897,7 +912,7 @@ export function pgoOptimizationInput(
 		: undefined;
 	return {
 		digest: profile.digest,
-		policy: `cpu-local-v1-work-${options.measuredWorkBonusPercent ?? 0}-target-zero-v2-unknown-20:${compilerProducerIdentity("pgo-training", 2)}`,
+		policy: `cpu-local-${cpuFunctions.size === 0 ? "v1" : "v2"}-work-${options.measuredWorkBonusPercent ?? 0}-target-zero-v2-unknown-20:${compilerProducerIdentity("pgo-training", 2)}`,
 		bind({ program, context }) {
 			const identities = new SourceProfileIdentities();
 			const origins = new Map(

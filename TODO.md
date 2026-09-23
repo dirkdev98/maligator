@@ -303,7 +303,14 @@ iterator cursor is not, by itself, permission to delete its language object.
       pass-manager slowdown, which did not reproduce now. D069's first static
       control is 0.71% larger than PGO; one trained and one held-out pair match
       Node and favor PGO slightly, but require a closer size match and repeated
-      comparisons before claiming useful profile direction.
+      comparisons before claiming useful profile direction. D070 adds validated
+      process-CPU samples and an explicit measured-work bonus; D071's constrained
+      combined pilot is 0.56% faster over two full-frontend pairs with exact
+      Node output and a 0.13% larger binary. Keep it opt-in pending repeated
+      full-input and equal-size static comparisons. Investigate exact guarded
+      target exposure for CPU-qualified typed entries and improve the boxed
+      index/string/array work in the measured hot compiler loops before raising
+      budgets again.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

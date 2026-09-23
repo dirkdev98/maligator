@@ -132,6 +132,8 @@ interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
 	readonly kind: "local" | "direct-entry" | "guarded-call";
 	readonly priorityScore: number;
 	readonly cpuCost?: number;
+	// CPU-only evidence can admit work without inventing VM entry heat for ordering.
+	readonly rankExposure?: number;
 	readonly observedZero?: () => boolean;
 	readonly resolve: () => ReadonlyArray<PendingCandidate>;
 }
@@ -1657,7 +1659,9 @@ function directEntryOpportunities(
 							function: call.caller,
 						});
 						const representations = Array.from(
-							{ length: needsArity ? site!.arguments!.length : fn.parameterCount },
+							{
+								length: needsArity ? site!.arguments!.length : fn.parameterCount,
+							},
 							(_, index): CorePlanRepresentation => {
 								if (call.numericSortCallback !== undefined) return "f64";
 								const argument = site?.arguments?.[index];
@@ -1950,7 +1954,10 @@ export function buildCoreOptimizationPlan(
 		options.onLocalCandidates?.(functionId, candidates);
 		const fn = program.function(functionId);
 		const cfg = analyses
-			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: functionId })
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			})
 			.exceptional();
 		const costModel = coreGeneratedCodeCostModel(fn, cfg);
 		const pending: Array<CorePendingOptimizationCandidate> = [];
@@ -1976,6 +1983,7 @@ export function buildCoreOptimizationPlan(
 				kind: "local",
 				exposure:
 					cpuCost !== undefined && (entries === undefined || entries === 0) ? 1 : entries,
+				rankExposure: entries,
 				cpuCost,
 				caller: input.function,
 				generatedCodeCost: 1,
@@ -2003,26 +2011,38 @@ export function buildCoreOptimizationPlan(
 			),
 		);
 	}
-	opportunities.sort(
-		(left, right) =>
-			(options.pgo === undefined
-				? 0
-				: (left.exposure === undefined ? 1 : 0) -
-						(right.exposure === undefined ? 1 : 0) ||
-					(right.exposure ?? 0) - (left.exposure ?? 0)) ||
+	const orderingExposure = (opportunity: CorePlanningOpportunity) =>
+		opportunity.kind === "local" ? opportunity.rankExposure : opportunity.exposure;
+	opportunities.sort((left, right) => {
+		if (options.pgo !== undefined) {
+			const leftExposure = orderingExposure(left);
+			const rightExposure = orderingExposure(right);
+			const exposureOrder =
+				(leftExposure === undefined ? 1 : 0) - (rightExposure === undefined ? 1 : 0) ||
+				(rightExposure ?? 0) - (leftExposure ?? 0);
+			if (exposureOrder !== 0) return exposureOrder;
+		}
+		return (
 			left.priorityScore - right.priorityScore ||
 			left.generatedCodeCost - right.generatedCodeCost ||
 			left.caller - right.caller ||
-			left.kind.localeCompare(right.kind),
-	);
+			left.kind.localeCompare(right.kind)
+		);
+	});
 	if (options.pgo?.functionCpuCost !== undefined) {
 		const localPositions: Array<number> = [];
 		const local = opportunities.filter((opportunity, index) => {
-			if (opportunity.kind !== "local") return false;
+			if (
+				opportunity.kind !== "local" ||
+				opportunity.cpuCost === undefined ||
+				opportunity.rankExposure === undefined ||
+				opportunity.rankExposure <= 0
+			)
+				return false;
 			localPositions.push(index);
 			return true;
 		});
-		local.sort((left, right) => (right.cpuCost ?? -1) - (left.cpuCost ?? -1));
+		local.sort((left, right) => (right.cpuCost ?? 0) - (left.cpuCost ?? 0));
 		localPositions.forEach((position, index) => {
 			opportunities[position] = local[index]!;
 		});
