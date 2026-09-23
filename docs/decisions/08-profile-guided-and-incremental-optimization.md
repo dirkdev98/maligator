@@ -2307,3 +2307,40 @@ from caching completed advanced
 recipes, whose warm-build net cost and program-fact witnesses are still open.
 The temporary diagnostics were removed. Logs and equal output-wire digests
 are under `.cache/pgo-cache-followup-20260923/primary-census/`.
+
+## D059 — 2026-09-23 — Cross unique predecessors before solving slot memory
+
+**Status:** Bounded local memory lookup implemented; representative work falls,
+but a stable frontend-time gain is unproven. **Refines:** D057–D058.
+
+The full Core memory solver remained a real cost in a warm self-hosted frontend
+profile. The same-block local lookup stopped at a block boundary even when the
+load had exactly one ordinary incoming path. It now scans across at most four
+such blocks within the existing 32-instruction limit. Joins, exceptional edges,
+entry, and revisited blocks fall back to the full solver. The same exact-slot
+match and effect/clobber rules apply to every scanned instruction. No heap
+location, persistent receipt, or cross-generation fact is admitted by this
+shortcut.
+
+On the frozen frontend, the warm Core-cache build still reused 34 leaves and
+605 functions, and its wire SHA-256 remained
+`cd1909fa3e2f6e4910688a075a1cfc211445901cf57756f90f2f42f05a375019`.
+Local answers rose from 4,265 to 13,097. Whole-function memory instructions
+indexed fell from 888,010 to 844,267 and solved partitions from 11,769 to
+10,252. The comparison control used the discarded streaming-source-index pilot,
+which preserved these solver counts; its 19.409-second warm frontend took
+19.240 and 19.123 seconds in two predecessor-shortcut warm runs. The memory
+phase ranged from 3.560 to 3.685 seconds versus 3.643 seconds in that control.
+These are single, non-interleaved diagnostic runs, so the reduced solver work is
+established but the wall-time difference is not performance acceptance. Focused
+Core IR, memory, static-value, optimizer-contract and compiled/interpreted
+global-slot checks passed; the broad gate remains deferred.
+
+Three narrower probes were discarded. A direct parameter guard in static-value
+folding, retained cell proofs across functions without cell accesses, and a
+streaming `CoreMemoryValueSources` index all preserved the wire but failed to
+reduce representative warm-build time. A one-defining-entry-block memory-column
+shortcut also preserved the wire, but its memory phase did not fall versus the
+predecessor-only version. These results argue against expanding receipt recipes
+or adding more local proof caches before their residual cost is measured.
+Diagnostic reports are under `.cache/pgo-cache-next-20260923/`.

@@ -582,7 +582,7 @@ describe("Core IR", () => {
 	});
 
 	it.each(["unreachable", "predecessor", "long-block"] as const)(
-		"preserves %s answers when local lookup cannot supply a value",
+		"preserves %s answers across the bounded local lookup and solver",
 		(flow) => {
 			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
 			const builder = new CoreFunctionBuilder(program);
@@ -619,6 +619,10 @@ describe("Core IR", () => {
 			expect(memory.valueForRead(read, location)).toBe(
 				flow === "unreachable" ? undefined : stored,
 			);
+			if (flow === "predecessor") {
+				expect(memory.statistics.indexedInstructions).toBe(0);
+				expect(memory.statistics.solvedPartitions).toBe(0);
+			}
 			if (flow === "long-block") expect(memory.statistics.localReadInstructions).toBe(32);
 			memory.readHash(read);
 			expect(memory.valueForRead(read, location)).toBe(
@@ -626,6 +630,70 @@ describe("Core IR", () => {
 			);
 		},
 	);
+
+	it("uses the full memory solver after two paths join", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const merge = builder.createBlock();
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [leftValue] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [rightValue] = builder.appendInstruction(right, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		builder.appendInstruction(left, "storeGlobal", [leftValue!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(right, "storeGlobal", [rightValue!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, { kind: "jump", edge: { block: merge, arguments: [] } });
+		builder.setTerminator(right, { kind: "jump", edge: { block: merge, arguments: [] } });
+		const [loaded] = builder.appendInstruction(merge, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const read = builder.bodyInstructionIds(merge).at(-1)!;
+		builder.setTerminator(merge, { kind: "return", value: loaded! });
+		const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
+		expect(memory.statistics.solvedPartitions).toBeGreaterThan(0);
+	});
+
+	it("does not forward an entry store past a later block's call", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const successor = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: successor, arguments: [] },
+		});
+		builder.appendInstruction(successor, "call", [stored!, stored!]);
+		const [loaded] = builder.appendInstruction(successor, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const read = builder.bodyInstructionIds(successor).at(-1)!;
+		builder.setTerminator(successor, { kind: "return", value: loaded! });
+		const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+		memory.readHash(read);
+		expect(memory.valueForRead(read, { kind: "global-slot", slot: 0 })).toBeUndefined();
+	});
 
 	it("retains stores for locations queried after the shared call barriers are solved", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
@@ -878,6 +946,7 @@ describe("Core IR", () => {
 			expect(memory.valueForRead(final, location)).toBe(
 				flow === "loop" ? replacement : undefined,
 			);
+			memory.readHash(final);
 			expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
 		},
 	);

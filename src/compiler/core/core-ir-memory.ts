@@ -370,6 +370,7 @@ type LocalMemoryReadValue = CoreValueId | undefined | typeof LOCAL_MEMORY_READ_U
 
 function localMemoryRead(
 	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
 	read: CoreInstructionId,
 	location: CoreSlotMemoryLocation,
 ): { readonly value: LocalMemoryReadValue; readonly instructions: number } {
@@ -380,11 +381,32 @@ function localMemoryRead(
 	)
 		return { value: undefined, instructions: 0 };
 	let instructions = 0;
-	for (
-		let instruction = fn.instructionPrevious(read);
-		instruction !== undefined && instructions < 32;
-		instruction = fn.instructionPrevious(instruction)
-	) {
+	const readBlock = fn.instructionBlock(read);
+	let block = readBlock;
+	let instruction = fn.instructionPrevious(read);
+	let transitions = 0;
+	let visited: Set<CoreBlockId> | undefined;
+	while (instructions < 32) {
+		if (instruction === undefined) {
+			if (block === fn.entry || transitions === 4) break;
+			let predecessor: CoreBlockId | undefined;
+			for (const edge of cfg.predecessors[block] ?? []) {
+				if (!cfg.reachable.has(edge.from)) continue;
+				if (predecessor !== undefined || edge.kind !== "ordinary") {
+					predecessor = undefined;
+					break;
+				}
+				predecessor = edge.from;
+			}
+			if (predecessor === undefined) break;
+			visited ??= new Set([readBlock]);
+			if (visited.has(predecessor)) break;
+			visited.add(predecessor);
+			block = predecessor;
+			instruction = fn.instructionPrevious(fn.blockTerminator(block));
+			transitions++;
+			continue;
+		}
 		instructions++;
 		const effects = coreInstructionEffects(fn, instruction);
 		if (
@@ -393,8 +415,10 @@ function localMemoryRead(
 			!CORE_MEMORY_FAMILY_DOMAINS[location.kind].some((domain) =>
 				effects.writes.includes(domain),
 			)
-		)
+		) {
+			instruction = fn.instructionPrevious(instruction);
 			continue;
+		}
 		const accesses = coreMemoryAccesses(fn, instruction);
 		// The full solver compares kill versions before the store and before the read.
 		if (memoryFamilyIsKilled(location.kind, effects, accesses))
@@ -404,6 +428,7 @@ function localMemoryRead(
 			if (access.mode === "write" && sameSlotLocation(access.location, location))
 				return { value: access.value, instructions };
 		}
+		instruction = fn.instructionPrevious(instruction);
 	}
 	return { value: LOCAL_MEMORY_READ_UNRESOLVED, instructions };
 }
@@ -1141,7 +1166,7 @@ function prepareMemoryVersions(
 					)
 						return undefined;
 					const result = runOwner(CORE_OPTIMIZATION_OWNER.memoryEventExtraction, () =>
-						localMemoryRead(fn, instruction, location),
+						localMemoryRead(fn, cfg, instruction, location),
 					);
 					local = { location: locationId, value: result.value };
 					localReads.set(instruction, local);
