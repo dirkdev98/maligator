@@ -1795,3 +1795,112 @@ cache boundary. The report (intentionally marked incomplete on wire mismatch)
 and both wires are retained under
 `.cache/pgo-selfhost-frontend-20260923/native-acceptance/cache-frontend-probe.json`
 and `cache-probe-wires/`.
+
+## D049 — 2026-09-23 — Reassess acceptance before expanding PGO or Core reuse
+
+**Status:** Reassessment and next-step ordering adopted; PGO and persistent Core
+reuse remain opt-in. **Refines:** D009, D038, D043, D046–D048.
+**Supersedes:** None.
+
+An Astra Ultra audit of source at `8c28dd38`, the execution backlog, and retained
+native-acceptance reports establishes the following boundary. Earlier implementation
+records remain valid for their stated slices; their focused checks do not imply
+completion of the original incremental-optimization design.
+
+| Capability                | Established implementation and evidence                                                                                                                                                                                  | Acceptance still open                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Training and profile use  | Exact-revision function/site identities, bounded entry/attempt counters, explicit validated capture/merge, compiled and interpreted training parity, current-build query diagnostics, and heat-directed budget admission | Representative native speed, holdout stability, training economics, and full self-compile                                                                       |
+| Persistent optimized Core | Production leaf selection, independently owned relocation, immutable validated artifacts, completed `conservative-structural-v4` scalar/structural cleanup, and PGO identity rebinding                                   | Representative cache-on/off execution and net application-edit build benefit                                                                                    |
+| Larger incremental design | Stage 4 has ordinary Meriyah and compiler-leaf reuse                                                                                                                                                                     | Function-demand loading, binding-aware reuse beyond leaves, stable native module products, persisted PGO upgrades, promotion/pinning, and resumable work grants |
+
+The [PGO adapter](../../src/pgo-artifact.ts) supplies only function entries and
+source-call attempts. It has no observed-target or guard-success distribution.
+Profile observations remain scheduling hints, never semantic proofs. The
+[module selector](../../src/core-module-selection.ts) admits import-free ESM leaves,
+not arbitrary functions from the assembled graph. The
+[cache](../../src/core-module-cache.ts) persists one conservative completed recipe;
+whole-program analyses, cross-call work, representation planning and backend
+generation still run. A warm selected module loads all its bodies. Ordinary
+module keys currently use resolved source paths, so portable artifact encoding
+does not establish cache sharing across relocated checkouts. Exact whole-image
+and object-cache hits are separate existing fast paths.
+
+The retained evidence supports narrower conclusions than a general performance
+claim:
+
+- `train-compiled/parity-summary.json` records equal function and call arrays and
+  equal Node wire output for the frozen summaries workload. Its 243.7 versus
+  26.1 seconds establishes one much cheaper training run, not amortized product
+  acceptance.
+- `compare-guard-attribution/report.json` compares the previous two-phase PGO
+  binary with the guarded-call policy candidate, despite its `static`/`pgo`
+  column names. The candidate is 895,040 bytes smaller and improves the trained
+  summaries pairs, but its held-out region result is mixed. Read binary hashes
+  and experiment provenance before interpreting any runner column as a
+  no-profile control.
+- `compare-third-capture-pass/report.json` isolates two-phase versus three-phase
+  PGO and finds the latter 4.32% slower and 0.78% faster in its two pass-manager
+  pairs. `compare-three-phase/report.json` measures summaries, shape and
+  pass-manager, all included in that profile; it does not measure the remaining
+  region-selection holdout. Widening the corpus has not established a gain.
+- `cache-frontend-probe.json` records deterministic but different cache-off/on
+  compiler wires, 34 hits and 605 imported functions, and no measured frontend
+  saving across its off/on/on/off sequence. The 34 additional cached functions
+  are consistent with module initializer retention, but their cause and runtime
+  effect remain unproven. Wire inequality alone proves neither a semantic bug
+  nor equivalence.
+
+The next work is ordered by unresolved correctness and avoidable experimental cost:
+
+1. Execute both D048 cache variants against the same frozen representative
+   compiler input and Node oracle. Cover initializer order, once-only effects,
+   throwing initialization and independent module state through the native cache
+   fixtures. Attribute retained initializers and remaining compilation phases
+   before changing the reuse boundary. Preserve both wires until the discrepancy
+   has an explained semantic result.
+2. Make late region-candidate exposure consistent with D046. At this revision,
+   `guardedCallOpportunities` in
+   [region selection](../../src/compiler/core/core-ir-region-selection.ts) still
+   assigns total source-call attempts to open hinted targets. Positive attempts
+   cannot fund a particular hinted target as measured traffic. Closed finite
+   target sets may use total attempts for their combined dispatch; open positive
+   traffic stays unknown. Preserve exact-zero admission as an independent reason
+   to skip optional proof work and retain deterministic no-profile behavior.
+3. Compare that isolated policy change with the existing frozen profile before
+   collecting another similar compiler slice. Only then consider bounded
+   target-success observations, with stable source/target identities and explicit
+   unknown/overflow behavior, if measured candidate decisions need them. A new
+   target counter must not turn target observations into guard-removal authority.
+4. Price cache keying, lookup, decoding/relocation, residual optimization and
+   emission against avoided work on repeated real application edits. Broaden to
+   demand-loaded functions or importing modules only after that accounting is
+   positive and the D042 binding/ownership contract is complete. Stages 5–7 are
+   separate proposals, not prerequisites to obtain useful stage-4 evidence.
+
+Semantic acceptance requires focused integration coverage of the changed boundary
+and the normal developer gate on the retained code. For PGO, preserve exact
+training counter semantics, unknown versus zero, guard fallbacks, cold errors and
+unseen targets; every native compiler run must match the frozen Node oracle.
+For Core reuse, cache-off/cold/warm execution must preserve observable results and
+initialization, including shifted function/constant indexes, dependency and
+producer invalidation, corrupt receipts and independently owned module instances.
+Different internal compiler wires may be accepted only after their execution and
+ownership differences are explained and verified; equal bytes are not a substitute
+for exercising initialization effects.
+
+Performance acceptance requires matched source, profile, options, toolchain and
+host conditions; repeated interleaved pairs; separate cold and warm results; and
+trained plus genuinely held-out inputs. Report absolute time, paired changes and
+uncertainty, binary/cache bytes, peak memory and training/build cost. Retain a
+runtime policy as a measured win only when improvement repeats beyond noise and
+representative holdouts do not introduce a material regression. Accept cache reuse
+as a build win only when end-to-end changed-entry time decreases after all restore
+and residual work, while cold/miss and runtime costs remain accounted for. Counted
+hits, fewer transforms or smaller binaries alone do not meet either criterion.
+Broader defaults require representative workload coverage beyond this frontend
+micro-corpus, including full self-compile under the repository's execution policy.
+
+This audit ran no new native tests or performance comparisons. Its report evidence
+remains under `.cache/pgo-selfhost-frontend-20260923/native-acceptance/`; fresh
+validation is required for subsequent changes, and neither saved baselines nor
+earlier decision statuses are altered by this reassessment.
