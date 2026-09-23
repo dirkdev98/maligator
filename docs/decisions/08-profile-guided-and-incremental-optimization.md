@@ -1330,3 +1330,26 @@ each subsequent workload run. Focused subprocess tests run two captures from
 one prepared executable and merge their counts, then reject a failed run, a
 missing payload and a changed executable. No native compiler or representative
 runtime benchmark was run for this decision.
+
+## D035 — 2026-09-23 — Admit independent cached leaves in host and cyclic graphs
+
+**Status:** Implemented with focused frontend checks; native execution parity and
+representative application-edit timing remain open. **Refines:** D009, D031.
+
+The persistent Core selector previously rejected a whole ESM graph if any
+consumer used a `node:*` host module or if any consumers formed an import cycle.
+Neither condition changes the standalone lowering contract of an import-free
+leaf. Selection now checks those conditions at the candidate: a dependency-free
+non-entry ESM leaf cannot itself join an import cycle, and a host module is not
+a source leaf. Cyclic consumers and host importers still lower normally.
+
+A leaf that reads free Node globals or uses `import.meta` is excluded when the
+Node surface is enabled. Standalone Core lowering runs without that surface,
+so those facts and host installer retention cannot safely be copied from the
+whole-program build. Shadowed local names do not trigger exclusion. The
+whole-graph static ESM, platform, and direct-eval restrictions remain in force.
+
+Focused builds show unchanged cold/warm wire bytes and cache hits across a
+host importer and a cyclic consumer, including a changed application entry.
+These checks establish cache admission and deterministic frontend output, not
+native execution parity or a speedup for the self-hosted compiler.

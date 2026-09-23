@@ -1,8 +1,31 @@
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import type { CoreFrontendOptions } from "./compiler/core/core-frontend.ts";
+import { ESTREE_STOP, traverseEstree } from "./compiler/frontend/estree-traversal.ts";
 import type { SemanticProgram } from "./compiler/frontend/semantic-analysis.ts";
 import { loadOrCompileCoreModule } from "./core-module-cache.ts";
+
+const NODE_HOST_GLOBALS = new Set([
+	"process",
+	"global",
+	"TextEncoder",
+	"TextDecoder",
+	"Buffer",
+]);
+
+function dependsOnNodeContext(file: SemanticProgram["files"][number]): boolean {
+	for (const binding of file.nodeToBinding.values())
+		if (binding.undeclared && NODE_HOST_GLOBALS.has(binding.name)) return true;
+	return (
+		traverseEstree(file.ast, (node) =>
+			node.type === "MetaProperty" &&
+			node.meta.name === "import" &&
+			node.property.name === "meta"
+				? ESTREE_STOP
+				: undefined,
+		) === ESTREE_STOP
+	);
+}
 
 export interface CoreModuleReuseStatistics {
 	hits: number;
@@ -24,11 +47,9 @@ export function selectReusableCoreModules(
 	const graph = semantic.graph;
 	if (
 		graph === undefined ||
-		graph.cycles.length !== 0 ||
 		[...graph.modules.values()].some(
 			(module) =>
 				module.goal !== "module" ||
-				module.host !== undefined ||
 				module.platform !== undefined ||
 				module.dependencies.some(
 					(dependency) => dependency.kind !== "import" && dependency.kind !== "export",
@@ -37,20 +58,29 @@ export function selectReusableCoreModules(
 		semantic.files.some((file) => file.hasDirectEval.size !== 0)
 	) {
 		statistics.fallback =
-			"Core reuse requires a static ESM graph without cycles, host modules or direct eval";
+			"Core reuse requires a static ESM graph without platform modules or direct eval";
 		return undefined;
 	}
+	const files = new Map(semantic.files.map((file) => [file.path, file]));
 	const directory = path.join(
 		cacheDirectory ?? maligatorCacheDirectory(),
 		"core-modules",
 	);
 	return (sourcePath) => {
 		const module = graph.modules.get(sourcePath);
+		// A dependency-free leaf cannot join a cycle; cyclic consumers still lower normally.
 		if (
 			module === undefined ||
 			module.path === graph.entry ||
-			module.dependencies.length !== 0
+			module.dependencies.length !== 0 ||
+			module.host !== undefined ||
+			module.platform !== undefined ||
+			module.virtual === true
 		)
+			return undefined;
+		const file = files.get(sourcePath);
+		// Standalone leaf lowering cannot supply Node import.meta fields or retain host globals.
+		if (graph.nodeEnabled && (file === undefined || dependsOnNodeContext(file)))
 			return undefined;
 		const result = loadOrCompileCoreModule({
 			source: module.source,

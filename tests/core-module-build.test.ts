@@ -166,6 +166,86 @@ it("reuses dependency Core after an application edit while retaining private sou
 	expect(repeat.wire).toEqual(warm.wire);
 });
 
+it("reuses an independent ESM leaf beside Node host imports", () => {
+	const { write, options } = fixture();
+	const nodeOptions = {
+		...options,
+		config: resolveBuildConfig({ surface: { node: true } }),
+		nodeGlobalsSource: readFileSync(
+			path.resolve(import.meta.dirname, "../src/node-globals.mjs"),
+			"utf8",
+		),
+	};
+	write(
+		"entry.mjs",
+		"import { readFileSync } from 'node:fs'; import { counter } from './lib.mjs'; console.log(typeof readFileSync, counter(7)());",
+	);
+	const cold = compileBuildFrontend(nodeOptions);
+	expect(cold.coreModules).toMatchObject({ misses: 1, hits: 0, unsupported: 0 });
+	const unchanged = compileBuildFrontend({ ...nodeOptions, forceCompile: true });
+	expect(unchanged.coreModules).toMatchObject({ hits: 1, misses: 0 });
+	expect(unchanged.wire).toEqual(cold.wire);
+	write(
+		"entry.mjs",
+		"import { readFileSync } from 'node:fs'; import { counter } from './lib.mjs'; console.log('edited', typeof readFileSync, counter(8)());",
+	);
+	const warm = compileBuildFrontend(nodeOptions);
+	expect(warm.coreModules).toMatchObject({
+		hits: 1,
+		misses: 0,
+		constructedFunctions: 0,
+		optimizedFunctions: 0,
+	});
+});
+
+it("leaves Node-context import.meta and host-global leaves to ordinary lowering", () => {
+	const { write, options } = fixture();
+	write("meta.mjs", "export const filename = import.meta.filename;");
+	write("host.mjs", "export const env = process.env;");
+	write("shadowed.mjs", "export function local(process) { return process.env; }");
+	write(
+		"entry.mjs",
+		"import { readFileSync } from 'node:fs'; import { n } from './lib.mjs'; import { filename } from './meta.mjs'; import { env } from './host.mjs'; import { local } from './shadowed.mjs'; console.log(typeof readFileSync, n, filename, env, local({env: 1}));",
+	);
+	const nodeOptions = {
+		...options,
+		config: resolveBuildConfig({ surface: { node: true } }),
+		nodeGlobalsSource: readFileSync(
+			path.resolve(import.meta.dirname, "../src/node-globals.mjs"),
+			"utf8",
+		),
+	};
+	const reused = compileBuildFrontend(nodeOptions);
+	expect(reused.coreModules).toMatchObject({ misses: 2, hits: 0, unsupported: 0 });
+});
+
+it("reuses an import-free leaf reached through a cyclic consumer", () => {
+	const { write, options } = fixture();
+	write(
+		"cycle-a.mjs",
+		"import { readB } from './cycle-b.mjs'; import { bump, n } from './lib.mjs'; export function read() { return n; } export function tick() { bump(); return readB(); }",
+	);
+	write(
+		"cycle-b.mjs",
+		"import { read } from './cycle-a.mjs'; export function readB() { return read(); }",
+	);
+	write("entry.mjs", "import { tick } from './cycle-a.mjs'; console.log(tick());");
+	const cold = compileBuildFrontend(options);
+	expect(cold.coreModules).toMatchObject({ misses: 1, hits: 0, unsupported: 0 });
+	const unchanged = compileBuildFrontend({ ...options, forceCompile: true });
+	expect(unchanged.coreModules).toMatchObject({ hits: 1, misses: 0 });
+	expect(unchanged.wire).toEqual(cold.wire);
+	write(
+		"entry.mjs",
+		"import { tick } from './cycle-a.mjs'; console.log('edited', tick());",
+	);
+	expect(compileBuildFrontend(options).coreModules).toMatchObject({
+		hits: 1,
+		misses: 0,
+		constructedFunctions: 0,
+	});
+});
+
 it("invalidates changed dependency bodies and resolved module instances", () => {
 	const { write, options } = fixture();
 	compileBuildFrontend(options);
