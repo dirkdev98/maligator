@@ -863,15 +863,18 @@ describe("Core optimizer infrastructure", () => {
 		).toMatchObject([{ analysis: "test-admitted-analysis", queries: 1 }]);
 	});
 
-	it("declares concrete admissions for every analysis-backed O2 pass", () => {
+	it("gates every analysis-backed O2 pass before requesting analyses", () => {
 		for (const pass of [
 			...CORE_CONTROL_FLOW_PASSES,
 			...CORE_PROOF_PASSES,
 			...CORE_MEMORY_PASSES,
 		]) {
 			if (pass.requiredAnalyses.length === 0) continue;
-			expect(pass.admission, pass.name).toBeDefined();
-			expect(pass.admission?.predicate.trim().length, pass.name).toBeGreaterThan(0);
+			expect(
+				(pass.admission?.predicate.trim().length ?? 0) +
+					(pass.requiredFunctionOpcodesAny?.length ?? 0),
+				pass.name,
+			).toBeGreaterThan(0);
 		}
 	});
 
