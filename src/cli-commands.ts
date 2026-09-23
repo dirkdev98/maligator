@@ -587,6 +587,13 @@ function compileAndBuild(
 				`${modules.hits} reused, ${modules.misses} compiled, ${modules.unsupported} unsupported, ${modules.budgetLimited} budget limited; ` +
 					`${modules.constructedFunctions} functions constructed, ${modules.optimizedFunctions} scalar recipes run`,
 		);
+		if (modules.timings !== undefined)
+			reporter.detail(
+				"Core module phases",
+				Object.entries(modules.timings)
+					.map(([phase, duration]) => `${phase} ${duration.toFixed(1)}ms`)
+					.join(", "),
+			);
 	}
 	for (const diagnostic of frontend.diagnostics) {
 		reporter.warning(

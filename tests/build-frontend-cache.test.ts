@@ -3,6 +3,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -116,6 +117,51 @@ describe("normal build frontend cache", () => {
 		expect(compiled.optimizationReport?.instrumentation).toBe("full");
 		expect(compiled.optimizationReport?.phases.length).toBeGreaterThan(0);
 		expect(compiled.optimizationReport?.passes.length).toBeGreaterThan(0);
+	});
+
+	it("measures Core cache restoration only under phase diagnostics", () => {
+		const root = temporaryDirectory();
+		try {
+			const entrypoint = path.join(root, "entry.mjs");
+			write(path.join(root, "package.json"), `{"type":"module"}\n`);
+			write(path.join(root, "leaf.mjs"), "export const answer = 42;\n");
+			write(entrypoint, "import { answer } from './leaf.mjs'; console.log(answer);\n");
+			const options = {
+				entrypoint,
+				config: resolveBuildConfig({}),
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "core-cache-phase-test",
+				cacheDirectory: path.join(root, "cache"),
+				coreModuleCache: true,
+				forceCompile: true,
+			};
+			const cold = compileBuildFrontend(options);
+			const measured = compileBuildFrontend({
+				...options,
+				coreInstrumentation: "phases",
+			});
+			const ordinary = compileBuildFrontend(options);
+
+			expect(cold.coreModules).toMatchObject({ misses: 1, hits: 0 });
+			expect(measured.coreModules).toMatchObject({
+				misses: 0,
+				hits: 1,
+				constructedFunctions: 0,
+				optimizedFunctions: 0,
+			});
+			expect(ordinary.coreModules?.timings).toBeUndefined();
+			expect(measured.coreModules?.timings).toBeDefined();
+			const timings = measured.coreModules!.timings!;
+			for (const duration of Object.values(timings))
+				expect(Number.isFinite(duration) && duration >= 0).toBe(true);
+			expect(timings.decode).toBeGreaterThan(0);
+			expect(timings.import).toBeGreaterThan(0);
+			expect(timings.construct).toBe(0);
+			expect(timings.optimize).toBe(0);
+			expect(measured.wire).toEqual(ordinary.wire);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("does not turn instrumentation on for an optimization callback", () => {

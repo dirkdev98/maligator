@@ -149,6 +149,7 @@ export interface CoreModuleArtifact {
 export interface CompletedCoreModule {
 	artifact: CoreModuleArtifact;
 	completedRecipe: typeof CORE_MODULE_RECIPE;
+	runImport?: <Result>(run: () => Result) => Result;
 }
 export const CORE_MODULE_RECIPE = "conservative-structural-v4";
 export const CORE_MODULE_MAX_ENCODED_LENGTH = 32 * 1024 * 1024;

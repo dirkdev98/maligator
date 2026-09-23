@@ -1102,14 +1102,17 @@ function emitReusableModuleInit(
 		);
 		file = program.sourceFilesByPath.get(modulePath);
 	}
-	const imported = importCoreModule(
-		program.core,
-		reusable.artifact,
-		modulePath,
-		program.sourceOrigins === undefined || file === undefined
-			? undefined
-			: { origins: program.sourceOrigins, file },
-	);
+	const importModule = () =>
+		importCoreModule(
+			program.core,
+			reusable.artifact,
+			modulePath,
+			program.sourceOrigins === undefined || file === undefined
+				? undefined
+				: { origins: program.sourceOrigins, file },
+		);
+	const imported =
+		reusable.runImport === undefined ? importModule() : reusable.runImport(importModule);
 	program.nextFunctionIndex = program.core.functionCapacity;
 	program.nextGlobalIndex = program.core.globalCount;
 	for (const units of program.core.stringConstants.slice(program.stringConstants.length))

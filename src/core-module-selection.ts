@@ -4,6 +4,7 @@ import type { CoreFrontendOptions } from "./compiler/core/core-frontend.ts";
 import { ESTREE_STOP, traverseEstree } from "./compiler/frontend/estree-traversal.ts";
 import type { SemanticProgram } from "./compiler/frontend/semantic-analysis.ts";
 import { loadOrCompileCoreModule } from "./core-module-cache.ts";
+import type { CoreModuleCachePhase } from "./core-module-cache.ts";
 
 const NODE_HOST_GLOBALS = new Set([
 	"process",
@@ -35,6 +36,7 @@ export interface CoreModuleReuseStatistics {
 	constructedFunctions: number;
 	optimizedFunctions: number;
 	importedFunctions: number;
+	timings?: Record<CoreModuleCachePhase | "import", number>;
 	fallback?: string;
 }
 
@@ -82,6 +84,7 @@ export function selectReusableCoreModules(
 		// Standalone leaf lowering cannot supply Node import.meta fields or retain host globals.
 		if (graph.nodeEnabled && (file === undefined || dependsOnNodeContext(file)))
 			return undefined;
+		const timings = statistics.timings;
 		const result = loadOrCompileCoreModule({
 			source: module.source,
 			sourcePath,
@@ -89,6 +92,12 @@ export function selectReusableCoreModules(
 			capturePolicy: "optimized-only",
 			parsed: { result: module.parsed, producer: stripperIdentity },
 			cacheDirectory: directory,
+			onPhase:
+				timings === undefined
+					? undefined
+					: (phase, durationMs) => {
+							timings[phase] += durationMs;
+						},
 			onWork(phase, functions) {
 				if (phase === "construct") statistics.constructedFunctions += functions;
 				else statistics.optimizedFunctions += functions;
@@ -105,6 +114,18 @@ export function selectReusableCoreModules(
 		return {
 			artifact: result.optimized,
 			completedRecipe: result.completedRecipe,
+			...(timings === undefined
+				? {}
+				: {
+						runImport: <Result>(run: () => Result): Result => {
+							const startedAt = performance.now();
+							try {
+								return run();
+							} finally {
+								timings.import += performance.now() - startedAt;
+							}
+						},
+					}),
 		};
 	};
 }

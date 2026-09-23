@@ -33,6 +33,14 @@ import { conservativeCompilerProgramFacts } from "./compiler/shared/compiler-fac
 const BOUNDARY = "strict-esm-private-cells-boxed-local-v4";
 const RECEIPT_SCHEMA = 4;
 type CapturePolicy = "full" | "optimized-only";
+export type CoreModuleCachePhase =
+	| "key"
+	| "read"
+	| "decode"
+	| "construct"
+	| "optimize"
+	| "capture"
+	| "publish";
 export interface CoreModuleCacheOptions {
 	source: string;
 	sourcePath: string;
@@ -42,6 +50,7 @@ export interface CoreModuleCacheOptions {
 	maxEdits?: number;
 	capturePolicy?: CapturePolicy;
 	onWork?: (phase: "construct" | "optimize", functions: number) => void;
+	onPhase?: (phase: CoreModuleCachePhase, durationMs: number) => void;
 	/** The parsed tree must correspond to source under this stripping/transform producer. */
 	parsed?: { result: ModuleRecord["parsed"]; producer: string };
 }
@@ -77,6 +86,19 @@ interface UnsupportedReceipt {
 }
 function digest(text: string) {
 	return hash("sha256", text, "hex");
+}
+function timePhase<Result>(
+	onPhase: CoreModuleCacheOptions["onPhase"],
+	phase: CoreModuleCachePhase,
+	run: () => Result,
+): Result {
+	if (onPhase === undefined) return run();
+	const startedAt = performance.now();
+	try {
+		return run();
+	} finally {
+		onPhase(phase, performance.now() - startedAt);
+	}
 }
 function rejectUnsupportedSyntax(value: unknown): void {
 	if (value === null || typeof value !== "object") return;
@@ -138,12 +160,20 @@ function publishReceipt(
 	}
 }
 
-function loadPayload(directory: string, expectedDigest: string): CoreModuleArtifact {
+function loadPayload(
+	directory: string,
+	expectedDigest: string,
+	onPhase?: CoreModuleCacheOptions["onPhase"],
+): CoreModuleArtifact {
 	if (!/^[a-f0-9]{64}$/.test(expectedDigest))
 		throw new Error("Invalid Core payload digest");
-	const bytes = readFileSync(path.join(directory, `${expectedDigest}.json`), "utf8");
-	if (digest(bytes) !== expectedDigest) throw new Error("Core payload digest mismatch");
-	return decodeCoreModule(bytes);
+	const bytes = timePhase(onPhase, "read", () => {
+		const loaded = readFileSync(path.join(directory, `${expectedDigest}.json`), "utf8");
+		if (digest(loaded) !== expectedDigest)
+			throw new Error("Core payload digest mismatch");
+		return loaded;
+	});
+	return timePhase(onPhase, "decode", () => decodeCoreModule(bytes));
 }
 
 function cacheKey(options: CoreModuleCacheOptions, capturePolicy: CapturePolicy): string {
@@ -167,14 +197,20 @@ function loadCanonical(
 	directory: string,
 	key: string,
 	canonicalDigest: string | null,
+	onPhase?: CoreModuleCacheOptions["onPhase"],
 ): CoreModuleArtifact {
-	if (canonicalDigest !== null) return loadPayload(directory, canonicalDigest);
-	const descriptor = JSON.parse(
-		readFileSync(path.join(directory, "canonical.json"), "utf8"),
-	) as CanonicalDescriptor;
+	if (canonicalDigest !== null) return loadPayload(directory, canonicalDigest, onPhase);
+	const descriptor = timePhase(
+		onPhase,
+		"read",
+		() =>
+			JSON.parse(
+				readFileSync(path.join(directory, "canonical.json"), "utf8"),
+			) as CanonicalDescriptor,
+	);
 	if (descriptor.schema !== RECEIPT_SCHEMA || descriptor.key !== key)
 		throw new Error("Canonical Core descriptor identity mismatch");
-	return loadPayload(directory, descriptor.digest);
+	return loadPayload(directory, descriptor.digest, onPhase);
 }
 
 function constructCoreModule(options: CoreModuleCacheOptions) {
@@ -280,12 +316,17 @@ export function loadOrCompileCoreModule(
 	const maxWorkItems = options.maxWorkItems ?? 100_000;
 	const maxEdits = options.maxEdits ?? 100_000;
 	const capturePolicy = options.capturePolicy ?? "full";
-	const key = cacheKey(options, capturePolicy);
+	const key = timePhase(options.onPhase, "key", () => cacheKey(options, capturePolicy));
 	const directory = path.join(options.cacheDirectory, key);
 	try {
-		const receipt = JSON.parse(
-			readFileSync(path.join(directory, "manifest.json"), "utf8"),
-		) as ModuleReceipt | UnsupportedReceipt;
+		const receipt = timePhase(
+			options.onPhase,
+			"read",
+			() =>
+				JSON.parse(readFileSync(path.join(directory, "manifest.json"), "utf8")) as
+					| ModuleReceipt
+					| UnsupportedReceipt,
+		);
 		if (
 			receipt.schema === RECEIPT_SCHEMA &&
 			receipt.key === key &&
@@ -293,7 +334,7 @@ export function loadOrCompileCoreModule(
 			(receipt.status === "unsupported" || receipt.status === "budget-limited") &&
 			typeof receipt.unsupported === "string"
 		) {
-			touchCacheEntry(directory);
+			timePhase(options.onPhase, "read", () => touchCacheEntry(directory));
 			return {
 				status: receipt.status,
 				reason: receipt.unsupported,
@@ -308,14 +349,19 @@ export function loadOrCompileCoreModule(
 			(receipt.canonicalDigest === null) === (capturePolicy === "optimized-only") &&
 			typeof receipt.optimizedDigest === "string"
 		) {
-			const optimized = loadPayload(directory, receipt.optimizedDigest);
+			const optimized = loadPayload(directory, receipt.optimizedDigest, options.onPhase);
 			let canonical: CoreModuleArtifact | undefined;
-			touchCacheEntry(directory);
+			timePhase(options.onPhase, "read", () => touchCacheEntry(directory));
 			return {
 				status: "ready",
 				cache: "hit",
 				get canonical() {
-					return (canonical ??= loadCanonical(directory, key, receipt.canonicalDigest));
+					return (canonical ??= loadCanonical(
+						directory,
+						key,
+						receipt.canonicalDigest,
+						options.onPhase,
+					));
 				},
 				optimized,
 				completedRecipe: RECIPE,
@@ -327,55 +373,72 @@ export function loadOrCompileCoreModule(
 		/* An unusable cache entry is a miss; destination Core has not been touched. */
 	}
 	try {
-		const { core, functions, exports } = constructCoreModule(options);
+		const { core, functions, exports } = timePhase(options.onPhase, "construct", () =>
+			constructCoreModule(options),
+		);
 		let canonical: CoreModuleArtifact | undefined =
 			capturePolicy === "full"
-				? captureCoreModule(core.program, exports, functions[0]!, core.context.data)
+				? timePhase(options.onPhase, "capture", () =>
+						captureCoreModule(core.program, exports, functions[0]!, core.context.data),
+					)
 				: undefined;
-		const localRules = new CoreLocalRuleRegistry(core.program);
-		const featureIndex = new CoreFunctionFeatureIndex(core.program, localRules.dispatch);
-		const scratch = new CoreAnalysisScratchPool();
-		const report = new CoreOptimizationReportBuilder(core.program, "off");
-		const passes = CORE_CONSTRUCTION_NORMALIZATION_PASSES.map((pass) => ({
-			...pass,
-			budget: { maxWorkItems, maxEdits, exhaustion: "error" as const },
-		}));
-		for (const fn of functions) {
-			options.onWork?.("optimize", 1);
-			new CoreLocalOptimizer(core.program, fn, {
-				maxWorkItems,
-				maxEdits,
-				budgetExhaustion: "error",
-				ruleRegistry: localRules,
-			}).run();
-			const analyses = new CoreAnalysisManager(
+		timePhase(options.onPhase, "optimize", () => {
+			const localRules = new CoreLocalRuleRegistry(core.program);
+			const featureIndex = new CoreFunctionFeatureIndex(
 				core.program,
-				core.context,
-				report,
-				scratch,
+				localRules.dispatch,
 			);
-			new CoreFunctionPassScheduler(core.program, core.context, analyses, report, fn, {
-				localOptimization: true,
-				localOptimizationCompleted: true,
-				localRules,
-				featureIndex,
-				localOptimizationBudget: {
+			const scratch = new CoreAnalysisScratchPool();
+			const report = new CoreOptimizationReportBuilder(core.program, "off");
+			const passes = CORE_CONSTRUCTION_NORMALIZATION_PASSES.map((pass) => ({
+				...pass,
+				budget: { maxWorkItems, maxEdits, exhaustion: "error" as const },
+			}));
+			for (const fn of functions) {
+				options.onWork?.("optimize", 1);
+				new CoreLocalOptimizer(core.program, fn, {
 					maxWorkItems,
 					maxEdits,
 					budgetExhaustion: "error",
-				},
-			}).runComponent("canonicalize", passes);
-		}
-		const optimized = captureCoreModule(
-			core.program,
-			exports,
-			functions[0]!,
-			core.context.data,
-			{ retainPreparedImport: true },
+					ruleRegistry: localRules,
+				}).run();
+				const analyses = new CoreAnalysisManager(
+					core.program,
+					core.context,
+					report,
+					scratch,
+				);
+				new CoreFunctionPassScheduler(core.program, core.context, analyses, report, fn, {
+					localOptimization: true,
+					localOptimizationCompleted: true,
+					localRules,
+					featureIndex,
+					localOptimizationBudget: {
+						maxWorkItems,
+						maxEdits,
+						budgetExhaustion: "error",
+					},
+				}).runComponent("canonicalize", passes);
+			}
+		});
+		const [optimized, canonicalBytes, optimizedBytes] = timePhase(
+			options.onPhase,
+			"capture",
+			() => {
+				const optimized = captureCoreModule(
+					core.program,
+					exports,
+					functions[0]!,
+					core.context.data,
+					{ retainPreparedImport: true },
+				);
+				return [
+					optimized,
+					canonical === undefined ? undefined : encodeCoreModule(canonical),
+					encodeCoreModule(optimized),
+				] as const;
+			},
 		);
-		const canonicalBytes =
-			canonical === undefined ? undefined : encodeCoreModule(canonical);
-		const optimizedBytes = encodeCoreModule(optimized);
 		if (
 			(canonicalBytes !== undefined &&
 				canonicalBytes.length > CORE_MODULE_MAX_ENCODED_LENGTH) ||
@@ -384,24 +447,30 @@ export function loadOrCompileCoreModule(
 			throw new UnsupportedCoreModuleError(
 				"Reusable Core exceeds the artifact size limit",
 			);
-		const receipt: ModuleReceipt = {
-			schema: RECEIPT_SCHEMA,
-			key,
-			status: "ready",
-			canonicalDigest: canonicalBytes === undefined ? null : digest(canonicalBytes),
-			optimizedDigest: digest(optimizedBytes),
-		};
-		publishReceipt(directory, receipt, [
-			...(canonicalBytes === undefined || receipt.canonicalDigest === null
-				? []
-				: [{ digest: receipt.canonicalDigest, bytes: canonicalBytes }]),
-			{ digest: receipt.optimizedDigest, bytes: optimizedBytes },
-		]);
+		const receipt = timePhase(
+			options.onPhase,
+			"capture",
+			(): ModuleReceipt => ({
+				schema: RECEIPT_SCHEMA,
+				key,
+				status: "ready",
+				canonicalDigest: canonicalBytes === undefined ? null : digest(canonicalBytes),
+				optimizedDigest: digest(optimizedBytes),
+			}),
+		);
+		timePhase(options.onPhase, "publish", () =>
+			publishReceipt(directory, receipt, [
+				...(canonicalBytes === undefined || receipt.canonicalDigest === null
+					? []
+					: [{ digest: receipt.canonicalDigest, bytes: canonicalBytes }]),
+				{ digest: receipt.optimizedDigest, bytes: optimizedBytes },
+			]),
+		);
 		return {
 			status: "ready",
 			cache: "miss",
 			get canonical() {
-				return (canonical ??= loadCanonical(directory, key, null));
+				return (canonical ??= loadCanonical(directory, key, null, options.onPhase));
 			},
 			optimized,
 			completedRecipe: RECIPE,
@@ -418,12 +487,14 @@ export function loadOrCompileCoreModule(
 		) {
 			const status =
 				error instanceof CoreOptimizationBudgetError ? "budget-limited" : "unsupported";
-			publishReceipt(directory, {
-				schema: RECEIPT_SCHEMA,
-				key,
-				unsupported: error.message,
-				status,
-			});
+			timePhase(options.onPhase, "publish", () =>
+				publishReceipt(directory, {
+					schema: RECEIPT_SCHEMA,
+					key,
+					unsupported: error.message,
+					status,
+				}),
+			);
 			return { status, reason: error.message };
 		}
 		throw error;

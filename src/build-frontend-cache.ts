@@ -632,6 +632,21 @@ export function compileBuildFrontend(
 				constructedFunctions: 0,
 				optimizedFunctions: 0,
 				importedFunctions: 0,
+				...(options.coreInstrumentation === "phases" ||
+				options.coreInstrumentation === "full"
+					? {
+							timings: {
+								key: 0,
+								read: 0,
+								decode: 0,
+								construct: 0,
+								optimize: 0,
+								capture: 0,
+								publish: 0,
+								import: 0,
+							},
+						}
+					: {}),
 			}
 		: undefined;
 	if (
