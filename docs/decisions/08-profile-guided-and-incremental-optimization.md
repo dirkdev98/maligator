@@ -2490,3 +2490,38 @@ roughly 550 ms gross ceiling. Do not add a restricted recipe merely because it
 is easy to serialize. The temporary source hook and disposable cache were
 removed; compact census reports remain under
 `.cache/pgo-cache-next-20260923/primary-class-census/`.
+
+## D065 — 2026-09-23 — Reject measured local-scan return ranking
+
+**Status:** PGO local-discovery scheduling pilot rejected and removed. PGO
+remains opt-in. **Refines:** D045, D055, D063.
+
+The late planner orders positive measured opportunities by raw function-entry
+count, then spends almost its entire measured compiler-work allowance while
+leaving generated-code allowance. A bounded pilot kept every nonlocal,
+unknown, and zero-exposure opportunity at its existing sorted slot, and
+reordered only positive measured local-function scans by entry count times the
+strongest static benefit divided by scan work. It added no profile query or
+budget and left early cross-call transforms unchanged. A focused planner test
+proved that, when only one real numeric candidate fits, the smaller function
+can win despite half the observed entries.
+
+On the frozen self-hosted frontend, late selection changed from 2,378 to
+2,447 recipes: array iterator cursors rose from 368 to 431 and iterator-result
+virtualizations from 208 to 244, while numeric fusion fell from 133 to 110
+and stack-object plans from 128 to 115. The portable wire grew four bytes,
+generated C grew 19,312 bytes, and the native binary grew 33,024 bytes.
+
+Three interleaved native pairs on each of four compiler slices matched the
+frozen Node oracle exactly. Candidate-versus-current-PGO time changes were
+mixed on summaries (−0.70%, +0.49%, +0.58%), mixed on shape (+0.58%, −0.55%,
+−0.48%), consistently faster on pass-manager (−0.45%, −0.90%, −1.49%), and
+mixed on region selection (−1.53%, +0.04%, −0.16%). Total time over all
+twelve pairs fell 0.38%, too small and inconsistent to claim a broadly useful
+PGO improvement or repay extra code with confidence. Pass-manager remains a
+promising diagnostic, not acceptance for this scheduling rule. Both binaries
+used the same frozen source, profile, build options, and Core cache mode; the
+runner's `static` and `pgo` labels mean **current PGO control** and **candidate
+PGO**, respectively. The patch and compact comparison evidence are under
+`.cache/pgo-local-roi-20260923/`; disposable binaries and build caches were
+removed.
