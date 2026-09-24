@@ -16,6 +16,9 @@ describe("production profile recorder", () => {
 	let compilerBinary: string;
 	let phaseBinary: string;
 	let runtimeBinary: string;
+	let backgroundWorkersBinary: string;
+	let dnsWorkersBinary: string;
+	let sqliteWorkersBinary: string;
 
 	beforeAll(() => {
 		binary = buildNativeBinary({
@@ -64,6 +67,33 @@ describe("production profile recorder", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 			outDir: directory,
 		});
+		backgroundWorkersBinary = buildNativeBinary({
+			fixture: "tests/local/profile-background-workers.mjs",
+			name: "profile-background-workers",
+			compiled: true,
+			profileEnabled: true,
+			nodeEnabled: true,
+			mainFile: HOST_MAIN,
+			outDir: directory,
+		});
+		dnsWorkersBinary = buildNativeBinary({
+			fixture: "tests/local/profile-dns-workers.mjs",
+			name: "profile-dns-workers",
+			compiled: true,
+			profileEnabled: true,
+			nodeEnabled: true,
+			mainFile: HOST_MAIN,
+			outDir: directory,
+		});
+		sqliteWorkersBinary = buildNativeBinary({
+			fixture: "tests/local/profile-sqlite-workers.mjs",
+			name: "profile-sqlite-workers",
+			compiled: true,
+			profileEnabled: true,
+			nodeEnabled: true,
+			mainFile: HOST_MAIN,
+			outDir: directory,
+		});
 	});
 
 	it("captures bounded logical CPU stacks in the versioned raw format", () => {
@@ -79,17 +109,18 @@ describe("production profile recorder", () => {
 		expect(result.status).toBe(0);
 		expect(existsSync(capture)).toBe(true);
 		const bytes = readFileSync(capture);
-		expect(bytes.subarray(0, 8).toString()).toBe("MALPROF5");
+		expect(bytes.subarray(0, 8).toString()).toBe("MALPROF6");
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-		expect(view.getUint32(8, true)).toBe(5);
+		expect(view.getUint32(8, true)).toBe(6);
 		const recordCount = view.getUint32(12, true);
 		const frameCount = view.getUint32(16, true);
 		expect(recordCount).toBeGreaterThan(0);
 		expect(frameCount).toBeGreaterThan(0);
 		expect(view.getBigUint64(40, true)).toBe(524_288n);
 		expect(bytes.subarray(48, 80).toString("hex")).toBe(captureIdentity);
-		expect(view.getUint8(80)).toBe(1);
-		expect(bytes.byteLength).toBe(80 + recordCount * 40 + frameCount * 12);
+		expect(view.getUint32(80, true)).toBe(0);
+		expect(view.getUint8(84)).toBe(1);
+		expect(bytes.byteLength).toBe(84 + recordCount * 40 + frameCount * 12);
 	});
 
 	it("accounts for every omitted frame in a deep logical stack", () => {
@@ -111,6 +142,53 @@ describe("production profile recorder", () => {
 		expect(truncated).toBeDefined();
 		expect(truncated?.frames).toHaveLength(256);
 		expect(truncated?.frames.at(-1)?.siteId).toBeGreaterThanOrEqual(0);
+	});
+
+	it("marks background CPU workers so their time cannot guide native PGO", () => {
+		const capture = path.join(directory, "background-workers.bin");
+		const result = spawnSync(backgroundWorkersBinary, [], {
+			env: {
+				...process.env,
+				MAL_PROFILE_CAPTURE: capture,
+				MAL_PROFILE_IDENTITY: captureIdentity,
+				MAL_PROFILE_INTERVAL_US: "1000",
+			},
+			encoding: "utf8",
+		});
+		expect(result).toMatchObject({ status: 0, stdout: "done\n", stderr: "" });
+		const parsed = parseProfileCapture(readFileSync(capture));
+		expect(parsed.workerCpuPossible).toBe(true);
+		expect(parsed.records.some((record) => record.kind === 1)).toBe(true);
+	});
+
+	it("marks DNS worker captures even when resolution is brief", () => {
+		const capture = path.join(directory, "dns-workers.bin");
+		const result = spawnSync(dnsWorkersBinary, [], {
+			env: {
+				...process.env,
+				MAL_PROFILE_CAPTURE: capture,
+				MAL_PROFILE_IDENTITY: captureIdentity,
+			},
+			encoding: "utf8",
+		});
+		expect(result).toMatchObject({ status: 0, stdout: "done\n", stderr: "" });
+		const parsed = parseProfileCapture(readFileSync(capture));
+		expect(parsed.workerCpuPossible).toBe(true);
+	});
+
+	it("marks SQLite sorting captures as possibly containing worker CPU", () => {
+		const capture = path.join(directory, "sqlite-workers.bin");
+		const result = spawnSync(sqliteWorkersBinary, [], {
+			env: {
+				...process.env,
+				MAL_PROFILE_CAPTURE: capture,
+				MAL_PROFILE_IDENTITY: captureIdentity,
+			},
+			encoding: "utf8",
+		});
+		expect(result).toMatchObject({ status: 0, stdout: "done\n", stderr: "" });
+		const parsed = parseProfileCapture(readFileSync(capture));
+		expect(parsed.workerCpuPossible).toBe(true);
 	});
 
 	it("flushes a valid capture before a development-style termination", async () => {
@@ -143,7 +221,7 @@ describe("production profile recorder", () => {
 		child.kill("SIGTERM");
 		const signal = await exited;
 		expect(signal).toBe("SIGTERM");
-		expect(readFileSync(capture).subarray(0, 8).toString()).toBe("MALPROF5");
+		expect(readFileSync(capture).subarray(0, 8).toString()).toBe("MALPROF6");
 	});
 
 	it("publishes exact source-site compiler counters in a separate artifact", () => {

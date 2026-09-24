@@ -2944,3 +2944,32 @@ required and remaining allowance and independent work, expansion, and proof
 constraints. Spend more code only when a specific binding limit blocks
 identifiable hot work. The current aggregate `generated-code-cost` decline
 count cannot distinguish those cases.
+
+## D080 — 2026-09-24 — Admit CPU samples only from compiled captures without possible worker CPU
+
+**Status:** Implemented as an opt-in PGO evidence rule; full gates pending.
+**Refines:** D070 and D077.
+
+The process-CPU timer measures every thread, while the safepoint profiler records
+the VM thread's JavaScript stack. An interpreter-only build has a different
+dispatch cost from the compiled product. Either condition can make a plausible
+CPU sample wrong for native optimization. Counter training and general profile
+inspection are unaffected.
+
+Prepared profile schema 7 records whether the sampled binary is compiled or
+interpreted. Raw capture schema 6 and manifest schema 6 carry a sticky
+`workerCpuPossible` flag. Argon2 and DNS workers inherit blocked `SIGPROF` and
+mark captures when their pools start. SQLite `exec` and `step` also run with
+`SIGPROF` blocked and conservatively mark captures: its sorter can create
+workers inside either call and a worker can outlive a returned row. The flag
+can therefore reject a SQLite capture even if that particular query created
+no worker. PGO import requires a compiled backend, new raw/manifest schemas,
+and no possible worker CPU. Merged PGO schema 4 rejects previously merged CPU
+evidence that bypassed these checks; pre-1.0 profiles must be re-captured and
+re-merged. The sampling producer identity changed with the evidence contract.
+
+Focused type checking and 69 PGO/cache unit tests passed. Nine native profiler
+tests passed, including compiled Argon2, DNS, and SQLite worker-path fixtures.
+The earlier native run first found a missing host event-loop setup in the new
+Argon2 fixture; that fixture was corrected before the passing run. Full gates
+and broader PGO runtime measurements remain separate acceptance steps.

@@ -149,9 +149,14 @@ node ./src/index.ts pgo merge .cache/pgo/runs/<counter-run-id> \
 node ./src/index.ts build app.mjs --production --pgo-use .cache/pgo/selected.json
 ```
 
-Only process-CPU samples with a validated capture identity, complete raw payload,
-successful workload, no dropped or truncated records, and acceptable sampling delay
-enter the merged profile. Each function needs at least 20 attributable samples
+Only compiled-native process-CPU samples with a validated capture identity,
+complete raw payload, successful workload, no dropped or truncated records, and
+acceptable sampling delay enter the merged profile. Interpreter-only profiles
+measure different dispatch costs and cannot guide native PGO. Captures that start
+background CPU workers, or execute SQLite queries that may start sorter workers,
+remain useful for inspection but cannot guide PGO: the process timer cannot
+assign those workers' CPU time to JavaScript functions.
+Each function needs at least 20 attributable samples
 before CPU cost can guide local discovery. Missing samples mean unknown cost, not
 zero cost. CPU samples identify functions that consumed time; a sample drained at a
 safepoint does not prove that its reported instruction consumed that time.

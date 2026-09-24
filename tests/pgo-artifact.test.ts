@@ -101,11 +101,13 @@ function cpuRecord(
 		attribution?: "physical" | "inline" | "shared" | "ambiguous";
 		dropped?: number;
 		delayNs?: bigint;
+		backend?: "compiled" | "interpreted";
+		backgroundWorkers?: boolean;
 	} = {},
 ) {
 	const directory = mkdtempSync(path.join(root, "cpu-"));
 	const prepared: PreparedProfile = {
-		schema: 6,
+		schema: 7,
 		calls: [],
 		mode: "sampling",
 		buildId: "b".repeat(64),
@@ -113,6 +115,7 @@ function cpuRecord(
 			semanticKey,
 			producer: "sampling-test",
 			optimization: "full",
+			backend: options.backend ?? "compiled",
 		},
 		entrypoint: "/project/input.js",
 		functions: [
@@ -170,22 +173,23 @@ function cpuRecord(
 		remarks: [],
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
-	const bytes = Buffer.alloc(80 + samples * 40 + samples * 12);
-	bytes.write("MALPROF5");
-	bytes.writeUInt32LE(5, 8);
+	const bytes = Buffer.alloc(84 + samples * 40 + samples * 12);
+	bytes.write("MALPROF6");
+	bytes.writeUInt32LE(6, 8);
 	bytes.writeUInt32LE(samples, 12);
 	bytes.writeUInt32LE(samples, 16);
 	bytes.writeUInt32LE(options.dropped ?? 0, 20);
 	bytes.writeUInt32LE(intervalUs, 28);
 	Buffer.from(prepared.captureIdentity, "hex").copy(bytes, 48);
+	bytes.writeUInt32LE(options.backgroundWorkers ? 1 : 0, 80);
 	for (let index = 0; index < samples; index++) {
-		const offset = 80 + index * 40;
+		const offset = 84 + index * 40;
 		bytes.writeUInt8(1, offset);
 		bytes.writeBigUInt64LE(BigInt(index + 1) * BigInt(intervalUs) * 1_000n, offset + 8);
 		bytes.writeBigUInt64LE(options.delayNs ?? 0n, offset + 24);
 		bytes.writeUInt32LE(index, offset + 32);
 		bytes.writeUInt32LE(1, offset + 36);
-		const frame = 80 + samples * 40 + index * 12;
+		const frame = 84 + samples * 40 + index * 12;
 		bytes.writeInt32LE(0, frame);
 		bytes.writeInt32LE(-1, frame + 4);
 		bytes.writeInt32LE(options.attribution === "inline" ? 0 : -1, frame + 8);
@@ -224,6 +228,11 @@ it("merges validated CPU captures by exact revision and sampling interval", () =
 	]);
 	expect(readPgoProfile(merged.path, prepared.semanticKey).cpuFunctions).toEqual(
 		merged.profile.cpuFunctions,
+	);
+	const legacyMerged = path.join(root, "legacy-cpu-merged.json");
+	writeFileSync(legacyMerged, JSON.stringify({ ...merged.profile, schema: 3 }));
+	expect(() => readPgoProfile(legacyMerged, prepared.semanticKey)).toThrow(
+		/semantic configuration or schema mismatch/,
 	);
 	first.bytes[90] = first.bytes[90]! ^ 1;
 	writeFileSync(path.join(first.directory, "capture.bin"), first.bytes);
@@ -327,6 +336,32 @@ it("rejects dropped and delayed CPU samples before they can guide optimization",
 			}),
 		).toThrow(/dropped|delayed/);
 	}
+});
+it("rejects interpreter CPU samples as native optimization guidance", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const interpreted = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, {
+		backend: "interpreted",
+	});
+	expect(() =>
+		mergePgoCaptures([counter.capture.directory], undefined, {
+			cpuProfiles: [{ workload: "interpreted", directory: interpreted.directory }],
+		}),
+	).toThrow(/compiled/);
+});
+it("rejects process CPU from captures that started background workers", () => {
+	const { root, prepared } = setup();
+	const counter = record(prepared, root);
+	finalizePgoCapture(counter.capture, true);
+	const concurrent = cpuRecord(root, prepared.semanticKey, 10_000, 24, true, {
+		backgroundWorkers: true,
+	});
+	expect(() =>
+		mergePgoCaptures([counter.capture.directory], undefined, {
+			cpuProfiles: [{ workload: "concurrent", directory: concurrent.directory }],
+		}),
+	).toThrow(/worker CPU/);
 });
 it("merges exact target guard matches and keeps an incomplete site unknown", () => {
 	const { root, prepared } = setup();

@@ -76,6 +76,7 @@ typedef struct MalProfileState {
     u8 capture_identity[32];
     bool finished;
     bool compiler_enabled;
+    bool worker_cpu_possible;
     u32 counter_site_count;
     u32 total_site_count;
     u64 *site_counters;
@@ -95,7 +96,13 @@ static volatile sig_atomic_t g_profile_pending_ticks = 0;
 static volatile sig_atomic_t g_profile_first_tick_cpu_seconds = -1;
 static volatile sig_atomic_t g_profile_first_tick_cpu_nanoseconds = 0;
 static volatile sig_atomic_t g_profile_termination_signal = 0;
+static volatile sig_atomic_t g_worker_cpu_possible_seen = 0;
 volatile sig_atomic_t mal_profile_poll_requested = 0;
+
+void mal_profile_mark_worker_cpu_possible(void) {
+    g_worker_cpu_possible_seen = 1;
+    if (g_profile != nullptr) g_profile->worker_cpu_possible = true;
+}
 
 static void mal_profile_signal(int signal_number) {
     (void) signal_number;
@@ -542,8 +549,8 @@ static void mal_profile_publish(MalProfileState *state) {
                 state->output_path, strerror(errno));
         return;
     }
-    fwrite("MALPROF5", 1, 8, file);
-    mal_profile_write_u32(file, 5);
+    fwrite("MALPROF6", 1, 8, file);
+    mal_profile_write_u32(file, 6);
     mal_profile_write_u32(file, state->record_count);
     mal_profile_write_u32(file, state->frame_count);
     mal_profile_write_u32(file, state->dropped_records);
@@ -552,6 +559,7 @@ static void mal_profile_publish(MalProfileState *state) {
     mal_profile_write_u64(file, state->start_ns);
     mal_profile_write_u64(file, MAL_PROFILE_ALLOCATION_INTERVAL);
     fwrite(state->capture_identity, 1, sizeof(state->capture_identity), file);
+    mal_profile_write_u32(file, state->worker_cpu_possible ? 1 : 0);
     for (u32 index = 0; index < state->record_count; index++) {
         MalProfileRecord *record = &state->records[index];
         fputc(record->kind, file);
@@ -708,6 +716,7 @@ void mal_profile_init(MalVm *vm) {
 #endif
     g_profile_pending_ticks = 0;
     g_profile_first_tick_cpu_seconds = -1;
+    state->worker_cpu_possible = g_worker_cpu_possible_seen != 0;
     vm->heap.profile_state = state;
     g_profile = state;
 

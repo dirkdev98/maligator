@@ -349,7 +349,7 @@ it("rebinds cached function and call heat for each import and rejects cross-owne
 	const callIdentity = identities.callIdentity(baselineSite);
 	if (callIdentity.status !== "known") throw new Error(callIdentity.reason);
 	const profile: MergedPgoProfile = {
-		schema: 3,
+		schema: 4,
 		semantics: 2,
 		semanticKey: "a".repeat(64),
 		digest: "b".repeat(64),

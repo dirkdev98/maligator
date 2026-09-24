@@ -1,6 +1,7 @@
 #include "argon2.h"
 
 #include "host.h"
+#include "profile.h"
 #include "secure_scrub.h"
 
 #include <errno.h>
@@ -404,6 +405,16 @@ static bool mal_argon2_start_pool(MalArgon2State *state) {
     if (threads == nullptr) {
         return false;
     }
+#if MAL_PROFILE
+    // Workers inherit blocked SIGPROF so they cannot race the VM sampler's signal state.
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGPROF);
+    if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
+        free(threads);
+        return false;
+    }
+#endif
     usize started = 0;
     for (usize i = 0; i < state->thread_limit; i++) {
         if (state->fail_next_pool_start
@@ -412,6 +423,10 @@ static bool mal_argon2_start_pool(MalArgon2State *state) {
         }
         started++;
     }
+    if (started > 0) mal_profile_mark_worker_cpu_possible();
+#if MAL_PROFILE
+    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+#endif
     state->fail_next_pool_start = false;
     if (started == 0) {
         free(threads);

@@ -2,6 +2,7 @@
 
 #include "host.h"
 #include "net.h"
+#include "profile.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -278,6 +279,16 @@ static bool mal_dns_start_pool(MalDnsState *state) {
     if (state->threads == nullptr) {
         return false;
     }
+#if MAL_PROFILE
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGPROF);
+    if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
+        free(state->threads);
+        state->threads = nullptr;
+        return false;
+    }
+#endif
     for (usize i = 0; i < state->thread_limit; i++) {
         if (pthread_create(&state->threads[state->thread_count], nullptr, mal_dns_worker, state) !=
             0) {
@@ -285,6 +296,10 @@ static bool mal_dns_start_pool(MalDnsState *state) {
         }
         state->thread_count++;
     }
+    if (state->thread_count > 0) mal_profile_mark_worker_cpu_possible();
+#if MAL_PROFILE
+    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+#endif
     return state->thread_count > 0;
 }
 

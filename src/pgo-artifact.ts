@@ -69,7 +69,7 @@ export interface PgoCaptureManifest {
 }
 
 export interface MergedPgoProfile {
-	schema: 3;
+	schema: 4;
 	semantics: 2;
 	semanticKey: string;
 	digest: string;
@@ -593,7 +593,7 @@ export function mergePgoCaptures(
 	if (functions.size + calls.size + targets.size > MAX_COUNTERS)
 		throw new Error("PGO merged profile counter limit exceeded");
 	const profile: MergedPgoProfile = {
-		schema: 3,
+		schema: 4,
 		semantics: 2,
 		semanticKey,
 		digest: "",
@@ -659,7 +659,7 @@ function mergedIdentity(profile: MergedPgoProfile): string {
 export function readPgoProfile(file: string, semanticKey: string): MergedPgoProfile {
 	const profile = JSON.parse(readFileSync(file, "utf8")) as MergedPgoProfile;
 	if (
-		profile.schema !== 3 ||
+		profile.schema !== 4 ||
 		profile.semantics !== 2 ||
 		profile.semanticKey !== semanticKey
 	)

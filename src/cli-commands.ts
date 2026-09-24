@@ -484,6 +484,7 @@ function compileAndBuild(
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
+	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
 	const execution = resolveExecution(command, buildConfig, {
 		compiled:
 			command.kind === "build"
@@ -859,7 +860,7 @@ function compileAndBuild(
 	const output = reporter.phase("Generate native code", () =>
 		emitProgramTranslationUnits(programImage, {
 			sourcePath: nativeSourcePath,
-			compiled: command.kind !== "build" || command.internal.compiled,
+			compiled: compiledNativeOutput,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
 		}),
@@ -952,8 +953,9 @@ function compileAndBuild(
 					},
 					{
 						semanticKey: pgoSemanticIdentity(buildConfig),
-						producer: compilerProducerIdentity("pgo-sampling", 1),
+						producer: compilerProducerIdentity("pgo-sampling", 3),
 						optimization: "full",
+						backend: compiledNativeOutput ? "compiled" : "interpreted",
 					},
 				),
 			)
@@ -1543,8 +1545,9 @@ function executeProfiledTests(
 		},
 		{
 			semanticKey: pgoSemanticIdentity(config),
-			producer: compilerProducerIdentity("pgo-sampling", 1),
+			producer: compilerProducerIdentity("pgo-sampling", 3),
 			optimization: "full",
+			backend: "compiled",
 		},
 	);
 	const capture = createProfileCapture("test", profile);

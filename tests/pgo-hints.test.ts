@@ -25,7 +25,7 @@ function construct(source: string) {
 function profile(core: ReturnType<typeof construct>): MergedPgoProfile {
 	const identities = new SourceProfileIdentities();
 	return {
-		schema: 3,
+		schema: 4,
 		semantics: 2,
 		semanticKey: "a".repeat(64),
 		digest: "b".repeat(64),

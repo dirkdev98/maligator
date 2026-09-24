@@ -73,6 +73,7 @@ void mal_profile_native_allocation(
     MalHeap *heap, usize size, MalProfileAllocationFamily family);
 void mal_profile_event(MalVm *vm, u8 kind, u64 value);
 void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin);
+void mal_profile_mark_worker_cpu_possible(void);
 #if defined(MAL_PERF_STATS) && MAL_PERF_STATS
 void mal_profile_site_event(MalVm *vm, i32 site_id, u8 event, u64 value);
 void mal_profile_safepoint_compiler(MalVm *vm);
@@ -135,6 +136,7 @@ static inline void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin) {
     (void) phase_id;
     (void) begin;
 }
+static inline void mal_profile_mark_worker_cpu_possible(void) {}
 #define MAL_PROFILE_SITE_EVENT(vm, site_id, event, value) ((void) 0)
 #define MAL_PROFILE_CURRENT_SITE(vm, site_id) ((void) 0)
 #define MAL_PROFILE_SITE_BOX(vm, site_id, value) (value)

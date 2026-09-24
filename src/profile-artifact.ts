@@ -19,6 +19,7 @@ import type {
 const CAPTURE_LEGACY_HEADER_BYTES = 40;
 const CAPTURE_V3_HEADER_BYTES = 48;
 const CAPTURE_V4_HEADER_BYTES = 80;
+const CAPTURE_V6_HEADER_BYTES = 84;
 const CAPTURE_RECORD_BYTES = 40;
 const CAPTURE_FRAME_V1_BYTES = 8;
 const CAPTURE_FRAME_V2_BYTES = 12;
@@ -81,7 +82,7 @@ const ALLOCATION_FAMILY_NAMES = [
 ];
 
 export interface PreparedProfile {
-	schema: 6;
+	schema: 7;
 	calls: Array<{
 		file: string;
 		line: number;
@@ -96,6 +97,7 @@ export interface PreparedProfile {
 		semanticKey: string;
 		producer: string;
 		optimization: "full" | "development";
+		backend: "compiled" | "interpreted";
 	};
 	captureIdentity?: string;
 	entrypoint: string;
@@ -137,8 +139,9 @@ interface RawRecord {
 }
 
 interface RawCapture {
-	schema: 1 | 2 | 3 | 4 | 5;
+	schema: 1 | 2 | 3 | 4 | 5 | 6;
 	captureIdentity?: string;
+	workerCpuPossible: boolean;
 	intervalUs: number;
 	allocationIntervalBytes: number;
 	allocationSampling: "legacy-fixed" | "poisson";
@@ -179,7 +182,7 @@ export function profileCaptureIdentity(prepared: PreparedProfile): string {
 function validatedCaptureIdentity(prepared: PreparedProfile): string {
 	const identity = prepared.captureIdentity;
 	if (
-		prepared.schema !== 6 ||
+		prepared.schema !== 7 ||
 		identity === undefined ||
 		!/^[0-9a-f]{64}$/u.test(identity)
 	) {
@@ -294,7 +297,7 @@ export function prepareProfile(
 	const resolver = new SourceProfileIdentities();
 	const identities = profileFunctionIdentities(image, resolver);
 	const prepared: PreparedProfile = {
-		schema: 6,
+		schema: 7,
 		calls: (image.diagnostics.sourceCallSites ?? []).map((site) => ({
 			file: site.file,
 			line: site.line,
@@ -385,7 +388,8 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 		magic !== "MALPROF2" &&
 		magic !== "MALPROF3" &&
 		magic !== "MALPROF4" &&
-		magic !== "MALPROF5"
+		magic !== "MALPROF5" &&
+		magic !== "MALPROF6"
 	) {
 		throw new Error("profile capture has an unknown magic value");
 	}
@@ -396,17 +400,23 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 		(magic === "MALPROF2" && schema !== 2) ||
 		(magic === "MALPROF3" && schema !== 3) ||
 		(magic === "MALPROF4" && schema !== 4) ||
-		(magic === "MALPROF5" && schema !== 5)
+		(magic === "MALPROF5" && schema !== 5) ||
+		(magic === "MALPROF6" && schema !== 6)
 	)
 		throw new Error("profile capture schema is unsupported");
-	const typedSchema = schema as 1 | 2 | 3 | 4 | 5;
+	const typedSchema = schema as 1 | 2 | 3 | 4 | 5 | 6;
 	const headerBytes =
-		schema >= 4
-			? CAPTURE_V4_HEADER_BYTES
-			: schema === 3
-				? CAPTURE_V3_HEADER_BYTES
-				: CAPTURE_LEGACY_HEADER_BYTES;
+		schema === 6
+			? CAPTURE_V6_HEADER_BYTES
+			: schema >= 4
+				? CAPTURE_V4_HEADER_BYTES
+				: schema === 3
+					? CAPTURE_V3_HEADER_BYTES
+					: CAPTURE_LEGACY_HEADER_BYTES;
 	if (bytes.byteLength < headerBytes) throw new Error("profile capture is truncated");
+	const workerCpuPossible = schema === 6 ? view.getUint32(80, true) : 0;
+	if (workerCpuPossible > 1)
+		throw new Error("profile capture worker-CPU flag is invalid");
 	const recordCount = view.getUint32(12, true);
 	const frameCount = view.getUint32(16, true);
 	const frameBytes = schema === 1 ? CAPTURE_FRAME_V1_BYTES : CAPTURE_FRAME_V2_BYTES;
@@ -449,6 +459,7 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 	}
 	return {
 		schema: typedSchema,
+		workerCpuPossible: workerCpuPossible === 1,
 		...(schema >= 4
 			? {
 					captureIdentity: Buffer.from(bytes.subarray(48, 80)).toString("hex"),
@@ -1038,10 +1049,11 @@ function functionIdentityCoverage(prepared: PreparedProfile): FunctionIdentityCo
 }
 
 export interface ProfileManifest {
-	schema: 5;
+	schema: 6;
 	functionIdentities: FunctionIdentityCoverage;
 	status: "complete";
 	workloadSucceeded: boolean;
+	workerCpuPossible: boolean;
 	captureId: string;
 	payloadDigest: string;
 	command: string;
@@ -1517,10 +1529,11 @@ export function finalizeProfileCapture(
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
 	const manifest: ProfileManifest = {
-		schema: 5,
+		schema: 6,
 		functionIdentities: functionIdentityCoverage(prepared),
 		status: "complete",
 		workloadSucceeded: options.workloadSucceeded === true,
+		workerCpuPossible: capture.workerCpuPossible,
 		captureId: hash("sha256", `${captureIdentity}:${payloadDigest}`, "hex"),
 		payloadDigest,
 		command,
@@ -1646,7 +1659,7 @@ export function readProfileCpuEvidence(
 		readFileSync(path.join(directory, "manifest.json"), "utf8"),
 	) as ProfileManifest;
 	if (
-		manifest.schema !== 5 ||
+		manifest.schema !== 6 ||
 		manifest.status !== "complete" ||
 		manifest.workloadSucceeded !== true
 	)
@@ -1659,10 +1672,11 @@ export function readProfileCpuEvidence(
 	if (
 		prepared.mode !== "sampling" ||
 		compatibility?.optimization !== "full" ||
+		compatibility.backend !== "compiled" ||
 		!/^[0-9a-f]{64}$/u.test(compatibility.semanticKey) ||
 		compatibility.producer.trim() === ""
 	)
-		throw new Error("PGO requires production sampling with compatible metadata");
+		throw new Error("PGO requires compiled production sampling with compatible metadata");
 	const payload = readFileSync(path.join(directory, "capture.bin"));
 	const payloadDigest = hash("sha256", payload, "hex");
 	const captureId = hash("sha256", `${captureIdentity}:${payloadDigest}`, "hex");
@@ -1677,8 +1691,10 @@ export function readProfileCpuEvidence(
 	const capture = parseProfileCapture(payload);
 	const cpu = capture.records.filter((record) => record.kind === 1);
 	const maximumDelayNs = capture.intervalUs * 4_000;
+	if (capture.workerCpuPossible)
+		throw new Error("PGO cannot use process-CPU captures that may include worker CPU");
 	if (
-		capture.schema !== 5 ||
+		capture.schema !== 6 ||
 		capture.captureIdentity !== captureIdentity ||
 		capture.samplingClock !== "process-cpu" ||
 		capture.intervalUs === 0 ||
@@ -1694,6 +1710,7 @@ export function readProfileCpuEvidence(
 		throw new Error("CPU profile has insufficient, delayed, dropped, or unbound samples");
 	if (
 		manifest.captureSchema !== capture.schema ||
+		manifest.workerCpuPossible !== capture.workerCpuPossible ||
 		manifest.intervalUs !== capture.intervalUs ||
 		manifest.cpuSamples !== cpu.length ||
 		manifest.clocks.sampling !== capture.samplingClock

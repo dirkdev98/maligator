@@ -1,7 +1,11 @@
 #include "sqlite.h"
+#include "profile.h"
 
 #include <limits.h>
 #include <stdlib.h>
+#if MAL_PROFILE
+#include <pthread.h>
+#endif
 
 #include "sqlite3.h"
 
@@ -15,6 +19,16 @@ struct MalSqliteStatement {
     sqlite3_stmt *handle;
     MalSqliteDatabase *database;
 };
+
+#if MAL_PROFILE
+static bool mal_sqlite_profile_block_sigprof(sigset_t *previous) {
+    // SQLite may create sorter threads during exec or step; they must inherit blocked SIGPROF.
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGPROF);
+    return pthread_sigmask(SIG_BLOCK, &blocked, previous) == 0;
+}
+#endif
 
 static void mal_sqlite_database_retain(MalSqliteDatabase *database) {
     database->references++;
@@ -94,7 +108,16 @@ const char *mal_sqlite_database_error(const MalSqliteDatabase *database) {
 
 i32 mal_sqlite_database_exec(MalSqliteDatabase *database, const char *sql) {
     if (database == nullptr || !database->open) return SQLITE_MISUSE;
-    return sqlite3_exec(database->handle, sql, nullptr, nullptr, nullptr);
+    mal_profile_mark_worker_cpu_possible();
+#if MAL_PROFILE
+    sigset_t previous;
+    if (!mal_sqlite_profile_block_sigprof(&previous)) return SQLITE_ERROR;
+#endif
+    i32 status = sqlite3_exec(database->handle, sql, nullptr, nullptr, nullptr);
+#if MAL_PROFILE
+    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+#endif
+    return status;
 }
 
 i32 mal_sqlite_database_prepare(
@@ -198,7 +221,16 @@ const char *mal_sqlite_statement_parameter_name(
 
 i32 mal_sqlite_statement_step(MalSqliteStatement *statement) {
     if (!mal_sqlite_statement_is_open(statement)) return SQLITE_MISUSE;
-    return sqlite3_step(statement->handle);
+    mal_profile_mark_worker_cpu_possible();
+#if MAL_PROFILE
+    sigset_t previous;
+    if (!mal_sqlite_profile_block_sigprof(&previous)) return SQLITE_ERROR;
+#endif
+    i32 status = sqlite3_step(statement->handle);
+#if MAL_PROFILE
+    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+#endif
+    return status;
 }
 
 i32 mal_sqlite_statement_column_count(const MalSqliteStatement *statement) {

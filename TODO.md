@@ -325,7 +325,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       measured PGO code allowance still has 13,377 units free while measured
       work and unknown code bind. Diagnose positive-exposure candidate declines
       by exact per-function, phase, and profile-pool limit before granting more
-      code or work.
+      code or work. D080 excludes interpreter and possible worker-CPU captures
+      from native PGO and invalidates old merged CPU profiles; recapture CPU
+      evidence before the next work-budget experiment.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
