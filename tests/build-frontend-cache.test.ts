@@ -3,7 +3,6 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
-	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,

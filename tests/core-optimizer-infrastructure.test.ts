@@ -13,7 +13,6 @@ import {
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
