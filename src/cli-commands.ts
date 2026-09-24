@@ -538,7 +538,6 @@ function compileAndBuild(
 					pgo,
 					coreInstrumentation:
 						command.kind === "build" ? command.internal.coreReport : undefined,
-					coreModuleCache: command.kind === "build" && command.coreCache,
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
@@ -587,22 +586,6 @@ function compileAndBuild(
 			"PGO query coverage",
 			`functions ${[...functions].map(([kind, count]) => `${kind}=${count}`).join(", ")}; calls ${[...calls].map(([kind, count]) => `${kind}=${count}`).join(", ")}; guarded targets ${[...targets].map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
 		);
-	}
-	if (frontend.coreModules !== undefined) {
-		const modules = frontend.coreModules;
-		reporter.detail(
-			"Core modules",
-			modules.fallback ??
-				`${modules.hits} reused, ${modules.misses} compiled, ${modules.unsupported} unsupported, ${modules.budgetLimited} budget limited; ` +
-					`${modules.constructedFunctions} functions constructed, ${modules.optimizedFunctions} scalar recipes run`,
-		);
-		if (modules.timings !== undefined)
-			reporter.detail(
-				"Core module phases",
-				Object.entries(modules.timings)
-					.map(([phase, duration]) => `${phase} ${duration.toFixed(1)}ms`)
-					.join(", "),
-			);
 	}
 	for (const diagnostic of frontend.diagnostics) {
 		reporter.warning(

@@ -160,7 +160,6 @@
 				"src/compiler/core/core-virtual-captures.ts",
 				"src/compiler/core/core-virtual-state.ts",
 				"src/compiler/core/core-memory-passes.ts",
-				"src/compiler/core/core-module-artifact.ts",
 				"src/compiler/core/core-native-body-reachability.ts",
 				"src/compiler/core/core-native-entry-analysis.ts",
 				"src/compiler/core/core-native-field-analysis.ts",

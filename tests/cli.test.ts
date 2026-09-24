@@ -228,6 +228,7 @@ describe("parseCliArgs", () => {
 		[["compile"], "unknown command 'compile'"],
 		[["build", "--wat"], "unknown option '--wat'"],
 		[["build", "--ablate-optimization"], "unknown option '--ablate-optimization'"],
+		[["build", "--core-cache"], "unknown option '--core-cache'"],
 		[["build", "--config"], "option '--config' requires a value"],
 		[["build", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],
 		[["run", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],

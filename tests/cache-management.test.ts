@@ -41,33 +41,6 @@ function artifact(
 }
 
 describe("Maligator cache management", () => {
-	it("accounts and prunes complete Core entries with separately loaded variants", () => {
-		const root = cacheRoot();
-		try {
-			const entries = Array.from({ length: 129 }, (_, index) => {
-				const directory = artifact(root, "core-modules", `module-${index}`, 10, 10);
-				writeFileSync(path.join(directory, "canonical.json"), Buffer.alloc(20));
-				writeFileSync(path.join(directory, "optimized.json"), Buffer.alloc(30));
-				const usedAt = new Date(pruneNowMs - (index === 0 ? 20 : 10) * DAY);
-				utimesSync(directory, usedAt, usedAt);
-				return directory;
-			});
-			expect(inspectMaligatorCache(root).managedBytes).toBe(129 * 60);
-			const result = pruneMaligatorCache({
-				cacheRoot: root,
-				maxBytes: 1,
-				minAgeMs: 0,
-				nowMs: pruneNowMs,
-			});
-			expect(result.removed.map((entry) => entry.path)).toEqual([entries[0]]);
-			for (const directory of entries.slice(1)) {
-				expect(existsSync(path.join(directory, "canonical.json"))).toBe(true);
-				expect(existsSync(path.join(directory, "optimized.json"))).toBe(true);
-			}
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
 	it("retains recent entries and prunes old excess entries to a size target", () => {
 		const root = cacheRoot();
 		const smokeStamp = path.join(root, "test-suite-smoke.json");

@@ -5,7 +5,6 @@ import type {
 	CoreCompilationContext,
 } from "../core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
-import type { CoreFrontendOptions } from "../core/core-frontend.ts";
 import type { CoreOptimizationPlan } from "../core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "../core/core-ir.ts";
@@ -28,7 +27,6 @@ export type CompileCorePhase =
 	| "execution to image";
 
 export interface CompileCoreOptions {
-	reusableModule?: CoreFrontendOptions["reusableModule"];
 	pgoTraining?: boolean;
 	pgo?: CorePgoInput;
 	facts?: CompilerProgramFacts;
@@ -64,7 +62,6 @@ export function optimizeSemanticProgramToCore(
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 ): CoreCompilation {
 	const core = lowerSemanticProgramToCore(semantic, {
-		reusableModule: options.reusableModule,
 		pgoTraining: options.pgoTraining,
 		...options.semanticLowering,
 		sourceOrigins:

@@ -38,12 +38,9 @@ interface PassConsumption {
 
 interface CoreFunctionPassSeedOptions {
 	readonly seedLocalFromInitialChanges?: boolean;
-	readonly completedInitialPasses?: ReadonlyArray<CoreFunctionPass>;
 }
 
 export interface CoreFunctionPassSchedulerOptions {
-	/** A completed scalar recipe skips the initial seed; edits still wake work. */
-	readonly localOptimizationCompleted?: boolean;
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly localOptimization?: boolean;
@@ -119,7 +116,6 @@ export class CoreFunctionPassScheduler {
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
 		this.#localBudget = options.localOptimizationBudget;
-		this.#localSeeded = options.localOptimizationCompleted === true;
 		this.#localOptimizationReportName =
 			options.localOptimizationReportName ?? "fused-local-optimizer";
 		this.#localRules = this.#localOptimization
@@ -217,10 +213,8 @@ export class CoreFunctionPassScheduler {
 			}
 		};
 		if (initialChanges === undefined) {
-			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
-				if (!seed.completedInitialPasses?.includes(passes[passIndex]!))
-					enqueuePass(passIndex);
-			}
+			for (let passIndex = 0; passIndex < passes.length; passIndex++)
+				enqueuePass(passIndex);
 			if (stage === "canonicalize" && !this.#localSeeded) {
 				enqueueLocal();
 				this.#localSeeded = true;

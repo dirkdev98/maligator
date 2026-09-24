@@ -60,8 +60,6 @@ import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts"
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";
-import { selectReusableCoreModules } from "./core-module-selection.ts";
-import type { CoreModuleReuseStatistics } from "./core-module-selection.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendCompilerArtifact,
@@ -124,7 +122,6 @@ export interface BuildFrontendPhases {
 }
 
 export interface CompiledBuildFrontend {
-	coreModules?: CoreModuleReuseStatistics;
 	programImage: ProgramImage;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
@@ -147,8 +144,6 @@ export interface CompiledBuildFrontend {
 }
 
 export interface CompileBuildFrontendOptions {
-	/** Experimental conservative Core reuse for static ESM leaf dependencies. */
-	coreModuleCache?: boolean;
 	pgoTraining?: boolean;
 	pgo?: CorePgoInput;
 	entrypoint: string;
@@ -217,7 +212,6 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
-			coreModuleCache: options.coreModuleCache === true,
 			pgoTraining: options.pgoTraining === true,
 			pgo:
 				options.pgo === undefined
@@ -623,38 +617,11 @@ export function compileBuildFrontend(
 	let fragmentFallback: string | undefined;
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
-	const coreModules: CoreModuleReuseStatistics | undefined = options.coreModuleCache
-		? {
-				hits: 0,
-				misses: 0,
-				unsupported: 0,
-				budgetLimited: 0,
-				constructedFunctions: 0,
-				optimizedFunctions: 0,
-				importedFunctions: 0,
-				...(options.coreInstrumentation === "phases" ||
-				options.coreInstrumentation === "full"
-					? {
-							timings: {
-								key: 0,
-								read: 0,
-								decode: 0,
-								construct: 0,
-								optimize: 0,
-								capture: 0,
-								publish: 0,
-								import: 0,
-							},
-						}
-					: {}),
-			}
-		: undefined;
 	if (
 		options.relocatable === true &&
 		options.forceCompile !== true &&
 		options.pgoTraining !== true &&
 		options.pgo === undefined &&
-		!options.coreModuleCache &&
 		options.optimization === "development" &&
 		options.enforcePolicies !== false
 	) {
@@ -723,7 +690,6 @@ export function compileBuildFrontend(
 					optimizationReport = report;
 					optimizationPlan = plan;
 				},
-				coreModules,
 			);
 			const serializeStartedAt = Date.now();
 			compilerWire = serializeCompilerArtifact(programImage);
@@ -746,7 +712,6 @@ export function compileBuildFrontend(
 				optimizationReport = report;
 				optimizationPlan = plan;
 			},
-			coreModules,
 		);
 		const serializeStartedAt = Date.now();
 		compilerWire = serializeCompilerArtifact(programImage);
@@ -824,7 +789,6 @@ export function compileBuildFrontend(
 		...(optimizationPlan === undefined ? {} : { optimizationPlan }),
 		fragmentArtifacts,
 		fragmentFallback,
-		coreModules,
 	};
 }
 
@@ -834,28 +798,8 @@ function compileProgramImage(
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
 	onOptimization: (report: CoreOptimizationReport, plan: CoreOptimizationPlan) => void,
-	coreModules?: CoreModuleReuseStatistics,
 ): ProgramImage {
-	let reusableModule: ReturnType<typeof selectReusableCoreModules>;
-	if (coreModules !== undefined) {
-		if (
-			options.profile ||
-			options.pgoTraining ||
-			options.optimization === "development"
-		) {
-			coreModules.fallback =
-				"Core reuse requires full optimization without profiling or training";
-		} else {
-			reusableModule = selectReusableCoreModules(
-				semantic,
-				options.cacheDirectory,
-				options.stripperIdentity,
-				coreModules,
-			);
-		}
-	}
 	return compileSemanticProgramToProgramImage(semantic, {
-		reusableModule,
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,

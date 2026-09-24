@@ -39,7 +39,6 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	{ path: "build-frontend", keep: 64, entryKind: "grandchildren" },
 	{ path: "build-fragments", keep: 64, entryKind: "grandchildren" },
 	{ path: "dependency-fragments", keep: 64, entryKind: "grandchildren" },
-	{ path: "core-modules", keep: 128 },
 	{ path: "test", keep: 64, entryKind: "grandchildren" },
 	{ path: "frontend", keep: 512, entryKind: "grandchildren" },
 	{ path: "compiler-wire", keep: 2 },

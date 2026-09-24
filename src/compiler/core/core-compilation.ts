@@ -4,7 +4,6 @@ import type { SourceCallSite } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
-import type { CoreFunctionVersions } from "./core-store.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
 export interface CoreCapturedSlotRef {
@@ -29,7 +28,6 @@ export interface CoreHostInstallCandidate {
  * copied into this closed contract instead.
  */
 export interface CoreProgramData {
-	readonly moduleExports?: ReadonlyArray<{ path: string; name: string; slot: number }>;
 	readonly sourceCallSites?: ReadonlyArray<SourceCallSite>;
 	readonly entrypointPath: string;
 	readonly moduleEvaluationOrder: ReadonlyArray<string>;
@@ -78,8 +76,6 @@ export function coreClosedGlobalSlotMembership(
 export interface ConstructedCoreCompilation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
-	/** Version witnesses for imported bodies with completed scalar and structural cleanup. */
-	readonly reusedFunctions?: ReadonlyMap<number, CoreFunctionVersions>;
 }
 
 /** Product compiler boundary: sealed Core SSA plus its explicit lowering plan. */

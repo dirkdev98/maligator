@@ -13,7 +13,6 @@ export interface InternalBuildOptions {
 }
 
 export interface BuildCommand {
-	coreCache?: boolean;
 	pgoTrain?: boolean;
 	pgoUse?: string;
 	pgoMeasuredWorkBonus?: number;
@@ -122,7 +121,6 @@ Options:
   --config <path>              Use an explicit build configuration
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
-  --core-cache                 Reuse supported dependency Core (production build only)
   --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
   --pgo-use <profile>    Use a validated merged PGO profile for optimization
@@ -238,10 +236,6 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--production") {
 			command.production = true;
-			continue;
-		}
-		if (argument === "--core-cache") {
-			command.coreCache = true;
 			continue;
 		}
 		if (argument === "--core-report") {
@@ -509,14 +503,6 @@ function validatePgoTraining<T extends BuildCommand | RunCommand | DevCommand>(
 	)
 		throw new CliUsageError(
 			"--pgo-measured-work-bonus requires --pgo-use and --production",
-		);
-	if (
-		command.kind === "build" &&
-		command.coreCache &&
-		(!command.production || command.profile || command.pgoTrain)
-	)
-		throw new CliUsageError(
-			"--core-cache requires --production without profiling or PGO training",
 		);
 	if (command.pgoTrain && command.pgoUse !== undefined)
 		throw new CliUsageError("PGO training and profile use are mutually exclusive");

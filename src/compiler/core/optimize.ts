@@ -14,7 +14,6 @@ import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
-import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
@@ -36,7 +35,6 @@ import {
 } from "./core-platform-constants.ts";
 import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
-import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 	coreProgramTransformBudgets,
@@ -137,7 +135,6 @@ export function optimizeCore(
 		}
 	}
 	measurePhase("construction-cleanup", () => undefined);
-	let completedImportedFunctions: Set<CoreFunctionId> | undefined;
 	reportBuilder.measureOwner(
 		CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup,
 		() => {
@@ -179,17 +176,6 @@ export function optimizeCore(
 						CORE_CONSTRUCTION_ANNOTATION_PASSES,
 					),
 				);
-				const reusedVersion = compilation.reusedFunctions?.get(functionId);
-				if (
-					reusedVersion !== undefined &&
-					coreFunctionVersionsAreCurrent(
-						compilation.program.function(functionId),
-						reusedVersion,
-					)
-				) {
-					(completedImportedFunctions ??= new Set()).add(functionId);
-					continue;
-				}
 				const normalizationPasses = new CoreFunctionPassScheduler(
 					compilation.program,
 					compilation.context,
@@ -236,21 +222,6 @@ export function optimizeCore(
 	);
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
-	if (completedImportedFunctions !== undefined) {
-		for (const functionId of completedImportedFunctions) {
-			const reusedVersion = compilation.reusedFunctions?.get(functionId);
-			if (
-				reusedVersion === undefined ||
-				!compilation.program.hasFunction(functionId) ||
-				!coreFunctionVersionsAreCurrent(
-					compilation.program.function(functionId),
-					reusedVersion,
-				)
-			) {
-				completedImportedFunctions.delete(functionId);
-			}
-		}
-	}
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),
@@ -297,7 +268,6 @@ export function optimizeCore(
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 					benchmarkAblation: ablatedFamily,
-					constructionRecipeCompleted: completedImportedFunctions?.has(functionId),
 				},
 			).optimizePrimary(runFunctionPhase),
 		);
