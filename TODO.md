@@ -328,24 +328,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       code or work. D080 excludes interpreter and possible worker-CPU captures
       from native PGO and invalidates old merged CPU profiles; recapture CPU
       evidence before the next work-budget experiment.
-- [x] Integrate opt-in persistent Core reuse into ordinary production builds for
-      admitted static ESM leaves. Preserve live exports, initializer order, captured
-      cells and source-immutable facts; skip only the completed scalar seed.
-- [x] Extend the boxed artifact boundary for Meriyah's classes, handlers, switches,
-      heap operations and literal pools; reuse its Core after application edits.
-- [x] Reuse the verified Core function storage on first import instead of rebuilding
-      SSA and use chains; keep repeated imports independently owned.
-- [x] Split persistent Core manifests and variants; ordinary hits load only optimized
-      bodies, while canonical decoding remains explicit and lazy.
-- [x] Reuse the validated optimized Core storage on its first cold import, with
-      immutable owned capture and independent later imports. D029 measures the
-      Meriyah first-import saving without changing emitted artifacts.
-- [x] Reuse Core-owned immutable constant tables and retain their rows through
-      frontend import/finalization while snapshotting caller-owned inputs.
-- [x] Materialize decoder operand placeholders only for actual forward references,
-      retaining verification of missing, cyclic and non-dominating uses.
-- [x] Persist completed scalar/structural cleanup with strict budget completion and
-      version witnesses; skip unchanged imports' initial construction cleanup.
 - [x] Make cross-call value-kind propagation consumer-driven: collect foldable
       observations first and request global types only when their unresolved inputs
       depend on call results, parameters or receivers. Preserve local folds and
@@ -356,60 +338,6 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
       bookkeeping. Sharing across verification or frame-exit consumers requires an
       explicit body-ownership contract; mutable function identity is insufficient.
-- [x] Capture only selected optimized Core on cold production module-cache builds,
-      with a separate explicit canonical reconstruction pinned to its receipt key.
-      D031 records the format and three matched cold Meriyah pairs; selected
-      artifacts remain byte-identical to full capture.
-- [ ] Finish ADR stage 4: split function bodies for demand loading and
-      complete repeated representative application-edit performance acceptance. Current
-      `build --production --core-cache` reuses supported leaves, while graph parsing,
-      semantic analysis and selected-module decoding remain current-build work.
-      D035 admits independent leaves beside host imports and cyclic consumers;
-      D037's frontend probe saw 28 hits and 475 imported functions, but native
-      parity and matched application-edit timing remain to be established. D040
-      attributes the changed-entry Core work. D042 finds exact numeric function
-      keys ineffective after an added import and sets the binding and net-cost
-      requirements for a full-graph completed-local-stage pilot. Implement a
-      cheaper typed key and safe body replacement only if the measured restore
-      cost fits below the avoided work; widening module import support also
-      needs a complete initializer and binding-ownership contract. D043 admits
-      private-name class leaves with owner and captured-slot relocation; measure
-      the added self-hosted receipts and changed-entry compile saving. D048's
-      alternating changed-entry probe reused 34 leaves and 605 functions but
-      showed no frontend-time saving and produced structurally different
-      cache-on/off wires. D050 executes both variants on two frozen compiler
-      inputs with exact Node output parity and traces the extra functions to
-      retained imported-module initializers. D052 prices warm leaf restore at
-      about 250 ms and measures a small cache-on gain in a missed whole-build
-      cache; D053 conditionally skips completed structural seeds with native
-      behavior intact. D056 verifies ordinary frontend invalidation on two
-      observable entry edits, unchanged-entry hits, and exact Node/VM output
-      parity, but the two cache-on/off edit pairs show a tie and a small win.
-      Establish a repeatable net edit benefit and isolate the seed skip's cost
-      before widening reuse. D057 finds all 605 reused functions retained by
-      conservative reachability and 618 ms of residual primary optimization
-      on them. One root and 2,615 reachable wildcard callers mark every
-      function `any-script`; the root itself has 20 fully open call targets,
-      mostly property loads from globals. These are not proofs that every body
-      runs. A completed advanced recipe needs explicit program-fact witnesses;
-      body omission needs a stronger call, identity and ownership contract.
-      D058 traces the 20 root wildcard calls to one host import and 19
-      property loads; add a producer-backed target proof before narrowing
-      reachability, since method names and immutable bindings alone are unsafe.
-      The 19 property receivers currently yield `unsupported-producer` in
-      the targeted static-value query; a witness also needs memory/fact-aware
-      invalidation before call-target caching can reuse it. D061–D064 price
-      further leaf-recipe and post-primary function reuse: restricted local-only
-      receipts cover just 1.5–2.0 ms of 550 ms gross residual work on the
-      frozen self-hosted frontend. A useful post-primary artifact must preserve
-      facts, effect refinements, and nonboxed representations with explicit
-      dependency witnesses; measure its restore cost before adoption.
-
-- [ ] Implement reusable optimized Core modules, then stable native products and
-      bounded upgrades through stages 3–7 of [the incremental optimization plan](docs/decisions/08-profile-guided-and-incremental-optimization.md#d009--2026-09-22--meriyah-pilot-and-plan-of-attack).
-      Extend dependency validation beyond admitted leaves, preserve canonical
-      alternatives and charge cached output growth.
-
 - [ ] Establish a complete source-closed entry/escape set for native reduction,
       including exports, host callbacks, dynamic loading/eval policy, reflection,
       and generic/interpreted callers. Use it to remove unreachable functions,

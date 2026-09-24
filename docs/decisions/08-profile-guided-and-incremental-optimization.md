@@ -2991,3 +2991,23 @@ profile, build log, and parity report are under
 `schema4-core-cache-build.log`, and `schema4-parity/report.json`). This verifies
 counter-only migration and output parity; its single slice is not a new speed
 measurement. Old CPU captures remain ineligible under D080.
+
+## D082 — 2026-09-24 — Retire persistent Core module reuse
+
+**Status:** Adopted. **Supersedes:** The persistent Core artifact, module reuse,
+and resumable recipe proposals and implementations in D001–D081; their PGO
+decisions and evidence remain in force.
+
+The opt-in `--core-cache` path made compilation and optimizer scheduling harder to
+reason about without establishing a repeatable representative rebuild benefit.
+Remove its Core serialization, receipt store, module selection and import path,
+and completed local-recipe skip. Existing exact frontend, dependency-fragment,
+and generated-object caches continue to operate at their own boundaries. PGO
+training, capture, profile validation, current-build binding, and heat-directed
+optimization remain available independently of persistent Core modules.
+
+The earlier records retain their historical measurements and source links, which
+may now refer to files available only in Git history. Do not treat them as an
+active implementation plan or restore the Core cache incrementally. Any future
+persistent IR design needs a fresh ownership and invalidation contract plus a
+measured net benefit on representative application edits.
