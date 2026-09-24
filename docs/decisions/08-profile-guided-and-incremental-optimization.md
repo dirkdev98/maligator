@@ -2973,3 +2973,21 @@ tests passed, including compiled Argon2, DNS, and SQLite worker-path fixtures.
 The earlier native run first found a missing host event-loop setup in the new
 Argon2 fixture; that fixture was corrected before the passing run. Full gates
 and broader PGO runtime measurements remain separate acceptance steps.
+
+## D081 — 2026-09-24 — Re-merge counter training after the CPU evidence format change
+
+**Status:** Counter-only migration checked; CPU-guided profiles still require new
+sampling captures. **Refines:** D077 and D080.
+
+The two retained counter training captures merged into schema 4 without
+retraining. A production build from the D077 frozen frontend capture used that
+profile with the same `--core-cache` setting as the saved P0 control. Its Core
+input, output, selected specializations, and PGO budget use matched the saved
+plan exactly: 4,570 input functions, 2,378 selected specializations, 8,184
+unknown and 1,396 measured cross-call code units, and 17,963 measured plan
+code units. A bounded compiler-summaries run matched the exact Node wire. The
+profile, build log, and parity report are under
+`.cache/pgo-size-control-20260924/` (`counter-only-schema4.json`,
+`schema4-core-cache-build.log`, and `schema4-parity/report.json`). This verifies
+counter-only migration and output parity; its single slice is not a new speed
+measurement. Old CPU captures remain ineligible under D080.
