@@ -86,14 +86,16 @@ check(strictEqual(consLeft, consRight), "distinct cons strings");
 check(strictNotEqual(consLeft, consOther), "different cons strings");
 
 let directHits = 0;
+const directSource = new Proxy({ value: object }, {});
 for (let i = 0; i < 5000; i++) {
-	if (object === object) directHits++;
+	if (strictEqual(directSource.value, object)) directHits++;
 }
 check(strictEqual(directHits, 5000), "direct strict loop");
 
 let stringHits = 0;
+const stringSource = new Proxy({ left: consLeft, right: consRight }, {});
 for (let i = 0; i < 64; i++) {
-	if (consLeft === consRight) stringHits++;
+	if (strictEqual(stringSource.left, stringSource.right)) stringHits++;
 }
 check(strictEqual(stringHits, 64), "string fallback loop");
 

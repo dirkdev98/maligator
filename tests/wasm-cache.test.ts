@@ -51,7 +51,7 @@ function sourceCheckout(directory: string): string {
 		bridge,
 		`#include "cache-test.h"\n${readFileSync(bridge, "utf8").replace(
 			"int mal_wasm_abi_version(void) { return 1; }",
-			"int mal_wasm_abi_version(void) { return MAL_CACHE_ABI; }",
+			"#ifndef MAL_CACHE_INCLUDE_REVISION\n#define MAL_CACHE_INCLUDE_REVISION 0\n#endif\nint mal_wasm_abi_version(void) { return MAL_CACHE_ABI + MAL_CACHE_INCLUDE_REVISION; }",
 		)}`,
 	);
 	writeFileSync(
@@ -121,8 +121,8 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 		writeFileSync(
 			bridge,
 			readFileSync(bridge, "utf8").replace(
-				"return MAL_CACHE_ABI;",
-				"return MAL_CACHE_ABI + 1;",
+				"return MAL_CACHE_ABI + MAL_CACHE_INCLUDE_REVISION;",
+				"return MAL_CACHE_ABI + MAL_CACHE_INCLUDE_REVISION + 1;",
 			),
 		);
 		const changedC = build(secondRoot);
@@ -137,7 +137,8 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 			"#define MAL_CACHE_ABI 3\n",
 		);
 		const changedHeader = build(secondRoot);
-		expect(changedHeader.stages["wasm-object"]?.reused).toBe(0);
+		expect(changedHeader.stages["wasm-object"]?.built).toBeGreaterThan(0);
+		expect(changedHeader.stages["wasm-object"]?.reused).toBeGreaterThan(0);
 		expect(changedHeader.stages["wasm-source"]?.reused).toBe(1);
 		expect(changedHeader.stages["wasm-rust"]?.reused).toBe(1);
 		expect(
@@ -153,7 +154,13 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 			`${readFileSync(include, "utf8")}\n#define MAL_CACHE_INCLUDE_REVISION 1\n`,
 		);
 		const changedInclude = build(secondRoot);
-		expect(changedInclude.stages["wasm-object"]?.reused).toBe(0);
+		expect(
+			(instantiate(changedInclude.file).exports.mal_wasm_abi_version as () => number)(),
+		).toBe(5);
+		expect(changedInclude.stages["wasm-object"]?.reused).toBeGreaterThan(0);
+		expect(changedInclude.stages["wasm-object"]?.built).toBeGreaterThan(
+			changedHeader.stages["wasm-object"]?.built ?? 0,
+		);
 		expect(changedInclude.stages["wasm-source"]?.reused).toBe(1);
 
 		const changedFlags = build(secondRoot, {

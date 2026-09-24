@@ -145,6 +145,9 @@ function loadArrayLength(value) {
 	return value.length;
 }
 
+globalThis.loadStringLength = loadStringLength;
+globalThis.loadArrayLength = loadArrayLength;
+
 const lengthArray = [1, 2, 3];
 
 function readAfterCoercion(target, coercer) {
@@ -189,10 +192,12 @@ function stackObjectProbe(value, escape) {
 	return typeof object === "object" ? object.value : 0;
 }
 
+globalThis.stackObjectProbe = stackObjectProbe;
+
 function runStackObjectProbe(count) {
 	let result = 0;
 	for (let i = 0; i < count; i++) {
-		const value = stackObjectProbe(i, i === count - 1);
+		const value = globalThis.stackObjectProbe(i, i === count - 1);
 		result += typeof value === "object" ? value.value : value;
 	}
 	return result;
@@ -219,8 +224,8 @@ for (let i = 0; i < 2000; i++) {
 	total += counter.read();
 	if (loadStringMethod("stats") !== stringMethod) throw new Error("string method cache");
 	if (loadNumberMethod(i) !== numberMethod) throw new Error("number method cache");
-	total += loadStringLength(i % 2 === 0 ? "s" : "stats");
-	total += loadArrayLength(lengthArray);
+	total += globalThis.loadStringLength(i % 2 === 0 ? "s" : "stats");
+	total += globalThis.loadArrayLength(lengthArray);
 	total += loadModeChurn(i % 2 === 0 ? churnOwn : churnInherited, false);
 	const churnStore = {};
 	storeModeChurn(churnStore, i);

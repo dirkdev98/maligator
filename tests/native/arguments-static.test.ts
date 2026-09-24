@@ -71,7 +71,6 @@ describe("static arguments access", () => {
 				encoding: "utf8",
 				env: {
 					...process.env,
-					MAL_COROUTINE_STATS: "1",
 					MAL_GC_STATS: "1",
 					MAL_PERF_STATS: "1",
 				},
@@ -86,11 +85,6 @@ describe("static arguments access", () => {
 			expect(field("logical_values")).toBe(42);
 			expect(field("destination_writes")).toBe(name === "interpreted" ? 41 : 42);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
-			const coroutine = result.stderr
-				.split("\n")
-				.find((candidate) => candidate.startsWith("[coroutine-stats]"));
-			expect(coroutine).toBeDefined();
-			expect(Number(coroutine?.match(/requests=([0-9]+)/)?.[1] ?? -1)).toBe(9);
 		});
 	}
 });

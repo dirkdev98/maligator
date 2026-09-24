@@ -11,15 +11,17 @@ function normalizedLength(regexp, value) {
 	return normalized.length;
 }
 
+globalThis.normalizedLength = normalizedLength;
+
 let total = 0;
 for (let iteration = 0; iteration < 100; iteration++) {
-	total += normalizedLength(/^([A-Za-z]+)$/, "Read");
+	total += globalThis.normalizedLength(/^([A-Za-z]+)$/, "Read");
 }
 check("hot ASCII capture chain keeps its length", total === 400);
-check("empty capture keeps zero length", normalizedLength(/^()$/, "") === 0);
+check("empty capture keeps zero length", globalThis.normalizedLength(/^()$/, "") === 0);
 check(
 	"long ASCII capture takes the bounded fallback",
-	normalizedLength(/^(.+)$/, "A".repeat(65)) === 65,
+	globalThis.normalizedLength(/^(.+)$/, "A".repeat(65)) === 65,
 );
 
 let genericEscape;
@@ -30,12 +32,13 @@ function genericLength(value) {
 }
 check(
 	"non-ASCII capture preserves the generic case result",
-	normalizedLength(/^(.+)$/, "ß") === genericLength("ß") && genericEscape !== undefined,
+	globalThis.normalizedLength(/^(.+)$/, "ß") === genericLength("ß") &&
+		genericEscape !== undefined,
 );
 
 let unmatchedThrew = false;
 try {
-	normalizedLength(/^(a)?b$/, "b");
+	globalThis.normalizedLength(/^(a)?b$/, "b");
 } catch (error) {
 	unmatchedThrew = error instanceof TypeError;
 }
@@ -54,7 +57,7 @@ Object.defineProperty(String.prototype, "toLowerCase", {
 });
 check(
 	"lower method getter runs at its original fallback point",
-	normalizedLength(/^(.+)$/, "A") === 7 && lowerGetterCalls === 1,
+	globalThis.normalizedLength(/^(.+)$/, "A") === 7 && lowerGetterCalls === 1,
 );
 Object.defineProperty(String.prototype, "toLowerCase", {
 	configurable: true,
@@ -68,7 +71,7 @@ String.prototype.toUpperCase = function () {
 };
 check(
 	"method replacement forces the generic chain",
-	normalizedLength(/^(.+)$/, "A") === 6,
+	globalThis.normalizedLength(/^(.+)$/, "A") === 6,
 );
 String.prototype.toUpperCase = originalUpper;
 
