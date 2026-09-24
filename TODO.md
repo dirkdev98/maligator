@@ -310,7 +310,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       full-input and equal-size static comparisons. Investigate exact guarded
       target exposure for CPU-qualified typed entries and improve the boxed
       index/string/array work in the measured hot compiler loops before raising
-      budgets again.
+      budgets again. D074 finds the 25% measured-work grant ties 10% on two
+      short slices and the full frontend while producing 33 KB more binary;
+      do not enlarge the grant on those results.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.

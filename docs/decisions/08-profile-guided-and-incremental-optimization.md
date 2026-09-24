@@ -2777,3 +2777,23 @@ hints and was intentionally excluded; broadening to it needs a separate
 single-owner dispatch design and a stronger benefit hypothesis. Existing
 generic VM calls already shortcut compiled functions, so target identity alone
 is not enough to make this path profitable.
+
+## D074 — 2026-09-24 — Do not enlarge measured work beyond 10% on current evidence
+
+**Status:** The 25% opt-in grant did not beat a 10% grant on the frozen
+self-hosted frontend. Both remain opt-in. **Refines:** D071.
+
+The 10% and 25% binaries used the same frozen frontend source, merged counter
+and validated CPU profile, and constrained CPU ordering. The 10% product was
+51,933,848 bytes; the 25% product was 51,966,880 bytes, 33,032 bytes larger.
+Two interleaved pairs on compiler-summaries and compiler-pass-manager matched
+the exact Node wires. Their combined runtime difference was below 0.01%.
+
+The full frontend holdout also matched Node's wire in both pairs. The 25%
+product took 121.874 versus 121.110 seconds in the first pair, and 121.781
+versus 122.680 seconds in the second pair. Its aggregate was 0.06% faster,
+with opposite pair signs. This does not justify the extra code or work budget.
+The 10% product has not been directly compared with the counter-only control
+on the full holdout; do not infer that it preserves D071's small gain.
+Reports are under `.cache/pgo-cpu-work-20260923/compare-work10-vs25-short/`
+and `.cache/pgo-cpu-work-20260923/compare-work10-vs25-full/`.
