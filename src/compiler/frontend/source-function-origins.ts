@@ -47,19 +47,7 @@ export interface SourceFunctionOriginOptions {
 
 export interface SourceFunctionOrigins {
 	get(file: SemanticFile, node: ESTree.Node): SourceFunctionOrigin | undefined;
-	functionAt(
-		file: SemanticFile,
-		start: number,
-		end: number,
-	): SourceFunctionOrigin | undefined;
 	call(file: SemanticFile, node: ESTree.Node): number | undefined;
-	callAt(
-		file: SemanticFile,
-		owner: SourceFunctionOrigin,
-		kind: SourceCallSite["kind"],
-		start: number,
-		end: number,
-	): number | undefined;
 	callSites(): ReadonlyArray<SourceCallSite>;
 }
 
@@ -394,56 +382,11 @@ export function collectSourceFunctionOrigins(
 		}
 	}
 
-	const functionLocations = new Map<SemanticFile, Map<string, ESTree.Node | null>>();
-	let callLocations: Map<SemanticFile, Map<string, number | null>> | undefined;
 	const result: SourceFunctionOrigins = {
-		functionAt(file, start, end) {
-			let locations = functionLocations.get(file);
-			if (locations === undefined) {
-				locations = new Map();
-				for (const draft of drafts.get(file)?.values() ?? []) {
-					if (draft.start === undefined || draft.end === undefined) continue;
-					const key = `${draft.start}:${draft.end}`;
-					locations.set(key, locations.has(key) ? null : draft.node);
-				}
-				functionLocations.set(file, locations);
-			}
-			const node = locations.get(`${start}:${end}`);
-			return node === undefined || node === null ? undefined : result.get(file, node);
-		},
 		call(file, node) {
 			const id = callIds.get(node);
 			if (id === undefined || calls[id]!.file !== file) return undefined;
 			calls[id]!.lowered = true;
-			return id;
-		},
-		callAt(file, owner, kind, start, end) {
-			if (owner.status !== "captured") return undefined;
-			if (callLocations === undefined) {
-				callLocations = new Map();
-				for (let id = 0; id < calls.length; id++) {
-					const call = calls[id]!;
-					if (
-						call.start === undefined ||
-						call.end === undefined ||
-						call.owner?.start === undefined
-					)
-						continue;
-					const locations =
-						callLocations.get(call.file) ?? new Map<string, number | null>();
-					const key = `${call.kind}:${call.owner.start + call.start}:${call.owner.start + call.end}`;
-					locations.set(key, locations.has(key) ? null : id);
-					callLocations.set(call.file, locations);
-				}
-			}
-			const id = callLocations
-				.get(file)
-				?.get(`${kind}:${owner.start + start}:${owner.start + end}`);
-			if (id === undefined || id === null) return undefined;
-			const call = calls[id]!;
-			if (call.owner === undefined || result.get(file, call.owner.node) !== owner)
-				return undefined;
-			call.lowered = true;
 			return id;
 		},
 		callSites() {

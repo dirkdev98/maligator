@@ -257,18 +257,6 @@ function snapshotSourcePosition(position: CoreSourcePosition): CoreSourcePositio
 	return immutableCoreData.has(position) ? position : freezeCoreData({ ...position });
 }
 
-/** Relocation callbacks must be pure; the source transfers exclusive ownership. */
-export interface CoreProgramRelocation {
-	readonly data: CoreProgramDataTables;
-	readonly sourcePositionOffset: number;
-	metadata(fn: CoreFunctionStore): CoreFunctionMetadata;
-	attributes(
-		fn: CoreFunctionStore,
-		instruction: CoreInstructionId,
-	): CoreInstructionAttributes;
-	immediate(value: CoreImmediate): CoreImmediate;
-}
-
 export type CoreInstructionKind =
 	| "operation"
 	| "jump"
@@ -828,64 +816,6 @@ export class CoreFunctionStore {
 				if (this.#trackUseTraversal) this.#liveUseVisits++;
 			},
 		);
-	}
-
-	_assertTransferable(mutation: CoreStoreMutation): void {
-		this.#requireMutation(mutation);
-		if (this.#activeEditor || this.#sealed || this.#retired || !this.finished)
-			throw new Error(
-				"Cannot transfer an active, sealed, retired or unfinished Core function",
-			);
-		if (this.#liveFacts !== 0 || this.#liveEffectRefinements !== 0)
-			throw new Error("Core transfer requires proof-free functions");
-		for (const field of ["id", "generation"])
-			if (Object.getOwnPropertyDescriptor(this, field)?.writable !== true)
-				throw new Error("Cannot transfer frozen Core identity fields");
-	}
-
-	_prepareTransfer(
-		mutation: CoreStoreMutation,
-		program: CoreProgram,
-		id: CoreFunctionId,
-		relocation: CoreProgramRelocation,
-	): () => void {
-		this._assertTransferable(mutation);
-		const metadata = freezeMetadata(relocation.metadata(this));
-		const attributes: Array<readonly [number, CoreInstructionAttributes]> = [];
-		const cases: Array<readonly [number, CoreImmediate]> = [];
-		for (let instruction = 0; instruction < this.#instructionLive.length; instruction++) {
-			if (!this.#instructionLive[instruction]) continue;
-			if (this.#instructionOpcode[instruction]! >= 0) {
-				const previous = this.#instructionPayload[instruction];
-				const relocated = relocation.attributes(this, coreInstructionId(instruction));
-				if (relocated !== previous)
-					attributes.push([instruction, freezeAttributes(relocated)]);
-			} else {
-				const start = this.#instructionTerminatorEdgeStart[instruction]!;
-				const end = start + this.#instructionTerminatorEdgeCount[instruction]!;
-				for (let edge = start; edge < end; edge++) {
-					const previous = this.#terminatorEdgeCaseValue[edge];
-					if (previous === undefined) continue;
-					const relocated = relocation.immediate(previous);
-					if (relocated !== previous) cases.push([edge, freezeImmediate(relocated)]);
-				}
-			}
-		}
-		return () => {
-			this.#program = program;
-			// Keep hot identity reads as data-property access in the self-hosted compiler.
-			Object.assign(this, { id, generation: program.generation });
-			this.#metadata = metadata;
-			for (const [instruction, value] of attributes)
-				this.#instructionPayload[instruction] = value;
-			if (relocation.sourcePositionOffset !== 0)
-				for (let i = 0; i < this.#instructionSourcePosition.length; i++)
-					if (this.#instructionSourcePosition[i]! >= 0)
-						this.#instructionSourcePosition[i]! += relocation.sourcePositionOffset;
-			for (const [edge, value] of cases) this.#terminatorEdgeCaseValue[edge] = value;
-			for (const domain of FUNCTION_DOMAINS) this.#versions[domain]++;
-			this.#featureVersion++;
-		};
 	}
 
 	get isGenerator(): boolean {
@@ -2949,54 +2879,6 @@ export class CoreProgram {
 
 	_configureProgramData(data: CoreProgramDataTables): void {
 		this._setProgramData(CORE_STORE_MUTATION, data);
-	}
-
-	_transferFunctions(source: CoreProgram, relocation: CoreProgramRelocation): void {
-		if (
-			source === this ||
-			this.#sealed ||
-			source.#sealed ||
-			source.registry !== this.registry
-		)
-			throw new Error("Unsupported Core program transfer");
-		checkedCount(relocation.sourcePositionOffset, "Core source position offset");
-		const data = new CoreProgram(this.registry, relocation.data);
-		const base = this.#functions.length;
-		const commits = source.#functions.map((fn, ordinal) =>
-			fn?._prepareTransfer(
-				CORE_STORE_MUTATION,
-				this,
-				coreFunctionId(base + ordinal),
-				relocation,
-			),
-		);
-		for (const fn of source.#functions) fn?._assertTransferable(CORE_STORE_MUTATION);
-		// Every callback and table copy must succeed before either owner changes.
-		for (const commit of commits) commit?.();
-		this.#stringConstants = data.#stringConstants;
-		this.#bigintConstants = data.#bigintConstants;
-		this.#literalTemplateData = data.#literalTemplateData;
-		this.#sourcePositions = data.#sourcePositions;
-		this.#globalCount = data.#globalCount;
-		this.#stringConstantSlots = undefined;
-		this.#bigintConstantSlots = undefined;
-		this.#literalTemplates = undefined;
-		this.#literalPoolSlots.clear();
-		const domains = new Set(FUNCTION_DOMAINS);
-		for (const fn of source.#functions) {
-			this.#functions.push(fn);
-			if (fn !== undefined)
-				this._recordFunctionChange(CORE_STORE_MUTATION, fn.id, domains);
-		}
-		source.#functions.length = 0;
-		for (const domain of PROGRAM_DOMAINS) {
-			this.#versions[domain]++;
-			source.#versions[domain]++;
-		}
-		source.#generation++;
-		for (const domain of FUNCTION_DOMAINS) source.#functionVersions[domain]++;
-		source.#programFlowFunctions.length = 0;
-		source.#programFlowDomainMasks.length = 0;
 	}
 
 	_recordConstructionStatistics(statistics: CoreConstructionStatistics): void {
