@@ -2797,3 +2797,36 @@ The 10% product has not been directly compared with the counter-only control
 on the full holdout; do not infer that it preserves D071's small gain.
 Reports are under `.cache/pgo-cpu-work-20260923/compare-work10-vs25-short/`
 and `.cache/pgo-cpu-work-20260923/compare-work10-vs25-full/`.
+
+## D075 — 2026-09-24 — Reject the bounded guarded Number-entry pilot
+
+**Status:** Bounded pilot rejected after exact-output native and self-hosted
+comparisons; pilot code removed. **Refines:** D071–D074.
+
+The pilot allowed at most eight open method-call sites and two targets with
+qualified CPU samples, complete exact callee-target hits, and one argument.
+It checked the loaded callee and the runtime Number tag before entering a
+numeric direct entry, preserving the generic call on a guard miss. Focused
+planner and native compiled/interpreted checks covered partial or missing
+target evidence, same-name methods, non-Number arguments, coercion, exceptions,
+method replacement, and GC stress. These checks passed before the pilot was
+removed. Target hits established callee identity, not Number-guard success.
+
+The pilot added 16,616 bytes (0.032%) to the 10%-grant control binary. On four
+short compiler slices, two interleaved pairs per slice matched Node's exact
+wire; aggregate runtime was 0.30% lower, with mixed per-pair results. On the
+entire frozen frontend holdout, the control took 120.978 and 121.539 seconds,
+while the pilot took 121.119 and 121.057 seconds. The 0.14% aggregate reduction
+also had opposite pair signs. Neither comparison supports retaining the extra
+planner, codec, and emitter paths. The short and full reports are under
+`.cache/pgo-cpu-work-20260923/compare-number-guard-short/` and
+`.cache/pgo-cpu-work-20260923/compare-number-guard-full/`.
+
+The generated numeric entries still boxed their argument for the captured
+`#requireInstruction` helper and retained its call frame and private-field
+loads. The two selected store methods held about 4.8% of sampled CPU, so the
+guard removed only a fraction of a modest hotspot. A later general inlining
+attempt needs exact closure-environment provenance and throw-edge support;
+raising the work budget or guard-site cap cannot supply those proofs. If this
+path is reopened, measure Number-guard success separately from callee hits and
+sample native stacks to identify the actual helper cost.
