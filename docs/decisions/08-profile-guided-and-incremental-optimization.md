@@ -2890,3 +2890,57 @@ correctness gates, and assess representative applications and training cost
 before changing defaults. At the observed 2.47-second saving, roughly 90
 seconds of training execution alone would require about 37 such full
 compiles to amortize; training builds and profile merging add cost.
+
+## D078 — 2026-09-24 — Reject fixed guarded-entry wrapper charges as a speed policy
+
+**Status:** Pilot rejected; source and tests removed. **Refines:** D077.
+
+A static-only diagnostic charged eight generated-code units to the actual
+caller for each selected ordinary guarded typed-entry arm. Body cost stayed on
+the target function, and compiler-work cost, benefit score, budget limits,
+unguarded entries, mixed entries, and shared numeric-sort callbacks were
+unchanged. A transient distributed ledger enforced per-function, program, and
+profile-pool limits atomically. Focused type checking and 133 Core planner
+tests passed; the frozen frontend built and matched Node's exact output.
+
+At the same static program code cap of 1,500, the pilot reduced the binary
+from 51,888,536 to 51,822,336 bytes (66,200 bytes, 0.13%) and guarded typed
+call arms from 616 to 532. All 84 removed arms belonged to one plan-verifier
+failure helper with zero observed training entries; the other selected typed
+targets were unchanged. On four short compiler slices, two interleaved pairs
+each gave a 0.39% aggregate slowdown, with three of four slice totals slower.
+On the full frontend, the old static product took 123.765 and 124.592 seconds;
+the pilot took 123.891 and 124.331 seconds. The pair changes, +0.10% and
+-0.21%, are mixed and total only -0.05%. Exact Node wire parity held. Reports
+are `.cache/pgo-size-control-20260924/compare-wrapper-short/report.json` and
+`.cache/pgo-size-control-20260924/compare-wrapper-full/report.json`; the runner
+labels the pilot binary `pgo` only because its comparison interface has two
+fixed slots. Neither product used a PGO profile.
+
+The new accounting changed output but did not improve speed. Do not keep an
+unused distributed-cost ledger or a fixed surcharge for this result. This
+rejects the pilot policy, not the general idea that wrapper costs have
+different owners. Reopen only with evidence that a more selective charge
+changes hot choices, rather than removing observed-cold code alone.
+
+## D079 — 2026-09-24 — Diagnose binding budget causes before a measured-code grant
+
+**Status:** No further global code or work grant on current evidence.
+**Refines:** D071, D074, D076–D078.
+
+The counter-only PGO plan consumed 19,359 measured generated-code units and
+left 13,377 available, while measured compiler work was exhausted. The 10%
+and 25% work-grant products still left 11,596 and 9,019 measured code units,
+respectively, without a useful runtime improvement. Unknown generated-code
+allowance, by contrast, was exhausted. Raising the total code budget would
+also raise its current 20% unknown-code share; a changed product would not
+isolate more code for measured candidates. A measured-code-only experiment
+would require a separately fixed unknown-code limit and a changed policy
+identity, but the existing headroom predicts no output change from that grant.
+
+Before adjusting a limit, record positive-exposure candidates rejected by
+per-function, phase/program, or profile-pool code limits, together with the
+required and remaining allowance and independent work, expansion, and proof
+constraints. Spend more code only when a specific binding limit blocks
+identifiable hot work. The current aggregate `generated-code-cost` decline
+count cannot distinguish those cases.

@@ -319,9 +319,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       yet PGO is about 2% faster in both full-frontend pairs and all eight short
       slice pairs. This meets equal-size pilot acceptance on the frozen frontend,
       not broader default-policy acceptance. Keep PGO opt-in; validate full gates,
-      representative applications and training economics. Check whether charging
-      guarded direct-entry wrappers to their actual callers improves static
-      selection before making a stronger claim about profile guidance.
+      representative applications and training economics. D078 rejects a fixed
+      guarded-entry wrapper charge: it removes 84 observed-cold arms and 66 KB,
+      but the full input is neutral and short slices lean slower. D079 finds
+      measured PGO code allowance still has 13,377 units free while measured
+      work and unknown code bind. Diagnose positive-exposure candidate declines
+      by exact per-function, phase, and profile-pool limit before granting more
+      code or work.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
