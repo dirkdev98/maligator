@@ -2077,7 +2077,7 @@ export function buildCoreOptimizationPlan(
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	if (options.pgo !== undefined) service.enablePgoScheduling();
-	for (const opportunity of opportunities) {
+	for (const opportunity of service.orderDiscovery(opportunities)) {
 		if (options.pgo !== undefined && opportunity.exposure === 0) {
 			discovery.skipped++;
 			increment(discovery.skippedByReason, "observed-zero");

@@ -207,6 +207,28 @@ function candidatePrecedes(
 	return left.targets.length < right.targets.length;
 }
 
+function roundRobinByCaller<Value extends { readonly caller: CoreFunctionId }>(
+	values: ReadonlyArray<Value>,
+): Array<Value> {
+	const groups = new Map<CoreFunctionId, Array<Value>>();
+	for (const value of values) {
+		const group = groups.get(value.caller);
+		if (group === undefined) groups.set(value.caller, [value]);
+		else group.push(value);
+	}
+	const ordered: Array<Value> = [];
+	let active = [...groups.values()];
+	for (let index = 0; active.length > 0; index++) {
+		const next: Array<Array<Value>> = [];
+		for (const group of active) {
+			ordered.push(group[index]!);
+			if (group.length > index + 1) next.push(group);
+		}
+		active = next;
+	}
+	return ordered;
+}
+
 function sameCandidateIdentity(
 	left: CoreTransformCandidate,
 	right: CoreTransformCandidate,
@@ -263,6 +285,8 @@ export class CoreTransformCandidateService {
 		Map<CoreInstructionId, Array<CoreTransformCandidate>>
 	>();
 	readonly #queue: Array<CoreTransformCandidate> = [];
+	#fairQueue: Array<CoreTransformCandidate> = [];
+	#fairCursor = 0;
 	readonly #appliedByKind = transformKindCounts();
 	readonly #declinedByReason = declineReasonCounts();
 	readonly #siteExpansions = new Map<CoreFunctionId, Map<CoreInstructionId, number>>();
@@ -311,6 +335,12 @@ export class CoreTransformCandidateService {
 		this.#limits = limits;
 	}
 
+	orderDiscovery<Opportunity extends { readonly caller: CoreFunctionId }>(
+		opportunities: ReadonlyArray<Opportunity>,
+	): ReadonlyArray<Opportunity> {
+		return this.#profileScheduling ? opportunities : roundRobinByCaller(opportunities);
+	}
+
 	offer(candidate: CoreTransformCandidate): boolean {
 		const caller =
 			this.#known.get(candidate.caller) ??
@@ -326,11 +356,29 @@ export class CoreTransformCandidateService {
 	}
 
 	next(): CoreTransformCandidate | undefined {
-		return popCandidate(this.#queue);
+		if (this.#profileScheduling) return popCandidate(this.#queue);
+		if (this.#fairCursor < this.#fairQueue.length && this.#queue.length === 0)
+			return this.#fairQueue[this.#fairCursor++];
+		const candidates = this.#fairQueue.slice(this.#fairCursor);
+		for (
+			let candidate = popCandidate(this.#queue);
+			candidate !== undefined;
+			candidate = popCandidate(this.#queue)
+		)
+			candidates.push(candidate);
+		if (this.#fairCursor < this.#fairQueue.length)
+			candidates.sort((left, right) =>
+				candidatePrecedes(left, right) ? -1 : candidatePrecedes(right, left) ? 1 : 0,
+			);
+		this.#fairQueue = roundRobinByCaller(candidates);
+		this.#fairCursor = 0;
+		const next = this.#fairQueue[0];
+		if (next !== undefined) this.#fairCursor = 1;
+		return next;
 	}
 
 	beginPhase(): void {
-		if (this.#queue.length !== 0) {
+		if (this.#queue.length !== 0 || this.#fairCursor < this.#fairQueue.length) {
 			throw new Error("Cannot begin a Core transform phase with pending candidates");
 		}
 		this.#known.clear();
@@ -381,7 +429,7 @@ export class CoreTransformCandidateService {
 
 	discardPending(reason: CoreTransformDeclineReason): number {
 		let discarded = 0;
-		while (popCandidate(this.#queue) !== undefined) {
+		while (this.next() !== undefined) {
 			this.recordDeclined(reason);
 			discarded++;
 		}

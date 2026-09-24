@@ -401,6 +401,46 @@ describe("bounded Core cross-call transforms", () => {
 		]).toEqual([0, 2, 3]);
 	});
 
+	it("shares discovery and pending selection across callers while preserving caller priority", () => {
+		const service = new CoreTransformCandidateService();
+		const candidate = (
+			caller: number,
+			priorityScore: number,
+		): CoreTransformCandidate => ({
+			kind: "inline",
+			caller: caller as never,
+			site: priorityScore as never,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore,
+			targets: [],
+			generatedCodeCost: 1,
+			compilerWorkCost: 1,
+			expansive: true,
+		});
+		for (const item of [
+			candidate(0, 1),
+			candidate(0, 2),
+			candidate(0, 3),
+			candidate(1, 4),
+			candidate(1, 5),
+		])
+			service.offer(item);
+		expect(Array.from({ length: 5 }, () => service.next()?.priorityScore)).toEqual([
+			1, 4, 2, 5, 3,
+		]);
+		expect(
+			service
+				.orderDiscovery([
+					{ caller: 0 as never, priority: 1 },
+					{ caller: 0 as never, priority: 2 },
+					{ caller: 1 as never, priority: 3 },
+					{ caller: 1 as never, priority: 4 },
+				])
+				.map(({ priority }) => priority),
+		).toEqual([1, 3, 2, 4]);
+	});
+
 	it("discovers inline candidates without mutating analysis metadata into Core", () => {
 		const program = analysisProgram();
 		appendCaller(program, 1);
