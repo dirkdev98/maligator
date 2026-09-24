@@ -259,6 +259,9 @@ For a guarded direct-call ablation, capture both compilers from one frozen progr
 source and pass `--ablate-core-family guarded-direct-call` only to the candidate
 `capture`. This omits already selected guarded call plans during target lowering;
 the timed compilers use the same ordinary evaluation policy and output oracle.
+Use `--ablate-core-family priority-scheduling` to build a compiler with the
+previous global-priority candidate order while leaving its timed evaluation
+policy and budget limits unchanged.
 
 The budget includes the oracle, two warmups, and all measured pairs. Only complete
 pairs enter the elapsed-time summary; individual peak-RSS readings and raw resource

@@ -280,6 +280,7 @@ function popCandidate(
 
 export class CoreTransformCandidateService {
 	readonly #limits: CoreTransformBudgetLimits;
+	readonly #fairScheduling: boolean;
 	readonly #known = new Map<
 		CoreFunctionId,
 		Map<CoreInstructionId, Array<CoreTransformCandidate>>
@@ -331,14 +332,20 @@ export class CoreTransformCandidateService {
 		if (applied) used.code += cost.generatedCodeCost;
 	}
 
-	constructor(limits: CoreTransformBudgetLimits = DEFAULT_CORE_TRANSFORM_BUDGETS) {
+	constructor(
+		limits: CoreTransformBudgetLimits = DEFAULT_CORE_TRANSFORM_BUDGETS,
+		fairScheduling = true,
+	) {
 		this.#limits = limits;
+		this.#fairScheduling = fairScheduling;
 	}
 
 	orderDiscovery<Opportunity extends { readonly caller: CoreFunctionId }>(
 		opportunities: ReadonlyArray<Opportunity>,
 	): ReadonlyArray<Opportunity> {
-		return this.#profileScheduling ? opportunities : roundRobinByCaller(opportunities);
+		return this.#profileScheduling || !this.#fairScheduling
+			? opportunities
+			: roundRobinByCaller(opportunities);
 	}
 
 	offer(candidate: CoreTransformCandidate): boolean {
@@ -356,7 +363,8 @@ export class CoreTransformCandidateService {
 	}
 
 	next(): CoreTransformCandidate | undefined {
-		if (this.#profileScheduling) return popCandidate(this.#queue);
+		if (this.#profileScheduling || !this.#fairScheduling)
+			return popCandidate(this.#queue);
 		if (this.#fairCursor < this.#fairQueue.length && this.#queue.length === 0)
 			return this.#fairQueue[this.#fairCursor++];
 		const candidates = this.#fairQueue.slice(this.#fairCursor);

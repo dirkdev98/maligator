@@ -92,7 +92,9 @@ export function optimizeCore(
 	const instrumentation = options.instrumentation ?? "off";
 	const ablatedFamily = options.benchmarkAblation?.family;
 	const ablatedPassFamily =
-		ablatedFamily === "guarded-direct-call" ? undefined : ablatedFamily;
+		ablatedFamily === "guarded-direct-call" || ablatedFamily === "priority-scheduling"
+			? undefined
+			: ablatedFamily;
 	const profile =
 		CORE_OPTIMIZER_WORK_PROFILES[
 			options.mode ?? compilation.context.facts.compilationMode
@@ -314,6 +316,7 @@ export function optimizeCore(
 					programCompilerWork: baseO3Budgets.programCompilerWork + measuredWorkBonus,
 					profileUnknownWorkLimit: Math.floor(baseO3Budgets.programCompilerWork * 0.2),
 				},
+		ablatedFamily !== "priority-scheduling",
 	);
 	const crossCallBudgets =
 		profile.o3Budgets ??
