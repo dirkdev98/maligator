@@ -8,6 +8,7 @@ const TARGET_DIRECTORY = "src/compiler/target";
 const EXCLUDED_CORE_SOURCES = new Set([
 	"core-debug-view.ts",
 	"core-format.ts",
+	"core-module-artifact.ts",
 	"core-optimization-report.ts",
 	"core-store.ts",
 ]);

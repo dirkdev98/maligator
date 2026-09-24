@@ -10,6 +10,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
 function retainedHostInstallers(binary: string): Array<string> {
 	return execFileSync("nm", ["-g", binary], { encoding: "utf-8" })
 		.split("\n")
+		.filter((line) => /\sT\s/.test(line))
 		.map((line) => line.trim().split(/\s+/).at(-1) ?? "")
 		.map((symbol) => (symbol.startsWith("_") ? symbol.slice(1) : symbol))
 		.filter((symbol) => symbol.startsWith("mal_host_install_"))

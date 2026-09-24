@@ -67,8 +67,8 @@ try {
 	Reflect.construct(constructors[0], [], revoked.proxy);
 	throw new Error("revoked newTarget did not throw");
 } catch (error) {
-	if (!(error instanceof TypeError)) {
-		throw new Error("revoked newTarget did not throw a Reflect-realm TypeError");
+	if (!(error instanceof realmA.TypeError)) {
+		throw new Error("revoked newTarget did not throw a constructor-realm TypeError");
 	}
 }
 
