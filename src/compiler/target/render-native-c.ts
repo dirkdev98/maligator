@@ -2277,7 +2277,8 @@ function emitBody(
 			reverse === undefined ? undefined : fn.instructions[reverse.coercionIp];
 		const update = reverse === undefined ? undefined : fn.instructions[reverse.updateIp];
 		if (
-			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			(load?.opcode !== "LOAD_PROPERTY_STATIC" &&
+				load?.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") ||
 			comparison?.opcode !== "BINARY" ||
 			!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
 			(reverse === undefined
@@ -3954,6 +3955,44 @@ function emitInstruction(
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
 	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
+	if (
+		indexedLengthLoopAction?.role === "load" &&
+		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+	) {
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		const id = indexedLengthLoopAction.loadIp;
+		const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
+		const pairedAdmission =
+			pairedArrayLoopAction?.role === "admit"
+				? [
+						`  __paired_array_${pairedArrayLoopAction.plan.id}_secondary = mal_vm_as_array(${boxed(pairedArrayLoopAction.plan.secondaryObject)});`,
+						`  __paired_array_${pairedArrayLoopAction.plan.id}_fast = !__indexed_length_${id}_array->dense_deopted && !__indexed_length_${id}_array->dense_maybe_holey && __indexed_length_${id}_array->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary != nullptr && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_deopted && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_maybe_holey && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->length >= __indexed_length_${id}_value;`,
+					]
+				: [];
+		return [
+			...(pairedArrayLoopAction?.role === "admit"
+				? [`__paired_array_${pairedArrayLoopAction.plan.id}_fast = false;`]
+				: []),
+			`__indexed_length_${id}_kind = 0;`,
+			`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
+			`if (__indexed_length_${id}_array != nullptr) {`,
+			`  __indexed_length_${id}_kind = 1;`,
+			`  __indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
+			`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
+			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
+			`  mal_perf_ic_load_array_length_hit();`,
+			...pairedAdmission,
+			`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
+			`  __indexed_length_${id}_kind = 2;`,
+			`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
+			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
+			`} else {`,
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
+		];
+	}
 	if (nativePlan?.kind === "exact-own-slot" && stackObjectAccess === undefined) {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY_STATIC":
@@ -5111,38 +5150,6 @@ function emitInstruction(
 				`  ${throwCheck()}`,
 				`}`,
 			];
-			if (indexedLengthLoopAction?.role === "load") {
-				const id = indexedLengthLoopAction.loadIp;
-				const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
-				const pairedAdmission =
-					pairedArrayLoopAction?.role === "admit"
-						? [
-								`  __paired_array_${pairedArrayLoopAction.plan.id}_secondary = mal_vm_as_array(${boxed(pairedArrayLoopAction.plan.secondaryObject)});`,
-								`  __paired_array_${pairedArrayLoopAction.plan.id}_fast = !__indexed_length_${id}_array->dense_deopted && !__indexed_length_${id}_array->dense_maybe_holey && __indexed_length_${id}_array->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary != nullptr && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_deopted && !__paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_maybe_holey && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->dense_count >= __indexed_length_${id}_value && __paired_array_${pairedArrayLoopAction.plan.id}_secondary->length >= __indexed_length_${id}_value;`,
-							]
-						: [];
-				return [
-					...(pairedArrayLoopAction?.role === "admit"
-						? [`__paired_array_${pairedArrayLoopAction.plan.id}_fast = false;`]
-						: []),
-					`__indexed_length_${id}_kind = 0;`,
-					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
-					`if (__indexed_length_${id}_array != nullptr) {`,
-					`  __indexed_length_${id}_kind = 1;`,
-					`  __indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
-					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
-					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
-					`  mal_perf_ic_load_array_length_hit();`,
-					...pairedAdmission,
-					`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
-					`  __indexed_length_${id}_kind = 2;`,
-					`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
-					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
-					`} else {`,
-					...ordinary().map((line) => `  ${line}`),
-					`}`,
-				];
-			}
 			if (nativeStringSplitCursorAction?.role === "length") {
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.callIp;

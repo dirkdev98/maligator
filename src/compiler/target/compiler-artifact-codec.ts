@@ -1609,7 +1609,8 @@ function validateIndexedLengthLoopRegion(
 					? undefined
 					: fn.instructions[reverseInduction.updateIp];
 			return (
-				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				(load?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					load?.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") ||
 				String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !== "length" ||
 				comparison?.opcode !== "BINARY" ||
 				!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||

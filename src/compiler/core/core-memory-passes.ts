@@ -1307,6 +1307,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 				property === undefined ? receiver : instructionOperandAt(fn, property, 0);
 			if (
 				layout?.kind !== "indexed" ||
+				layout.elements.size !== layout.length ||
 				propertyBase === undefined ||
 				provenance.allocationOf(propertyBase)?.instruction !== layout.instruction
 			)
@@ -1332,6 +1333,12 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			});
 		}
 		if (candidates.length === 0) return undefined;
+		const handlerEscapes = new Set<CoreInstructionId>();
+		for (const value of fn.valueIds()) {
+			if (fn.kernel.valueHandlerUseCount(value) === 0) continue;
+			const allocation = provenance.allocationOf(value);
+			if (allocation !== undefined) handlerEscapes.add(allocation.instruction);
+		}
 		const byCall = new Map(candidates.map((candidate) => [candidate.call, candidate]));
 		const byProperty = new Map(
 			candidates.flatMap((candidate) =>
@@ -1344,6 +1351,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		for (const allocation of new Set(
 			candidates.map((candidate) => candidate.allocation),
 		)) {
+			if (handlerEscapes.has(allocation)) continue;
 			let valid = true;
 			for (const instruction of fn.instructionIds()) {
 				const operandStart = fn.kernel.instructionOperandStart(instruction);
@@ -1361,7 +1369,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 						(candidateProperty?.allocation === allocation && operandIndex === 0) ||
 						(candidateCall?.allocation === allocation &&
 							operandIndex === candidateCall.receiverPosition) ||
-						((opcode === "loadProperty" || opcode === "storeProperty") &&
+						(opcode === "loadProperty" &&
 							operandIndex === 0 &&
 							(() => {
 								const key = instructionOperandAt(fn, instruction, 1);

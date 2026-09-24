@@ -52,6 +52,14 @@ function holesStaySemantic() {
 	return true;
 }
 
+function sparseWriteBeforePop() {
+	const values = [];
+	values[2] = 7;
+	assert(values.pop() === 7, "sparse write value");
+	assert(values.pop() === undefined, "sparse write hole");
+	return values.length === 1;
+}
+
 function escapedAndShadowed() {
 	const escaped = [];
 	function append(array) {
@@ -75,5 +83,6 @@ assert(drain(4000), "drain");
 assert(multipleAndExtraArguments(), "multiple arguments");
 assert(initiallyDenseFrames(), "initial dense frames");
 assert(holesStaySemantic(), "holes");
+assert(sparseWriteBeforePop(), "sparse write");
 assert(escapedAndShadowed(), "conservative cases");
 console.log("contained-array-stack PASS");

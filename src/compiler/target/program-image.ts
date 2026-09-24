@@ -1994,7 +1994,8 @@ function lowerExecutionFunctionToNativePlan(
 					reverse === undefined ? undefined : instructions[reverse.coercionIp];
 				const update = reverse === undefined ? undefined : instructions[reverse.updateIp];
 				if (
-					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					(load?.opcode !== "LOAD_PROPERTY_STATIC" &&
+						load?.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") ||
 					String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !==
 						"length" ||
 					comparison?.opcode !== "BINARY" ||
