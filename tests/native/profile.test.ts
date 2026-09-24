@@ -1,13 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseCompilerCapture, parseProfileCapture } from "../../src/profile-artifact.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-"));
 const captureIdentity = "b".repeat(64);
+afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 describe("production profile recorder", () => {
 	let binary: string;
