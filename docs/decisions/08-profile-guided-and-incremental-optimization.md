@@ -2830,3 +2830,22 @@ attempt needs exact closure-environment provenance and throw-edge support;
 raising the work budget or guard-site cap cannot supply those proofs. If this
 path is reopened, measure Number-guard success separately from callee hits and
 sample native stacks to identify the actual helper cost.
+
+## D076 — 2026-09-24 — Keep the counter-only PGO budget for the full frontend
+
+**Status:** The 10% measured-work grant remains opt-in; counter-only PGO is the
+reference for the next size-matched static control. **Refines:** D071, D074.
+
+The direct two-pair comparison used the same frozen frontend input and exact
+Node wire as D074. Counter-only PGO took 120.979 and 121.161 seconds; the
+constrained CPU-ordering plus 10%-grant product took 121.484 and 121.289
+seconds. The larger product was 0.26% slower in aggregate and 33,176 native
+bytes larger. Both pair signs favored counter-only PGO, but the small sample
+does not establish a stable regression. It also supplies no basis to spend more
+compiler time or code on this policy. The complete report is
+`.cache/pgo-cpu-work-20260923/compare-p0-vs-work10-full/report.json`.
+
+This chooses the smaller 51,900,672-byte counter-only PGO binary as the
+reference for an approximately equal-size static build. It does not settle
+whether PGO improves runtime at equal code size; that comparison still needs
+matched static and PGO products from the frozen source and paired workloads.
