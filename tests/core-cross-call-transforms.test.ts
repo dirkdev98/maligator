@@ -12,17 +12,12 @@ import {
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
-import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import type { CorePgoHints } from "../src/compiler/core/core-pgo.ts";
-import {
-	CORE_PROGRAM_SUMMARIES_ANALYSIS,
-	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
-} from "../src/compiler/core/core-program-flow-analysis.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
@@ -53,7 +48,6 @@ import {
 function runTransforms(
 	program: CoreProgram,
 	limits?: CoreTransformBudgetLimits,
-	pgo?: CorePgoHints,
 	beforeOptimizeCaller?: (
 		wave: number,
 		functionId: CoreFunctionId,
@@ -82,7 +76,6 @@ function runTransforms(
 		limits,
 		undefined,
 		candidates,
-		pgo,
 	);
 	return {
 		...result,
@@ -241,100 +234,6 @@ describe("bounded Core cross-call transforms", () => {
 		expect(service.statistics().generatedCodeConsumed).toBe(0);
 		expect(service.statistics().compilerWorkConsumed).toBe(8);
 	});
-	it("reports PGO budget use separately by phase while preserving shared limits", () => {
-		const service = new CoreTransformCandidateService({
-			perSiteExpansions: 2,
-			perCallerExpansions: 8,
-			perCallerGeneratedCode: 100,
-			perCallerCompilerWork: 100,
-			programGeneratedCode: 100,
-			programCompilerWork: 100,
-		});
-		const firstPhase = service.statistics();
-		service.enablePgoScheduling();
-		service.recordDiscovery({
-			caller: 0 as never,
-			generatedCodeCost: 4,
-			compilerWorkCost: 3,
-		});
-		const unknown = {
-			kind: "inline" as const,
-			caller: 2 as never,
-			site: 0 as never,
-			revision: 0,
-			priorityClass: 0,
-			priorityScore: 0,
-			targets: [],
-			generatedCodeCost: 20,
-			compilerWorkCost: 1,
-			expansive: true,
-		};
-		expect(service.admit(unknown)).toBeUndefined();
-		service.recordApplied(unknown);
-		service.beginPhase();
-		const secondPhase = service.statistics();
-		const measured = {
-			kind: "inline",
-			caller: 1 as never,
-			site: 0 as never,
-			revision: 0,
-			priorityClass: 0,
-			priorityScore: 0,
-			targets: [],
-			generatedCodeCost: 5,
-			compilerWorkCost: 2,
-			expansive: true,
-			exposure: 1,
-		} as const;
-		expect(service.admit({ ...unknown, caller: 3 as never, generatedCodeCost: 1 })).toBe(
-			"generated-code-cost",
-		);
-		expect(service.admit(measured)).toBeUndefined();
-		service.recordApplied(measured);
-		expect(service.statisticsSince(firstPhase).profileBudget).toMatchObject({
-			unknown: { compilerWorkConsumed: 4, generatedCodeConsumed: 20 },
-			measured: { compilerWorkConsumed: 2, generatedCodeConsumed: 5 },
-			unknownWorkLimit: 20,
-			measuredWorkLimit: 80,
-		});
-		expect(service.statisticsSince(secondPhase).profileBudget).toMatchObject({
-			unknown: { compilerWorkConsumed: 0, generatedCodeConsumed: 0 },
-			measured: { compilerWorkConsumed: 2, generatedCodeConsumed: 5 },
-		});
-	});
-	it("grants only measured compiler work while preserving the unknown reserve and code caps", () => {
-		const service = new CoreTransformCandidateService({
-			perSiteExpansions: 2,
-			perCallerExpansions: 8,
-			perCallerGeneratedCode: 100,
-			perCallerCompilerWork: 200,
-			programGeneratedCode: 100,
-			programCompilerWork: 125,
-			profileUnknownWorkLimit: 20,
-		});
-		service.enablePgoScheduling();
-		expect(
-			service.admitDiscovery({
-				caller: 0 as never,
-				exposure: 1,
-				generatedCodeCost: 1,
-				compilerWorkCost: 90,
-			}),
-		).toBeUndefined();
-		expect(
-			service.admitDiscovery({
-				caller: 0 as never,
-				generatedCodeCost: 1,
-				compilerWorkCost: 21,
-			}),
-		).toBe("compiler-work-cost");
-		expect(service.statistics().profileBudget).toMatchObject({
-			unknownWorkLimit: 20,
-			measuredWorkLimit: 105,
-			unknownCodeLimit: 20,
-			measuredCodeLimit: 80,
-		});
-	});
 	it("owns exactly two deliberate waves without driving pass stages", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),
@@ -439,6 +338,28 @@ describe("bounded Core cross-call transforms", () => {
 				])
 				.map(({ priority }) => priority),
 		).toEqual([1, 3, 2, 4]);
+		const priorityControl = new CoreTransformCandidateService(undefined, false);
+		for (const item of [
+			candidate(0, 1),
+			candidate(0, 2),
+			candidate(0, 3),
+			candidate(1, 4),
+			candidate(1, 5),
+		])
+			priorityControl.offer(item);
+		expect(
+			Array.from({ length: 5 }, () => priorityControl.next()?.priorityScore),
+		).toEqual([1, 2, 3, 4, 5]);
+		expect(
+			priorityControl
+				.orderDiscovery([
+					{ caller: 0 as never, priority: 1 },
+					{ caller: 0 as never, priority: 2 },
+					{ caller: 1 as never, priority: 3 },
+					{ caller: 1 as never, priority: 4 },
+				])
+				.map(({ priority }) => priority),
+		).toEqual([1, 2, 3, 4]);
 	});
 
 	it("discovers inline candidates without mutating analysis metadata into Core", () => {
@@ -516,43 +437,6 @@ describe("bounded Core cross-call transforms", () => {
 		},
 	);
 
-	it("selects measured exposure over a static loop under a one-inline budget", () => {
-		const program = analysisProgram();
-		const loop = appendBudgetCaller(program, 2, true);
-		const hot = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
-		runTransforms(
-			program,
-			{ ...TINY_CODE_BUDGET, perCallerGeneratedCode: 1, programGeneratedCode: 1 },
-			{
-				digest: "fixture",
-				functionEntries: () => undefined,
-				callAttempts: (id) => (id === hot.function ? 2 : 1),
-			},
-		);
-		expect(callInstructions(program, hot.function)).toEqual([]);
-		expect(callInstructions(program, loop.function)).toEqual([loop.call]);
-		verifyCoreProgram(program, { stage: "pre-target" });
-	});
-
-	it("keeps measured counts separate from unknown static loop weights", () => {
-		const program = analysisProgram();
-		const unknown = appendBudgetCaller(program, 2, true);
-		const hot = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
-		runTransforms(
-			program,
-			{ ...TINY_CODE_BUDGET, perCallerGeneratedCode: 1, programGeneratedCode: 1 },
-			{
-				digest: "fixture",
-				functionEntries: () => undefined,
-				callAttempts: (id) => (id === hot.function ? 1 : undefined),
-			},
-		);
-		expect(callInstructions(program, hot.function)).toEqual([]);
-		expect(callInstructions(program, unknown.function)).toEqual([unknown.call]);
-	});
-
 	it("prefers a smaller inline over an earlier larger body at the same frequency", () => {
 		const program = analysisProgram();
 		const largeCaller = appendBudgetCaller(program, 2, false);
@@ -600,198 +484,6 @@ describe("bounded Core cross-call transforms", () => {
 		expect(transformed.statistics.appliedByKind["guarded-inline"] ?? 0).toBe(0);
 		verifyCoreProgram(program, { stage: "pre-target" });
 	});
-
-	it("does not spend measured inline budget on positive guarded call attempts", () => {
-		const program = analysisProgram();
-		const guarded = appendBudgetCaller(program, 2, false, true);
-		const exact = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
-
-		const transformed = runTransforms(
-			program,
-			{
-				...TINY_CODE_BUDGET,
-				perCallerGeneratedCode: 2,
-				programGeneratedCode: 2,
-			},
-			{
-				digest: "guarded-call-attempts",
-				functionEntries: () => undefined,
-				callAttempts: (caller) => (caller === guarded.function ? 1_000 : 1),
-			},
-		);
-		expect(callInstructions(program, exact.function)).toEqual([]);
-		expect(callInstructions(program, guarded.function)).toEqual([guarded.call]);
-		expect(transformed.statistics.appliedByKind.inline).toBe(1);
-		verifyCoreProgram(program, { stage: "pre-target" });
-	});
-
-	it("keeps an open guarded region behind a measured closed call", () => {
-		const program = analysisProgram();
-		const open = appendBudgetCaller(program, 2, false, true);
-		const closed = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
-		const context = programAnalysisContext();
-		const analyses = new CoreAnalysisManager(
-			program,
-			context,
-			new CoreOptimizationReportBuilder(program),
-		);
-		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
-			scope: "program",
-		});
-		expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
-		expect(summaries.targets.site(closed.function, closed.call)?.open).toBe(false);
-		let guardedQueries = 0;
-		const plan = buildCoreOptimizationPlan(
-			program,
-			analyses,
-			summaries,
-			[...program.functionIds()],
-			{
-				context,
-				pgo: {
-					digest: "guarded-region-attempts",
-					functionEntries: () => 0,
-					callAttempts: (caller) => (caller === open.function ? 1_000 : 1),
-					guardedCallHits: () => {
-						guardedQueries++;
-						return 100;
-					},
-				},
-				budgets: {
-					perSiteExpansions: 1,
-					perCallerExpansions: 4,
-					perCallerGeneratedCode: 4,
-					perCallerCompilerWork: 100,
-					programGeneratedCode: 1,
-					programCompilerWork: 100,
-				},
-			},
-		);
-		expect(guardedQueries).toBe(0);
-		expect(
-			projectCoreSpecializationRecipes(plan.recipes).filter(
-				(recipe) => recipe.kind === "guarded-direct-call",
-			),
-		).toEqual([
-			expect.objectContaining({ function: closed.function, anchors: [closed.call] }),
-		]);
-		verifyCoreOptimizationPlan(program.seal(), plan, context);
-	});
-	it("does not promote positive open target matches into the measured budget", () => {
-		const program = analysisProgram();
-		const open = appendBudgetCaller(program, 2, false, true);
-		const closed = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
-		const context = programAnalysisContext();
-		const analyses = new CoreAnalysisManager(
-			program,
-			context,
-			new CoreOptimizationReportBuilder(program),
-		);
-		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
-			scope: "program",
-		});
-		const plan = buildCoreOptimizationPlan(
-			program,
-			analyses,
-			summaries,
-			[...program.functionIds()],
-			{
-				context,
-				pgo: {
-					digest: "guarded-target-matches",
-					functionEntries: () => 0,
-					callAttempts: (caller) => (caller === open.function ? 1_000 : 1),
-					guardedCallHits: (caller) => (caller === open.function ? 100 : undefined),
-				},
-				budgets: {
-					perSiteExpansions: 1,
-					perCallerExpansions: 4,
-					perCallerGeneratedCode: 4,
-					perCallerCompilerWork: 100,
-					programGeneratedCode: 1,
-					programCompilerWork: 100,
-				},
-			},
-		);
-		expect(
-			projectCoreSpecializationRecipes(plan.recipes).filter(
-				(recipe) => recipe.kind === "guarded-direct-call",
-			),
-		).toEqual([
-			expect.objectContaining({ function: closed.function, anchors: [closed.call] }),
-		]);
-		verifyCoreOptimizationPlan(program.seal(), plan, context);
-	});
-
-	it.each([
-		{ attempts: undefined, targetHits: undefined, selected: 1 },
-		{ attempts: 1_000, targetHits: undefined, selected: 1 },
-		{ attempts: 1_000, targetHits: 100, selected: 1 },
-		{ attempts: 1_000, targetHits: 0, selected: 0 },
-		{ attempts: 0, targetHits: undefined, selected: 0 },
-	])(
-		"keeps open guarded regions optional under $attempts attempts and $targetHits target hits",
-		({ attempts, targetHits, selected }) => {
-			const program = analysisProgram();
-			const open = appendBudgetCaller(program, 1, false, true);
-			appendLeaf(program);
-			const context = programAnalysisContext();
-			const analyses = new CoreAnalysisManager(
-				program,
-				context,
-				new CoreOptimizationReportBuilder(program),
-			);
-			const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
-				scope: "program",
-			});
-			expect(summaries.targets.site(open.function, open.call)?.open).toBe(true);
-			let guardedQueries = 0;
-			const plan = buildCoreOptimizationPlan(
-				program,
-				analyses,
-				summaries,
-				[...program.functionIds()],
-				{
-					context,
-					pgo: {
-						digest: "open-region-attempts",
-						functionEntries: () => 0,
-						callAttempts: () => attempts,
-						guardedCallHits: () => {
-							guardedQueries++;
-							return targetHits;
-						},
-					},
-					budgets: {
-						perSiteExpansions: 1,
-						perCallerExpansions: 4,
-						perCallerGeneratedCode: 4,
-						perCallerCompilerWork: 100,
-						programGeneratedCode: 20,
-						programCompilerWork: 100,
-					},
-				},
-			);
-			expect(guardedQueries).toBe(attempts === 0 ? 0 : 1);
-			if (targetHits === 0) {
-				expect(plan.statistics.discovery.attempted).toBe(0);
-			}
-			const regions = projectCoreSpecializationRecipes(plan.recipes).filter(
-				(recipe) => recipe.kind === "guarded-direct-call",
-			);
-			expect(regions).toHaveLength(selected);
-			if (selected > 0)
-				expect(regions[0]).toMatchObject({
-					function: open.function,
-					anchors: [open.call],
-					fallback: "canonical-core",
-				});
-			verifyCoreOptimizationPlan(program.seal(), plan, context);
-		},
-	);
 
 	it("preserves representation joins when inlining represented returns", () => {
 		const program = analysisProgram();
@@ -2575,7 +2267,6 @@ describe("bounded Core cross-call transforms", () => {
 		const transformed = runTransforms(
 			program,
 			{ ...TINY_CODE_BUDGET, programGeneratedCode: 1_000 },
-			undefined,
 			(wave, functionId, editor) => {
 				if (wave !== 0 || functionId !== fn) return;
 				editor.replaceInstruction(target, "typeofCompare", [parameter], {

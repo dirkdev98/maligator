@@ -243,8 +243,6 @@ function cloneInstruction(
 	base: RebaseBases,
 ): BytecodeInstruction {
 	switch (instruction.opcode) {
-		case "PGO_CALL":
-			throw new Error("Training images cannot be merged without their source maps");
 		case "CREATE_FUNCTION":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
 		case "LOAD_CAPTURED":

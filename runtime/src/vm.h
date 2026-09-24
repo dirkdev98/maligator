@@ -325,10 +325,6 @@ typedef struct MalInstruction {
         } load_callee;
 
         struct {
-            i32 site, callee;
-        } pgo_call;
-
-        struct {
             i32 dst, owner_function_index, index;
         } load_captured;
 
@@ -1717,9 +1713,6 @@ typedef struct MalVm {
     MalNativeFrame *native_frames;
     i32 native_frame_count;
     i32 native_frame_capacity;
-#if MAL_PGO
-    struct MalPgoState *pgo_state;
-#endif
 #if MAL_PROFILE
     /** Last source site published by either backend; profile attribution is O(1). */
     i32 profile_current_site_id;

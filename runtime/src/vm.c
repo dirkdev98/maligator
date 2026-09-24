@@ -27,7 +27,6 @@
 #include "promise_object.h"
 #include "perf_stats.h"
 #include "profile.h"
-#include "pgo.h"
 #include "proxy_object.h"
 #include "u16_buffer.h"
 #include "value_ops.h"
@@ -503,9 +502,6 @@ static uptr mal_vm_compute_stack_limit(void) {
 
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
-#if MAL_PGO
-    vm->pgo_state = nullptr;
-#endif
     vm->literal_cache_count = 0;
     vm->literal_cache_cursor = 0;
 #if !MAL_REALMS
@@ -814,7 +810,6 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
 	MalFiber *main_fiber = malloc(sizeof(MalFiber));
 	mal_fiber_init_main(main_fiber, vm);
 	mal_profile_init(vm);
-	mal_pgo_init(vm);
 }
 
 void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
@@ -929,7 +924,6 @@ void mal_vm_free(MalVm *vm) {
         free(entry);
     }
 	mal_profile_finish(vm);
-	mal_pgo_finish(vm);
     for (usize i = vm->runtime_cleanup_count; i > 0; i--) {
         vm->runtime_cleanups[i - 1](vm);
     }
@@ -1961,7 +1955,6 @@ bool mal_vm_push_function_frame(
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;
-    mal_pgo_entry(vm, function_index);
 #if MAL_REALMS
     // Default stamp: the realm current at push time. Call/construct seams that cross
     // into a callee's realm switch to it BEFORE pushing (so this captures the callee
@@ -3088,14 +3081,6 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
-            case MAL_OP_PGO_CALL:
-                mal_pgo_call(vm, instruction->as.pgo_call.site,
-                    instruction->as.pgo_call.callee < 0
-                        ? MAL_VALUE_UNDEFINED
-                        : registers[instruction->as.pgo_call.callee],
-                    instruction->as.pgo_call.callee >= 0);
-                MAL_VM_INTERPRETER_DIRECT_LEAF();
-                continue;
             case MAL_OP_THROW:
                 MAL_VM_INTERPRETER_ACTIVATION_BOUNDARY(mal_op_throw(frame, instruction));
                 break;

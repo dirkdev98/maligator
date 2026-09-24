@@ -114,7 +114,6 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "value_ops.h"',
 	'#include "perf_stats.h"',
 	'#include "profile.h"',
-	'#include "pgo.h"',
 	'#include "builtin_array.h"',
 	'#include "builtin_boolean.h"',
 	'#include "builtin_date.h"',
@@ -737,7 +736,6 @@ function emitNativeFunctions(
 			options.relocatable === true,
 			strictCompiledTargets,
 			image.runtime.stringConstants,
-			image.diagnostics.pgoTraining === true,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		const entries = emitted.directEntries.filter((entry) => fits(entry.source));
@@ -2114,8 +2112,6 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_TRY_BEGIN }`;
 		case "TRY_END":
 			return `{ .opcode = MAL_OP_TRY_END }`;
-		case "PGO_CALL":
-			return `{ .opcode = MAL_OP_PGO_CALL, .as.pgo_call = { .site = ${instruction.site}, .callee = ${instruction.callee} } }`;
 		case "GENERATOR_START":
 			return `{ .opcode = MAL_OP_GENERATOR_START }`;
 		case "ASYNC_START":

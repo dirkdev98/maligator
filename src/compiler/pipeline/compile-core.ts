@@ -45,10 +45,6 @@ function lowerOptimizedCoreToProgramImage(
 		}),
 	);
 	return runPhase("execution to image", () =>
-		lowerExecutionToProgramImage(
-			lowered,
-			options.profile === true,
-			options.pgoTraining === true,
-		),
+		lowerExecutionToProgramImage(lowered, options.profile === true),
 	);
 }

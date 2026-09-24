@@ -120,10 +120,6 @@ typedef size_t usize;
 #define MAL_PROFILE 0
 #endif
 
-#ifndef MAL_PGO
-#define MAL_PGO 0
-#endif
-
 // GC build-dimension gates. These MUST live here (the shared low-level header
 // every TU includes first) rather than in gc.h: heap.h gates the header's `dirty`
 // remembered-set byte on `#if MAL_GC_GENERATIONAL` but includes only defaults.h,

@@ -26,7 +26,6 @@ import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.t
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
-import type { CorePgoInput } from "./compiler/core/core-pgo.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
@@ -75,8 +74,8 @@ import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 3;
-const BUILD_FRONTEND_PIPELINE_VERSION = 3;
+const BUILD_FRONTEND_CACHE_SCHEMA = 4;
+const BUILD_FRONTEND_PIPELINE_VERSION = 4;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
@@ -86,7 +85,7 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 3;
+	schema: 4;
 	identity: string;
 	contentKey: string;
 	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
@@ -144,8 +143,6 @@ export interface CompiledBuildFrontend {
 }
 
 export interface CompileBuildFrontendOptions {
-	pgoTraining?: boolean;
-	pgo?: CorePgoInput;
 	entrypoint: string;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
@@ -212,11 +209,6 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
-			pgoTraining: options.pgoTraining === true,
-			pgo:
-				options.pgo === undefined
-					? undefined
-					: { digest: options.pgo.digest, policy: options.pgo.policy },
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
@@ -536,7 +528,7 @@ export function compileBuildFrontend(
 		};
 	};
 
-	if (!options.forceCompile && options.pgoTraining !== true) {
+	if (!options.forceCompile) {
 		const validationStartedAt = Date.now();
 		const cached = loadCached(root, artifactRoot, entrypoint, identity, session);
 		phases.validationMs = Date.now() - validationStartedAt;
@@ -620,8 +612,6 @@ export function compileBuildFrontend(
 	if (
 		options.relocatable === true &&
 		options.forceCompile !== true &&
-		options.pgoTraining !== true &&
-		options.pgo === undefined &&
 		options.optimization === "development" &&
 		options.enforcePolicies !== false
 	) {
@@ -805,8 +795,6 @@ function compileProgramImage(
 		coreVerification: options.coreVerification,
 		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: options.profile,
-		pgoTraining: options.pgoTraining,
-		pgo: options.pgo,
 		afterCoreOptimization(program, context, report, plan) {
 			options.afterCoreOptimization?.(program, context, report, plan);
 			onOptimization(report, plan);

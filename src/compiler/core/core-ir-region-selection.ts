@@ -84,7 +84,6 @@ import type {
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
-import type { CorePgoHints } from "./core-pgo.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
@@ -131,10 +130,6 @@ type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
 interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
 	readonly kind: "local" | "direct-entry" | "guarded-call";
 	readonly priorityScore: number;
-	readonly cpuCost?: number;
-	// CPU-only evidence can admit work without inventing VM entry heat for ordering.
-	readonly rankExposure?: number;
-	readonly observedZero?: () => boolean;
 	readonly resolve: () => ReadonlyArray<PendingCandidate>;
 }
 
@@ -1158,7 +1153,6 @@ function guardedCallOpportunities(
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
-	pgo?: CorePgoHints,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
 	const instanceMethodHints = coreInstanceMethodHints(program);
@@ -1212,17 +1206,8 @@ function guardedCallOpportunities(
 			) {
 				continue;
 			}
-			const attempts = pgo?.callAttempts(caller, site.instruction);
-			const exposure = site.open ? (attempts === 0 ? 0 : undefined) : attempts;
 			candidates.push({
 				kind: "guarded-call",
-				exposure,
-				...(site.open && attempts !== 0 && pgo?.guardedCallHits !== undefined
-					? {
-							observedZero: () =>
-								pgo.guardedCallHits?.(caller, site.instruction, targetFunctions) === 0,
-						}
-					: {}),
 				caller,
 				generatedCodeCost: targetFunctions.length,
 				compilerWorkCost: 1,
@@ -1295,7 +1280,6 @@ function directEntryOpportunities(
 	localCandidates: (
 		functionId: CoreFunctionId,
 	) => ReadonlyArray<CorePendingOptimizationCandidate>,
-	pgo?: CorePgoHints,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
@@ -1327,42 +1311,6 @@ function directEntryOpportunities(
 		);
 	};
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
-	const exposureBySite =
-		pgo === undefined
-			? undefined
-			: new Map<CoreFunctionId, Map<CoreInstructionId, number | undefined>>();
-	const exactCallExposure = (
-		target: CoreFunctionId,
-		call: CoreDirectEntryCallSite,
-	): number | undefined => {
-		if (
-			pgo === undefined ||
-			call.guarded === true ||
-			call.numericSortCallback !== undefined
-		)
-			return undefined;
-		const site = summaries.targets.site(call.caller, call.instruction);
-		if (
-			site?.open !== false ||
-			site.targets.functions.length !== 1 ||
-			site.targets.functions[0] !== target
-		)
-			return undefined;
-		let callerSites = exposureBySite!.get(call.caller);
-		if (callerSites === undefined) {
-			callerSites = new Map();
-			exposureBySite!.set(call.caller, callerSites);
-		}
-		if (!callerSites.has(call.instruction))
-			callerSites.set(call.instruction, pgo.callAttempts(call.caller, call.instruction));
-		return callerSites.get(call.instruction);
-	};
-	const exposureKey = (call: CoreDirectEntryCallSite): number | string => {
-		const site = program
-			.function(call.caller)
-			.instructionAttributes(call.instruction).sourceCall;
-		return typeof site === "number" ? site : `ir:${call.caller}:${call.instruction}`;
-	};
 	const methods = new Map<number, Array<CoreFunctionId>>();
 	for (const target of live) {
 		const fn = program.function(target);
@@ -1487,18 +1435,10 @@ function directEntryOpportunities(
 	for (const [target, callSites] of [...callsByTarget].sort(
 		([left], [right]) => left - right,
 	)) {
-		const targetExposure = pgo?.functionEntries(target);
-		if (
-			pgo !== undefined &&
-			targetExposure !== 0 &&
-			callSites.every((call) => exactCallExposure(target, call) === 0)
-		)
-			continue;
 		const fn = program.function(target);
 		const generatedCodeCost = Math.max(8, [...fn.instructionIds()].length);
 		candidates.push({
 			kind: "direct-entry",
-			exposure: targetExposure,
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
@@ -1639,9 +1579,6 @@ function directEntryOpportunities(
 							calls: Array<CoreDirectEntryCallSite>;
 							scalars: number;
 							weight: number;
-							measuredExposure: number;
-							measuredSites: Set<number | string>;
-							unknownExposure: boolean;
 						}
 					>();
 					for (const call of selectedCalls) {
@@ -1675,51 +1612,20 @@ function directEntryOpportunities(
 							representations,
 							calls: [],
 							weight: 0,
-							measuredExposure: 0,
-							measuredSites: new Set<number | string>(),
-							unknownExposure: false,
 							scalars:
 								representations.filter((representation) => representation !== "boxed")
 									.length + (needsArity ? 1 : 0),
 						};
 						signature.calls.push(call);
 						signature.weight += callWeight(call);
-						const measured = exactCallExposure(target, call);
-						if (measured === undefined) signature.unknownExposure = true;
-						else {
-							const source = exposureKey(call);
-							if (!signature.measuredSites.has(source)) {
-								signature.measuredSites.add(source);
-								signature.measuredExposure += measured;
-							}
-						}
 						signatures.set(key, signature);
 					}
 					const eligibleSignatures = [...signatures.values()].filter(
 						({ scalars }) => scalars > 0,
 					);
-					if (
-						pgo !== undefined &&
-						eligibleSignatures.length > 0 &&
-						eligibleSignatures.every(
-							(signature) =>
-								signature.measuredExposure === 0 && !signature.unknownExposure,
-						)
-					)
-						return [];
-					const signature = eligibleSignatures.sort((left, right) => {
-						const exposureClass = (entry: typeof left) =>
-							entry.measuredExposure > 0 ? 2 : entry.unknownExposure ? 1 : 0;
-						const classDifference = exposureClass(right) - exposureClass(left);
-						if (classDifference !== 0) return classDifference;
-						if (left.measuredExposure > 0 || right.measuredExposure > 0) {
-							const measuredDifference =
-								right.measuredExposure * right.scalars -
-								left.measuredExposure * left.scalars;
-							if (measuredDifference !== 0) return measuredDifference;
-						}
-						return right.weight * right.scalars - left.weight * left.scalars;
-					})[0];
+					const signature = eligibleSignatures.sort(
+						(left, right) => right.weight * right.scalars - left.weight * left.scalars,
+					)[0];
 					if (signature !== undefined) {
 						argumentRepresentations = needsArity ? signature.representations : undefined;
 						parameterRepresentations = Array.from(
@@ -1778,23 +1684,6 @@ function directEntryOpportunities(
 					(resultRepresentation === "boxed" && valueRepresentations === undefined)
 				)
 					return [];
-				let measuredExposure = 0;
-				let unknownExposure = false;
-				if (pgo !== undefined) {
-					const measuredSites = new Set<number | string>();
-					for (const call of selectedCalls) {
-						const measured = exactCallExposure(target, call);
-						if (measured === undefined) unknownExposure = true;
-						else {
-							const source = exposureKey(call);
-							if (!measuredSites.has(source)) {
-								measuredSites.add(source);
-								measuredExposure += measured;
-							}
-						}
-					}
-					if (measuredExposure === 0 && !unknownExposure) return [];
-				}
 				const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 				const compilerWork = generatedCode + fn.valueCapacity;
 				const runtimeBenefit =
@@ -1818,11 +1707,6 @@ function directEntryOpportunities(
 						...(fieldParameters === undefined ? {} : { fieldParameters }),
 						budget: {
 							kind: "direct-entry",
-							...(pgo === undefined
-								? {}
-								: {
-										exposure: measuredExposure > 0 ? measuredExposure : undefined,
-									}),
 							caller: target,
 							site: callSites[0]!.instruction,
 							revision: 0,
@@ -1886,7 +1770,6 @@ function claim(
 }
 
 export interface BuildCoreOptimizationPlanOptions {
-	readonly pgo?: CorePgoHints;
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly candidateService?: CoreTransformCandidateService;
 	readonly perFunctionExpansions?: number;
@@ -1977,14 +1860,8 @@ export function buildCoreOptimizationPlan(
 	if (options.discoverCandidates !== false) {
 		for (const input of resolvedLocalInputs) {
 			if (input.discovery === undefined) continue;
-			const cpuCost = options.pgo?.functionCpuCost?.(input.function);
-			const entries = options.pgo?.functionEntries(input.function);
 			opportunities.push({
 				kind: "local",
-				exposure:
-					cpuCost !== undefined && (entries === undefined || entries === 0) ? 1 : entries,
-				rankExposure: entries,
-				cpuCost,
 				caller: input.function,
 				generatedCodeCost: 1,
 				...input.discovery,
@@ -1992,36 +1869,13 @@ export function buildCoreOptimizationPlan(
 			});
 		}
 		opportunities.push(
-			...guardedCallOpportunities(
-				program,
-				summaries,
-				liveFunctions,
-				analyses,
-				options.pgo,
-			),
+			...guardedCallOpportunities(program, summaries, liveFunctions, analyses),
 		);
 		opportunities.push(
-			...directEntryOpportunities(
-				program,
-				summaries,
-				live,
-				analyses,
-				resolveLocal,
-				options.pgo,
-			),
+			...directEntryOpportunities(program, summaries, live, analyses, resolveLocal),
 		);
 	}
-	const orderingExposure = (opportunity: CorePlanningOpportunity) =>
-		opportunity.kind === "local" ? opportunity.rankExposure : opportunity.exposure;
 	opportunities.sort((left, right) => {
-		if (options.pgo !== undefined) {
-			const leftExposure = orderingExposure(left);
-			const rightExposure = orderingExposure(right);
-			const exposureOrder =
-				(leftExposure === undefined ? 1 : 0) - (rightExposure === undefined ? 1 : 0) ||
-				(rightExposure ?? 0) - (leftExposure ?? 0);
-			if (exposureOrder !== 0) return exposureOrder;
-		}
 		return (
 			left.priorityScore - right.priorityScore ||
 			left.generatedCodeCost - right.generatedCodeCost ||
@@ -2029,24 +1883,6 @@ export function buildCoreOptimizationPlan(
 			left.kind.localeCompare(right.kind)
 		);
 	});
-	if (options.pgo?.functionCpuCost !== undefined) {
-		const localPositions: Array<number> = [];
-		const local = opportunities.filter((opportunity, index) => {
-			if (
-				opportunity.kind !== "local" ||
-				opportunity.cpuCost === undefined ||
-				opportunity.rankExposure === undefined ||
-				opportunity.rankExposure <= 0
-			)
-				return false;
-			localPositions.push(index);
-			return true;
-		});
-		local.sort((left, right) => (right.cpuCost ?? 0) - (left.cpuCost ?? 0));
-		localPositions.forEach((position, index) => {
-			opportunities[position] = local[index]!;
-		});
-	}
 	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
 	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const service =
@@ -2076,13 +1912,7 @@ export function buildCoreOptimizationPlan(
 	const claimed = new Map<CoreFunctionId, Map<CoreInstructionId, ClaimState>>();
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
-	if (options.pgo !== undefined) service.enablePgoScheduling();
 	for (const opportunity of service.orderDiscovery(opportunities)) {
-		if (options.pgo !== undefined && opportunity.exposure === 0) {
-			discovery.skipped++;
-			increment(discovery.skippedByReason, "observed-zero");
-			continue;
-		}
 		const cost =
 			opportunity.kind === "local" && provenLocal.has(opportunity.caller)
 				? { ...opportunity, compilerWorkCost: 0 }
@@ -2101,26 +1931,12 @@ export function buildCoreOptimizationPlan(
 			increment(discovery.skippedByReason, reason);
 			continue;
 		}
-		if (opportunity.observedZero?.() === true) {
-			discovery.skipped++;
-			increment(discovery.skippedByReason, "observed-zero");
-			continue;
-		}
 		service.recordDiscovery(cost);
 		discovery.attempted++;
 		discovery.compilerWork += cost.compilerWorkCost;
 		for (const candidate of opportunity.resolve()) {
 			increment(discoveredByKind, candidate.budget.kind);
-			const budget =
-				options.pgo === undefined
-					? candidate.budget
-					: {
-							...candidate.budget,
-							exposure:
-								candidate.budget.kind === "direct-entry"
-									? candidate.budget.exposure
-									: opportunity.exposure,
-						};
+			const budget = candidate.budget;
 			if (service.offer(budget)) byBudget.set(budget, candidate);
 		}
 

@@ -10,8 +10,6 @@ let implementationDigest: string | undefined;
 
 export const COMPILER_PRODUCER_STAGES = [
 	"build-frontend",
-	"pgo-training",
-	"pgo-sampling",
 	"build-fragment",
 	"dependency-fragment",
 	"test-frontend",
@@ -22,8 +20,6 @@ export type CompilerProducerStage = (typeof COMPILER_PRODUCER_STAGES)[number];
 
 const PRODUCER_ROOTS: Record<CompilerProducerStage, Array<string>> = {
 	"build-frontend": ["build-frontend-cache.ts"],
-	"pgo-training": ["pgo-artifact.ts"],
-	"pgo-sampling": ["profile-artifact.ts"],
 	"build-fragment": ["build-fragment-cache.ts"],
 	"dependency-fragment": ["dependency-fragment-cache.ts"],
 	"test-frontend": ["testing/cache.ts"],

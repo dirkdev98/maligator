@@ -690,7 +690,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-22)).toEqual([
+		expect(WIRE_OPCODES.slice(-21)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -712,25 +712,7 @@ describe("program-image-codec", () => {
 			"BUILTIN_ERROR",
 			"PREPARED_STRING_COMPARE",
 			"PRECISE_NUMBER_SUM",
-			"PGO_CALL",
 		]);
-	});
-
-	it("rejects a PGO call marker outside the owning register frame", () => {
-		const image = (callee: number) =>
-			withBytecodeFunctions(definition, [
-				{
-					...mainFn,
-					registerCount: 3,
-					positions: [],
-					instructions: [{ opcode: "PGO_CALL", site: 0, callee }],
-				},
-			]);
-		expect(() => serializeCompilerArtifact(image(-1))).not.toThrow();
-		expect(() => serializeCompilerArtifact(image(-2))).toThrow(
-			/invalid PGO call marker/u,
-		);
-		expect(() => serializeCompilerArtifact(image(3))).toThrow(/invalid PGO call marker/u);
 	});
 
 	it("round-trips bounded precise sums and rejects invalid input registers", () => {

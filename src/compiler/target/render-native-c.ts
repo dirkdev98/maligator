@@ -581,13 +581,11 @@ function emitCompiledVariant(
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	pgoTraining = false,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
-		if (pgoTraining) return null;
 		if (directEntry !== undefined || relocatable) return null;
 		return emitResumableFunction(
 			fn,
@@ -1032,8 +1030,6 @@ function emitCompiledVariant(
 			? `${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
 			: `${linkage === "static" ? "static " : ""}${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
 	);
-	if (pgoTraining && directEntry === undefined)
-		lines.push(`    mal_pgo_entry(vm, ${relocation.functionIndex(index)});`);
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -1318,7 +1314,6 @@ export function emitCompiledFunction(
 	relocatable = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	pgoTraining = false,
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -1334,11 +1329,9 @@ export function emitCompiledFunction(
 		undefined,
 		strictCompiledTargets,
 		stringConstants,
-		pgoTraining,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
-	if (pgoTraining) return canonical;
 	const variants = native.directEntries.flatMap<{
 		entry: NativeDirectEntryPlan;
 		emitted: CompiledFunction;
@@ -4291,10 +4284,6 @@ function emitInstruction(
 		];
 	}
 	switch (instruction.opcode) {
-		case "PGO_CALL":
-			return [
-				`mal_pgo_call(vm, ${instruction.site}, ${instruction.callee < 0 || reps[instruction.callee] !== "boxed" ? "MAL_VALUE_UNDEFINED" : `r${instruction.callee}`}, ${instruction.callee >= 0});`,
-			];
 		case "MOVE": {
 			if (staticPropertyNumericAction?.role === "skip") {
 				const fallback = emitGenericInstruction();

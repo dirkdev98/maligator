@@ -28,7 +28,6 @@ import type {
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
-import type { CorePgoHints } from "./core-pgo.ts";
 import {
 	specializeCorePlatformConstants,
 	pruneUnusedPlatformAliases,
@@ -47,8 +46,6 @@ import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
 
 export interface OptimizeCoreOptions {
-	readonly pgo?: CorePgoHints;
-	readonly training?: boolean;
 	readonly verification?: CoreVerificationProfile;
 	readonly mode?: "development" | "full";
 	readonly instrumentation?: CoreInstrumentationMode;
@@ -143,8 +140,7 @@ export function optimizeCore(
 		CORE_OPTIMIZATION_OWNER.constructionStructuralCleanup,
 		() => {
 			const resources = new CoreFunctionOptimizationResources(compilation.program);
-			const ablateLocalOptimization =
-				options.training === true || ablatedFamily === "o1-scalar-structural";
+			const ablateLocalOptimization = ablatedFamily === "o1-scalar-structural";
 			const phaseTimes = new Map<CoreOptimizationPhase, number>();
 			const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
 				if (!reportBuilder.collectsPhases) return run();
@@ -260,7 +256,6 @@ export function optimizeCore(
 		}
 	};
 	for (const functionId of compilation.program.functionIds()) {
-		if (options.training === true) continue;
 		localPlanInputs.push(
 			new CoreFunctionOptimizationSession(
 				compilation.program,
@@ -304,18 +299,8 @@ export function optimizeCore(
 	const baseO3Budgets =
 		profile.o3Budgets ??
 		coreProgramTransformBudgets(DEFAULT_CORE_SPECIALIZATION_BUDGETS, liveInstructions);
-	const measuredWorkBonus = Math.floor(
-		(baseO3Budgets.programCompilerWork * (options.pgo?.measuredWorkBonusPercent ?? 0)) /
-			100,
-	);
 	const o3Candidates = new CoreTransformCandidateService(
-		measuredWorkBonus === 0
-			? baseO3Budgets
-			: {
-					...baseO3Budgets,
-					programCompilerWork: baseO3Budgets.programCompilerWork + measuredWorkBonus,
-					profileUnknownWorkLimit: Math.floor(baseO3Budgets.programCompilerWork * 0.2),
-				},
+		baseO3Budgets,
 		ablatedFamily !== "priority-scheduling",
 	);
 	const crossCallBudgets =
@@ -324,7 +309,7 @@ export function optimizeCore(
 	const crossCall = measurePhase(
 		"cross-call-transforms",
 		() =>
-			options.training === true || ablatedFamily === "inlining-cross-call"
+			ablatedFamily === "inlining-cross-call"
 				? emptyCoreCrossCallTransformResult(initialFlow)
 				: runCoreCrossCallTransforms(
 						compilation.program,
@@ -346,7 +331,6 @@ export function optimizeCore(
 						crossCallBudgets,
 						initialFlow,
 						o3Candidates,
-						options.pgo,
 					),
 		CORE_OPTIMIZATION_OWNER.crossCallTransforms,
 	);
@@ -381,11 +365,9 @@ export function optimizeCore(
 		{
 			context: compilation.context,
 			candidateService: o3Candidates,
-			pgo: options.pgo,
 			perFunctionExpansions: CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 			localInputs: [...finalLocalPlanInputs.values()],
-			discoverCandidates:
-				options.training !== true && ablatedFamily !== "late-specialization-direct-entry",
+			discoverCandidates: ablatedFamily !== "late-specialization-direct-entry",
 			...(reportBuilder.collectsPhases
 				? {
 						onPhase(phase: "discovery" | "selection", elapsedMs: number) {

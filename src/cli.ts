@@ -13,10 +13,6 @@ export interface InternalBuildOptions {
 }
 
 export interface BuildCommand {
-	pgoTrain?: boolean;
-	pgoUse?: string;
-	pgoMeasuredWorkBonus?: number;
-	pgoWorkload?: string;
 	kind: "build";
 	entry?: string;
 	configPath?: string;
@@ -29,9 +25,6 @@ export interface BuildCommand {
 }
 
 export interface RunCommand {
-	pgoTrain?: boolean;
-	pgoUse?: string;
-	pgoWorkload?: string;
 	kind: "run";
 	entry?: string;
 	configPath?: string;
@@ -42,9 +35,6 @@ export interface RunCommand {
 }
 
 export interface DevCommand {
-	pgoTrain?: boolean;
-	pgoUse?: string;
-	pgoWorkload?: string;
 	kind: "dev";
 	entry?: string;
 	configPath?: string;
@@ -78,13 +68,6 @@ export interface CacheCommand {
 }
 
 export type CliCommand =
-	| {
-			kind: "pgo-merge";
-			inputs: Array<string>;
-			cpuProfiles: Array<{ workload: string; directory: string }>;
-			output?: string;
-	  }
-	| { kind: "pgo-run"; binary: string; workload: string; programArgs: Array<string> }
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
@@ -105,8 +88,6 @@ export class CliUsageError extends Error {
 export const CLI_HELP = `Usage: maligator <command> [options]
 
 Commands:
-  pgo merge <captures...>      Merge explicit training and optional CPU captures
-  pgo run <binary>              Capture a workload with a prepared training binary
   init                         Create maligator.build.ts
   doctor                       Check native build toolchains
   cache status                 Show Maligator-owned cache usage
@@ -123,12 +104,6 @@ Options:
   --production                 Build with production optimizations
   --core-report <mode>          Show Core phases, counters, or full diagnostics (build only)
   --profile[=compiler]         Sample production code, or add exact compiler counters
-  --pgo-use <profile>    Use a validated merged PGO profile for optimization
-  --pgo-measured-work-bonus <percent>  Grant extra measured PGO proof work (build only)
-  --pgo-train                  Build or run with compact VM training counters
-  --pgo-workload <name>        Label a training run (run only)
-  --out <path>                Select the merged profile output (pgo merge)
-  --cpu-profile <name> <dir>   Add a completed production CPU capture (pgo merge)
   --artifact <directory>       Create a deployable production artifact
   --verbose                    Show build diagnostics or every pruned cache entry
   --run <name>                 Filter tests by hierarchical name
@@ -216,24 +191,6 @@ function parseBuild(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
-		if (argument === "--pgo-use") {
-			command.pgoUse = optionValue(args, index++, argument);
-			continue;
-		}
-		if (argument === "--pgo-measured-work-bonus") {
-			const value = optionValue(args, index++, argument);
-			const percent = Number(value);
-			if (!Number.isSafeInteger(percent) || percent < 0 || percent > 100)
-				throw new CliUsageError(
-					"--pgo-measured-work-bonus requires an integer from 0 to 100",
-				);
-			command.pgoMeasuredWorkBonus = percent;
-			continue;
-		}
-		if (argument === "--pgo-train") {
-			command.pgoTrain = true;
-			continue;
-		}
 		if (argument === "--production") {
 			command.production = true;
 			continue;
@@ -300,7 +257,7 @@ function parseBuild(args: Array<string>): CliCommand {
 		command.entry = argument;
 	}
 
-	return validatePgoTraining(command);
+	return command;
 }
 
 function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
@@ -318,23 +275,11 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 		}
 		if (argument === "--") {
 			command.programArgs = args.slice(index + 1);
-			return validatePgoTraining(command);
+			return command;
 		}
 		if (argument === "--config") {
 			command.configPath = optionValue(args, index, argument);
 			index++;
-			continue;
-		}
-		if (kind === "run" && argument === "--pgo-use") {
-			command.pgoUse = optionValue(args, index++, argument);
-			continue;
-		}
-		if (kind === "run" && argument === "--pgo-train") {
-			command.pgoTrain = true;
-			continue;
-		}
-		if (kind === "run" && argument === "--pgo-workload") {
-			command.pgoWorkload = optionValue(args, index++, argument);
 			continue;
 		}
 		if (argument === "--verbose") {
@@ -355,7 +300,7 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 		command.entry = argument;
 	}
 
-	return validatePgoTraining(command);
+	return command;
 }
 
 function positiveInteger(value: string, option: string): number {
@@ -493,82 +438,6 @@ function parseTest(args: Array<string>): CliCommand {
 	return command;
 }
 
-function validatePgoTraining<T extends BuildCommand | RunCommand | DevCommand>(
-	command: T,
-): T {
-	if (
-		command.kind === "build" &&
-		command.pgoMeasuredWorkBonus !== undefined &&
-		(command.pgoUse === undefined || !command.production)
-	)
-		throw new CliUsageError(
-			"--pgo-measured-work-bonus requires --pgo-use and --production",
-		);
-	if (command.pgoTrain && command.pgoUse !== undefined)
-		throw new CliUsageError("PGO training and profile use are mutually exclusive");
-	if (command.pgoTrain && command.profile)
-		throw new CliUsageError("PGO training and diagnostic profiling are separate modes");
-	if (command.pgoWorkload !== undefined && !command.pgoTrain)
-		throw new CliUsageError("--pgo-workload requires --pgo-train");
-	if (
-		command.pgoTrain &&
-		command.kind === "build" &&
-		(command.internal.serializePath !== undefined ||
-			command.artifactDirectory !== undefined)
-	)
-		throw new CliUsageError("PGO training currently supports local native binaries only");
-	return command;
-}
-
-function parsePgo(args: Array<string>): CliCommand {
-	if (args[1] === "run") {
-		let binary: string | undefined;
-		let workload: string | undefined;
-		let programArgs: Array<string> = [];
-		for (let index = 2; index < args.length; index++) {
-			const argument = args[index]!;
-			if (argument === "--") {
-				programArgs = args.slice(index + 1);
-				break;
-			}
-			if (argument === "--pgo-workload") {
-				workload = optionValue(args, index++, argument);
-				continue;
-			}
-			if (argument.startsWith("-")) return unexpectedArgument("pgo run", argument);
-			if (binary !== undefined) return unexpectedArgument("pgo run", argument);
-			binary = argument;
-		}
-		if (binary === undefined || workload === undefined || workload.trim() === "")
-			throw new CliUsageError("pgo run needs a binary and --pgo-workload <name>");
-		return { kind: "pgo-run", binary, workload, programArgs };
-	}
-	if (args[1] !== "merge")
-		throw new CliUsageError("expected pgo run <binary> or pgo merge <captures...>");
-	const command: Extract<CliCommand, { kind: "pgo-merge" }> = {
-		kind: "pgo-merge",
-		inputs: [],
-		cpuProfiles: [],
-	};
-	for (let index = 2; index < args.length; index++) {
-		const argument = args[index]!;
-		if (argument === "--out") command.output = optionValue(args, index++, argument);
-		else if (argument === "--cpu-profile") {
-			const workload = optionValue(args, index++, argument);
-			const directory = optionValue(args, index++, argument);
-			if (workload.trim() === "" || directory.startsWith("-"))
-				throw new CliUsageError(
-					"--cpu-profile needs a workload name and capture directory",
-				);
-			command.cpuProfiles.push({ workload, directory });
-		} else if (argument.startsWith("-")) return unexpectedArgument("pgo merge", argument);
-		else command.inputs.push(argument);
-	}
-	if (command.inputs.length === 0)
-		throw new CliUsageError("PGO merge needs explicit captures");
-	return command;
-}
-
 export function parseCliArgs(args: Array<string>): CliCommand {
 	const command = args[0];
 	if (command === undefined) {
@@ -601,7 +470,6 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 	if (command === "test") {
 		return parseTest(args);
 	}
-	if (command === "pgo") return parsePgo(args);
 	if (command === "cache") {
 		return parseCache(args);
 	}

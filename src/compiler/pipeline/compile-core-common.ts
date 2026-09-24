@@ -13,7 +13,6 @@ import type {
 	CoreInstrumentationMode,
 	CoreOptimizationReport,
 } from "../core/core-optimization-report.ts";
-import type { CorePgoHints, CorePgoInput } from "../core/core-pgo.ts";
 import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -27,8 +26,6 @@ export type CompileCorePhase =
 	| "execution to image";
 
 export interface CompileCoreOptions {
-	pgoTraining?: boolean;
-	pgo?: CorePgoInput;
 	facts?: CompilerProgramFacts;
 	optimization?: "development" | "full";
 	/** Derive source-site identities and compiler remarks for a profiled image. */
@@ -62,14 +59,9 @@ export function optimizeSemanticProgramToCore(
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 ): CoreCompilation {
 	const core = lowerSemanticProgramToCore(semantic, {
-		pgoTraining: options.pgoTraining,
 		...options.semanticLowering,
 		sourceOrigins:
-			options.profile === true ||
-			options.pgoTraining === true ||
-			options.pgo !== undefined
-				? { moduleKeys: options.profileModuleKeys }
-				: undefined,
+			options.profile === true ? { moduleKeys: options.profileModuleKeys } : undefined,
 		facts: {
 			...(options.facts ?? conservativeCompilerProgramFacts()),
 			compilationMode: options.optimization ?? "full",
@@ -84,12 +76,8 @@ export function optimizeConstructedCore(
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 ): CoreCompilation {
-	let pgo: CorePgoHints | undefined;
 	const optimizedResult = runPhase("optimize core ir", () => {
-		pgo = options.pgo?.bind(core);
 		return optimizeCore(core, {
-			training: options.pgoTraining,
-			pgo,
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
 			instrumentation: options.coreInstrumentation ?? "off",
@@ -100,17 +88,10 @@ export function optimizeConstructedCore(
 		options.profile === true
 			? attachCoreCompilerSiteFacts(optimizedResult.compilation)
 			: optimizedResult.compilation;
-	const report =
-		pgo?.queryCoverage === undefined
-			? optimizedResult.report
-			: Object.freeze({
-					...optimizedResult.report,
-					pgoQueries: pgo.queryCoverage(),
-				});
 	options.afterCoreOptimization?.(
 		optimized.program,
 		optimized.context,
-		report,
+		optimizedResult.report,
 		optimized.plan,
 	);
 	return optimized;

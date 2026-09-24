@@ -23,7 +23,6 @@ import type { CoreFunctionStore } from "./core-store.ts";
  * markers are structural Core concepts and therefore cannot appear as opcodes.
  */
 export const CORE_OPCODES = [
-	"pgoCall",
 	"arrayRest",
 	"asyncStart",
 	"await",
@@ -140,7 +139,6 @@ export const CORE_OPCODES = [
 export type CoreOpcode = (typeof CORE_OPCODES)[number];
 
 const NO_OUTPUT = new Set<CoreOpcode>([
-	"pgoCall",
 	"declareGlobalLexical",
 	"asyncStart",
 	"checkSuperClass",
@@ -620,7 +618,6 @@ function opcodeAccesses(opcode: CoreOpcode): ReadonlyArray<CoreOpcodeAccess> {
 }
 
 const INPUT_ARITIES = {
-	pgoCall: [0, 1],
 	queryStaticData: [2, 2],
 	arrayRest: [1, 1],
 	asyncStart: [0, 0],
@@ -754,7 +751,6 @@ function domainsFor(
 }
 
 function effectsFor(opcode: CoreOpcode): CoreInstructionEffects {
-	if (opcode === "pgoCall") return { ...CORE_NO_EFFECTS, writes: ["host"] };
 	const reads = domainsFor(opcode, "reads");
 	const writes = domainsFor(opcode, "writes");
 	if (

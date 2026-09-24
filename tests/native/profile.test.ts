@@ -145,7 +145,7 @@ describe("production profile recorder", () => {
 		expect(truncated?.frames.at(-1)?.siteId).toBeGreaterThanOrEqual(0);
 	});
 
-	it("marks background CPU workers so their time cannot guide native PGO", () => {
+	it("marks background CPU workers in the capture metadata", () => {
 		const capture = path.join(directory, "background-workers.bin");
 		const result = spawnSync(backgroundWorkersBinary, [], {
 			env: {

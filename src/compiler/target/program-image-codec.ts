@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 60;
+export const WIRE_VERSION = 61;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -652,7 +652,6 @@ function writeFunction(w: Writer, fn: BytecodeFunction, debug: boolean): void {
 
 	w.u32(fn.instructions.length);
 	for (const instruction of fn.instructions) {
-		validatePgoCallMarker(instruction, fn.registerCount);
 		writeInstruction(w, instruction);
 	}
 
@@ -745,21 +744,6 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 	if (expectedLiteralShape > fn.literalShapeCount) {
 		throw new RangeError("program-image-codec: literal shape count is too small");
 	}
-}
-
-function validatePgoCallMarker(
-	instruction: BytecodeInstruction,
-	registerCount: number,
-): void {
-	if (instruction.opcode !== "PGO_CALL") return;
-	if (
-		!Number.isSafeInteger(instruction.site) ||
-		instruction.site < 0 ||
-		!Number.isSafeInteger(instruction.callee) ||
-		instruction.callee < -1 ||
-		instruction.callee >= registerCount
-	)
-		throw new RangeError("program-image-codec: invalid PGO call marker");
 }
 
 function opcodeTag(opcode: string): number {
@@ -967,14 +951,6 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		// intentionally dropped — deserialize restores it as 0.
 		case "TRY_BEGIN":
 		case "TRY_END":
-			return;
-		case "PGO_CALL":
-			if (!Number.isInteger(i.site) || i.site < 0 || i.site > 0x7fffffff)
-				throw new Error("Invalid PGO call site");
-			if (!Number.isInteger(i.callee) || i.callee < -1 || i.callee > 0x7fffffff)
-				throw new Error("Invalid PGO callee register");
-			w.i32(i.site);
-			w.i32(i.callee);
 			return;
 		case "GENERATOR_START":
 		case "ASYNC_START":
@@ -1535,7 +1511,6 @@ function readFunction(r: Reader): BytecodeFunction {
 	let physicalLiteralShapeCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
 		const instruction = readInstruction(r);
-		validatePgoCallMarker(instruction, registerCount);
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
@@ -1903,12 +1878,6 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, handlerIp: 0 };
 		case "TRY_END":
 			return { opcode };
-		case "PGO_CALL": {
-			const site = r.i32();
-			const callee = r.i32();
-			if (site < 0 || callee < -1) throw new Error("Invalid PGO call marker");
-			return { opcode, site, callee };
-		}
 		case "GENERATOR_START":
 			return { opcode };
 		case "ASYNC_START":

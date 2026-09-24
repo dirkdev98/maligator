@@ -3011,3 +3011,16 @@ may now refer to files available only in Git history. Do not treat them as an
 active implementation plan or restore the Core cache incrementally. Any future
 persistent IR design needs a fresh ownership and invalidation contract plus a
 measured net benefit on representative application edits.
+
+## D083 — 2026-09-24 — Retire profile-guided optimization
+
+**Status:** Adopted. **Supersedes:** The PGO proposals and implementation decisions
+in D001–D082; the persistent Core reuse retirement in D082 remains in force.
+
+Remove VM training counters, PGO capture and merge, profile-based Core hints,
+separate hot and unknown budgets, and their CLI and wire contracts. The training
+and validation cost did not establish a representative net benefit sufficient to
+support the additional optimization policy. Ordinary Core transforms and the
+diagnostic `--profile` recorder remain available. Earlier measurements in this
+log are historical evidence, not an active implementation plan. Any future
+profile-directed design needs a new measurement and ownership contract.

@@ -6,7 +6,6 @@ import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {
-	readonly pgoTraining?: boolean;
 	readonly sourceOrigins?: SourceFunctionOriginOptions;
 	readonly evalCompletion?: boolean;
 	readonly evalDirect?: boolean;
@@ -26,7 +25,6 @@ export function lowerSemanticProgramToCore(
 		options.runPhase ?? (<T>(_phase: "construct core ir", run: () => T): T => run());
 	return runPhase("construct core ir", () =>
 		constructSemanticProgramCore(semantic, {
-			pgoTraining: options.pgoTraining,
 			sourceOrigins: options.sourceOrigins,
 			evalCompletion: options.evalCompletion,
 			evalDirect: options.evalDirect,

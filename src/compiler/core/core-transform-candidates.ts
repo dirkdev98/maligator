@@ -41,7 +41,6 @@ export type CoreTransformDeclineReason =
 	| "target-support";
 
 export interface CoreTransformCandidate {
-	readonly exposure?: number;
 	readonly kind: CoreTransformKind;
 	readonly caller: CoreFunctionId;
 	readonly site: CoreInstructionId;
@@ -57,7 +56,6 @@ export interface CoreTransformCandidate {
 }
 
 export interface CoreTransformDiscoveryCost {
-	readonly exposure?: number;
 	readonly caller: CoreFunctionId;
 	// A lower bound for admission; discovery itself does not consume generated code.
 	readonly generatedCodeCost: number;
@@ -71,7 +69,6 @@ export interface CoreTransformBudgetLimits {
 	readonly perCallerCompilerWork: number;
 	readonly programGeneratedCode: number;
 	readonly programCompilerWork: number;
-	readonly profileUnknownWorkLimit?: number;
 }
 
 export const DEFAULT_CORE_TRANSFORM_BUDGETS: CoreTransformBudgetLimits = Object.freeze({
@@ -116,22 +113,6 @@ export interface CoreTransformBudgetStatistics {
 	readonly declinedByReason: Readonly<Record<CoreTransformDeclineReason, number>>;
 	readonly generatedCodeConsumed: number;
 	readonly compilerWorkConsumed: number;
-	readonly profileBudget?: CoreProfileBudgetStatistics;
-}
-
-export interface CoreProfileBudgetStatistics {
-	readonly unknown: Readonly<{
-		compilerWorkConsumed: number;
-		generatedCodeConsumed: number;
-	}>;
-	readonly measured: Readonly<{
-		compilerWorkConsumed: number;
-		generatedCodeConsumed: number;
-	}>;
-	readonly unknownWorkLimit: number;
-	readonly unknownCodeLimit: number;
-	readonly measuredWorkLimit: number;
-	readonly measuredCodeLimit: number;
 }
 
 interface CallerConsumption {
@@ -190,8 +171,6 @@ function candidatePrecedes(
 	left: CoreTransformCandidate,
 	right: CoreTransformCandidate,
 ): boolean {
-	if ((left.exposure === undefined) !== (right.exposure === undefined))
-		return left.exposure !== undefined;
 	if (left.priorityClass !== right.priorityClass)
 		return left.priorityClass < right.priorityClass;
 	if (left.priorityScore !== right.priorityScore)
@@ -297,40 +276,6 @@ export class CoreTransformCandidateService {
 	#declined = 0;
 	#generatedCode = 0;
 	#compilerWork = 0;
-	#profileScheduling = false;
-	readonly #unknownUse = { work: 0, code: 0 };
-	readonly #measuredUse = { work: 0, code: 0 };
-	enablePgoScheduling(): void {
-		this.#profileScheduling = true;
-	}
-	#profileBudget(
-		cost: CoreTransformDiscoveryCost,
-	): CoreTransformDeclineReason | undefined {
-		if (!this.#profileScheduling) return undefined;
-		const unknown = cost.exposure === undefined;
-		const used = unknown ? this.#unknownUse : this.#measuredUse;
-		const work =
-			this.#limits.profileUnknownWorkLimit ??
-			Math.floor(this.#limits.programCompilerWork * 0.2);
-		const code = Math.floor(this.#limits.programGeneratedCode * 0.2);
-		if (
-			used.work + cost.compilerWorkCost >
-			(unknown ? work : this.#limits.programCompilerWork - work)
-		)
-			return "compiler-work-cost";
-		if (
-			used.code + cost.generatedCodeCost >
-			(unknown ? code : this.#limits.programGeneratedCode - code)
-		)
-			return "generated-code-cost";
-		return undefined;
-	}
-	#recordProfile(cost: CoreTransformDiscoveryCost, applied: boolean): void {
-		if (!this.#profileScheduling) return;
-		const used = cost.exposure === undefined ? this.#unknownUse : this.#measuredUse;
-		used.work += cost.compilerWorkCost;
-		if (applied) used.code += cost.generatedCodeCost;
-	}
 
 	constructor(
 		limits: CoreTransformBudgetLimits = DEFAULT_CORE_TRANSFORM_BUDGETS,
@@ -343,9 +288,7 @@ export class CoreTransformCandidateService {
 	orderDiscovery<Opportunity extends { readonly caller: CoreFunctionId }>(
 		opportunities: ReadonlyArray<Opportunity>,
 	): ReadonlyArray<Opportunity> {
-		return this.#profileScheduling || !this.#fairScheduling
-			? opportunities
-			: roundRobinByCaller(opportunities);
+		return this.#fairScheduling ? roundRobinByCaller(opportunities) : opportunities;
 	}
 
 	offer(candidate: CoreTransformCandidate): boolean {
@@ -363,8 +306,7 @@ export class CoreTransformCandidateService {
 	}
 
 	next(): CoreTransformCandidate | undefined {
-		if (this.#profileScheduling || !this.#fairScheduling)
-			return popCandidate(this.#queue);
+		if (!this.#fairScheduling) return popCandidate(this.#queue);
 		if (this.#fairCursor < this.#fairQueue.length && this.#queue.length === 0)
 			return this.#fairQueue[this.#fairCursor++];
 		const candidates = this.#fairQueue.slice(this.#fairCursor);
@@ -449,8 +391,6 @@ export class CoreTransformCandidateService {
 		limits?: CoreTransformBudgetLimits,
 	): CoreTransformDeclineReason | undefined {
 		if (candidate.unsupportedReason !== undefined) return candidate.unsupportedReason;
-		const profileReason = this.#profileBudget(candidate);
-		if (profileReason !== undefined) return profileReason;
 		const active = this.#activeLimits(limits);
 		const caller = this.#caller.get(candidate.caller) ?? {
 			expansions: 0,
@@ -482,8 +422,6 @@ export class CoreTransformCandidateService {
 	admitDiscovery(
 		cost: CoreTransformDiscoveryCost,
 	): CoreTransformDeclineReason | undefined {
-		const profileReason = this.#profileBudget(cost);
-		if (profileReason !== undefined) return profileReason;
 		const active = this.#limits;
 		const caller = this.#caller.get(cost.caller);
 		if (
@@ -502,7 +440,6 @@ export class CoreTransformCandidateService {
 	}
 
 	recordDiscovery(cost: CoreTransformDiscoveryCost): void {
-		this.#recordProfile(cost, false);
 		const caller = this.#caller.get(cost.caller) ?? {
 			expansions: 0,
 			generatedCode: 0,
@@ -514,7 +451,6 @@ export class CoreTransformCandidateService {
 	}
 
 	recordApplied(candidate: CoreTransformCandidate): void {
-		this.#recordProfile(candidate, true);
 		const caller = this.#caller.get(candidate.caller) ?? {
 			expansions: 0,
 			generatedCode: 0,
@@ -543,10 +479,6 @@ export class CoreTransformCandidateService {
 	}
 
 	statistics(): CoreTransformBudgetStatistics {
-		const unknownWorkLimit =
-			this.#limits.profileUnknownWorkLimit ??
-			Math.floor(this.#limits.programCompilerWork * 0.2);
-		const unknownCodeLimit = Math.floor(this.#limits.programGeneratedCode * 0.2);
 		return Object.freeze({
 			considered: this.#considered,
 			applied: this.#applied,
@@ -555,24 +487,6 @@ export class CoreTransformCandidateService {
 			declinedByReason: Object.freeze({ ...this.#declinedByReason }),
 			generatedCodeConsumed: this.#generatedCode,
 			compilerWorkConsumed: this.#compilerWork,
-			...(this.#profileScheduling
-				? {
-						profileBudget: Object.freeze({
-							unknown: Object.freeze({
-								compilerWorkConsumed: this.#unknownUse.work,
-								generatedCodeConsumed: this.#unknownUse.code,
-							}),
-							measured: Object.freeze({
-								compilerWorkConsumed: this.#measuredUse.work,
-								generatedCodeConsumed: this.#measuredUse.code,
-							}),
-							unknownWorkLimit,
-							unknownCodeLimit,
-							measuredWorkLimit: this.#limits.programCompilerWork - unknownWorkLimit,
-							measuredCodeLimit: this.#limits.programGeneratedCode - unknownCodeLimit,
-						}),
-					}
-				: {}),
 		});
 	}
 
@@ -604,32 +518,6 @@ export class CoreTransformCandidateService {
 			generatedCodeConsumed:
 				current.generatedCodeConsumed - baseline.generatedCodeConsumed,
 			compilerWorkConsumed: current.compilerWorkConsumed - baseline.compilerWorkConsumed,
-			...(current.profileBudget === undefined
-				? {}
-				: {
-						profileBudget: Object.freeze({
-							unknown: Object.freeze({
-								compilerWorkConsumed:
-									current.profileBudget.unknown.compilerWorkConsumed -
-									(baseline.profileBudget?.unknown.compilerWorkConsumed ?? 0),
-								generatedCodeConsumed:
-									current.profileBudget.unknown.generatedCodeConsumed -
-									(baseline.profileBudget?.unknown.generatedCodeConsumed ?? 0),
-							}),
-							measured: Object.freeze({
-								compilerWorkConsumed:
-									current.profileBudget.measured.compilerWorkConsumed -
-									(baseline.profileBudget?.measured.compilerWorkConsumed ?? 0),
-								generatedCodeConsumed:
-									current.profileBudget.measured.generatedCodeConsumed -
-									(baseline.profileBudget?.measured.generatedCodeConsumed ?? 0),
-							}),
-							unknownWorkLimit: current.profileBudget.unknownWorkLimit,
-							unknownCodeLimit: current.profileBudget.unknownCodeLimit,
-							measuredWorkLimit: current.profileBudget.measuredWorkLimit,
-							measuredCodeLimit: current.profileBudget.measuredCodeLimit,
-						}),
-					}),
 		});
 	}
 }

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 60u
+#define WIRE_VERSION 61u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -891,12 +891,6 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             return;
         case WIRE_TRY_END:
             o->opcode = MAL_OP_TRY_END;
-            return;
-        case WIRE_PGO_CALL:
-            o->opcode = MAL_OP_PGO_CALL;
-            o->as.pgo_call.site = rd_i32(r);
-            o->as.pgo_call.callee = rd_i32(r);
-            if (o->as.pgo_call.site < 0 || o->as.pgo_call.callee < -1) r->ok = false;
             return;
         case WIRE_GENERATOR_START:
             o->opcode = MAL_OP_GENERATOR_START;
@@ -2459,9 +2453,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
             const MalInstruction *instruction = &fn->instructions[ip];
-            if (instruction->opcode == MAL_OP_PGO_CALL) {
-                if (instruction->as.pgo_call.callee >= fn->register_count) r.ok = false;
-            } else if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
+            if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
                 if (!mal_loaded_static_query_valid(def, fn, instruction)) r.ok = false;
             } else if (instruction->opcode == MAL_OP_BASE_CONSTRUCT_RESULT) {
                 i32 registers[] = {

@@ -42,10 +42,8 @@ import type {
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
-import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
-import type { CorePgoQueryCoverage } from "./compiler/core/core-pgo.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -60,17 +58,6 @@ import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
-import {
-	createPgoCapture,
-	finalizePgoCapture,
-	mergePgoCaptures,
-	pgoSemanticIdentity,
-	preparePgoTraining,
-	readPgoProfile,
-	pgoOptimizationInput,
-	readPreparedPgoTraining,
-} from "./pgo-artifact.ts";
-import type { PreparedPgo } from "./pgo-artifact.ts";
 import {
 	executionTarget,
 	hostExecutionTarget,
@@ -244,7 +231,6 @@ export interface BuildCommandResult {
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
 	profile?: PreparedProfile;
-	pgo?: PreparedPgo;
 }
 
 class CommandError extends Error {
@@ -321,7 +307,6 @@ function selectToolchain(
 	if (
 		command.kind !== "build" &&
 		!command.profile &&
-		!command.pgoTrain &&
 		compatibleDevelopmentRunner(config, context) !== undefined
 	) {
 		return {};
@@ -384,18 +369,6 @@ function compileAndBuild(
 	compact = false,
 ): BuildCommandResult {
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
-	if (
-		command.pgoTrain &&
-		(command.profile ||
-			command.pgoUse !== undefined ||
-			command.kind === "dev" ||
-			(command.kind === "build" &&
-				(command.internal.serializePath !== undefined ||
-					command.artifactDirectory !== undefined)))
-	)
-		commandError(
-			"PGO training requires a separate build/run without profile use, diagnostic profiling, or deployment/wire-only artifacts",
-		);
 	const entrypointPath = resolveEntrypoint(command, buildConfig);
 	const name =
 		command.kind === "build"
@@ -496,18 +469,6 @@ function compileAndBuild(
 				? executionTarget(command.target)
 				: hostExecutionTarget(process.platform, process.arch),
 	});
-	const pgo =
-		command.pgoUse === undefined
-			? undefined
-			: pgoOptimizationInput(
-					readPgoProfile(path.resolve(command.pgoUse), pgoSemanticIdentity(buildConfig)),
-					{
-						collectQueryCoverage: reporter.verbose,
-						measuredWorkBonusPercent:
-							command.kind === "build" ? command.pgoMeasuredWorkBonus : undefined,
-					},
-				);
-	const pgoQueryCoverage: Array<CorePgoQueryCoverage> = [];
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontend = reporter.phase(
@@ -534,8 +495,6 @@ function compileAndBuild(
 					// names its own pass instead of surfacing at a later boundary.
 					...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
 					profile: command.profile,
-					pgoTraining: command.pgoTrain,
-					pgo,
 					coreInstrumentation:
 						command.kind === "build" ? command.internal.coreReport : undefined,
 					enforcePolicies: !(
@@ -545,18 +504,13 @@ function compileAndBuild(
 					// not part of the portable wire schema yet. Do not accept a definition-only
 					// frontend cache hit that would discard its source-site identities.
 					forceCompile:
-						debugEnabled ||
-						compilerDiagnostics ||
-						command.profile ||
-						command.pgoTrain ||
-						reporter.verbose,
-					relocatable: command.kind !== "build" && !command.profile && !command.pgoTrain,
+						debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
+					relocatable: command.kind !== "build" && !command.profile,
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
 					},
 					dependencyWorker: context.dependencyWorker,
-					afterCoreOptimization: (core, _context, report) => {
-						if (report.pgoQueries !== undefined) pgoQueryCoverage.push(report.pgoQueries);
+					afterCoreOptimization: (core) => {
 						if (command.kind === "build" && compilerDiagnostics) {
 							log.info(formatCoreProgram(core));
 						}
@@ -570,23 +524,6 @@ function compileAndBuild(
 		(result) => `frontend cache ${result.cache}`,
 	);
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
-	if (pgoQueryCoverage.length > 0) {
-		const functions = new Map<string, number>();
-		const calls = new Map<string, number>();
-		const targets = new Map<string, number>();
-		for (const coverage of pgoQueryCoverage) {
-			for (const [kind, count] of Object.entries(coverage.functions))
-				functions.set(kind, (functions.get(kind) ?? 0) + count);
-			for (const [kind, count] of Object.entries(coverage.calls))
-				calls.set(kind, (calls.get(kind) ?? 0) + count);
-			for (const [kind, count] of Object.entries(coverage.targets))
-				targets.set(kind, (targets.get(kind) ?? 0) + count);
-		}
-		reporter.detail(
-			"PGO query coverage",
-			`functions ${[...functions].map(([kind, count]) => `${kind}=${count}`).join(", ")}; calls ${[...calls].map(([kind, count]) => `${kind}=${count}`).join(", ")}; guarded targets ${[...targets].map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
-		);
-	}
 	for (const diagnostic of frontend.diagnostics) {
 		reporter.warning(
 			`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +
@@ -654,7 +591,7 @@ function compileAndBuild(
 	}
 
 	const packagedRunner =
-		command.kind !== "build" && !command.profile && !command.pgoTrain
+		command.kind !== "build" && !command.profile
 			? compatibleDevelopmentRunner(buildConfig, context)
 			: undefined;
 	if (command.kind !== "build" && packagedRunner !== undefined) {
@@ -721,23 +658,21 @@ function compileAndBuild(
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const baseDerivation = buildDerivationFromConfig(buildConfig);
-	const derivation =
-		command.profile || command.pgoTrain
-			? {
-					features: normalizeNativeFeatures({
-						...baseDerivation.features,
-						profileEnabled: command.profile,
-						pgoEnabled: command.pgoTrain === true,
-					}),
-					cacheSuffix: [
-						baseDerivation.cacheSuffix,
-						command.pgoTrain ? "pgo" : "profile",
-						command.profileCompiler ? "compiler" : "",
-					]
-						.filter((part) => part !== "")
-						.join("-"),
-				}
-			: baseDerivation;
+	const derivation = command.profile
+		? {
+				features: normalizeNativeFeatures({
+					...baseDerivation.features,
+					profileEnabled: command.profile,
+				}),
+				cacheSuffix: [
+					baseDerivation.cacheSuffix,
+					"profile",
+					command.profileCompiler ? "compiler" : "",
+				]
+					.filter((part) => part !== "")
+					.join("-"),
+			}
+		: baseDerivation;
 	reporter.detail(
 		"Rust features",
 		derivation.features.cargoFeatures.length === 0
@@ -788,7 +723,7 @@ function compileAndBuild(
 			);
 		},
 	});
-	if (command.kind !== "build" && !command.profile && !command.pgoTrain) {
+	if (command.kind !== "build" && !command.profile) {
 		const wirePaths = reporter.phase("Cache development image", () =>
 			frontend.runtimeArtifacts.map((artifact) => artifact.path),
 		);
@@ -917,13 +852,6 @@ function compileAndBuild(
 			return caches.join(" · ");
 		},
 	);
-	const preparedPgo = command.pgoTrain
-		? preparePgoTraining(
-				binaryPath,
-				frontend.programImage,
-				pgoSemanticIdentity(buildConfig),
-			)
-		: undefined;
 	const preparedProfile = command.profile
 		? reporter.phase("Prepare profile metadata", () =>
 				prepareProfile(
@@ -933,12 +861,6 @@ function compileAndBuild(
 					{
 						coreOptimizationReport: frontend.optimizationReport,
 						coreOptimizationPlan: frontend.optimizationPlan,
-					},
-					{
-						semanticKey: pgoSemanticIdentity(buildConfig),
-						producer: compilerProducerIdentity("pgo-sampling", 3),
-						optimization: "full",
-						backend: compiledNativeOutput ? "compiled" : "interpreted",
 					},
 				),
 			)
@@ -979,7 +901,6 @@ function compileAndBuild(
 			artifactDirectory: artifact.directory,
 			dependencies,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
-			...(preparedPgo === undefined ? {} : { pgo: preparedPgo }),
 		};
 	}
 	reporter.complete(
@@ -991,7 +912,6 @@ function compileAndBuild(
 		binaryPath,
 		dependencies,
 		...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
-		...(preparedPgo === undefined ? {} : { pgo: preparedPgo }),
 	};
 }
 
@@ -1001,25 +921,6 @@ export function buildCommand(
 	context: CommandContext,
 ): BuildCommandResult {
 	return compileAndBuild(command, context);
-}
-
-function executePgoTrainingRun(
-	binaryPath: string,
-	args: Array<string>,
-	prepared: PreparedPgo,
-	workload: string,
-): RunOutcome {
-	const training = createPgoCapture(prepared, workload);
-	const outcome = executeBinary(binaryPath, args, {
-		...runEnv(),
-		...training.environment,
-	});
-	try {
-		finalizePgoCapture(training, outcome.status === 0 && outcome.signal === undefined);
-	} finally {
-		writeStderr(`PGO capture ${path.join(training.directory, "manifest.json")}`);
-	}
-	return outcome;
 }
 
 function reportRunOutcome(outcome: RunOutcome): void {
@@ -1043,19 +944,11 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 			? createProfileCapture("run", result.profile)
 			: undefined;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
-	const outcome =
-		result.pgo === undefined
-			? executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
-					...runEnv(),
-					...(capture === undefined ? {} : capture.environment),
-					...compilerProfileRuntimeEnvironment(command),
-				})
-			: executePgoTrainingRun(
-					binaryPath,
-					result.runArguments ?? command.programArgs,
-					result.pgo,
-					command.pgoWorkload ?? path.basename(command.entry ?? "application"),
-				);
+	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
+		...runEnv(),
+		...(capture === undefined ? {} : capture.environment),
+		...compilerProfileRuntimeEnvironment(command),
+	});
 	if (capture !== undefined && result.profile !== undefined) {
 		if (existsSync(capture.capturePath)) {
 			try {
@@ -1526,12 +1419,6 @@ function executeProfiledTests(
 			coreOptimizationReport: compiled.optimizationReport,
 			coreOptimizationPlan: compiled.optimizationPlan,
 		},
-		{
-			semanticKey: pgoSemanticIdentity(config),
-			producer: compilerProducerIdentity("pgo-sampling", 3),
-			optimization: "full",
-			backend: "compiled",
-		},
 	);
 	const capture = createProfileCapture("test", profile);
 	const executionStartedAt = Date.now();
@@ -1651,23 +1538,6 @@ export async function runCli(
 				),
 			);
 			if (report.toolchain === undefined) process.exit(1);
-			return;
-		}
-		if (command.kind === "pgo-merge") {
-			const merged = mergePgoCaptures(command.inputs, command.output, {
-				cpuProfiles: command.cpuProfiles,
-			});
-			writeStderr(
-				`PGO profile ${merged.path} (${merged.profile.runs.length} unique runs)`,
-			);
-			return;
-		}
-		if (command.kind === "pgo-run") {
-			const binary = path.resolve(command.binary);
-			const prepared = readPreparedPgoTraining(binary);
-			reportRunOutcome(
-				executePgoTrainingRun(binary, command.programArgs, prepared, command.workload),
-			);
 			return;
 		}
 		if (command.kind === "cache") {
