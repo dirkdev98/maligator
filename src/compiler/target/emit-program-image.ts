@@ -527,6 +527,7 @@ interface TranslationUnitPart {
 	kind: "data array" | "compiled function";
 	symbol: string;
 	partitionKey: string;
+	partitionHashes: Array<number | undefined>;
 	source: string;
 	declarationIndices: Array<number>;
 }
@@ -1266,7 +1267,7 @@ export function emitProgramTranslationUnits(
 		else indices.push(index);
 	}
 	const preparePart = (
-		part: Omit<TranslationUnitPart, "declarationIndices">,
+		part: Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">,
 	): TranslationUnitPart => {
 		const declarationIndices = new Set<number>();
 		for (const match of part.source.matchAll(/\bmal_[A-Za-z0-9_]+\b/g)) {
@@ -1274,7 +1275,11 @@ export function emitProgramTranslationUnits(
 			if (indices === undefined) continue;
 			for (const index of indices) declarationIndices.add(index);
 		}
-		return { ...part, declarationIndices: [...declarationIndices] };
+		return {
+			...part,
+			partitionHashes: [],
+			declarationIndices: [...declarationIndices],
+		};
 	};
 	const preparePartition = (
 		parts: Array<TranslationUnitPart>,
@@ -1327,7 +1332,7 @@ export function emitProgramTranslationUnits(
 	const partition = (
 		kind: "data" | "code",
 		headerLines: ReadonlyArray<string>,
-		inputs: Array<Omit<TranslationUnitPart, "declarationIndices">>,
+		inputs: Array<Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">>,
 	): Array<GeneratedTranslationUnit> => {
 		const units: Array<GeneratedTranslationUnit> = [];
 		const headerSourceCodeUnits = headerLines.reduce(
@@ -1384,12 +1389,13 @@ export function emitProgramTranslationUnits(
 			const round = Math.floor(depth / 32);
 			const bit = depth % 32;
 			for (const part of parts) {
-				const target =
-					((stablePartitionHash(`${part.kind}:${part.partitionKey}`, round) >>> bit) &
-						1) ===
-					0
-						? left
-						: right;
+				const hash =
+					part.partitionHashes[round] ??
+					(part.partitionHashes[round] = stablePartitionHash(
+						`${part.kind}:${part.partitionKey}`,
+						round,
+					));
+				const target = ((hash >>> bit) & 1) === 0 ? left : right;
 				target.push(part);
 			}
 			if (left.length === 0 || right.length === 0) {
@@ -1408,7 +1414,9 @@ export function emitProgramTranslationUnits(
 		partitionKey: data.source.replaceAll(data.symbol, "<self>"),
 		source: data.source,
 	}));
-	const codeParts: Array<Omit<TranslationUnitPart, "declarationIndices">> = [];
+	const codeParts: Array<
+		Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">
+	> = [];
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	for (const [functionIndex, fn] of emitted.compiled.entries()) {
 		if (fn === null) continue;
@@ -1502,10 +1510,16 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			definitions: [],
 		},
 	];
-	type NativeOverlayFunction = { fn: CompiledFunction; partitionKey: string };
+	type NativeOverlayFunction = {
+		fn: CompiledFunction;
+		partitionKey: string;
+		partitionHashes: Array<number | undefined>;
+	};
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) =>
-		fn === null ? [] : [{ fn, partitionKey: functionPartitionKeys[index]! }],
+		fn === null
+			? []
+			: [{ fn, partitionKey: functionPartitionKeys[index]!, partitionHashes: [] }],
 	);
 	const visit = (
 		functions: Array<NativeOverlayFunction>,
@@ -1559,10 +1573,10 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			return;
 		}
 		for (const fn of functions) {
-			(((stablePartitionHash(fn.partitionKey, round) >>> bit) & 1) === 0
-				? left
-				: right
-			).push(fn);
+			const hash =
+				fn.partitionHashes[round] ??
+				(fn.partitionHashes[round] = stablePartitionHash(fn.partitionKey, round));
+			(((hash >>> bit) & 1) === 0 ? left : right).push(fn);
 		}
 		if (left.length === 0 || right.length === 0) {
 			visit(functions, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
