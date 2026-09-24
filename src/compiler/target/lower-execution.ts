@@ -83,6 +83,7 @@ export type {
 
 export interface LowerCoreToExecutionOptions {
 	readonly reuseRegisters?: boolean;
+	readonly excludeGuardedDirectCalls?: boolean;
 }
 
 interface LoweredParallelCopy {
@@ -2675,6 +2676,12 @@ export function lowerCoreCompilationToExecutionProgram(
 		]),
 	);
 	for (let row = 0; row < compilation.plan.recipes.count; row++) {
+		if (
+			options.excludeGuardedDirectCalls === true &&
+			coreSpecializationRecipeKindAt(compilation.plan.recipes, row) ===
+				"guarded-direct-call"
+		)
+			continue;
 		const functionId = coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row);
 		const rows = specializationRows.get(functionId) ?? [];
 		rows.push(row);

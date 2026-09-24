@@ -40,6 +40,8 @@ function lowerOptimizedCoreToProgramImage(
 	const lowered = runPhase("core to execution", () =>
 		lowerCoreCompilationToExecution(optimized, {
 			reuseRegisters: options.optimization !== "development",
+			excludeGuardedDirectCalls:
+				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
 		}),
 	);
 	return runPhase("execution to image", () =>

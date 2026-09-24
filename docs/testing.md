@@ -215,6 +215,10 @@ inside the run directory for resumption. After confirming the run has stopped,
 removing its directory discards only that run's evidence and scratch. Shared native
 artifacts remain under normal cache management.
 
+`npm run bench -- javascript --compare HEAD --ablate-core-family guarded-direct-call`
+compares the normal compiler with a candidate that skips guarded direct-call
+emission after plan selection. Discovery, admission, and budget charges stay fixed.
+
 ## Focused compiler execution experiments
 
 For a small compiler or runtime execution experiment, preserve a compiler before
@@ -250,6 +254,11 @@ so the resulting native executables can still be checked against an exact Node
 oracle. Each capture preserves the frozen source and its original manifest digest.
 This isolates the speed of the generated native program; measuring a changed
 compiler's own output still requires semantic benchmarks when emitted C differs.
+
+For a guarded direct-call ablation, capture both compilers from one frozen program
+source and pass `--ablate-core-family guarded-direct-call` only to the candidate
+`capture`. This omits already selected guarded call plans during target lowering;
+the timed compilers use the same ordinary evaluation policy and output oracle.
 
 The budget includes the oracle, two warmups, and all measured pairs. Only complete
 pairs enter the elapsed-time summary; individual peak-RSS readings and raw resource

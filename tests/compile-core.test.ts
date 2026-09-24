@@ -71,6 +71,53 @@ function scanLiveStorage(program: CoreProgram) {
 }
 
 describe("compileSemanticProgramToProgramImage", () => {
+	it("ablates selected guarded direct-call plans only at target lowering", () => {
+		const source = `
+			function left(value) { return value + 1; }
+			function right(value) { return value + 2; }
+			let target = Math.random() > 0.5 ? left : right;
+			globalThis.answer = target(41);
+		`;
+		const compile = (ablate: boolean) => {
+			let plan: CoreOptimizationPlan | undefined;
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, "guarded-direct-ablation.js"),
+				{
+					optimization: "full",
+					...(ablate
+						? {
+								coreOptimizationBenchmarkAblation: {
+									family: "guarded-direct-call" as const,
+								},
+							}
+						: {}),
+					afterCoreOptimization(_program, _context, _report, selected) {
+						plan = selected;
+					},
+				},
+			);
+			if (plan === undefined) throw new Error("missing optimization plan");
+			const guardedCalls = image.native.functions.flatMap((fn) =>
+				fn.instructions.filter(
+					(instruction) =>
+						instruction !== undefined &&
+						instruction.kind === "call" &&
+						"guardedFunctionIndices" in instruction,
+				),
+			);
+			return { plan, guardedCalls };
+		};
+		const normal = compile(false);
+		const ablated = compile(true);
+		expect(normal.plan.statistics.selectedByKind["guarded-direct-call"]).toBe(1);
+		expect(ablated.plan.recipes).toEqual(normal.plan.recipes);
+		expect(ablated.plan.statistics.selectedByKind).toEqual(
+			normal.plan.statistics.selectedByKind,
+		);
+		expect(normal.guardedCalls).toHaveLength(1);
+		expect(ablated.guardedCalls).toEqual([]);
+	});
+
 	it("omits exactly one internal optimizer family per benchmark ablation", () => {
 		const source = `
 			function sum(values) {

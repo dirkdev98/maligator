@@ -28,8 +28,8 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { CORE_OPTIMIZATION_FAMILIES } from "../src/compiler/core/core-optimization-families.ts";
-import type { CoreOptimizationFamily } from "../src/compiler/core/core-optimization-families.ts";
+import { CORE_OPTIMIZATION_BENCHMARK_ABLATIONS } from "../src/compiler/core/core-optimization-families.ts";
+import type { CoreOptimizationBenchmarkAblation } from "../src/compiler/core/core-optimization-families.ts";
 import type { CoreOptimizationOwnerReport } from "../src/compiler/core/core-optimization-owners.ts";
 import type {
 	CoreInstrumentationMode,
@@ -72,6 +72,7 @@ import {
 } from "./self-compile-workload.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
+type CoreOptimizationAblation = CoreOptimizationBenchmarkAblation["family"];
 const JAVASCRIPT_FIXTURE = "bench/javascript.mjs";
 const BENCHMARK_SCHEMA = 3;
 const JAVASCRIPT_MODES = [
@@ -248,7 +249,7 @@ interface SelfCompileCheckpoint {
 	readonly source: NonNullable<BenchmarkSnapshot["source"]>;
 	readonly runs: number;
 	readonly nativeCacheDirectory?: string;
-	readonly coreOptimizationAblation?: CoreOptimizationFamily;
+	readonly coreOptimizationAblation?: CoreOptimizationAblation;
 	readonly root: string;
 	readonly binary: string;
 	readonly nativeBuild: NativeOutputBuildMetrics;
@@ -293,7 +294,7 @@ interface NativeRuntimeMetrics {
 
 interface BenchmarkSnapshot {
 	schema: 3;
-	coreOptimizationAblation?: CoreOptimizationFamily;
+	coreOptimizationAblation?: CoreOptimizationAblation;
 	source?: {
 		readonly commit: string;
 		readonly dirty: boolean;
@@ -598,7 +599,7 @@ function benchJavascript(
 	runs: number,
 	selectedModes: ReadonlyArray<JavascriptMode>,
 	nativeCacheDirectory?: string,
-	coreOptimizationAblation?: CoreOptimizationFamily,
+	coreOptimizationAblation?: CoreOptimizationAblation,
 ): JavascriptMetrics {
 	const nativeBuild = nativeBuildRecorder();
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
@@ -1274,7 +1275,7 @@ function benchSelfCompileCheckpoint(
 	nativeCacheDirectory: string | undefined,
 	checkpointPath: string,
 	source: NonNullable<BenchmarkSnapshot["source"]>,
-	coreOptimizationAblation?: CoreOptimizationFamily,
+	coreOptimizationAblation?: CoreOptimizationAblation,
 ): SelfCompileMetrics | undefined {
 	let checkpoint: SelfCompileCheckpoint;
 	if (!existsSync(checkpointPath)) {
@@ -1600,7 +1601,7 @@ async function benchHttp(
 	durationSeconds: number,
 	concurrency: number,
 	nativeCacheDirectory?: string,
-	coreOptimizationAblation?: CoreOptimizationFamily,
+	coreOptimizationAblation?: CoreOptimizationAblation,
 ): Promise<HttpMetrics> {
 	if (!ohaAvailable()) throw new Error("HTTP benchmark requires `oha`");
 	const nativeBuild = nativeBuildRecorder();
@@ -1845,7 +1846,7 @@ interface Options {
 	jsonOut?: string;
 	nativeCacheDirectory?: string;
 	checkpointPath?: string;
-	coreOptimizationAblation?: CoreOptimizationFamily;
+	coreOptimizationAblation?: CoreOptimizationAblation;
 	mode?: JavascriptMode;
 	lanes: Array<string>;
 }
@@ -1914,10 +1915,14 @@ function parseOptions(args: Array<string>): Options | undefined {
 			index++;
 		} else if (arg === "--ablate-core-family") {
 			const family = requiredValue(args, index, arg);
-			if (!CORE_OPTIMIZATION_FAMILIES.includes(family as CoreOptimizationFamily)) {
+			if (
+				!CORE_OPTIMIZATION_BENCHMARK_ABLATIONS.includes(
+					family as CoreOptimizationAblation,
+				)
+			) {
 				throw new Error(`unknown Core optimization family: ${family}`);
 			}
-			options.coreOptimizationAblation = family as CoreOptimizationFamily;
+			options.coreOptimizationAblation = family as CoreOptimizationAblation;
 			index++;
 		} else if (arg === "--mode") {
 			const mode = requiredValue(args, index, arg);

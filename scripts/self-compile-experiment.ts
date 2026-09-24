@@ -19,6 +19,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createCacheLease } from "../src/cache-management.ts";
+import { CORE_OPTIMIZATION_BENCHMARK_ABLATIONS } from "../src/compiler/core/core-optimization-families.ts";
+import type { CoreOptimizationBenchmarkAblation } from "../src/compiler/core/core-optimization-families.ts";
 import type * as LoadedModule3 from "../src/compiler/frontend/compact-type-strip.ts";
 import type * as LoadedModule2 from "../src/compiler/pipeline/compile-program.ts";
 import type { ProgramClosureCertificate } from "../src/compiler/shared/compiler-facts.ts";
@@ -38,6 +40,7 @@ const HELP = `Usage: npm run bench:self-compile-experiment -- <command> [options
 Options:
   --source-only                     capture Node source without building a native compiler
   --program CAPTURE                 compile an existing capture's frozen source (capture only)
+  --ablate-core-family FAMILY       omit selected plans when building a compiler (capture only)
   --host native|node                compiler host (default: native)
   --workload parser|shape|full       frozen input cone (default: parser)
   --pairs N                         alternating measured pairs (default: 5)
@@ -73,6 +76,7 @@ interface Options {
 	budgetSeconds: number;
 	plan: boolean;
 	sourceOnly: boolean;
+	coreOptimizationAblation?: CoreOptimizationBenchmarkAblation["family"];
 }
 
 interface Capture {
@@ -81,6 +85,7 @@ interface Capture {
 	status: "complete";
 	capturedAt: string;
 	source: { commit: string; digest: string };
+	coreOptimizationAblation?: CoreOptimizationBenchmarkAblation["family"];
 	programSource?: { capturePath: string; captureManifestSha256: string };
 	closure?: ProgramClosureCertificate;
 	files: Record<string, string>;
@@ -223,6 +228,10 @@ async function captureCompiler(options: Options): Promise<void> {
 				stripTypes: stripCompactTypes,
 				entryGoal: "module",
 				coreInstrumentation: "off",
+				coreOptimizationBenchmarkAblation:
+					options.coreOptimizationAblation === undefined
+						? undefined
+						: { family: options.coreOptimizationAblation },
 				onProgramFacts(facts) {
 					closure = facts.closure;
 				},
@@ -274,6 +283,9 @@ async function captureCompiler(options: Options): Promise<void> {
 		status: "complete",
 		capturedAt: new Date().toISOString(),
 		source,
+		...(options.coreOptimizationAblation === undefined
+			? {}
+			: { coreOptimizationAblation: options.coreOptimizationAblation }),
 		programSource,
 		...native,
 		files: captureFiles(directory),
@@ -522,7 +534,17 @@ function parseOptions(args: Array<string>): Options | undefined {
 			options.sourceOnly = true;
 		else if (option === "--program" && command === "capture")
 			options.program = path.resolve(take());
-		else if (option === "--output" && command === "compare")
+		else if (option === "--ablate-core-family" && command === "capture") {
+			const family = take();
+			if (
+				!CORE_OPTIMIZATION_BENCHMARK_ABLATIONS.includes(
+					family as CoreOptimizationBenchmarkAblation["family"],
+				)
+			)
+				throw new Error(`unknown Core optimization ablation: ${family}`);
+			options.coreOptimizationAblation =
+				family as CoreOptimizationBenchmarkAblation["family"];
+		} else if (option === "--output" && command === "compare")
 			options.output = path.resolve(take());
 		else if (option === "--host" && command === "compare") {
 			const host = take();

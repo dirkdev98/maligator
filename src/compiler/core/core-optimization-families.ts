@@ -16,6 +16,11 @@ export const CORE_OPTIMIZATION_FAMILIES = Object.freeze([
 	"late-specialization-direct-entry",
 ] as const);
 
+export const CORE_OPTIMIZATION_BENCHMARK_ABLATIONS = Object.freeze([
+	...CORE_OPTIMIZATION_FAMILIES,
+	"guarded-direct-call",
+] as const);
+
 export type CoreOptimizationFamily = (typeof CORE_OPTIMIZATION_FAMILIES)[number];
 export type CoreAdvancedOptimizationFamily = Exclude<
 	CoreOptimizationFamily,
@@ -142,5 +147,5 @@ export const CORE_OPTIMIZATION_PROFITABILITY_CONTRACTS = Object.freeze({
 >;
 
 export interface CoreOptimizationBenchmarkAblation {
-	readonly family: CoreOptimizationFamily;
+	readonly family: (typeof CORE_OPTIMIZATION_BENCHMARK_ABLATIONS)[number];
 }

@@ -91,6 +91,8 @@ export function optimizeCore(
 	specializeCorePlatformConstants(compilation);
 	const instrumentation = options.instrumentation ?? "off";
 	const ablatedFamily = options.benchmarkAblation?.family;
+	const ablatedPassFamily =
+		ablatedFamily === "guarded-direct-call" ? undefined : ablatedFamily;
 	const profile =
 		CORE_OPTIMIZER_WORK_PROFILES[
 			options.mode ?? compilation.context.facts.compilationMode
@@ -267,7 +269,7 @@ export function optimizeCore(
 				{
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					benchmarkAblation: ablatedFamily,
+					benchmarkAblation: ablatedPassFamily,
 				},
 			).optimizePrimary(runFunctionPhase),
 		);
@@ -335,7 +337,7 @@ export function optimizeCore(
 									verification: options.verification,
 									optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 									crossCallWave: wave,
-									benchmarkAblation: ablatedFamily,
+									benchmarkAblation: ablatedPassFamily,
 								},
 							).optimizeCrossCall(editor),
 						crossCallBudgets,

@@ -2,8 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import {
-	CORE_OPTIMIZATION_FAMILIES,
-	type CoreOptimizationFamily,
+	CORE_OPTIMIZATION_BENCHMARK_ABLATIONS,
+	type CoreOptimizationBenchmarkAblation,
 } from "../src/compiler/core/core-optimization-families.ts";
 import {
 	completeCompilerOptimizationOwners,
@@ -41,14 +41,16 @@ const instrumentation: CoreInstrumentationMode = instrumentationValue;
 const ablationValue = process.env.MAL_CORE_BENCHMARK_ABLATION;
 if (
 	ablationValue !== undefined &&
-	!CORE_OPTIMIZATION_FAMILIES.includes(ablationValue as CoreOptimizationFamily)
+	!CORE_OPTIMIZATION_BENCHMARK_ABLATIONS.includes(
+		ablationValue as CoreOptimizationBenchmarkAblation["family"],
+	)
 ) {
 	throw new Error(`unknown Core benchmark ablation ${ablationValue}`);
 }
 const coreOptimizationBenchmarkAblation =
 	ablationValue === undefined
 		? undefined
-		: { family: ablationValue as CoreOptimizationFamily };
+		: { family: ablationValue as CoreOptimizationBenchmarkAblation["family"] };
 
 const config: ResolvedBuildConfig = {
 	entry: undefined,
