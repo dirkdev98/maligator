@@ -203,7 +203,7 @@ test("changed source files select transparent benchmark lanes", () => {
 	expect(lanesForChangedFiles(["README.md"], lanes)).toEqual([]);
 });
 
-test("paired comparison fails a clear slowdown and accepts a sub-threshold change", () => {
+test("paired comparison recognizes small consistent slowdowns", () => {
 	const slowdown = Array.from({ length: 7 }, (_, index) => ({
 		base: 100 + index * 0.1,
 		head: 110 + index * 0.1,
@@ -217,7 +217,7 @@ test("paired comparison fails a clear slowdown and accepts a sub-threshold chang
 	).toBe("regression");
 	expect(
 		classifyMetricSamples("javascript.modes.closed-compiled.wallMs", small)?.status,
-	).toBe("unchanged");
+	).toBe("regression");
 });
 
 test("paired comparison gives time and throughput ratios opposite directions", () => {
@@ -232,19 +232,26 @@ test("paired comparison gives time and throughput ratios opposite directions", (
 	).toBe("improvement");
 });
 
-test("paired comparison retains a confident two percent wall improvement", () => {
+test("paired comparison retains confident sub-percent time and throughput gains", () => {
 	const improvement = Array.from({ length: 7 }, (_, index) => ({
 		base: 100 + index * 0.01,
-		head: 97.5 + index * 0.01,
+		head: 99.5 + index * 0.01,
+	}));
+	const throughput = Array.from({ length: 7 }, (_, index) => ({
+		base: 100 + index * 0.01,
+		head: 100.5 + index * 0.01,
 	}));
 	expect(
 		classifyMetricSamples("javascript.modes.open-interpreted.phaseMs.text", improvement)
 			?.status,
 	).toBe("improvement");
+	expect(classifyMetricSamples("http.bare.malRps", throughput)?.status).toBe(
+		"improvement",
+	);
 });
 
-test("the confidence interval must exclude zero, not the full threshold", () => {
-	const improvements = [-1, -1.5, -2.5, -2.5, -2.5, -3, -3.5].map((change) => ({
+test("small improvements require an interval excluding zero", () => {
+	const improvements = [-0.4, -0.6, -0.8, -0.9, -1.1, -1.2, -1.4].map((change) => ({
 		base: 100,
 		head: 100 + change,
 	}));
@@ -252,8 +259,7 @@ test("the confidence interval must exclude zero, not the full threshold", () => 
 		"javascript.modes.closed-compiled.wallMs",
 		improvements,
 	);
-	expect(result?.medianRegressionPercent).toBeLessThan(-2);
-	expect(result?.confidenceInterval[1]).toBeGreaterThan(-2);
+	expect(result?.medianRegressionPercent).toBeGreaterThan(-2);
 	expect(result?.confidenceInterval[1]).toBeLessThan(0);
 	expect(result?.status).toBe("improvement");
 });

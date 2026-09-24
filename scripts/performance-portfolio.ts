@@ -44,9 +44,8 @@ export interface PortfolioFamily {
 }
 
 export interface PortfolioConfig {
-	readonly schema: 1;
+	readonly schema: 2;
 	readonly version: string;
-	readonly decisionThresholdPercent: number;
 	readonly minimumAcceptancePairs: number;
 	readonly aggregateUncertainty: {
 		readonly method: "independent-within-family-paired-bootstrap";
@@ -135,9 +134,8 @@ function loadPortfolio(): PortfolioConfig {
 	const raw: unknown = JSON.parse(readFileSync(PORTFOLIO_FILE, "utf8"));
 	const config = record(raw, "performance portfolio");
 	if (
-		config.schema !== 1 ||
+		config.schema !== 2 ||
 		typeof config.version !== "string" ||
-		typeof config.decisionThresholdPercent !== "number" ||
 		typeof config.minimumAcceptancePairs !== "number" ||
 		!Number.isInteger(config.minimumAcceptancePairs) ||
 		config.minimumAcceptancePairs < 2 ||
@@ -188,9 +186,8 @@ function loadPortfolio(): PortfolioConfig {
 		return family as unknown as PortfolioFamily;
 	});
 	return {
-		schema: 1,
+		schema: 2,
 		version: config.version,
-		decisionThresholdPercent: config.decisionThresholdPercent,
 		minimumAcceptancePairs: config.minimumAcceptancePairs,
 		aggregateUncertainty: {
 			method: aggregateUncertainty.method,
@@ -433,14 +430,11 @@ export function classifyPortfolio(
 	}
 	const [lower, upper] = confidenceInterval;
 	let status: PortfolioDecision["status"];
-	if (netImprovementPercent >= config.decisionThresholdPercent && lower > 0) {
+	if (lower > 0) {
 		status = "improvement";
-	} else if (netImprovementPercent <= -config.decisionThresholdPercent && upper < 0) {
+	} else if (upper < 0) {
 		status = "regression";
-	} else if (
-		lower >= -config.decisionThresholdPercent &&
-		upper <= config.decisionThresholdPercent
-	) {
+	} else if (lower === 0 && upper === 0) {
 		status = "unchanged";
 	} else {
 		status = "inconclusive";

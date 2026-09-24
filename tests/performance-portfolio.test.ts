@@ -28,7 +28,7 @@ function metric(
 	return {
 		path,
 		direction,
-		thresholdPercent: 2,
+		thresholdPercent: 0,
 		medianRegressionPercent,
 		confidenceInterval: [medianRegressionPercent, medianRegressionPercent],
 		status,
@@ -62,9 +62,8 @@ const families = [
 ] satisfies ReadonlyArray<PortfolioFamily>;
 
 const config: PortfolioConfig = {
-	schema: 1,
+	schema: 2,
 	version: "test",
-	decisionThresholdPercent: 2,
 	minimumAcceptancePairs: 2,
 	aggregateUncertainty: {
 		method: "independent-within-family-paired-bootstrap",
@@ -101,7 +100,7 @@ function measuredOutcome(
 		primary: {
 			path,
 			direction,
-			thresholdPercent: 2,
+			thresholdPercent: 0,
 			medianRegressionPercent,
 			confidenceInterval: [medianRegressionPercent, medianRegressionPercent],
 			status,
@@ -111,6 +110,19 @@ function measuredOutcome(
 }
 
 describe("performance portfolio decisions", () => {
+	it("classifies small consistent aggregate gains and losses", () => {
+		const gain = classifyPortfolio(config, [
+			outcome("compiler-app", -0.5, "improvement"),
+			outcome("app-batch", -0.5, "improvement"),
+		]);
+		const loss = classifyPortfolio(config, [
+			outcome("compiler-app", 0.5, "regression"),
+			outcome("app-batch", 0.5, "regression"),
+		]);
+		expect(gain.status).toBe("improvement");
+		expect(loss.status).toBe("regression");
+	});
+
 	it("allows a large portfolio win to outweigh a smaller related regression", () => {
 		const decision = classifyPortfolio(config, [
 			outcome("compiler-app", -40, "improvement"),

@@ -201,6 +201,60 @@ describe("Maligator cache management", () => {
 		for (const directory of recent) expect(existsSync(directory)).toBe(true);
 	});
 
+	it("prunes compiler work before older Rust work", () => {
+		const root = cacheRoot();
+		try {
+			const rust = [
+				artifact(root, "work/rust", "old-rust", 100, 20),
+				artifact(root, "work/rust-tests", "rust-tests", 100, 2),
+				artifact(root, "work/wasm-rust", "wasm-rust", 100, 1),
+			];
+			const compiler = [
+				artifact(root, "work/selfhost-frontend", "old-compiler", 100, 10),
+				artifact(root, "work/selfhost-frontend", "recent-a", 100, 1),
+				artifact(root, "work/selfhost-frontend", "recent-b", 100, 0),
+			];
+			const result = pruneMaligatorCache({
+				cacheRoot: root,
+				maxBytes: 500,
+				minAgeMs: 0,
+				nowMs: pruneNowMs,
+			});
+			expect(result.removed.map((entry) => entry.path)).toEqual([compiler[0]]);
+			for (const target of rust) expect(existsSync(target)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("prunes compiler actions before older Rust library actions", () => {
+		const root = cacheRoot();
+		try {
+			const actions = (family: string) =>
+				Array.from({ length: 9 }, (_, index) => {
+					const target = path.join(root, "actions", family, `${index}.json`);
+					mkdirSync(path.dirname(target), { recursive: true });
+					writeFileSync(target, "x".repeat(100));
+					const age = index === 0 ? (family === "rust-library" ? 20 : 10) : 1;
+					const usedAt = new Date(pruneNowMs - age * DAY);
+					utimesSync(target, usedAt, usedAt);
+					return target;
+				});
+			const rust = actions("rust-library");
+			const compiler = actions("wasm-object");
+			const result = pruneMaligatorCache({
+				cacheRoot: root,
+				maxBytes: 1700,
+				minAgeMs: 0,
+				nowMs: pruneNowMs,
+			});
+			expect(result.removed.map((entry) => entry.path)).toEqual([compiler[0]]);
+			for (const target of rust) expect(existsSync(target)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("warns and continues when the cache lease cannot be written", () => {
 		const root = cacheRoot();
 		writeFileSync(path.join(root, ".leases"), "not a directory\n");

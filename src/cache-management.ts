@@ -26,6 +26,8 @@ const TEST_SUITE_SMOKE_FILE = "test-suite-smoke.json";
 const GLOBAL_CLEAR_LOCK = ".clear-lock";
 const LEASE_HEARTBEAT_MS = 30_000;
 const LEASE_STALE_AFTER_MS = 10 * 60 * 1000;
+const RUST_WORK_FAMILIES = new Set(["rust", "rust-tests", "wasm-rust"]);
+const RUST_ACTION_FAMILIES = new Set(["actions/rust-library", "actions/wasm-rust"]);
 
 interface CacheFamilyPolicy {
 	path: string;
@@ -428,19 +430,29 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 			(candidate) =>
 				candidate.family !== "blobs" && !candidate.family.startsWith("actions/"),
 		);
-		for (const policy of CACHE_FAMILIES) {
-			const family = ordinary.filter((candidate) => candidate.family === policy.path);
-			const retained = retainedPerFamily(family, policy.keep);
+		const rustWork = (candidate: CacheEntry) =>
+			candidate.family === "work" &&
+			RUST_WORK_FAMILIES.has(path.basename(path.dirname(candidate.path)));
+		const pruneOrdinaryFamily = (family: Array<CacheEntry>, keep: number) => {
+			const retained = retainedPerFamily(family, keep);
 			for (const candidate of family
 				.filter((item) => !retained.has(item.path) && oldEnough(item))
 				.sort((left, right) => left.lastUsedMs - right.lastUsedMs)) {
 				if (projectedBytes <= maxBytes) break;
 				remove(candidate);
 			}
+		};
+		for (const policy of CACHE_FAMILIES) {
+			pruneOrdinaryFamily(
+				ordinary.filter(
+					(candidate) => candidate.family === policy.path && !rustWork(candidate),
+				),
+				policy.keep,
+			);
 		}
 
 		const actionFamilies = new Set(actions.map((candidate) => candidate.family));
-		for (const familyName of actionFamilies) {
+		const pruneActionFamily = (familyName: string) => {
 			const family = actions.filter((candidate) => candidate.family === familyName);
 			const retained = retainedPerFamily(family, 8);
 			for (const candidate of family
@@ -456,6 +468,14 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 					if (remaining === 0 && blob !== undefined) remove(blob);
 				}
 			}
+		};
+		for (const familyName of actionFamilies) {
+			if (!RUST_ACTION_FAMILIES.has(familyName)) pruneActionFamily(familyName);
+		}
+		// Cargo products change less often than compiler work and generated actions.
+		pruneOrdinaryFamily(ordinary.filter(rustWork), 2);
+		for (const familyName of actionFamilies) {
+			if (RUST_ACTION_FAMILIES.has(familyName)) pruneActionFamily(familyName);
 		}
 
 		if (!dryRun && removed.length > 0) {

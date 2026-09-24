@@ -102,7 +102,9 @@ Acceptance uses the fixed-weight geometric aggregate of family median cost ratio
 Its interval comes from deterministic paired resampling within each family, with
 families resampled independently because sequential family runs do not share round
 identities. Individual inconclusive family classifications therefore do not veto a
-supported aggregate result. Reports retain the estimator, seed, iteration count,
+supported aggregate result. There is no minimum percentage gain: a positive
+aggregate whose interval excludes zero can count, subject to the family regression
+guardrails. Reports retain the estimator, seed, iteration count,
 family contributions, assumptions, and a warning when the small number of pairs makes
 bootstrap calibration weak; bootstrap iterations are not additional measurements.
 One-pair runs remain screening evidence and cannot produce an acceptance decision.
@@ -160,7 +162,8 @@ closed compiled bare and Express servers. `--full` adds the slower fully closed
 self-compile family.
 
 Every classified metric reports the paired median change and a bootstrapped 95%
-confidence interval. Wall time and throughput require a 2% effect; p99 latency,
+confidence interval. Wall time and throughput have no minimum effect size: a
+repeatable small gain can count when the interval excludes zero. p99 latency,
 RSS, and GC pause metrics require 5%; binary size requires 0.5% and at least 32 KiB.
 The outcomes are `improvement`, `regression`, `unchanged`, and `inconclusive`.
 Exit 1 flags a classified regression; exit 2 means execution failed or was incomplete.
@@ -278,6 +281,9 @@ with `maligator cache status`; preview or apply reclamation with
 targets 15 GiB and normally considers entries unused for at least one day. Above
 twice the target it applies the per-family retention floors immediately, which
 prevents a burst of content-addressed artifacts from filling the disk.
+Eligible Rust work and Rust library artifacts are pruned after compiler work and
+other action artifacts, so stable Cargo products survive when the target can be
+met from shorter-lived entries.
 
 Build, test, standards, benchmark, and quality commands hold process leases.
 Pruning refuses to run while any live lease exists, removes stale lease files
