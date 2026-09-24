@@ -232,7 +232,7 @@ it("merges validated CPU captures by exact revision and sampling interval", () =
 	const legacyMerged = path.join(root, "legacy-cpu-merged.json");
 	writeFileSync(legacyMerged, JSON.stringify({ ...merged.profile, schema: 3 }));
 	expect(() => readPgoProfile(legacyMerged, prepared.semanticKey)).toThrow(
-		/semantic configuration or schema mismatch/,
+		/re-merge captures/,
 	);
 	first.bytes[90] = first.bytes[90]! ^ 1;
 	writeFileSync(path.join(first.directory, "capture.bin"), first.bytes);

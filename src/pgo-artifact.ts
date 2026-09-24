@@ -658,12 +658,10 @@ function mergedIdentity(profile: MergedPgoProfile): string {
 
 export function readPgoProfile(file: string, semanticKey: string): MergedPgoProfile {
 	const profile = JSON.parse(readFileSync(file, "utf8")) as MergedPgoProfile;
-	if (
-		profile.schema !== 4 ||
-		profile.semantics !== 2 ||
-		profile.semanticKey !== semanticKey
-	)
-		throw new Error("PGO semantic configuration or schema mismatch");
+	if (profile.schema !== 4)
+		throw new Error("PGO profile schema mismatch; re-merge captures with this compiler");
+	if (profile.semantics !== 2 || profile.semanticKey !== semanticKey)
+		throw new Error("PGO semantic configuration mismatch");
 	if (profile.digest !== mergedIdentity(profile))
 		throw new Error("PGO profile checksum mismatch");
 	if (
