@@ -2849,3 +2849,44 @@ This chooses the smaller 51,900,672-byte counter-only PGO binary as the
 reference for an approximately equal-size static build. It does not settle
 whether PGO improves runtime at equal code size; that comparison still needs
 matched static and PGO products from the frozen source and paired workloads.
+
+## D077 — 2026-09-24 — Counter-only PGO beats an equal-size static code allowance on the frozen frontend
+
+**Status:** Equal-size pilot acceptance met for this frozen frontend corpus;
+PGO remains opt-in. **Refines:** D068–D069, D076.
+
+Both products compiled the same frozen frontend capture
+`be59bc4be67d1d168fbdb072abd8302ff45f93de9a4624041f4582ef426d9fbc`
+with compiler closure
+`aed6f534e59f5bfb0ce64b31736a43bd10547f2551d1d006a2235aa64de323d5`.
+The static control changed only `programGeneratedCode` from 4,096 to 1,500
+during its build, then restored the source. Static calibration selected this
+allowance by binary size before timing: its 51,888,536-byte product was just
+12,136 bytes (0.0234%) smaller than the 51,900,672-byte counter-only PGO
+product. A current-source PGO rebuild reproduced the earlier P0 binary hash
+`9decdd2776ae2542981fa75b34e8a86d0bf009dbb26249ba0787f77827f15744`.
+
+Across two interleaved full-frontend pairs, static took 123.560 and 124.134
+seconds; PGO took 121.120 and 121.636 seconds. PGO was 1.975% and 2.012%
+faster, about 1.994% overall, saving about 2.47 seconds per compile. Four
+short frontend slices contributed eight further paired measurements, all
+favoring PGO, with a 1.792% aggregate reduction. Every native run matched the
+same exact Node wire. Reports are
+`.cache/pgo-size-control-20260924/compare-full/report.json` and
+`.cache/pgo-size-control-20260924/compare-short/report.json`. One unrelated
+Spotlight process held about one CPU core during the full run; the load was
+present throughout the pairs. This is a two-pair pilot, not a broad statistical
+claim.
+
+This supplies the equal-size control missing from D068: PGO allocates a
+similarly small code allowance more usefully than uniformly reducing the
+static allowance on this corpus. Its earlier comparison against the roughly
+2.04% larger default static binary was near runtime-neutral, so the two
+observations are compatible. The result does not show that PGO beats a better
+static selection policy, other applications, or full self-compile. Nor does it
+support the CPU-guided ordering or larger measured-work grants rejected in
+D074–D076. Retain counter-only PGO as the opt-in speed reference, run the full
+correctness gates, and assess representative applications and training cost
+before changing defaults. At the observed 2.47-second saving, roughly 90
+seconds of training execution alone would require about 37 such full
+compiles to amortize; training builds and profile merging add cost.

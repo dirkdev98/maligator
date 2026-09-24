@@ -313,6 +313,15 @@ iterator cursor is not, by itself, permission to delete its language object.
       budgets again. D074 finds the 25% measured-work grant ties 10% on two
       short slices and the full frontend while producing 33 KB more binary;
       do not enlarge the grant on those results.
+      D076 directly compares the 10% grant with counter-only PGO on the full
+      frontend: the larger product is 0.26% slower across two exact-output pairs.
+      D077's size-matched static control is 12 KB smaller than counter-only PGO,
+      yet PGO is about 2% faster in both full-frontend pairs and all eight short
+      slice pairs. This meets equal-size pilot acceptance on the frozen frontend,
+      not broader default-policy acceptance. Keep PGO opt-in; validate full gates,
+      representative applications and training economics. Check whether charging
+      guarded direct-entry wrappers to their actual callers improves static
+      selection before making a stronger claim about profile guidance.
 - [x] Integrate opt-in persistent Core reuse into ordinary production builds for
       admitted static ESM leaves. Preserve live exports, initializer order, captured
       cells and source-immutable facts; skip only the completed scalar seed.
