@@ -40,9 +40,15 @@ jobs:
       - name: Install cross-build tools
         shell: bash
         run: |
-          if ! command -v zig >/dev/null; then
-            brew install zig
-          fi
+          zig_archive="$RUNNER_TEMP/zig-aarch64-macos-0.15.2.tar.xz"
+          zig_dir="$RUNNER_TEMP/zig-aarch64-macos-0.15.2"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz \
+            --output "$zig_archive"
+          echo "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b  $zig_archive" | shasum -a 256 --check
+          tar -xJf "$zig_archive" -C "$RUNNER_TEMP"
+          echo "ZIG=$zig_dir/zig" >> "$GITHUB_ENV"
+          "$zig_dir/zig" version
           rustup target add \
             aarch64-apple-darwin \
             x86_64-apple-darwin \
