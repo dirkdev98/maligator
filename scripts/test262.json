@@ -1,8 +1,8 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 1678,
-    "PASSED": 51893,
+    "FAILED": 1673,
+    "PASSED": 51898,
     "SKIPPED": 7
   },
   "skips": {
@@ -15,9 +15,9 @@
     "test/built-ins/Atomics/wait/true-for-timeout.js": "host: CanBlockIsTrue requires a blocking agent; this host has CanBlock=false"
   },
   "code": {
-    "compiledFiles": 94108,
-    "functionCount": 2980469,
-    "instructionCount": 107664189
+    "compiledFiles": 94110,
+    "functionCount": 2980517,
+    "instructionCount": 107754750
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -38189,9 +38189,9 @@
     "test/language/expressions/in/S8.12.6_A2_T1.js": "PASSED",
     "test/language/expressions/in/S8.12.6_A2_T2.js": "PASSED",
     "test/language/expressions/in/S8.12.6_A3.js": "PASSED",
-    "test/language/expressions/in/private-field-in-nested.js": "FAILED",
+    "test/language/expressions/in/private-field-in-nested.js": "PASSED",
     "test/language/expressions/in/private-field-in.js": "PASSED",
-    "test/language/expressions/in/private-field-invalid-assignment-reference.js": "FAILED",
+    "test/language/expressions/in/private-field-invalid-assignment-reference.js": "PASSED",
     "test/language/expressions/in/private-field-invalid-assignment-target.js": "PASSED",
     "test/language/expressions/in/private-field-invalid-identifier-complex.js": "PASSED",
     "test/language/expressions/in/private-field-invalid-identifier-simple.js": "PASSED",
@@ -48892,7 +48892,7 @@
     "test/language/statements/for-await-of/head-await-using-init.js": "PASSED",
     "test/language/statements/for-await-of/head-const-init.js": "PASSED",
     "test/language/statements/for-await-of/head-let-init.js": "PASSED",
-    "test/language/statements/for-await-of/head-lhs-async.js": "FAILED",
+    "test/language/statements/for-await-of/head-lhs-async.js": "PASSED",
     "test/language/statements/for-await-of/head-using-init.js": "PASSED",
     "test/language/statements/for-await-of/head-var-init.js": "PASSED",
     "test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt.js": "PASSED",
@@ -52262,7 +52262,7 @@
     "test/staging/sm/Array/sort_native_string_nan.js": "PASSED",
     "test/staging/sm/Array/sort_proxy.js": "PASSED",
     "test/staging/sm/Array/sort_small.js": "PASSED",
-    "test/staging/sm/Array/species.js": "FAILED",
+    "test/staging/sm/Array/species.js": "PASSED",
     "test/staging/sm/Array/splice-return-array-elements-defined-not-set.js": "PASSED",
     "test/staging/sm/Array/splice-species-changes-length.js": "PASSED",
     "test/staging/sm/Array/splice-suppresses-unvisited-indexes.js": "FAILED",
@@ -52773,7 +52773,7 @@
     "test/staging/sm/RegExp/replace-sticky-lastIndex.js": "PASSED",
     "test/staging/sm/RegExp/replace-sticky.js": "PASSED",
     "test/staging/sm/RegExp/replace-this.js": "PASSED",
-    "test/staging/sm/RegExp/replace-trace.js": "FAILED",
+    "test/staging/sm/RegExp/replace-trace.js": "PASSED",
     "test/staging/sm/RegExp/replace-twoBytes.js": "PASSED",
     "test/staging/sm/RegExp/replace.js": "PASSED",
     "test/staging/sm/RegExp/search-this.js": "PASSED",
