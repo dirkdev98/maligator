@@ -10,13 +10,14 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import * as executionLowering from "../src/compiler/target/lower-native-execution.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
 import {
 	compileRelocatableTestImage,
@@ -118,6 +119,8 @@ describe("relocatable test fragment cache", () => {
 
 	test("keeps a cold Drizzle table graph on the linear development path", () => {
 		const root = temporaryDirectory();
+		const lowering = vi.spyOn(executionLowering, "lowerCoreCompilationToExecution");
+		onTestFinished(() => lowering.mockRestore());
 		const compiled = compileRelocatableTestImage({
 			files: [path.resolve("tests/fixtures/drizzle-simple-table.test.ts")],
 			config: resolveBuildConfig({ surface: { node: true } }),
@@ -130,10 +133,10 @@ describe("relocatable test fragment cache", () => {
 		expect(compiled.cache).toBe("miss");
 		expect(compiled.wires[0]?.kind).toBe("dependency");
 		expect(compiled.artifactMisses).toBe(4);
-		// The production allocator made this one-table graph take roughly 44 seconds.
-		// Ten seconds is a deliberately loose smoke fuse for loaded CI hosts while
-		// still proving interpreted tests use the linear development allocator.
-		expect(compiled.phases.compileMs).toBeLessThan(10_000);
+		expect(lowering).toHaveBeenCalled();
+		for (const [, options] of lowering.mock.calls) {
+			expect(options).toMatchObject({ reuseRegisters: false });
+		}
 	}, 15_000);
 
 	test("reuses dependency artifacts produced by a normal run build", () => {
