@@ -683,6 +683,8 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							kind: safepoint.kind,
 							instructionIp: safepoint.instructionIp,
 							rootRegisters: [...safepoint.rootRegisters],
+							incomingRootRegisters: [...safepoint.incomingRootRegisters],
+							outgoingRootRegisters: [...safepoint.outgoingRootRegisters],
 						})),
 					},
 				})),
@@ -709,6 +711,8 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						kind: safepoint.kind,
 						instructionIp: safepoint.instructionIp,
 						rootRegisters: [...safepoint.rootRegisters],
+						incomingRootRegisters: [...safepoint.incomingRootRegisters],
+						outgoingRootRegisters: [...safepoint.outgoingRootRegisters],
 					})),
 				},
 				instructions: native.instructions.map((plan) =>

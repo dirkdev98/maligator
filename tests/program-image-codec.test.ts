@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_ARTIFACT_MAGIC,
 	COMPILER_ARTIFACT_VERSION,
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
 	MAX_STRING_CODE_UNITS,
+	readRuntimeImage,
+	Writer,
 	WIRE_OPCODES,
 } from "../src/compiler/target/program-image-codec.ts";
 import { VM_GUARDED_BUILTIN_OPERATIONS } from "../src/compiler/target/program-image.ts";
@@ -608,7 +611,207 @@ function shapeCaseDefinition(): ProgramImage {
 	);
 }
 
+function phasedRootsDefinition(): ProgramImage {
+	const propertyInstructions: Array<BytecodeInstruction> = [
+		{
+			opcode: "LOAD_PROPERTY_STATIC",
+			dst: 1,
+			object: 0,
+			stringIndex: 1,
+			icIndex: 0,
+		},
+		{
+			opcode: "LOAD_PROPERTY_STATIC",
+			dst: 2,
+			object: 1,
+			stringIndex: 1,
+			icIndex: 1,
+		},
+		{ opcode: "RETURN", value: 2 },
+	];
+	return withNativeFunctionPlan(
+		withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				registerCount: 3,
+				instructions: propertyInstructions,
+				handlers: [],
+				positions: propertyInstructions.map(() => 0),
+			},
+		]),
+		0,
+		(plan) => {
+			const gc = {
+				safepoints: [0, 1].map((instructionIp) => ({
+					kind: "operation" as const,
+					instructionIp,
+					rootRegisters: [instructionIp, instructionIp + 1],
+					incomingRootRegisters: [instructionIp],
+					outgoingRootRegisters: [instructionIp + 1],
+				})),
+			};
+			return {
+				...plan,
+				gc,
+				directEntries: [
+					{
+						id: 0,
+						parameterRepresentations: ["boxed"],
+						resultRepresentation: "boxed",
+						registerRepresentations: plan.registerRepresentations,
+						gc,
+					},
+				],
+			};
+		},
+	);
+}
+
+function firstNativeSafepointReader(bytes: Uint8Array) {
+	const { reader } = readRuntimeImage(
+		bytes,
+		COMPILER_ARTIFACT_MAGIC,
+		COMPILER_ARTIFACT_VERSION,
+	);
+	expect(reader.u32()).toBe(0); // Semantic protectors.
+	expect(reader.u32()).toBe(1); // Native functions.
+	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
+	return reader;
+}
+
 describe("program-image-codec", () => {
+	it("round-trips distinct incoming and outgoing roots in ordinary and direct entries", () => {
+		const image = phasedRootsDefinition();
+		const bytes = serializeCompilerArtifact(image);
+		const restored = deserializeCompilerArtifact(bytes);
+		expect(restored.native.functions[0]!.gc).toEqual(image.native.functions[0]!.gc);
+		expect(restored.native.functions[0]!.directEntries).toEqual(
+			image.native.functions[0]!.directEntries,
+		);
+		expect(serializeCompilerArtifact(restored)).toEqual(bytes);
+	});
+
+	it("stores dense root phases as small exclusions from their sorted union", () => {
+		const base = phasedRootsDefinition();
+		const roots = Array.from({ length: 130 }, (_, register) => register);
+		const registerRepresentations = roots.map(() => "boxed" as const);
+		const gc = {
+			safepoints: [
+				{
+					kind: "operation" as const,
+					instructionIp: 0,
+					rootRegisters: roots,
+					incomingRootRegisters: roots.slice(0, -1),
+					outgoingRootRegisters: roots.slice(1),
+				},
+				{
+					kind: "operation" as const,
+					instructionIp: 1,
+					rootRegisters: roots,
+					incomingRootRegisters: roots,
+					outgoingRootRegisters: roots,
+				},
+			],
+		};
+		const image = withNativeFunctionPlan(
+			withRuntime(base, {
+				functions: base.runtime.functions.map((fn) => ({
+					...fn,
+					registerCount: roots.length,
+				})),
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				registerRepresentations,
+				gc,
+				directEntries: plan.directEntries.map((entry) => ({
+					...entry,
+					registerRepresentations,
+					gc,
+				})),
+			}),
+		);
+		const bytes = serializeCompilerArtifact(image);
+		const reader = firstNativeSafepointReader(bytes);
+		expect(reader.u8()).toBe(0);
+		expect(reader.i32()).toBe(0);
+		expect(reader.i32Array()).toEqual(roots);
+		const firstPhaseStart = reader.remaining();
+		expect(reader.i32Array()).toEqual([129]);
+		expect(reader.i32Array()).toEqual([0]);
+		expect(firstPhaseStart - reader.remaining()).toBe(5);
+		expect(reader.u8()).toBe(0);
+		expect(reader.i32()).toBe(1);
+		expect(reader.i32Array()).toEqual(roots);
+		const secondPhaseStart = reader.remaining();
+		expect(reader.i32Array()).toEqual([]);
+		expect(reader.i32Array()).toEqual([]);
+		expect(secondPhaseStart - reader.remaining()).toBe(2);
+		const restored = deserializeCompilerArtifact(bytes).native.functions[0]!;
+		expect(restored.gc).toEqual(gc);
+		expect(restored.directEntries[0]!.gc).toEqual(gc);
+	});
+
+	it.each(["incomingRootRegisters", "outgoingRootRegisters"] as const)(
+		"rejects corrupt serialized %s exclusions",
+		(phase) => {
+			const image = phasedRootsDefinition();
+			const bytes = serializeCompilerArtifact(image);
+			const reader = firstNativeSafepointReader(bytes);
+			expect(reader.u8()).toBe(0);
+			expect(reader.i32()).toBe(0);
+			expect(reader.i32Array()).toEqual([0, 1]);
+			if (phase === "outgoingRootRegisters") expect(reader.i32Array()).toEqual([1]);
+			expect(reader.u32()).toBe(1);
+			const firstRootOffset = bytes.length - reader.remaining();
+			bytes[firstRootOffset] = image.runtime.functions[0]!.registerCount * 2;
+			expect(() => deserializeCompilerArtifact(bytes)).toThrow(
+				"invalid native root exclusions",
+			);
+		},
+	);
+
+	it.each([
+		{ reason: "duplicate", exclusions: [1, 1] },
+		{ reason: "unsorted", exclusions: [1, 0] },
+		{ reason: "absent from the union", exclusions: [2] },
+		{ reason: "negative", exclusions: [-1] },
+		{ reason: "larger than the union", exclusions: [0, 1, 2] },
+	])("rejects $reason native root exclusions", ({ exclusions }) => {
+		const bytes = serializeCompilerArtifact(phasedRootsDefinition());
+		const reader = firstNativeSafepointReader(bytes);
+		reader.u8();
+		reader.i32();
+		reader.i32Array();
+		const start = bytes.length - reader.remaining();
+		reader.i32Array();
+		const end = bytes.length - reader.remaining();
+		const writer = new Writer();
+		writer.i32Array(exclusions);
+		const corrupt = Uint8Array.from([
+			...bytes.subarray(0, start),
+			...writer.finish(),
+			...bytes.subarray(end),
+		]);
+		expect(() => deserializeCompilerArtifact(corrupt)).toThrow(
+			"invalid native root exclusions",
+		);
+	});
+
+	it("rejects exclusion phases that both remove the same declared root", () => {
+		const bytes = serializeCompilerArtifact(phasedRootsDefinition());
+		const reader = firstNativeSafepointReader(bytes);
+		reader.u8();
+		reader.i32();
+		reader.i32Array();
+		expect(reader.u32()).toBe(1);
+		bytes[bytes.length - reader.remaining()] = 0;
+		expect(() => deserializeCompilerArtifact(bytes)).toThrow(
+			"native GC roots must equal the incoming/outgoing root union",
+		);
+	});
+
 	it("round-trips portable root maps as untrusted metadata and rejects malformed maps", () => {
 		const mapped = withBytecodeFunctions(definition, [
 			{

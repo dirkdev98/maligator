@@ -21,7 +21,7 @@ import type { StaticDataQueryKind } from "../shared/static-data-query.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
-import { executionSafepointRootRegisters } from "./execution-liveness.ts";
+import { executionSafepointRoots } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 
 /** Portable VM image contract and lowering. No native ABI or region plan belongs here. */
@@ -2942,10 +2942,7 @@ function lowerExecutionFunctionToBytecode(
 				)
 			: []
 	) satisfies Array<CompilerInstruction>;
-	const frameExitRoots = executionSafepointRootRegisters(
-		fn,
-		new Set(frameExitInstructions),
-	);
+	const frameExitRoots = executionSafepointRoots(fn, new Set(frameExitInstructions));
 	const portableSafepoints = [
 		...fn.gc.safepoints.map(({ instruction, rootRegisters }) => ({
 			instruction,
@@ -2953,7 +2950,7 @@ function lowerExecutionFunctionToBytecode(
 		})),
 		...frameExitInstructions.map((instruction) => ({
 			instruction,
-			rootRegisters: frameExitRoots.get(instruction) ?? [],
+			rootRegisters: frameExitRoots.get(instruction)?.rootRegisters ?? [],
 		})),
 	];
 	const gcSafepoints = portableSafepoints

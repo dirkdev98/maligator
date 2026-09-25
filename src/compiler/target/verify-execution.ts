@@ -12,7 +12,7 @@ import type {
 } from "./execution-ir.ts";
 import {
 	executionLoopBackedgeInstructions,
-	executionSafepointRootRegisters,
+	executionSafepointRoots,
 } from "./execution-liveness.ts";
 
 export interface ExecutionVerificationContext {
@@ -915,20 +915,28 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
 			opcode: missingBackedge.type,
 		});
 	}
-	const exactRoots = executionSafepointRootRegisters(fn, safepoints);
+	const exactRoots = executionSafepointRoots(fn, safepoints);
 	for (const safepoint of fn.gc.safepoints) {
-		const expectedRoots = exactRoots.get(safepoint.instruction) ?? [];
-		const mismatch = Math.max(expectedRoots.length, safepoint.rootRegisters.length);
-		for (let index = 0; index < mismatch; index++) {
-			if (expectedRoots[index] === safepoint.rootRegisters[index]) continue;
-			const site = model.sites.get(safepoint.instruction)!;
-			fail("GC safepoint roots do not match exact execution liveness", {
-				functionIndex,
-				block: site.block,
-				instruction: site.index,
-				opcode: safepoint.instruction.type,
-				register: expectedRoots[index] ?? safepoint.rootRegisters[index],
-			});
+		for (const boundary of [
+			"rootRegisters",
+			"incomingRootRegisters",
+			"outgoingRootRegisters",
+		] as const) {
+			const expectedRoots = exactRoots.get(safepoint.instruction)![boundary];
+			const actualRoots = safepoint[boundary];
+			const mismatch = Math.max(expectedRoots.length, actualRoots.length);
+			for (let index = 0; index < mismatch; index++) {
+				if (expectedRoots[index] === actualRoots[index]) continue;
+				const site = model.sites.get(safepoint.instruction)!;
+				const phase = boundary === "rootRegisters" ? "" : ` (${boundary})`;
+				fail(`GC safepoint roots do not match exact execution liveness${phase}`, {
+					functionIndex,
+					block: site.block,
+					instruction: site.index,
+					opcode: safepoint.instruction.type,
+					register: expectedRoots[index] ?? actualRoots[index],
+				});
+			}
 		}
 	}
 }
