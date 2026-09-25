@@ -45,5 +45,48 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
+      - name: Inspect native archive tools
+        run: |
+          for tool in clang-19 ar ld; do
+            command -v "$tool"
+            readlink -f "$(command -v "$tool")"
+            "$tool" --version | sed -n '1p'
+          done
+
       - name: Smoke the Linux x64 release
         run: npm run release:smoke
+
+      - name: Save runtime archives after failure
+        if: failure()
+        run: |
+          node --input-type=module <<'NODE'
+          import { copyFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+          import path from "node:path";
+
+          const root = path.join(process.env.MALIGATOR_CACHE_DIR, "v1");
+          const actions = path.join(root, "actions/runtime-archive");
+          const manifests = readdirSync(actions).flatMap((producer) =>
+            readdirSync(path.join(actions, producer)).map((name) =>
+              path.join(actions, producer, name),
+            ),
+          );
+          if (manifests.length !== 1) throw new Error(`expected one runtime archive action, found ${manifests.length}`);
+          const manifest = manifests[0];
+          const action = JSON.parse(readFileSync(manifest, "utf8"));
+          const output = path.join(process.env.RUNNER_TEMP, "runtime-archives");
+          mkdirSync(output, { recursive: true });
+          copyFileSync(manifest, path.join(output, "manifest.json"));
+          for (const entry of action.outputs) {
+            const blob = path.join(root, "blobs/sha256", entry.digest.slice(0, 2), entry.digest.slice(2));
+            copyFileSync(blob, path.join(output, entry.name));
+            console.log(`${entry.name}: ${entry.digest} (${entry.size} bytes)`);
+          }
+          NODE
+
+      - name: Upload runtime archive evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-x64-runtime-archives-${{ github.run_id }}
+          path: ${{ runner.temp }}/runtime-archives
+          retention-days: 1
