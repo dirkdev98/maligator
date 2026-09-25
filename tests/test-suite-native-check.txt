@@ -22,6 +22,7 @@ tests/native/virtual-state.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/object-has-own-known.test.ts
 tests/native/object-rest-shaped.test.ts
+tests/native/object-slot-coallocation.test.ts
 tests/native/own-table-property-cache.test.ts
 tests/native/node-scheduling.test.ts
 tests/native/postgres-load.test.ts
