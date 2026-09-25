@@ -28,11 +28,25 @@ runs:
         rustup_home="$RUNNER_TEMP/rustup-home"
         cargo_home="$RUNNER_TEMP/cargo-home"
         rustup_init="$RUNNER_TEMP/rustup-init"
+        case "$(uname -m)" in
+          arm64)
+            rustup_target=aarch64-apple-darwin
+            rustup_sha=aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1
+            ;;
+          x86_64)
+            rustup_target=x86_64-apple-darwin
+            rustup_sha=33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7
+            ;;
+          *)
+            echo "unsupported macOS architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
         # The hosted ARM image's Homebrew Rustup can install unusable proxies: https://github.com/actions/runner-images/issues/14097
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-          https://static.rust-lang.org/rustup/archive/1.29.0/aarch64-apple-darwin/rustup-init \
+          "https://static.rust-lang.org/rustup/archive/1.29.0/$rustup_target/rustup-init" \
           --output "$rustup_init"
-        echo "aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1  $rustup_init" | shasum -a 256 --check
+        echo "$rustup_sha  $rustup_init" | shasum -a 256 --check
         chmod +x "$rustup_init"
         RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
           "$rustup_init" -y --no-modify-path --default-toolchain none

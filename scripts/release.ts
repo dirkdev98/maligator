@@ -480,7 +480,7 @@ function smokeRelease(): void {
 		writeFileSync(path.join(project, "main.ts"), `console.log("release smoke app");\n`);
 		releaseLog("building and executing isolated smoke application");
 		const artifact = path.join(smokeRoot, "application");
-		invoke(["build", "--production", "--artifact", artifact]);
+		invoke(["build", "--production", "--artifact", artifact, "--verbose"]);
 		const applicationOutput = execFileSync(path.join(artifact, "bin/release-smoke"), [], {
 			cwd: smokeRoot,
 			env: { PATH: tools },

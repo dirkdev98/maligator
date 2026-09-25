@@ -39,9 +39,15 @@ describe("GitHub Actions", () => {
 			path.join(githubRoot, "actions/setup-macos/action.yml"),
 			"utf8",
 		);
-		expect(action).toContain("rustup/archive/1.29.0/aarch64-apple-darwin/rustup-init");
+		expect(action).toContain('case "$(uname -m)" in');
+		expect(action).toContain("rustup_target=aarch64-apple-darwin");
+		expect(action).toContain("rustup_target=x86_64-apple-darwin");
+		expect(action).toContain("rustup/archive/1.29.0/$rustup_target/rustup-init");
 		expect(action).toContain(
 			"aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1",
+		);
+		expect(action).toContain(
+			"33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7",
 		);
 		expect(action).toContain('echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"');
 	});
