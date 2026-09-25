@@ -23,24 +23,19 @@ export async function generatePlatformApi(check = false): Promise<void> {
 				"",
 			].join("\n"),
 		],
-		...PLATFORM_MODULES.flatMap(
-			(module): Array<readonly [string, string]> => [
-				[
-					path.resolve("src", module.declarationFile),
-					generatePlatformDeclarations(module),
-				],
-				[
-					path.resolve("website", `${module.id.replace(":", "-")}.html`),
-					renderSiteTemplate(
-						generatePlatformReference(module, PLATFORM_MODULES).replace(
-							"__API_STYLES__",
-							`<style>${readFileSync("website/templates/api.css", "utf8")}</style>`,
-						),
-						"api",
+		...PLATFORM_MODULES.flatMap((module): Array<readonly [string, string]> => [
+			[path.resolve("src", module.declarationFile), generatePlatformDeclarations(module)],
+			[
+				path.resolve("website", `${module.id.replace(":", "-")}.html`),
+				renderSiteTemplate(
+					generatePlatformReference(module, PLATFORM_MODULES).replace(
+						"__API_STYLES__",
+						`<style>${readFileSync("website/templates/api.css", "utf8")}</style>`,
 					),
-				],
+					"api",
+				),
 			],
-		),
+		]),
 	];
 	for (const [file, contents] of outputs) {
 		const formatted = await format(file, contents, formatOptions);

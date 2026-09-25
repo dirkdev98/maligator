@@ -1237,16 +1237,15 @@ export function emitProgramTranslationUnits(
 			return { symbol: match[1]!, source };
 		})
 		.concat(
-			emitted.compiled.flatMap(
-				(fn): Array<GeneratedDeclaration> =>
-					fn === null || fn.source.length === 0
-						? []
-						: [
-								{
-									symbol: fn.symbol,
-									source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
-								},
-							],
+			emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
+				fn === null || fn.source.length === 0
+					? []
+					: [
+							{
+								symbol: fn.symbol,
+								source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
+							},
+						],
 			),
 		)
 		.concat(

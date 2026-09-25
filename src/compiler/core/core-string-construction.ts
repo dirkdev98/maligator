@@ -36,7 +36,7 @@ export function coreStaticStringReplacementParts(
 	const parts: Array<CoreStringPart> = [];
 	let end = 0,
 		count = 0;
-	for (let start = 0; start <= receiver.value.length; ) {
+	for (let start = 0; start <= receiver.value.length;) {
 		const position = receiver.value.indexOf(needle.value, start);
 		if (position < 0) break;
 		if (++count > 64) return undefined;

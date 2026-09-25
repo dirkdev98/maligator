@@ -114,13 +114,11 @@ describe("symbolic Core call graph", () => {
 		for (let seed = 1; seed <= 100; seed++) {
 			const next = random(seed);
 			const functions = functionIds(2 + Math.floor(next() * 10));
-			const rows = functions.map(
-				(caller): CoreCallGraphRow => ({
-					caller,
-					exactTargets: functions.filter(() => next() < 0.2),
-					wildcard: next() < 0.25,
-				}),
-			);
+			const rows = functions.map((caller): CoreCallGraphRow => ({
+				caller,
+				exactTargets: functions.filter(() => next() < 0.2),
+				wildcard: next() < 0.25,
+			}));
 			const graph = updateCoreCallGraph(undefined, functions, rows);
 			const cursor = new CoreCallerCursor(functions.length);
 			for (const target of functions) {

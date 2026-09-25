@@ -523,15 +523,13 @@ describe("Core optimizer infrastructure", () => {
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, compilationContext, report);
 		const contexts: Array<CoreFunctionPassContext> = [];
-		const passes = ["first", "second"].map(
-			(name): CoreFunctionPass => ({
-				...noOpPass(name, []),
-				run(passContext) {
-					contexts.push(passContext);
-					return undefined;
-				},
-			}),
-		);
+		const passes = ["first", "second"].map((name): CoreFunctionPass => ({
+			...noOpPass(name, []),
+			run(passContext) {
+				contexts.push(passContext);
+				return undefined;
+			},
+		}));
 		for (const { id } of functions) {
 			const scheduler = new CoreFunctionPassScheduler(
 				program,

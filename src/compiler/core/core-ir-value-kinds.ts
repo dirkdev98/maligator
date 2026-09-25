@@ -967,7 +967,7 @@ function solveCoreValueKinds(
 		queued: Uint8Array,
 		queue: Array<number>,
 	): void => {
-		for (let dependency = dependentHeads[value]!; dependency >= 0; ) {
+		for (let dependency = dependentHeads[value]!; dependency >= 0;) {
 			const transfer = dependentTransfers[dependency]!;
 			dependency = dependentNext[dependency]!;
 			if (queued[transfer] !== 0) continue;

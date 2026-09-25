@@ -697,9 +697,13 @@ const GRAPH_VARIATIONS: ReadonlyArray<GraphVariation> = [false, true].flatMap((j
 	(join ? (["dynamic", "constant"] as const) : (["dynamic"] as const)).flatMap((branch) =>
 		[false, true].flatMap((loop) =>
 			[false, true].flatMap((deadProducer) =>
-				[false, true].map(
-					(copy): GraphVariation => ({ join, branch, loop, deadProducer, copy }),
-				),
+				[false, true].map((copy): GraphVariation => ({
+					join,
+					branch,
+					loop,
+					deadProducer,
+					copy,
+				})),
 			),
 		),
 	),

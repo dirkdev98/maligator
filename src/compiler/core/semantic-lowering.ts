@@ -2981,7 +2981,7 @@ function emitInstanceElementInit(
 		});
 	}
 
-	for (let i = 0; i < plan.length; ) {
+	for (let i = 0; i < plan.length;) {
 		const entry = plan[i]!;
 		if (!entry.private || entry.valueNode !== null) {
 			emitFieldInstall(program, ctorFn, cursor, entry);

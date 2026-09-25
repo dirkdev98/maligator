@@ -399,22 +399,20 @@ const mathBinaryOperationKeys = [
 ] as const;
 
 const mathBinaryOperations: ReadonlyArray<BuiltinOperationDescriptor> =
-	mathBinaryOperationKeys.map(
-		([id, key]): BuiltinOperationDescriptor => ({
-			id,
-			owner: "Math",
-			key,
-			receiver: "none",
-			arity: { minimum: 0 },
-			evaluationOrder: "arguments-left-to-right",
-			coercionOrder: ["arguments-number-left-to-right"],
-			effects: ["coerce", "throw"],
-			result: "number",
-			realm: "semantic-identity",
-			lowerings: ["generic", "native-number"],
-			nativeNumberArity: 2,
-		}),
-	);
+	mathBinaryOperationKeys.map(([id, key]): BuiltinOperationDescriptor => ({
+		id,
+		owner: "Math",
+		key,
+		receiver: "none",
+		arity: { minimum: 0 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: ["arguments-number-left-to-right"],
+		effects: ["coerce", "throw"],
+		result: "number",
+		realm: "semantic-identity",
+		lowerings: ["generic", "native-number"],
+		nativeNumberArity: 2,
+	}));
 
 const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 	[
@@ -431,28 +429,26 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 		["findLastIndex", "number", false],
 		["flatMap", "array", true],
 	] as const
-).map(
-	([key, result, allocates]): BuiltinOperationDescriptor => ({
-		id: `Array.prototype.${key}`,
-		owner: "Array.prototype",
-		key,
-		receiver: "array",
-		arity: { minimum: 1 },
-		evaluationOrder: "receiver-then-arguments",
-		coercionOrder: ["receiver-object", "receiver-length"],
-		effects: [
-			"coerce",
-			"property-access",
-			"call-user-code",
-			...(allocates ? (["allocate"] as const) : []),
-			"throw",
-			"safepoint",
-		],
-		result,
-		realm: "semantic-identity",
-		lowerings: ["generic", "inlined-callback-loop"],
-	}),
-);
+).map(([key, result, allocates]): BuiltinOperationDescriptor => ({
+	id: `Array.prototype.${key}`,
+	owner: "Array.prototype",
+	key,
+	receiver: "array",
+	arity: { minimum: 1 },
+	evaluationOrder: "receiver-then-arguments",
+	coercionOrder: ["receiver-object", "receiver-length"],
+	effects: [
+		"coerce",
+		"property-access",
+		"call-user-code",
+		...(allocates ? (["allocate"] as const) : []),
+		"throw",
+		"safepoint",
+	],
+	result,
+	realm: "semantic-identity",
+	lowerings: ["generic", "inlined-callback-loop"],
+}));
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
@@ -720,21 +716,19 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 		}),
 	),
-	...(["add", "has", "delete"] as const).map(
-		(key): BuiltinOperationDescriptor => ({
-			id: `Set.prototype.${key}`,
-			owner: "Set.prototype",
-			key,
-			receiver: "set",
-			arity: { minimum: 1, maximum: 1 },
-			evaluationOrder: "receiver-then-arguments",
-			coercionOrder: [],
-			effects: ["throw", "safepoint"],
-			result: key === "add" ? "receiver" : "boolean",
-			realm: "semantic-identity",
-			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
-		}),
-	),
+	...(["add", "has", "delete"] as const).map((key): BuiltinOperationDescriptor => ({
+		id: `Set.prototype.${key}`,
+		owner: "Set.prototype",
+		key,
+		receiver: "set",
+		arity: { minimum: 1, maximum: 1 },
+		evaluationOrder: "receiver-then-arguments",
+		coercionOrder: [],
+		effects: ["throw", "safepoint"],
+		result: key === "add" ? "receiver" : "boolean",
+		realm: "semantic-identity",
+		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
+	})),
 	{
 		id: "String.prototype.slice",
 		owner: "String.prototype",

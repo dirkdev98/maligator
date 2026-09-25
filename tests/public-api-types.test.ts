@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as ts from "typescript";
+import * as ts from "typescript-v6-api";
 import { describe, expect, it } from "vitest";
 
 function formatDiagnostics(diagnostics: ReadonlyArray<ts.Diagnostic>): string {

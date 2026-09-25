@@ -512,18 +512,16 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				description:
 					"Run after every selected descendant test. Nested-suite hooks run before\nancestor hooks.",
 			},
-		].map(
-			(entry): PlatformExport => ({
-				...entry,
-				type: entry.type as PlatformType,
-				contract: {
-					phase: "runtime",
-					value: "callable",
-					identity: "module",
-					effects: EVERY_EFFECT_SUMMARY,
-				},
-			}),
-		),
+		].map((entry): PlatformExport => ({
+			...entry,
+			type: entry.type as PlatformType,
+			contract: {
+				phase: "runtime",
+				value: "callable",
+				identity: "module",
+				effects: EVERY_EFFECT_SUMMARY,
+			},
+		})),
 	},
 ];
 

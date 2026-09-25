@@ -1,6 +1,6 @@
 import { readdirSync } from "node:fs";
 import * as path from "node:path";
-import ts from "typescript";
+import ts from "typescript-v6-api";
 import { describe, expect, it } from "vitest";
 
 const CORE_DIRECTORY = "src/compiler/core";

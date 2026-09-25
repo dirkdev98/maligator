@@ -477,7 +477,7 @@ function utf8Encode(text: string): Array<number> {
 
 function utf8Decode(bytes: Array<number>): string {
 	let out = "";
-	for (let i = 0; i < bytes.length; ) {
+	for (let i = 0; i < bytes.length;) {
 		const b0 = bytes[i++]!;
 		let code: number;
 		if (b0 < 0x80) {

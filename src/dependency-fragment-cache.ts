@@ -463,18 +463,16 @@ export function compileDependencyFragments(
 		options.worker !== undefined &&
 		(missing.length > 1 || (options.parallelWorkerTasks?.length ?? 0) > 0)
 	) {
-		const requests = missing.map(
-			({ plans }): DependencyFragmentRequest => ({
-				schema: 1,
-				targets: plans,
-				config: options.config,
-				execution: options.execution,
-				stripperIdentity: options.stripperIdentity,
-				...(options.cacheDirectory === undefined
-					? {}
-					: { cacheDirectory: options.cacheDirectory }),
-			}),
-		);
+		const requests = missing.map(({ plans }): DependencyFragmentRequest => ({
+			schema: 1,
+			targets: plans,
+			config: options.config,
+			execution: options.execution,
+			stripperIdentity: options.stripperIdentity,
+			...(options.cacheDirectory === undefined
+				? {}
+				: { cacheDirectory: options.cacheDirectory }),
+		}));
 		options.phases.workerMs += compileWithWorkers(
 			root,
 			requests,

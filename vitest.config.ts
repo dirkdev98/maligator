@@ -32,10 +32,9 @@ export default defineConfig({
 		coverage: {
 			provider: "v8",
 		},
-		experimental: {
-			fsModuleCache: true,
-			fsModuleCachePath: ".cache/vitest",
-		},
+		fsModuleCache: true,
+		fsModuleCachePath: ".cache/vitest",
+		sequence: { shuffle: { files: true } },
 
 		projects: [
 			{
@@ -55,8 +54,9 @@ export default defineConfig({
 						// Distinct groupOrder per project: vitest requires it when projects
 						// differ in maxWorkers. The fast unit lane runs first (group 0).
 						groupOrder: 0,
-						concurrent: true,
-						shuffle: { files: true, tests: true },
+						// Stateful tests share a worker realm and must run serially within each file.
+						concurrent: false,
+						shuffle: { tests: true },
 					},
 				},
 			},

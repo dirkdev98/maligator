@@ -1,4 +1,5 @@
-import ts from "typescript";
+// TypeScript 7 exposes the CLI but not the compiler API used to render signatures.
+import ts from "typescript-v6-api";
 import type { PlatformDocumentation, PlatformModule, PlatformType } from "./catalog.ts";
 
 function documentation(value: PlatformDocumentation, indent: string): string {

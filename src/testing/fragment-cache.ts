@@ -833,9 +833,8 @@ export function compileRelocatableTestImage(
 		wires: [
 			...dependencyArtifacts.map((artifact) => relocatableWire("dependency", artifact)),
 			relocatableWire("base", baseArtifact),
-			...fragmentArtifacts.map(
-				(artifact): RelocatableTestWire =>
-					relocatableWire("entry", artifact, artifact.file),
+			...fragmentArtifacts.map((artifact): RelocatableTestWire =>
+				relocatableWire("entry", artifact, artifact.file),
 			),
 			relocatableWire("runner", runnerArtifact),
 		],

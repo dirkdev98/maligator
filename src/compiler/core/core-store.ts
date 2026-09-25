@@ -2956,7 +2956,7 @@ export class CoreProgram {
 		if (this.#sealed) throw new Error("Core program is sealed");
 		if (this.#literalTemplates === undefined) {
 			this.#literalTemplates = new Map();
-			for (let offset = 0; offset < this.#literalTemplateData.length; ) {
+			for (let offset = 0; offset < this.#literalTemplateData.length;) {
 				const end = scanLiteralTemplateSegment(
 					this.#literalTemplateData,
 					offset,

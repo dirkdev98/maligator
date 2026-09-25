@@ -4191,9 +4191,8 @@ function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 	}
 	const obligations = [
 		...new Set(
-			plan.obligations.map(
-				(obligation): VmGuardObligation =>
-					obligation.kind === "fallback" ? "fallback" : "materialize",
+			plan.obligations.map((obligation): VmGuardObligation =>
+				obligation.kind === "fallback" ? "fallback" : "materialize",
 			),
 		),
 	];

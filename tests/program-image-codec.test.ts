@@ -1147,17 +1147,15 @@ describe("program-image-codec", () => {
 					"Boolean.prototype.toString",
 				] as const
 			).flatMap((operation) =>
-				[0, 1, 5].map(
-					(argumentCount): BytecodeInstruction => ({
-						opcode: "CALL",
-						dst: 0,
-						callee: 1,
-						thisValue: 2,
-						guardedBuiltinCall: { operation },
-						argumentCount,
-						arguments: Array.from({ length: argumentCount }, () => 3),
-					}),
-				),
+				[0, 1, 5].map((argumentCount): BytecodeInstruction => ({
+					opcode: "CALL",
+					dst: 0,
+					callee: 1,
+					thisValue: 2,
+					guardedBuiltinCall: { operation },
+					argumentCount,
+					arguments: Array.from({ length: argumentCount }, () => 3),
+				})),
 			),
 		];
 		const withCalls = (instructions: Array<BytecodeInstruction>): ProgramImage =>

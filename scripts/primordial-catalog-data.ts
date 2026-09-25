@@ -43,21 +43,17 @@ export function packPrimordialCatalog(
 			(node.constructable ? 4 : 0) |
 			(node.kind === "symbol" ? 8 : 0),
 		node.implementation ?? null,
-		node.descriptors.map(
-			(descriptor): PrimordialProperty => [
-				"string" in descriptor.key
-					? descriptor.key.string
-					: [index(descriptor.key.symbol)],
-				descriptor.flags,
-				descriptor.value === undefined ? null : value(descriptor.value),
-				descriptor.get !== undefined && "ref" in descriptor.get
-					? index(descriptor.get.ref)
-					: -1,
-				descriptor.set !== undefined && "ref" in descriptor.set
-					? index(descriptor.set.ref)
-					: -1,
-			],
-		),
+		node.descriptors.map((descriptor): PrimordialProperty => [
+			"string" in descriptor.key ? descriptor.key.string : [index(descriptor.key.symbol)],
+			descriptor.flags,
+			descriptor.value === undefined ? null : value(descriptor.value),
+			descriptor.get !== undefined && "ref" in descriptor.get
+				? index(descriptor.get.ref)
+				: -1,
+			descriptor.set !== undefined && "ref" in descriptor.set
+				? index(descriptor.set.ref)
+				: -1,
+		]),
 		node.aliases,
 	]);
 	return { nodes, roots: normalized.roots.map((root) => [root.name, value(root.value)]) };
