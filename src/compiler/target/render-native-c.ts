@@ -668,6 +668,18 @@ function emitCompiledVariant(
 			valueRegs.push(i);
 		}
 	}
+	if (valueRegs.length > 64) {
+		// Only the first 64 slots can be masked; prioritize registers dead at more
+		// certified safepoints over roots that the conservative tail would retain anyway.
+		const liveSafepointCounts = new Uint32Array(fn.registerCount);
+		for (const { rootRegisters } of nativeContract.gc.safepoints) {
+			for (const register of rootRegisters) liveSafepointCounts[register]!++;
+		}
+		valueRegs.sort(
+			(left, right) =>
+				liveSafepointCounts[left]! - liveSafepointCounts[right]! || left - right,
+		);
+	}
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
