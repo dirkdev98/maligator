@@ -67,10 +67,14 @@ typedef struct MalHeap {
      * recycled by mal_gc_new_block before carving a fresh block from a chunk.
      * A blank block can serve any size class / kind after re-init. */
     MalGcBlock *free_blocks;
-    /** Reclaimed managed cells per size class, rebuilt by the sweep; the
-     * allocator reuses these before bumping. Empty between (and without) any
-     * collection, so an uncollected run is pure bump allocation as before. */
+    /** Reclaimed managed cells per size class. Majors rebuild these lists;
+     * minors preserve existing entries and add newly dead cells. */
     void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
+#if MAL_GC_GENERATIONAL
+    /** Managed blocks allocated into since the last sweep, including cell reuse.
+     * Minor collections sweep only this list; old-only blocks need no visit. */
+    MalGcBlock *young_blocks;
+#endif
     /** Per-size-class list of RAW blocks that hold at least one reclaimable cell
      * (a doubly-linked intrusive list threaded through MalGcBlock.next_free /
      * prev_free). Unlike cell_free this is NOT rebuilt by the sweep — RAW buffers
@@ -518,6 +522,13 @@ extern bool mal_heap_sweep_sticky;
  * mark phase first. Large-object cells are not yet swept.
  */
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
+
+#if MAL_GC_GENERATIONAL
+/** Sweep allocation-touched blocks after a minor mark. Old BLACK cells stay
+ * live; existing FREE links remain valid. Empty blocks await a major before
+ * page reclamation so no global free-list removal is needed. */
+void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
+#endif
 
 #if MAL_GC_CONCURRENT
 /**

@@ -1726,7 +1726,14 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 
     mal_gc_weak_pass();
 
-    mal_heap_sweep(&vm->heap, mal_gc_finalize_cell);
+#if MAL_GC_GENERATIONAL
+    if (!major) {
+        mal_heap_sweep_minor(&vm->heap, mal_gc_finalize_cell);
+    } else
+#endif
+    {
+        mal_heap_sweep(&vm->heap, mal_gc_finalize_cell);
+    }
 
 #if MAL_GC_GENERATIONAL
     mal_heap_sweep_sticky = false;

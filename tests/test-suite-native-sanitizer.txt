@@ -16,6 +16,7 @@ tests/native/coroutine-pool.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/function-reflect-builtins.test.ts
 tests/native/gc.test.ts
+tests/native/gc-minor-sweep.test.ts
 tests/native/platform-execution.test.ts
 tests/native/node-async-hooks.test.ts
 tests/native/node-scheduling.test.ts
