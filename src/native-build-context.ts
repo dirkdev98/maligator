@@ -145,6 +145,16 @@ export function nativeBuildEnvironmentFingerprint(env: NodeJS.ProcessEnv): strin
 				value !== undefined &&
 				(BUILD_ENVIRONMENT_NAMES.has(name) || isCargoBuildVariable(name)),
 		)
+		// Nested npm scripts prepend the same tool directories without changing lookup.
+		.map(
+			([name, value]) =>
+				[
+					name,
+					name === "PATH" && value !== undefined
+						? [...new Set(value.split(path.delimiter))].join(path.delimiter)
+						: value,
+				] as const,
+		)
 		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 	return hash("sha256", JSON.stringify(filtered), "hex");
 }
