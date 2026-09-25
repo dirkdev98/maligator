@@ -61,7 +61,7 @@ export interface TestCommandSummary {
 export const ISOLATED_TEST_RESULT_PREFIX = "__MALIGATOR_ISOLATED_TEST_RESULT__";
 
 function output(message = ""): void {
-	// eslint-disable-next-line no-console -- this is the product test reporter.
+	// oxlint-disable-next-line no-console -- this is the product test reporter.
 	console.log(message);
 }
 

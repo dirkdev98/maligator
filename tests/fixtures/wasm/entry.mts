@@ -10,7 +10,7 @@ api.fail = () => {
 	throw new Error("fixture exception");
 };
 api.badDiagnostic = () => {
-	// eslint-disable-next-line @typescript-eslint/only-throw-error -- JavaScript permits thrown values whose diagnostic coercion also throws.
+	// oxlint-disable-next-line typescript/only-throw-error -- JavaScript permits thrown values whose diagnostic coercion also throws.
 	throw {
 		toString() {
 			throw new Error("diagnostic exception");

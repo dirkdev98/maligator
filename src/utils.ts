@@ -25,7 +25,7 @@ export const log = {
 		return () => console.timeEnd(label);
 	},
 	info(args: unknown) {
-		// eslint-disable-next-line no-console
+		// oxlint-disable-next-line no-console
 		console.log(args);
 	},
 	dir(arg: unknown, depth: number | null = null) {

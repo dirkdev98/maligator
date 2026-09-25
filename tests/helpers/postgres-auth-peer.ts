@@ -182,7 +182,10 @@ export async function startPostgresAuthPeer(
 
 		socket.on("data", (chunk) => {
 			try {
-				buffered = Buffer.concat([buffered, chunk]);
+				buffered = Buffer.concat([
+					buffered,
+					typeof chunk === "string" ? Buffer.from(chunk) : chunk,
+				]);
 				while (buffered.length >= 4) {
 					if (startup) {
 						const length = buffered.readInt32BE(0);

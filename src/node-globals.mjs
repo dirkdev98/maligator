@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
+/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return, typescript/require-await -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
 
 /** Node-surface compatibility globals implemented over Maligator's node:* host modules. */
 

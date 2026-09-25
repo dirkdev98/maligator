@@ -1,7 +1,7 @@
 import net from "node:net";
 import postgres from "postgres";
 
-/* eslint-disable no-console, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- Native compatibility fixture values come from postgres.js. */
+/* oxlint-disable no-console, typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return -- Native compatibility fixture values come from postgres.js. */
 
 const common = {
 	connect_timeout: 3,

@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This compatibility fixture intentionally runs pinned CommonJS packages. */
+/* oxlint-disable -- This compatibility fixture intentionally runs pinned CommonJS packages. */
 
 const depd = require("depd");
 const createError = require("http-errors");

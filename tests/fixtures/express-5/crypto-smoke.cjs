@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This compatibility fixture intentionally executes pinned CommonJS. */
+/* oxlint-disable -- This compatibility fixture intentionally executes pinned CommonJS. */
 
 const etag = require("etag");
 const signature = require("cookie-signature");

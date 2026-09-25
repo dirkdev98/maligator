@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
+/* oxlint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
 
 const assert = require("node:assert/strict");
 const http = require("node:http");

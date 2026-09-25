@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This compatibility fixture intentionally runs pinned CommonJS packages. */
+/* oxlint-disable -- This compatibility fixture intentionally runs pinned CommonJS packages. */
 
 const prepareDescriptor = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
 const limitDescriptor = Object.getOwnPropertyDescriptor(Error, "stackTraceLimit");

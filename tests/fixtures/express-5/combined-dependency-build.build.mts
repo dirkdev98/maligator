@@ -1,4 +1,4 @@
-/* eslint-disable import-x/no-default-export -- Build configs require a default export. */
+/* oxlint-disable import/no-default-export -- Build configs require a default export. */
 
 export default {
 	entry: "tests/fixtures/express-5/combined-dependency-build.mjs",

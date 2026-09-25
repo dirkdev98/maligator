@@ -63,5 +63,5 @@ const server = Mal.serve({
 	fetch: (request) => siteResponse(request, pages),
 });
 
-// eslint-disable-next-line no-console -- The standalone server needs one startup status line.
+// oxlint-disable-next-line no-console -- The standalone server needs one startup status line.
 console.log(`Maligator site listening on http://${hostname}:${server.port}`);

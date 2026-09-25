@@ -1,4 +1,4 @@
-/* eslint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
+/* oxlint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
 
 // The Express-shaped graceful shutdown: serve until SIGTERM, stop accepting, let
 // the close callback run, then leave through `beforeExit` with a zero status.

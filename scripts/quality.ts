@@ -12,15 +12,8 @@ const stages: Record<
 	lint: [
 		{
 			label: "lint and fix",
-			tool: "eslint",
-			args: [
-				".",
-				"--concurrency=auto",
-				"--fix",
-				"--cache",
-				"--cache-location",
-				".cache/eslint/",
-			],
+			tool: "oxlint",
+			args: [".", "--fix"],
 		},
 		{ label: "format files", tool: "oxfmt", args: [] },
 	],
@@ -30,7 +23,7 @@ const stages: Record<
 			tool: process.execPath,
 			args: ["./scripts/generate-platform-api.ts", "--check"],
 		},
-		{ label: "lint", tool: "eslint", args: [".", "--concurrency=auto"] },
+		{ label: "lint", tool: "oxlint", args: ["."] },
 		{ label: "check formatting", tool: "oxfmt", args: ["--check"] },
 	],
 	"type-check": [{ label: "check TypeScript", tool: "tsc", args: [] }],

@@ -1,4 +1,4 @@
-// eslint-disable-next-line import-x/consistent-type-specifier-style -- native compact-strip acceptance fixture.
+// oxlint-disable-next-line import/consistent-type-specifier-style -- native compact-strip acceptance fixture.
 import { type Numbers } from "./types.ts";
 
 export interface DescriptionInput<Values extends Numbers = Numbers> {

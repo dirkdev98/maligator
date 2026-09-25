@@ -1,6 +1,6 @@
 import postgres from "postgres";
 
-/* eslint-disable no-console -- Native compatibility fixtures report through stdout. */
+/* oxlint-disable no-console -- Native compatibility fixtures report through stdout. */
 
 let passwordCalls = 0;
 const password =

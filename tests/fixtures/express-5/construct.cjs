@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This fixture executes the pinned, unmodified CommonJS packages. */
+/* oxlint-disable -- This fixture executes the pinned, unmodified CommonJS packages. */
 
 const net = require("net");
 const canonicalNet = require("node:net");

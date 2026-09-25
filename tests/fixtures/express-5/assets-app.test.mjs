@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- JavaScript fixture imports an intentionally untyped CommonJS app. */
+/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call -- JavaScript fixture imports an intentionally untyped CommonJS app. */
 
 import { afterAll, beforeAll, expect, test } from "maligator:test";
 import expressFixture from "./assets-app.cjs";

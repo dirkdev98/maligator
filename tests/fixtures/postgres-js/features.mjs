@@ -1,6 +1,6 @@
 import postgres from "postgres";
 
-/* eslint-disable no-console, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- Native compatibility fixture values come from postgres.js. */
+/* oxlint-disable no-console, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Native compatibility fixture values come from postgres.js. */
 
 const port = Number(process.env.PGPORT) || 5432;
 const common = {

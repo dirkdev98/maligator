@@ -1,4 +1,4 @@
-/* eslint-disable -- This integration fixture mirrors the reported dependency graph. */
+/* oxlint-disable -- This integration fixture mirrors the reported dependency graph. */
 
 import { DatabaseSync } from "node:sqlite";
 import { sql } from "drizzle-orm";

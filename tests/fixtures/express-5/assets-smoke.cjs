@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This real-world compatibility fixture intentionally uses CommonJS. */
+/* oxlint-disable -- This real-world compatibility fixture intentionally uses CommonJS. */
 
 const assert = require("node:assert/strict");
 const { listen } = require("./assets-app.cjs");

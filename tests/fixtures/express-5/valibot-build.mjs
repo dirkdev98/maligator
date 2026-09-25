@@ -1,4 +1,4 @@
-/* eslint-disable -- This integration fixture intentionally mirrors untyped user code. */
+/* oxlint-disable -- This integration fixture intentionally mirrors untyped user code. */
 
 import express from "express";
 import { literal, object, parse } from "valibot";

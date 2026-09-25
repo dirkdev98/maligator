@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
+/* oxlint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
 
 const { EventEmitter } = require("events");
 const iconv = require("iconv-lite");

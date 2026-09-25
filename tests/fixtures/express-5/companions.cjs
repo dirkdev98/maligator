@@ -1,6 +1,6 @@
 "use strict";
 
-/* eslint-disable -- This fixture executes pinned, unmodified Express dependencies. */
+/* oxlint-disable -- This fixture executes pinned, unmodified Express dependencies. */
 
 const net = require("net");
 const canonicalNet = require("node:net");

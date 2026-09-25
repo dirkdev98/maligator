@@ -61,5 +61,5 @@ const result = buildLocalBinary({
 	cacheSuffix: derivation.cacheSuffix,
 });
 
-// eslint-disable-next-line no-console -- CLI result consumed by the bootstrap check.
+// oxlint-disable-next-line no-console -- CLI result consumed by the bootstrap check.
 console.log(result.binaryPath);

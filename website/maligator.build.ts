@@ -1,4 +1,4 @@
-/* eslint-disable import-x/no-default-export, @typescript-eslint/no-unsafe-call -- The build config loader requires this published-package shape. */
+/* oxlint-disable import/no-default-export, typescript/no-unsafe-call -- The build config loader requires this published-package shape. */
 // @ts-expect-error -- The product config loader supplies this published-package import.
 import { defineBuild } from "@maligator/cli";
 
