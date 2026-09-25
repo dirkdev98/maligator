@@ -1,0 +1,63 @@
+name: Native performance
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-performance')
+    name: Paired JavaScript runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Check the runner environment
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
+
+      - name: Inspect the complete comparison plan
+        run: >-
+          node scripts/bench.ts javascript --compare "$BASE_SHA"
+          --runs 5 --max-pairs 7 --budget-seconds 2700 --plan=json
+          | tee .cache/native-performance/plan.json
+
+      - name: Compare JavaScript runtime and individual phases
+        run: |
+          set -o pipefail
+          node scripts/bench.ts javascript --compare "$BASE_SHA" \
+            --runs 5 --max-pairs 7 --budget-seconds 2700 \
+            2>&1 | tee .cache/native-performance/comparison.log
+
+      - name: Retain comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-performance-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/
+            .cache/**/*.json
+            .cache/**/*.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
