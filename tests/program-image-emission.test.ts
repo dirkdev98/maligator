@@ -1475,6 +1475,92 @@ describe("emit-program-image instruction packing", () => {
 		expect(Number(trusted?.[23])).toBeGreaterThan(0);
 	});
 
+	it.each([
+		{ rootCount: 64, liveCounts: [64, 60, 58], scannedSlots: 182 },
+		{ rootCount: 70, liveCounts: [70, 66, 64], scannedSlots: 200 },
+		{ rootCount: 130, liveCounts: [130, 66, 2], scannedSlots: 262 },
+	])(
+		"uses the maskable slots for frequently dead roots in a $rootCount-root frame",
+		({ rootCount, liveCounts, scannedSlots }) => {
+			const call: BytecodeInstruction = {
+				opcode: "CALL",
+				dst: 1,
+				callee: 0,
+				thisValue: -1,
+				argumentCount: 0,
+				arguments: [],
+			};
+			const wideFunction: BytecodeFunction = {
+				...fn,
+				capturedCount: 1,
+				parameterCount: 2,
+				registerCount: rootCount + 3,
+				instructions: [call, call, call, { opcode: "RETURN", value: 0 }],
+			};
+			const safepoints = liveCounts.map((count, instructionIp) => ({
+				kind: "operation" as const,
+				instructionIp,
+				rootRegisters: Array.from({ length: count }, (_, register) => register),
+			}));
+			const image = withNativeFunctionPlan(
+				testProgramImage({ ...definition.runtime, functions: [wideFunction] }),
+				0,
+				(plan) => ({
+					...plan,
+					registerRepresentations: [
+						...Array.from({ length: rootCount - 1 }, () => "boxed" as const),
+						"string",
+						"int32",
+						"number",
+						"boolean",
+					],
+					gc: { safepoints },
+				}),
+			);
+			const output = emitCompiledFunction(
+				wideFunction,
+				image.native.functions[0]!,
+				0,
+				"",
+				false,
+			)?.source;
+			expect(output).toBeDefined();
+			const slots = new Map(
+				[...output!.matchAll(/#define r(\d+) \(__gc_slots\[(\d+)\]\)/g)].map((match) => [
+					Number(match[1]),
+					Number(match[2]),
+				]),
+			);
+			const masks: Array<bigint> = [];
+			let publishedMask = 0n;
+			for (const match of output!.matchAll(
+				/MAL_ROOT_MASK\((0x[\da-f]+)\);|mal_vm_call_cached\(/g,
+			)) {
+				if (match[1] !== undefined) publishedMask = BigInt(match[1]);
+				else masks.push(publishedMask);
+			}
+			expect(new Set(slots.keys())).toEqual(new Set(safepoints[0]!.rootRegisters));
+			expect(new Set(slots.values())).toEqual(new Set(safepoints[0]!.rootRegisters));
+			expect(slots.get(rootCount - 1)).toBeLessThan(64);
+			expect(masks).toHaveLength(safepoints.length);
+			let scanned = 0;
+			for (const [index, safepoint] of safepoints.entries()) {
+				const live = new Set(safepoint.rootRegisters);
+				for (const [register, slot] of slots) {
+					const inactive = slot < 64 && (masks[index]! & (1n << BigInt(slot))) !== 0n;
+					if (!inactive) scanned++;
+					if (live.has(register)) expect(inactive).toBe(false);
+				}
+			}
+			expect(scanned).toBe(scannedSlots);
+			if (rootCount <= 64) {
+				for (const [register, slot] of slots) expect(slot).toBe(register);
+			}
+			expect(output).toContain("r0 = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED;");
+			expect(output).toContain("__gc_frame.env = env;");
+		},
+	);
+
 	it("coalesces straight-line native root masks and republishes them at joins", () => {
 		const call = (argument: number): BytecodeInstruction => ({
 			opcode: "CALL",
