@@ -2429,6 +2429,29 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step(vm,");
 	});
 
+	it.each([
+		["Map", 'new Map([["x", [1, 2]]])'],
+		["Array entries", "[[1, 2]].entries()"],
+		["Object entries", "Object.entries({ x: [1, 2] })"],
+	])("retains generic %s pair cleanup across nested destructuring", (_name, iterable) => {
+		const definition = lower(`
+			for (const [key, [first, second]] of ${iterable}) {
+				globalThis.result = key + first + second;
+			}
+		`);
+		expect(
+			specializations(definition).filter(
+				(region) => region.kind === "iterator-entry-pair-virtualization",
+			),
+		).toHaveLength(0);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+			definition,
+		);
+		expect(emitProgramImage(definition, { compiled: true })).toContain(
+			"mal_vm_iterator_close(vm,",
+		);
+	});
+
 	it("consumes the Core-owned indexed length loop region", () => {
 		const definition = lower(
 			`"use strict"; function sum(values) { let total = 0; for (let index = 0; index < values.length; ++index) total += values[index]; return total; } globalThis.sum = sum;`,

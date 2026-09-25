@@ -446,4 +446,61 @@ function iterableFrom(next, close) {
 	}
 }
 
+{
+	function nestedEntryTotal() {
+		let total = 0;
+		for (const [key, [first, second]] of new Map([["x", [1, 2]]])) {
+			total += key.length + first + second;
+		}
+		return total;
+	}
+	ok("nested Map entry destructuring succeeds", nestedEntryTotal() === 4);
+}
+
+{
+	const original = { name: "nested-entry-next" };
+	const secondary = { name: "entry-close" };
+	const events = [];
+	const nested = iterableFrom(
+		function () {
+			throw original;
+		},
+		function () {
+			events.push("nested");
+			return {};
+		},
+	);
+	let entryIndex = 0;
+	const entry = iterableFrom(
+		function () {
+			return { done: false, value: entryIndex++ === 0 ? "key" : nested };
+		},
+		function () {
+			events.push("entry");
+			throw secondary;
+		},
+	);
+	class EntryCollection {
+		[Symbol.iterator]() {
+			return {
+				next() {
+					return { done: false, value: entry };
+				},
+				return() {
+					events.push("outer");
+					throw secondary;
+				},
+			};
+		}
+	}
+	ok(
+		"nested entry failure closes containing iterators and preserves the original throw",
+		caughtValue(function () {
+			for (const [key, [first, second]] of new EntryCollection()) {
+				throw new Error("unexpected loop body: " + key + first + second);
+			}
+		}) === original && events.join(",") === "entry,outer",
+	);
+}
+
 console.log("array-destructuring-close PASS " + passed + "/" + passed);
