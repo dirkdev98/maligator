@@ -14,7 +14,7 @@ jobs:
       github.event.pull_request.number == 65 &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 60
     permissions:
       contents: write
     env:
@@ -36,67 +36,152 @@ jobs:
           echo "$RUNNER_TEMP/native-bin" >> "$GITHUB_PATH"
           npm run env:check -- --json | tee .cache/root-candidate/environment.log
           node ./src/index.ts cache status
-      - name: Recover the exact initial experiment commands
+      - name: Recover the frozen entry-stable experiment
         run: |
-          git show e91c04f1b83af8899289529eb47c8ce8cd6e991b:.github/workflows/root-publication-experiment.yml > .cache/root-candidate/original.yml
+          git show 0689b2bcef0d74234ae39d07fa68bb133f97a38b:.github/workflows/root-publication-experiment.yml > .cache/root-candidate/v2.yml
           node --input-type=module <<'JS'
           import {readFileSync,writeFileSync} from 'node:fs';
           import {parse} from 'yaml';
-          const steps=parse(readFileSync('.cache/root-candidate/original.yml','utf8')).jobs.evaluate.steps;
-          const extract=(name,file)=>writeFileSync(`.cache/root-candidate/${file}`,steps.find(step=>step.name===name).run);
-          extract('Prepare matched construction and traversal probes','prepare.sh');
-          extract('Apply the isolated publication candidate','apply.sh');
-          extract('Store tested Git objects without updating a branch','store.sh');
-          const path='.cache/root-candidate/store.sh';
-          const source=readFileSync(path,'utf8');
-          const old="'docs/decisions/native-root-publication.md'];";
-          if(!source.includes(old)) throw Error('Missing publication file list');
-          writeFileSync(path,source.replace(old,"'docs/decisions/native-root-publication.md','tests/program-image-emission.test.ts'];"));
+          const steps=parse(readFileSync('.cache/root-candidate/v2.yml','utf8')).jobs.evaluate.steps;
+          for(const [name,file] of [
+            ['Recover the exact initial experiment commands','initialize.sh'],
+            ['Apply candidate and migrate the publication contract assertion','apply-v2.sh'],
+          ]) writeFileSync(`.cache/root-candidate/${file}`,steps.find(step=>step.name===name).run);
           JS
-      - name: Build the original six microbenchmarks
+          bash .cache/root-candidate/initialize.sh
+      - name: Build the original microbenchmarks
         run: bash .cache/root-candidate/prepare.sh | tee .cache/root-candidate/baseline-build.log
-      - name: Apply candidate and migrate the publication contract assertion
+      - name: Apply entry-stable roots and conditional operator masks
         run: |
-          bash .cache/root-candidate/apply.sh
-          node --input-type=module <<'JS'
-          import {readFileSync,writeFileSync} from 'node:fs';
-          const path='tests/program-image-emission.test.ts';
-          const lines=readFileSync(path,'utf8').split('\n');
-          const matches=lines.map((line,index)=>line.includes('expect(fallback).toMatch(new RegExp') && line.includes('${store.object}') ? index : -1).filter(index=>index>=0);
-          if(matches.length!==1) throw Error('Expected exactly one old store receiver assertion');
-          const replacement=String.raw`
-          const retained = fn.instructions.find((instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC");
-          if (retained?.opcode !== "LOAD_PROPERTY_STATIC") throw new Error("missing retained property value");
-          expect(retained.dst).not.toBe(store.object);
-          expect(output).toContain(String.raw\`#define r\${retained.dst} (__private_r\${retained.dst})\`);
-          const receiverPublication = new RegExp(String.raw\`__gc_slots\\[\\d+\\] = r\${store.object};\`, "g");
-          expect(output.match(receiverPublication)).toHaveLength(1);
-          expect(output.slice(0, output.indexOf("mal_root_frame_head = &__gc_frame"))).toMatch(receiverPublication);
-          expect(fallback).not.toMatch(receiverPublication);
-          expect(fallback).toMatch(new RegExp(String.raw\`__gc_slots\\[\\d+\\] = r\${retained.dst};\`));
-          `.replaceAll('String.raw\\`','`').replaceAll('\\`','`').replaceAll('\\${','${');
-          lines.splice(matches[0],1,replacement);
-          writeFileSync(path,lines.join('\n'));
-          JS
-          ./node_modules/.bin/oxfmt tests/program-image-emission.test.ts
-          git diff -- tests/program-image-emission.test.ts
+          bash .cache/root-candidate/apply-v2.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          file=Path('src/compiler/target/render-native-c.ts'); source=file.read_text()
+          def change(old,new,count=1):
+              global source
+              assert source.count(old)==count,(old[:100],source.count(old))
+              source=source.replace(old,new)
+          change('\t\tconst inactiveRootMask = inactiveRootMasks.get(ip);\n', '\t\tconst inactiveRootMask = inactiveRootMasks.get(ip);\n\t\tconst operatorInactiveRootMask =\n\t\t\tdeferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask\n\t\t\t\t? inactiveRootMask\n\t\t\t\t: undefined;\n')
+          change('\t\t\tmathCallInactiveRootMask === undefined &&\n','\t\t\toperatorInactiveRootMask === undefined &&\n\t\t\tmathCallInactiveRootMask === undefined &&\n',2)
+          change('\t\t\tmathCallInactiveRootMask !== undefined ||\n','\t\t\toperatorInactiveRootMask !== undefined ||\n\t\t\tmathCallInactiveRootMask !== undefined ||\n')
+          change('\t\t\t\t\t\t? incomingRootPublication\n\t\t\t\t\t\t: [],', '\t\t\t\t\t\t? operatorInactiveRootMask === undefined\n\t\t\t\t\t\t\t? incomingRootPublication\n\t\t\t\t\t\t\t: [...incomingRootPublication, `${cInactiveRootMaskPublication(operatorInactiveRootMask)};`]\n\t\t\t\t\t\t: [],')
+          file.write_text(source)
+          doc=Path('docs/decisions/native-root-publication.md')
+          with doc.open('a') as output:
+              output.write('\nBinary numeric guards leave the root mask untouched on their noncollecting\npath. The original union mask is published with incoming private roots inside\nthe coercing operator expression, before it can call user code. A conditional\npublication invalidates the emitter\'s known-mask state for the next operation;\npure specialized operators need no mask update at all.\n')
+          fixture=Path('tests/local/static-property-root-mask.js')
+          extra='''
+          function retainThroughNumberCoercion(holder, operand) {
+              const retained = holder.value;
+              const result = operand + 1;
+              gc();
+              return result + retained.marker;
+          }
+          function retainThroughStringCoercion(holder, operand) {
+              const retained = holder.value;
+              const result = operand + 1;
+              gc();
+              return result + retained.marker;
+          }
+          function retainThroughThrowingCoercion(holder, operand) {
+              const retained = holder.value;
+              try {
+                  return operand + 1;
+              } catch (error) {
+                  gc();
+                  return retained.marker + error.marker;
+              }
+          }
+          globalThis.rootCoercionReaders = [retainThroughNumberCoercion, retainThroughStringCoercion, retainThroughThrowingCoercion];
+          for (let index = 0; index < 16; index++) {
+              const numberHolder = {value: {marker: 41}};
+              const numberOperand = {valueOf() {numberHolder.value = null; gc(); return 17;}};
+              if (globalThis.rootCoercionReaders[0](numberHolder, numberOperand) !== 59) throw new Error("coercion lost an earlier heap-valued root");
+              const stringHolder = {value: {marker: 41}};
+              const stringOperand = {[Symbol.toPrimitive](hint) {if (hint !== "default") throw new Error("wrong coercion hint"); stringHolder.value = null; gc(); return "v";}};
+              if (globalThis.rootCoercionReaders[1](stringHolder, stringOperand) !== "v141") throw new Error("coercion lost its heap-valued result or preceding root");
+              const throwHolder = {value: {marker: 41}};
+              const throwOperand = {[Symbol.toPrimitive]() {throwHolder.value = null; gc(); throw {marker: 23};}};
+              if (globalThis.rootCoercionReaders[2](throwHolder, throwOperand) !== 64) throw new Error("throwing coercion lost a catch root");
+          }
+          '''
+          source=fixture.read_text(); marker='console.log("static-property-root-mask PASS");'
+          assert source.count(marker)==1
+          fixture.write_text(source.replace(marker,extra+'\n'+marker))
+          owner=Path('tests/native/static-property-root-mask.test.ts'); source=owner.read_text()
+          marker='const publicationKernels = [\n'; assert source.count(marker)==1
+          entries=''.join('\t{ name: "'+name+'", boundary: "BINARY", probe: "mal_vm_binary_op", properties: ["value"], firstBoundaryOnly: true },\n' for name in ['retainThroughNumberCoercion','retainThroughStringCoercion','retainThroughThrowingCoercion'])
+          source=source.replace(marker,marker+entries)
+          marker='\t\t\t\t\t.map((safepoint) => safepoint.incomingRootRegisters ?? []),'
+          assert source.count(marker)==1
+          source=source.replace(marker,'\t\t\t\t\t.slice(0, "firstBoundaryOnly" in kernel ? 1 : undefined)\n'+marker)
+          source=source.replace('retains private preceding roots at the emitted fast probe in $name','retains private preceding roots at the audited boundary in $name')
+          owner.write_text(source)
+          Path('tests/native-root-mask-edges.test.ts').write_text('''import { describe, expect, it } from "vitest";
+          import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+          import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+          import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
+          describe("native binary root-mask edges", () => {
+              it("publishes the original union mask inside the generic coercing edge, not the numeric hit", () => {
+                  const fn: BytecodeFunction = {nameStringIndex:-1,isGenerator:false,isAsync:false,parameterCount:1,mappedArguments:false,mappedArgumentSlots:[],length:1,registerCount:3,capturedCount:0,strict:true,needsArguments:false,argumentSnapshotCount:0,argumentSnapshotPlan:[],isDerivedConstructor:false,isClassConstructor:false,constructorSlotReserve:0,hasPrototype:false,literalShapeCount:0,instructions:[{opcode:"LOAD_PROPERTY_STATIC",object:0,dst:1,stringIndex:0,icIndex:0},{opcode:"BINARY",dst:2,left:1,right:0,operator:"+"},{opcode:"RETURN",value:2}],handlers:[],fileIndex:-1,positions:[]};
+                  const native = createConservativeNativePlan([fn]).functions[0]!;
+                  const output = emitCompiledFunction(fn,{...native,gc:{safepoints:[{kind:"operation",instructionIp:0,rootRegisters:[0,1],incomingRootRegisters:[0],outgoingRootRegisters:[0,1]},{kind:"operation",instructionIp:1,rootRegisters:[0,1,2],incomingRootRegisters:[0,1],outgoingRootRegisters:[2]}]}},0,"",false)!.source;
+                  const miss = output.indexOf("mal_vm_op_load_property_ic_static_miss");
+                  const propertyEnd = output.indexOf("\\n    }",miss);
+                  const guard = output.indexOf("if (mal_ops_is_number",propertyEnd);
+                  const call = output.indexOf("mal_vm_binary_op",guard);
+                  const fallback = output.lastIndexOf("} else {",call);
+                  expect(miss).toBeGreaterThan(0);
+                  expect(propertyEnd).toBeGreaterThan(miss);
+                  expect(guard).toBeGreaterThan(propertyEnd);
+                  expect(call).toBeGreaterThan(guard);
+                  expect(fallback).toBeGreaterThan(guard);
+                  expect(output.slice(propertyEnd,fallback)).not.toContain("MAL_ROOT_MASK(");
+                  expect(output.slice(fallback,call)).toContain("MAL_ROOT_MASK(0x0)");
+                  expect(output.slice(fallback,call)).toContain("__gc_slots[1] = r1");
+              });
+          });
+          ''')
+          store=Path('.cache/root-candidate/store.sh'); source=store.read_text()
+          marker="'tests/program-image-emission.test.ts'];"; assert source.count(marker)==1
+          source=source.replace(marker,"'tests/program-image-emission.test.ts','tests/native-root-mask-edges.test.ts','tests/local/static-property-root-mask.js','tests/native/static-property-root-mask.test.ts'];")
+          source='git add --intent-to-add tests/native-entry-stable-roots.test.ts tests/native-root-mask-edges.test.ts\n'+source
+          store.write_text(source)
+          PY
+          ./node_modules/.bin/oxfmt src/compiler/target/render-native-c.ts docs/decisions/native-root-publication.md tests/native-root-mask-edges.test.ts tests/local/static-property-root-mask.js tests/native/static-property-root-mask.test.ts
+          git diff --stat
       - name: Type checking and exact root contracts
         run: |
           npm run type-check
-          npm run test:unit -- --run tests/native-entry-stable-roots.test.ts tests/program-image-emission.test.ts tests/execution-liveness-transfers.test.ts tests/execution-verification.test.ts
-      - name: Native collecting and throwing paths
+          npm run test:unit -- --run tests/native-entry-stable-roots.test.ts tests/native-root-mask-edges.test.ts tests/program-image-emission.test.ts tests/execution-liveness-transfers.test.ts tests/execution-verification.test.ts
+      - name: Native collection and coercion contracts
         run: |
+          node --expose-gc --input-type=module -e 'globalThis.__mal_collect_garbage = globalThis.gc; await import("./tests/local/static-property-root-mask.js");'
           npm run test:native -- tests/native/static-property-root-mask.test.ts
           npm run test:sanitize -- tests/native/static-property-root-mask.test.ts
       - name: Measure matched microbenchmarks
         run: |
           node .cache/root-candidate/micro.mjs candidate | tee .cache/root-candidate/candidate-build.log
           node .cache/root-candidate/micro.mjs measure | tee .cache/root-candidate/micro-summary.log
-      - name: Store reviewed candidate tree without moving a branch
+      - name: Store tested tree without moving a branch
+        id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: bash .cache/root-candidate/store.sh
+        run: |
+          bash .cache/root-candidate/store.sh
+          echo "tree=$(node -p 'JSON.parse(require("fs").readFileSync(".cache/root-candidate/publication.json")).tree_sha')" >> "$GITHUB_OUTPUT"
+      - name: Retain tested candidate before the runtime comparison
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tested-root-tree-${{ steps.candidate.outputs.tree }}
+          path: |
+            .cache/root-candidate/publication.json
+            .cache/root-candidate/candidate.patch
+            .cache/root-candidate/micro-report.json
+            .cache/root-candidate/micro-summary.log
+          include-hidden-files: true
+          retention-days: 7
       - name: Plan full JavaScript runtime comparison
         run: >-
           node scripts/bench.ts javascript --compare "$BASE_SHA"
@@ -109,11 +194,11 @@ jobs:
           node scripts/bench.ts javascript --compare "$BASE_SHA" \
             --runs 5 --max-pairs 7 --budget-seconds 1800 \
             2>&1 | tee .cache/root-candidate/javascript.log
-      - name: Retain candidate evidence
+      - name: Retain all candidate evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: entry-stable-roots-${{ github.run_id }}
+          name: root-publication-edges-${{ github.run_id }}
           path: |
             .cache/root-candidate/*.json
             .cache/root-candidate/*.log
