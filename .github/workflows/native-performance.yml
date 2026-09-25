@@ -8,6 +8,48 @@ permissions:
   contents: read
 
 jobs:
+  development-inputs:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-development-inputs')
+    name: Capture offline development inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.14.1
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Capture source and locked dependencies without credentials
+        run: |
+          npm ci --no-audit --no-fund
+          mkdir -p .cache/native-development-inputs
+          git bundle create .cache/native-development-inputs/source.bundle --all HEAD
+          tar --exclude='*.woff' --exclude='*.woff2' --exclude='*.ttf' --exclude='*.otf' \
+            -czf .cache/native-development-inputs/dependencies.tar.gz node_modules
+          cp "$(command -v node)" .cache/native-development-inputs/node
+          git rev-parse HEAD > .cache/native-development-inputs/head.txt
+          node --version > .cache/native-development-inputs/node-version.txt
+          sha256sum package-lock.json > .cache/native-development-inputs/lock.sha256
+
+      - name: Retain offline inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-development-inputs-${{ github.run_id }}
+          path: .cache/native-development-inputs/
+          include-hidden-files: true
+          retention-days: 3
+
   javascript:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
