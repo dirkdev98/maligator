@@ -14,7 +14,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'native-development-inputs')
     name: Capture offline development inputs
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -23,16 +23,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.14.1
-          cache: npm
-          cache-dependency-path: package-lock.json
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
 
       - name: Capture source and locked dependencies without credentials
         run: |
-          npm ci --no-audit --no-fund
           mkdir -p .cache/native-development-inputs
           git bundle create .cache/native-development-inputs/source.bundle --all HEAD
           tar --exclude='*.woff' --exclude='*.woff2' --exclude='*.ttf' --exclude='*.otf' \
@@ -42,11 +37,32 @@ jobs:
           node --version > .cache/native-development-inputs/node-version.txt
           sha256sum package-lock.json > .cache/native-development-inputs/lock.sha256
 
+      - name: Capture native prerequisites
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          cargo fetch --locked --manifest-path runtime/rust/Cargo.toml --target x86_64-unknown-linux-gnu
+          mkdir -p .cache/native-toolchain-inputs
+          tar -C / -czf .cache/native-toolchain-inputs/llvm.tar.gz \
+            usr/lib/llvm-19 usr/lib/x86_64-linux-gnu/libLLVM.so.19.1 \
+            usr/lib/x86_64-linux-gnu/libclang-cpp.so.19.1
+          toolchain="$(basename "$(dirname "$(dirname "$(rustup which rustc)")")")"
+          tar -C "$HOME/.rustup" -czf .cache/native-toolchain-inputs/rust.tar.gz "toolchains/$toolchain"
+          cp "$(command -v rustup)" .cache/native-toolchain-inputs/rustup
+          tar -C "$HOME/.cargo" -czf .cache/native-toolchain-inputs/cargo-registry.tar.gz registry
+
       - name: Retain offline inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: native-development-inputs-${{ github.run_id }}
           path: .cache/native-development-inputs/
+          include-hidden-files: true
+          retention-days: 3
+
+      - name: Retain native toolchain inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-toolchain-inputs-${{ github.run_id }}
+          path: .cache/native-toolchain-inputs/
           include-hidden-files: true
           retention-days: 3
 
@@ -71,6 +87,14 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
 
+      - name: Select matching LLVM archive and link tools
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
       - name: Check the runner environment
         run: |
           mkdir -p .cache/native-performance
@@ -91,6 +115,10 @@ jobs:
             --runs 5 --max-pairs 7 --budget-seconds 2700 \
             2>&1 | tee .cache/native-performance/comparison.log
 
+      - name: Show failed snapshot diagnostics
+        if: failure()
+        run: find .cache/bench-comparisons -maxdepth 2 -name '*.log' -exec tail -100 {} \;
+
       - name: Retain comparison evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -98,8 +126,9 @@ jobs:
           name: native-performance-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/
-            .cache/**/*.json
-            .cache/**/*.md
+            .cache/bench-comparisons/*/*.json
+            .cache/bench-comparisons/*/*.log
+            .cache/bench-comparisons/*/*.md
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
