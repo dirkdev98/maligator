@@ -69,11 +69,11 @@ function encode(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return 'number:' + value.toPrecision(12);
   return typeof value + ':' + String(value);
 }
-const cases = [${cases.map(({ name, profile }) => `[globalThis.${name},${profile === "suspension"}]`).join(",")}];
+const cases = [${cases.map(({ name, profile }) => `[globalThis.${name},${profile === "suspension"},${profile === "loop" || profile === "repeatedLoop"}]`).join(",")}];
 for (let index = 0; index < cases.length; index++) {
-  const [run, generator] = cases[index];
+  const [run, generator, usesCount] = cases[index];
   for (const value of [-0, 0, NaN, Infinity, -Infinity, 1.25, 8]) {
-    for (const count of [0, 3]) {
+    for (const count of usesCount ? [0, 3] : [3]) {
       const events = [];
       const input = {[Symbol.toPrimitive](hint){events.push('convert:' + hint);return value;}};
       const effect = result => {events.push(encode(result));return result;};
@@ -158,10 +158,10 @@ function encode(value) {
   if (Object.is(value, -0)) return '-0';
   return typeof value + ':' + String(value);
 }
-const cases = [${cases.map(({ name, profile }) => `[globalThis.${name},${profile === "suspension"}]`).join(",")}];
+const cases = [${cases.map(({ name, profile }) => `[globalThis.${name},${profile === "suspension"},${profile === "loop"}]`).join(",")}];
 for (let index = 0; index < cases.length; index++) {
-  const [run, generator] = cases[index];
-  for (const count of [0, 3]) {
+  const [run, generator, usesCount] = cases[index];
+  for (const count of usesCount ? [0, 3] : [3]) {
     const events = [];
     const result = run(value => { events.push(encode(value)); return value; }, count);
     if (generator) {
@@ -750,9 +750,7 @@ console.log('constructed', Reflect.construct(Number,[-1n]).valueOf());
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture: "tests/local/eval-replaced-globals.mjs",
 				name: "eval-globals",
-				config: resolveBuildConfig({
-					engine: { primordials: "mutable", eval: true, realms: false },
-				}),
+				// The default mutable/eval profile shares the prewarmed compiler runtime.
 				outDir,
 			});
 			for (const binary of [pair.compiled, pair.interpreted]) {

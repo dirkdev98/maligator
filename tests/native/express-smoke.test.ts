@@ -1,9 +1,9 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -17,22 +17,16 @@ describe("Express 5 fixture smoke runner", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/fixtures/express-5/smoke.js",
-			name: "express-smoke-compiled",
+			name: "express-smoke",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/fixtures/express-5/smoke.js",
-			name: "express-smoke-interpreted",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-			compiled: false,
-		});
+		}));
 	}, 1_200_000);
+
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 	function run(binary: string, env: NodeJS.ProcessEnv = {}): void {
 		expect(runToStdout(binary, { env, timeoutMs: 30_000 }).trim()).toBe(success);

@@ -22,7 +22,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
+import { compilerEntrypointSourceFiles, ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./compiler/core/core-optimization-families.ts";
 import {
@@ -112,6 +112,11 @@ function defaultCompilerBake(): CompilerBakeInput {
 				stripTypes: stripCompactTypes,
 			}),
 	};
+}
+
+/** Reuse the canonical compiler wire without compiling its optional native companion. */
+export function prebuiltCompilerBake(): CompilerBakeInput {
+	return { kind: "prebuilt", path: ensureCompilerWire(defaultCompilerBake()) };
 }
 
 /**

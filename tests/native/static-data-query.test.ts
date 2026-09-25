@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	prebuiltCompilerBake,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -44,6 +45,8 @@ it("executes static queries across image growth during coercion", () => {
 			fixture,
 			name: "static-query-adoption",
 			config: resolveBuildConfig({ engine: { eval: true } }),
+			// Image adoption exercises the compiled query consumer; the compiler can run from wire.
+			compilerBake: prebuiltCompilerBake(),
 			outDir,
 		});
 		const queries = pair.programImage.runtime.functions.flatMap((fn) =>

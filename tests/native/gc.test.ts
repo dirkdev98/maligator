@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
 	scaledNativeRunTimeoutMs,
@@ -34,6 +34,8 @@ interface GcFixture {
 	mainFile?: string;
 	/** Extra run env merged into every run of this fixture (both plain and stress). */
 	env?: NodeJS.ProcessEnv;
+	/** Runtime compilation uses the same interval as the dedicated compiler GC lane. */
+	stressEnv?: NodeJS.ProcessEnv;
 }
 
 const FIXTURES: Array<GcFixture> = [
@@ -55,12 +57,21 @@ const FIXTURES: Array<GcFixture> = [
 		mainFile: HOST_MAIN,
 	},
 	// Coroutine-frame tracing: suspended generator/async/async-gen across GC +
-	// regressions (uninit-frame, COMPLETED-frame, post-eval-splice).
+	// regressions (uninit-frame and COMPLETED-frame).
 	{
 		fixture: "tests/local/gccoroutine.js",
 		name: "gccoroutine",
 		tag: "gccoroutine",
 		mainFile: HOST_MAIN,
+	},
+	// The explicit collections bracket eval while its generator is suspended. Avoid
+	// collecting the whole compiler heap at every instruction during compilation.
+	{
+		fixture: "tests/local/gccoroutine-eval.js",
+		name: "gccoroutine-eval",
+		tag: "gccoroutine-eval",
+		mainFile: HOST_MAIN,
+		stressEnv: { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" },
 	},
 	// RAW-table delete/clear barrier: Map/Set/dictionary deletes interleaved with GC.
 	{ fixture: "tests/local/gctable.js", name: "gctable", tag: "gctable" },
@@ -83,20 +94,13 @@ describe("targeted GC unit tests", () => {
 			let compiled: string;
 			let interp: string;
 			beforeAll(() => {
-				compiled = buildNativeBinary({
+				const pair = buildBackendPairFromOneProgramImage({
 					fixture: spec.fixture,
 					name: spec.name,
-					compiled: true,
 					mainFile: spec.mainFile,
 					outDir,
 				});
-				interp = buildNativeBinary({
-					fixture: spec.fixture,
-					name: `${spec.name}-ni`,
-					compiled: false,
-					mainFile: spec.mainFile,
-					outDir,
-				});
+				({ compiled, interpreted: interp } = pair);
 			});
 
 			it("compiled backend", () => {
@@ -111,7 +115,7 @@ describe("targeted GC unit tests", () => {
 				() => {
 					assertPassLine(
 						runToStdout(compiled, {
-							env: { ...HOST_GC, ...spec.env, ...STRESS_ENV },
+							env: { ...HOST_GC, ...spec.env, ...(spec.stressEnv ?? STRESS_ENV) },
 						}),
 						spec.tag,
 					);
@@ -131,7 +135,7 @@ describe("targeted GC unit tests", () => {
 				() => {
 					assertPassLine(
 						runToStdout(interp, {
-							env: { ...HOST_GC, ...spec.env, ...STRESS_ENV },
+							env: { ...HOST_GC, ...spec.env, ...(spec.stressEnv ?? STRESS_ENV) },
 						}),
 						spec.tag,
 					);

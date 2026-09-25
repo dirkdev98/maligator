@@ -1,14 +1,12 @@
 // Targeted GC unit tests: coroutine-frame tracing (regression coverage for the
 // 2026-07-10 fixes). A suspended generator / async function / async generator
-// keeps its live locals in a heap-allocated frame the collector must trace; three
+// keeps its live locals in a heap-allocated frame the collector must trace; two
 // distinct defects were fixed:
 //   - uninit-frame:  a generator created but never resumed left `frame` garbage,
 //                    so tracing it read uninitialized memory;
 //   - COMPLETED:     tracing a run-to-completion coroutine dereferenced its freed
 //                    register buffer (the tracer must skip COMPLETED coroutines);
-//   - eval-splice:   after an eval spliced a new definition (reallocating the
-//                    definition table), a suspended coroutine's cached
-//                    `frame.function` dangled (must re-resolve from function_index).
+// gccoroutine-eval.js separately checks frame tracing after runtime compilation.
 // Plus the positive contract: a heap object held in a coroutine local across a
 // forced GC survives intact on resume. Driven by MAL_HOST_GC on the HOST event
 // loop (async coroutines suspend across a real turn boundary). A failed assertion
@@ -91,15 +89,6 @@ const turns = [
 		sg.next(); // suspend at first yield
 		gc();
 		ok("suspended-gen-frame-object-survives", sg.next().value === "suspended");
-
-		// eval-splice: a suspended coroutine survives an eval that splices a new
-		// definition (reallocating the definition table) followed by a collection.
-		let eg = holder("evalsplice");
-		eg.next(); // suspend
-		let spliced = eval("(function spliced_fn() { return 40 + 2; })");
-		ok("eval-splice-new-definition-runs", spliced() === 42);
-		gc(); // traces the suspended `eg` whose frame.function must be re-resolved
-		ok("suspended-gen-survives-eval-splice", eg.next().value === "evalsplice");
 
 		// Kick off async coroutines; they run to their `await gate` and suspend.
 		asyncHolder(asyncGate).then((v) => (asyncResult = v));
