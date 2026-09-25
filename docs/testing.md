@@ -311,11 +311,11 @@ WPT removes its per-run native scratch tree on exit; pass
 
 ## Tiers
 
-| Tier  | Command              | Policy                                | Intended use                                                                                     |
-| ----- | -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Smoke | `npm run test:smoke` | Bail, 20s warm / 5m cold at 4 workers | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
-| Check | `npm run test:check` | Bail                                  | All regular unit tests, curated wire/normal standards, and disjoint normal/UBSan native coverage |
-| Full  | `npm run test:full`  | Bail, unbounded                       | Self-hosting, remaining partitioned native coverage, standards, collectors, and leaks            |
+| Tier  | Command              | Policy                                 | Intended use                                                                                     |
+| ----- | -------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 15m cold at 4 workers | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Check | `npm run test:check` | Bail                                   | All regular unit tests, curated wire/normal standards, and disjoint normal/UBSan native coverage |
+| Full  | `npm run test:full`  | Bail, unbounded                        | Self-hosting, remaining partitioned native coverage, standards, collectors, and leaks            |
 
 Smoke and check own disjoint unit selections: the small
 `tests/test-suite-unit-smoke.txt` manifest is the capability proof and check derives
@@ -332,9 +332,12 @@ differential follows the regular check matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The standalone smoke fuse measures its cumulative stages and fails if they exceed
-20 seconds on a warm four-worker run. It allows ten minutes when the reusable
-native or Test262 cache roots are missing. Both limits scale inversely when fewer
-than four workers are selected and stay fixed above four workers. The cumulative
+20 seconds on a warm four-worker run. It allows fifteen minutes when the reusable
+native or Test262 cache roots are missing. Cold CI must build separate development
+and eval-enabled Test262 runtimes before reaching WPT; the former ten-minute
+allowance could expire after those successful builds, before WPT started.
+Both limits scale inversely when fewer than four workers are selected and stay
+fixed above four workers. The cumulative
 check and full gates always use the scaled cold smoke completion budget because
 preceding benchmark work can evict an exact artifact while leaving the coarse cache
 roots intact. The fuse does not kill a native build in progress because terminating
