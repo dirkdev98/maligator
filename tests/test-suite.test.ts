@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,6 +18,52 @@ function stageInvocation(output: string, stage: string): string {
 	const index = lines.findIndex((line) => line === `${stage}:`);
 	if (index < 0) throw new Error(`missing stage ${stage}`);
 	return lines[index + 1] ?? "";
+}
+
+function simulateSmokeStages(
+	stages: Array<{ durationMs: number; status: number }>,
+	policy: "bail" | "complete" = "bail",
+) {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-smoke-budget-"));
+	try {
+		for (const entry of ["scripts", "src", "runtime", "tests", "package-lock.json"]) {
+			symlinkSync(path.join(root, entry), path.join(directory, entry));
+		}
+		const result = spawnSync(
+			process.execPath,
+			[
+				// Keep the gate's report root inside this disposable fixture.
+				"--preserve-symlinks-main",
+				"--import",
+				path.join(root, "tests/fixtures/test-suite-clock.mts"),
+				path.join(directory, "scripts/test-suite.ts"),
+				"smoke",
+				"--workers",
+				"4",
+				"--policy",
+				policy,
+			],
+			{
+				cwd: directory,
+				encoding: "utf8",
+				env: {
+					...process.env,
+					MALIGATOR_CACHE_DIR: path.join(directory, "cache"),
+					MAL_TEST_SUITE_FAKE_STAGES: JSON.stringify(stages),
+				},
+			},
+		);
+		if (result.error !== undefined) throw result.error;
+		const report = JSON.parse(
+			readFileSync(
+				path.join(directory, ".cache/mal-build/test-suite/report-smoke.json"),
+				"utf8",
+			),
+		) as { complete: boolean; stages: Array<{ name: string; status: number }> };
+		return { status: result.status, stderr: result.stderr, report };
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 }
 
 describe("test suite planner", () => {
@@ -113,7 +159,7 @@ describe("test suite planner", () => {
 		expect(help).toContain("npm run test262:report      full Test262 report");
 		expect(help).toContain("approval required");
 		expect(help).toContain("npm run test262:regressions");
-		expect(help).toContain("20-second warm / ten-minute cold fuse at four workers");
+		expect(help).toContain("20-second warm / fifteen-minute cold fuse at four workers");
 		expect(help).toContain("npm run test:check -- --list");
 		expect(help).toContain("--plan=json");
 	});
@@ -168,7 +214,7 @@ describe("test suite planner", () => {
 			expect(plan.smokeBudget).toEqual({
 				nominalWorkers: 4,
 				warmMs: Math.ceil((20_000 * 4) / Math.min(plan.workers, 4)),
-				coldMs: Math.ceil((600_000 * 4) / Math.min(plan.workers, 4)),
+				coldMs: Math.ceil((900_000 * 4) / Math.min(plan.workers, 4)),
 			});
 			for (const stage of plan.stages) {
 				expect(stage.environment.MALIGATOR_WORKERS).toBe(String(plan.workers));
@@ -208,6 +254,49 @@ describe("test suite planner", () => {
 			expect(native.environment.MAL_NATIVE_PREWARM).toBeUndefined();
 		},
 	);
+
+	it("reaches WPT after successful cold builds consume ten minutes", () => {
+		const result = simulateSmokeStages(
+			[22_400, 13_800, 104_000, 460_100, 60_000].map((durationMs) => ({
+				durationMs,
+				status: 0,
+			})),
+		);
+		expect(result.status).toBe(0);
+		expect(result.report.complete).toBe(true);
+		expect(result.report.stages.at(-1)?.name).toBe("smoke: WPT cross-section");
+	});
+
+	it("still stops before the next stage when the cold fuse expires", () => {
+		const result = simulateSmokeStages([{ durationMs: 3_600_001, status: 0 }]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("smoke fuse expired before all stages started");
+		expect(result.report.complete).toBe(false);
+		expect(result.report.stages.map((stage) => stage.name)).toEqual([
+			"smoke: TypeScript",
+		]);
+	});
+
+	it("still bails on a failed stage before the cold fuse expires", () => {
+		const result = simulateSmokeStages([{ durationMs: 1, status: 1 }]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("exited with status 1");
+		expect(result.report.complete).toBe(false);
+		expect(result.report.stages).toMatchObject([
+			{ name: "smoke: TypeScript", status: 1 },
+		]);
+	});
+
+	it("finishes coverage under complete policy while reporting a cold fuse failure", () => {
+		const result = simulateSmokeStages(
+			[3_600_001, 0, 0, 0, 0].map((durationMs) => ({ durationMs, status: 0 })),
+			"complete",
+		);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("smoke fuse exceeded");
+		expect(result.report.complete).toBe(true);
+		expect(result.report.stages.at(-1)?.name).toBe("smoke: WPT cross-section");
+	});
 
 	it.each(["0", "-1", "1.5", "many"])(
 		"rejects --workers %s before execution",
