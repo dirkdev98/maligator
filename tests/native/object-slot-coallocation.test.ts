@@ -13,6 +13,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-slot-coallocation-"));
+const hostGc = { MAL_HOST_GC: "1" };
 
 describe("shaped object slot coallocation", () => {
 	let compiled: string;
@@ -53,6 +54,7 @@ describe("shaped object slot coallocation", () => {
 		const result = spawnSync(instrumented, [], {
 			env: {
 				...process.env,
+				...hostGc,
 				MAL_PERF_STATS: "1",
 				MAL_PERF_CONTROL: "1",
 			},
@@ -68,10 +70,10 @@ describe("shaped object slot coallocation", () => {
 		["compiled", () => compiled],
 		["interpreted", () => interpreted],
 	])("preserves growth and dictionary transitions in %s mode", (_name, binary) => {
-		assertPassLine(runToStdout(binary()), "object-slot-coallocation");
+		assertPassLine(runToStdout(binary(), { env: hostGc }), "object-slot-coallocation");
 		assertPassLine(
 			runToStdout(binary(), {
-				env: { ...STRESS_ENV, MAL_GC_AT_EXIT: "1" },
+				env: { ...hostGc, ...STRESS_ENV, MAL_GC_AT_EXIT: "1" },
 				timeoutMs: 60000,
 			}),
 			"object-slot-coallocation",
@@ -80,7 +82,12 @@ describe("shaped object slot coallocation", () => {
 
 	it("reports coallocations and both migration paths", () => {
 		const result = spawnSync(interpreted, [], {
-			env: { ...process.env, MAL_GC_STATS: "1", MAL_GC_AT_EXIT: "1" },
+			env: {
+				...process.env,
+				...hostGc,
+				MAL_GC_STATS: "1",
+				MAL_GC_AT_EXIT: "1",
+			},
 			encoding: "utf-8",
 		});
 		expect(result.status).toBe(0);

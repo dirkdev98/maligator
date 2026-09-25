@@ -363,13 +363,21 @@ void mal_object_set_shaped_values(
 
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     if (new_count <= object->slot_capacity) return;
+    assert(new_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    u32 capacity = object->slot_capacity < 4 ? 4 : object->slot_capacity;
+    while (capacity < new_count) {
+        capacity = capacity < MAL_SHAPE_MAX_INLINE_SLOTS / 2
+            ? capacity * 2
+            : MAL_SHAPE_MAX_INLINE_SLOTS;
+    }
+    // Spare slots stay invisible until callers initialize them and publish the shape.
     if (object->slots_owned) {
-        object->slots = realloc(object->slots, sizeof(MalValue) * new_count);
-        object->slot_capacity = (u8) new_count;
+        object->slots = realloc(object->slots, sizeof(MalValue) * capacity);
+        object->slot_capacity = (u8) capacity;
         return;
     }
 
-    MalValue *slots = malloc(sizeof(MalValue) * new_count);
+    MalValue *slots = malloc(sizeof(MalValue) * capacity);
     for (u32 i = 0; i < old_count; ++i) {
         slots[i] = object->slots[i];
     }
@@ -378,7 +386,7 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     }
     object->slots = slots;
     object->slots_owned = true;
-    object->slot_capacity = (u8) new_count;
+    object->slot_capacity = (u8) capacity;
 }
 
 void mal_object_record_slot_dictionary_migration(MalObject *object) {
