@@ -1,0 +1,231 @@
+name: Root publication candidate
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: >-
+      github.event.label.name == 'evaluate-entry-stable-roots' &&
+      github.event.pull_request.number == 65 &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-linux
+      - name: Establish native environment
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-bin" .cache/root-candidate
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-bin" >> "$GITHUB_PATH"
+          npm run env:check -- --json | tee .cache/root-candidate/environment.log
+          node ./src/index.ts cache status
+      - name: Prepare matched construction and traversal probes
+        run: |
+          cat > .cache/root-candidate/micro.mjs <<'JS'
+          import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { resolve } from 'node:path';
+          import { buildNativeBinaryResult, HOST_MAIN } from '../../src/test-harness.ts';
+          import { resolveBuildConfig } from '../../src/build-config.ts';
+          import { emitCompiledFunction } from '../../src/compiler/target/render-native-c.ts';
+          const dir = resolve('.cache/root-candidate');
+          const cases = ['stable-shape-properties', 'record-array-traversal', 'direct-calls', 'indirect-calls', 'closure-calls', 'short-lived-records'];
+          const config = resolveBuildConfig({surface: {node: true, webPlatform: false}});
+          const stage = process.argv[2];
+          const json = (tool, args) => {
+            const output = execFileSync(tool, args, {encoding:'utf8', timeout:180000, maxBuffer:8*1024*1024});
+            return JSON.parse(output.trim().split('\n').at(-1));
+          };
+          const median = values => { const sorted=[...values].sort((a,b)=>a-b); return sorted[Math.floor(sorted.length/2)]; };
+          if (stage === 'baseline' || stage === 'candidate') {
+            const builds = [];
+            for (const id of cases) {
+              const fixture = `bench/runtime-gap/cases/${id}.mjs`;
+              const built = buildNativeBinaryResult({fixture, name:`${stage}-${id}`, compiled:true, production:true, mainFile:HOST_MAIN, config, outDir:dir});
+              let copies=0, sourceBytes=0;
+              for (const [index,fn] of built.programImage.runtime.functions.entries()) {
+                const emitted=emitCompiledFunction(fn,built.programImage.native.functions[index],index,'',false);
+                if (emitted) { copies+=(emitted.source.match(/__gc_slots\[\d+\] = r\d+;/g)||[]).length; sourceBytes+=Buffer.byteLength(emitted.source); }
+              }
+              const row={id,fixture,binary:built.binaryPath,bytes:statSync(built.binaryPath).size,sha256:createHash('sha256').update(readFileSync(built.binaryPath)).digest('hex'),copies,sourceBytes};
+              builds.push(row); console.log(JSON.stringify({stage,...row}));
+              writeFileSync(`${dir}/${stage}-builds.json`,JSON.stringify(builds,null,2));
+            }
+          } else {
+            const baseline=JSON.parse(readFileSync(`${dir}/baseline-builds.json`));
+            const candidate=JSON.parse(readFileSync(`${dir}/candidate-builds.json`));
+            const report=[];
+            for (const [index,before] of baseline.entries()) {
+              const after=candidate[index];
+              const args=['32','5'];
+              const oracle=json(process.execPath,[before.fixture,...args]);
+              const samples=[];
+              for(let pair=0;pair<7;pair++) {
+                const values={};
+                for(const variant of pair%2 ? ['candidate','baseline'] : ['baseline','candidate']) {
+                  const result=json(variant==='baseline'?before.binary:after.binary,args);
+                  if(result.checksum!==oracle.checksum || result.operations!==oracle.operations) throw Error(`oracle mismatch: ${before.id}/${variant}`);
+                  values[variant]=result; writeFileSync(`${dir}/${before.id}-${pair}-${variant}.json`,JSON.stringify(result,null,2));
+                }
+                samples.push(values);
+              }
+              const reductions=samples.map(s=>100*(1-s.candidate.elapsedMs/s.baseline.elapsedMs));
+              const mid=median(reductions);
+              const row={id:before.id,baseline:before,candidate:after,oracle,samples,medianReductionPercent:mid,madPercentagePoints:median(reductions.map(v=>Math.abs(v-mid))),fasterPairs:reductions.filter(v=>v>0).length};
+              report.push(row); console.log(JSON.stringify({id:row.id,medianReductionPercent:mid,madPercentagePoints:row.madPercentagePoints,fasterPairs:row.fasterPairs,baselineCopies:before.copies,candidateCopies:after.copies}));
+              writeFileSync(`${dir}/micro-report.json`,JSON.stringify(report,null,2));
+            }
+          }
+          JS
+          node .cache/root-candidate/micro.mjs baseline | tee .cache/root-candidate/baseline-build.log
+      - name: Apply the isolated publication candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          def replace_once(path, old, new):
+              file=Path(path); source=file.read_text()
+              assert source.count(old)==1, (path, old[:80], source.count(old))
+              file.write_text(source.replace(old,new))
+          lower='src/compiler/target/lower-native-root-publication.ts'
+          with Path(lower).open('a') as file:
+              file.write('''
+          /** Entry-published parameters need no recopy while their physical registers are unchanged. */
+          export function nativeEntryStableRootRegisters(
+          \tfn: BytecodeFunction,
+          \tprivateRegisters: ReadonlySet<number>,
+          ): ReadonlySet<number> {
+          \tconst stable = new Set([...privateRegisters].filter((register) => register < fn.parameterCount));
+          \tfor (const instruction of fn.instructions) {
+          \t\tif (stable.size === 0) break;
+          \t\tfor (const register of vmInstructionWriteRegisters(instruction)) stable.delete(register);
+          \t}
+          \treturn stable;
+          }
+          ''')
+          emit='src/compiler/target/render-native-c.ts'
+          replace_once(emit, '\tnativePrivateRootRegisters,\n', '\tnativePrivateRootRegisters,\n\tnativeEntryStableRootRegisters,\n')
+          replace_once(emit, 'interface NativeRootPublication {\n\treadonly slots:', 'interface NativeRootPublication {\n\treadonly entryStableRegisters: ReadonlySet<number>;\n\treadonly slots:')
+          replace_once(emit, '\t\tif (live.has(register)) {\n\t\t\tstores.push', '\t\tif (live.has(register)) {\n\t\t\tif (plan.entryStableRegisters.has(register)) continue;\n\t\t\tstores.push')
+          replace_once(emit, '\tconst rootPublication: NativeRootPublication = {\n', '\tconst rootPublication: NativeRootPublication = {\n\t\tentryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),\n')
+          doc='docs/decisions/native-root-publication.md'
+          replace_once(doc, 'Some instructions expose intermediate or out-parameter storage.', 'Private parameters are published at function entry. If no instruction writes\ntheir physical register, later live publications omit the redundant copy.\nExact liveness still controls their masks and dead-slot clearing: after a\ncollection clears a dead entry value, that unchanged value cannot become live\nagain along the same continuation. Reassigned parameters and all helper outputs\nkeep the ordinary publication path. This does not retain borrowed pointers.\n\nSome instructions expose intermediate or out-parameter storage.')
+          Path('tests/native-entry-stable-roots.test.ts').write_text('''import { describe, expect, it } from "vitest";
+          import { nativeEntryStableRootRegisters } from "../src/compiler/target/lower-native-root-publication.ts";
+          import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+          import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+          import type { BytecodeFunction, BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
+          function fn(instructions: Array<BytecodeInstruction>): BytecodeFunction {
+          return {nameStringIndex:-1,isGenerator:false,isAsync:false,parameterCount:1,mappedArguments:false,mappedArgumentSlots:[],length:1,registerCount:4,capturedCount:0,strict:true,needsArguments:false,argumentSnapshotCount:0,argumentSnapshotPlan:[],isDerivedConstructor:false,isClassConstructor:false,constructorSlotReserve:0,hasPrototype:false,literalShapeCount:0,instructions,handlers:[],fileIndex:-1,positions:[]};
+          }
+          const load: BytecodeInstruction = {opcode:"LOAD_PROPERTY_STATIC", object:0,dst:1,stringIndex:0,icIndex:0};
+          const call: BytecodeInstruction = {opcode:"CALL",dst:2,callee:1,thisValue:0,argumentCount:0,arguments:[]};
+          function emit(body: BytecodeFunction): string {
+          const native=createConservativeNativePlan([body]).functions[0]!;
+          return emitCompiledFunction(body,native,0,"",false)!.source;
+          }
+          describe("entry-stable private roots", () => {
+          it("recognizes unchanged private parameters, not locals or unpublished registers",()=>{
+          const body=fn([load,call,{opcode:"RETURN",value:2}]);
+          expect([...nativeEntryStableRootRegisters(body,new Set([0,1,2]))]).toEqual([0]);
+          expect([...nativeEntryStableRootRegisters(body,new Set([1,2]))]).toEqual([]);
+          });
+          it("rejects physical register replacement and continuously rooted helper outputs",()=>{
+          for(const write of [{opcode:"MOVE",src:1,dst:0},{...call,dst:0}] as Array<BytecodeInstruction>) {
+          expect([...nativeEntryStableRootRegisters(fn([load,write]),new Set([0]))]).toEqual([]);
+          }
+          });
+          it("publishes an immutable private receiver at entry rather than at every miss",()=>{
+          const source=emit(fn([load,call,{opcode:"RETURN",value:2}]));
+          expect(source).toContain("#define r0 (__private_r0)");
+          expect(source.match(/__gc_slots\\[\\d+\\] = r0;/g)).toHaveLength(1);
+          expect(source).toContain("mal_vm_op_load_property_ic_static_miss");
+          });
+          it("keeps publication when a parameter register receives another heap value",()=>{
+          const source=emit(fn([load,{opcode:"MOVE",src:1,dst:0},load,call,{opcode:"RETURN",value:2}]));
+          expect(source).toContain("#define r0 (__private_r0)");
+          expect((source.match(/__gc_slots\\[\\d+\\] = r0;/g) ?? []).length).toBeGreaterThan(1);
+          });
+          });
+          ''')
+          PY
+          ./node_modules/.bin/oxfmt src/compiler/target/lower-native-root-publication.ts src/compiler/target/render-native-c.ts tests/native-entry-stable-roots.test.ts docs/decisions/native-root-publication.md
+          git diff --stat
+          git diff -- src/compiler/target/lower-native-root-publication.ts src/compiler/target/render-native-c.ts docs/decisions/native-root-publication.md
+      - name: Type checking and emitter contracts
+        run: |
+          npm run type-check
+          npm run test:unit -- --run tests/native-entry-stable-roots.test.ts tests/program-image-emission.test.ts tests/execution-liveness-transfers.test.ts tests/execution-verification.test.ts
+      - name: Native GC and exception contracts
+        run: |
+          npm run test:native -- tests/native/static-property-root-mask.test.ts
+          npm run test:sanitize -- tests/native/static-property-root-mask.test.ts
+      - name: Measure matched microbenchmarks
+        run: |
+          node .cache/root-candidate/micro.mjs candidate | tee .cache/root-candidate/candidate-build.log
+          node .cache/root-candidate/micro.mjs measure | tee .cache/root-candidate/micro-summary.log
+      - name: Store tested Git objects without updating a branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git diff --binary > .cache/root-candidate/candidate.patch
+          node --input-type=module <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const files=['src/compiler/target/lower-native-root-publication.ts','src/compiler/target/render-native-c.ts','tests/native-entry-stable-roots.test.ts','docs/decisions/native-root-publication.md'];
+          const api=async(endpoint,body)=>{
+            const response=await fetch(`https://api.github.com/repos/${process.env.REPOSITORY}/git/${endpoint}`,{method:'POST',headers:{Authorization:`Bearer ${process.env.GH_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!response.ok) throw Error(`Git object creation failed: ${response.status}`);
+            return response.json();
+          };
+          const tree=[];
+          for(const path of files){const {sha}=await api('blobs',{content:readFileSync(path,'utf8'),encoding:'utf-8'});tree.push({path,mode:'100644',type:'blob',sha});}
+          const base_tree=execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim();
+          const result=await api('trees',{base_tree,tree});
+          const record={parent_sha:process.env.HEAD_SHA,tree_sha:result.sha,files:tree};
+          writeFileSync('.cache/root-candidate/publication.json',JSON.stringify(record,null,2));
+          console.log('TESTED_TREE '+JSON.stringify(record));
+          JS
+      - name: Plan full JavaScript runtime comparison
+        run: >-
+          node scripts/bench.ts javascript --compare "$BASE_SHA"
+          --runs 5 --max-pairs 7 --budget-seconds 1200 --plan=json
+          | tee .cache/root-candidate/javascript-plan.json
+      - name: Measure full JavaScript runtime
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node scripts/bench.ts javascript --compare "$BASE_SHA" \
+            --runs 5 --max-pairs 7 --budget-seconds 1200 \
+            2>&1 | tee .cache/root-candidate/javascript.log
+      - name: Retain candidate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: entry-stable-roots-${{ github.run_id }}
+          path: |
+            .cache/root-candidate/*.json
+            .cache/root-candidate/*.log
+            .cache/root-candidate/*.patch
+            .cache/bench-comparisons/*/*.json
+            .cache/bench-comparisons/*/*.log
+          include-hidden-files: true
+          retention-days: 7
