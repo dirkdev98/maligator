@@ -25,6 +25,7 @@ tests/native/readable-stream.test.ts
 tests/native/rooted-collections.test.ts
 tests/native/runtime-mechanics.test.ts
 tests/native/static-property-root-mask.test.ts
+tests/native/native-property-read-regions.test.ts
 tests/native/writable-stream.test.ts
 
 # Untrusted wire, parser, bulk-allocation, numeric, and buffer boundaries.

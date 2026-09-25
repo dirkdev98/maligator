@@ -46,9 +46,28 @@ export type NativePropertyProjectionAction =
 	  }
 	| { readonly role: "skip"; readonly plan: NativePropertyProjectionPlan };
 
+/** A decline resumes the retained instructions and cannot reuse this admission. */
+export interface NativePropertyReadRegionPlan {
+	readonly id: number;
+	readonly object: number;
+	readonly endIp: number;
+	readonly loads: ReadonlyArray<{
+		readonly ip: number;
+		readonly instruction: StaticPropertyLoad;
+	}>;
+	readonly continuation: "remaining-instructions";
+}
+
+export interface NativePropertyReadRegionAction {
+	readonly plan: NativePropertyReadRegionPlan;
+	readonly index: number;
+}
+
 export interface NativeFastPathLowering {
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyProjectionActions: ReadonlyMap<number, NativePropertyProjectionAction>;
+	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
+	readonly propertyReadRegionActions: ReadonlyMap<number, NativePropertyReadRegionAction>;
 	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
 	readonly pairedArrayLoopActions: ReadonlyMap<number, NativePairedArrayLoopAction>;
 	readonly constructorInitialization?: NativeConstructorInitializationPlan;
@@ -279,6 +298,116 @@ function lowerPropertyProjection(
 	});
 }
 
+const PROPERTY_REGION_COMPARE_OPERATORS = new Set([
+	"===",
+	"!==",
+	"==",
+	"!=",
+	"<",
+	"<=",
+	">",
+	">=",
+]);
+
+const PROPERTY_REGION_UNARY_OPERATORS = new Set([
+	"+",
+	"-",
+	"~",
+	"!",
+	"tonumeric",
+	"increment",
+	"decrement",
+]);
+
+function propertyReadRegionPureInstruction(
+	instruction: BytecodeInstruction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): boolean {
+	switch (instruction.opcode) {
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_BOOLEAN":
+			return true;
+		case "MOVE":
+			return (
+				representations[instruction.src] === representations[instruction.dst] ||
+				(isNumericRepresentation(representations[instruction.src]!) &&
+					isNumericRepresentation(representations[instruction.dst]!))
+			);
+		case "BINARY":
+			return (
+				isNumericRepresentation(representations[instruction.left]!) &&
+				isNumericRepresentation(representations[instruction.right]!) &&
+				(isNumericRepresentation(representations[instruction.dst]!) ||
+					representations[instruction.dst] === "boolean") &&
+				(NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) ||
+					PROPERTY_REGION_COMPARE_OPERATORS.has(instruction.operator))
+			);
+		case "UNARY":
+			return (
+				isNumericRepresentation(representations[instruction.src]!) &&
+				(isNumericRepresentation(representations[instruction.dst]!) ||
+					representations[instruction.dst] === "boolean") &&
+				PROPERTY_REGION_UNARY_OPERATORS.has(instruction.operator)
+			);
+		default:
+			return false;
+	}
+}
+
+function lowerPropertyReadRegion(
+	fn: BytecodeFunction,
+	firstIp: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	jumpTargets: ReadonlySet<number>,
+	conflicts: (ip: number) => boolean,
+): NativePropertyReadRegionPlan | undefined {
+	const first = fn.instructions[firstIp];
+	if (
+		first?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		first.object === first.dst ||
+		representations[first.object] !== "boxed" ||
+		representations[first.dst] !== "boxed" ||
+		conflicts(firstIp)
+	) {
+		return undefined;
+	}
+	const loads = [{ ip: firstIp, instruction: first }];
+	const limit = Math.min(fn.instructions.length, firstIp + 24);
+	for (let ip = firstIp + 1; ip < limit; ip++) {
+		if (jumpTargets.has(ip) || conflicts(ip)) break;
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+			instruction.object === first.object &&
+			representations[instruction.dst] === "boxed"
+		) {
+			loads.push({ ip, instruction });
+			if (loads.length === 8 || instruction.dst === first.object) break;
+			continue;
+		}
+		// Captured storage is valid only while the receiver is unchanged and no
+		// operation can collect, reenter JavaScript, throw, or mutate its layout.
+		if (
+			vmInstructionWriteRegisters(instruction).includes(first.object) ||
+			!propertyReadRegionPureInstruction(instruction, representations)
+		) {
+			break;
+		}
+	}
+	if (loads.length < 2 || (loads.length === 2 && loads[1]!.ip === firstIp + 1)) {
+		// Preserve the smaller existing adjacent-pair admission.
+		return undefined;
+	}
+	return Object.freeze({
+		id: firstIp,
+		object: first.object,
+		endIp: loads.at(-1)!.ip,
+		loads: Object.freeze(loads.map((load) => Object.freeze(load))),
+		continuation: "remaining-instructions",
+	});
+}
+
 function lowerConstructorInitialization(
 	fn: BytecodeFunction,
 	jumpTargets: ReadonlySet<number>,
@@ -503,6 +632,26 @@ export function lowerNativeFastPaths(
 			propertyProjectionActions.set(skippedIp, { role: "skip", plan });
 		}
 	}
+	const propertyReadRegions: Array<NativePropertyReadRegionPlan> = [];
+	const propertyReadRegionActions = new Map<number, NativePropertyReadRegionAction>();
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const plan = lowerPropertyReadRegion(
+			fn,
+			ip,
+			representations,
+			jumpTargets,
+			(candidate) =>
+				conflicts(candidate) ||
+				pairedArrayLoopActions.has(candidate) ||
+				propertyProjectionActions.has(candidate),
+		);
+		if (plan === undefined) continue;
+		propertyReadRegions.push(plan);
+		for (const [index, load] of plan.loads.entries()) {
+			propertyReadRegionActions.set(load.ip, { plan, index });
+		}
+		ip = plan.endIp;
+	}
 	const constructorInitialization = lowerConstructorInitialization(
 		fn,
 		jumpTargets,
@@ -527,6 +676,8 @@ export function lowerNativeFastPaths(
 		pairedArrayLoopActions,
 		propertyProjections: Object.freeze(propertyProjections),
 		propertyProjectionActions,
+		propertyReadRegions: Object.freeze(propertyReadRegions),
+		propertyReadRegionActions,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),

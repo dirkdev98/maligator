@@ -1973,6 +1973,108 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("admits property storage once and retains private hits through its generic continuation", () => {
+		const loadFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			parameterCount: 1,
+			registerCount: 6,
+			instructions: [
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 1, icIndex: 0 },
+				{ opcode: "CREATE_NUMBER", dst: 4, value: 1 },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 2, stringIndex: 2, icIndex: 1 },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 3, stringIndex: 3, icIndex: 2 },
+				{ opcode: "CREATE_OBJECT", dst: 5 },
+				{ opcode: "JUMP_IF", cond: 3, targetIp: 0 },
+				{ opcode: "RETURN", value: 1 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({ ...definition.runtime, functions: [loadFunction] }),
+			0,
+			(plan) => ({
+				...plan,
+				registerRepresentations: ["boxed", "boxed", "boxed", "boxed", "number", "boxed"],
+				gc: {
+					safepoints: [
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0, 1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [0, 1, 2],
+							incomingRootRegisters: [0, 1],
+							outgoingRootRegisters: [0, 1, 2],
+						},
+						{
+							kind: "operation",
+							instructionIp: 3,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1],
+							outgoingRootRegisters: [0, 1, 3],
+						},
+						{
+							kind: "operation",
+							instructionIp: 4,
+							rootRegisters: [0, 1, 3, 5],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1, 3, 5],
+						},
+						{
+							kind: "loop-backedge",
+							instructionIp: 5,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1],
+						},
+					],
+				},
+			}),
+		);
+		const output = emitCompiledFunction(
+			loadFunction,
+			image.native.functions[0]!,
+			0,
+			"",
+			false,
+		)!.source;
+		expect(output.match(/mal_vm_property_read_region_begin\(/g)).toHaveLength(1);
+		expect(output.match(/mal_vm_property_read_region_try_load\(/g)).toHaveLength(3);
+		expect(output.match(/mal_vm_op_load_property_ic_static_miss\(/g)).toHaveLength(3);
+		expect(output).not.toContain("mal_vm_property_try_load_static_pair(");
+		for (const register of [0, 1, 2, 3]) {
+			expect(output).toContain(`MalValue __private_r${register};`);
+			expect(output).toContain(`#define r${register} (__private_r${register})`);
+		}
+		for (const helper of [
+			"mal_vm_property_read_region_try_load",
+			"mal_vm_property_try_load_static",
+		]) {
+			const hits = [
+				...output.matchAll(
+					new RegExp(`if \\(${helper}[^\\n]+\\) \\{([\\s\\S]*?)\\} else \\{`, "g"),
+				),
+			];
+			expect(hits, helper).toHaveLength(3);
+			for (const hit of hits) expect(hit[1], helper).not.toContain("__gc_slots");
+		}
+		const admission = output.indexOf(
+			"__property_region_0 = mal_vm_property_read_region_begin",
+		);
+		expect(output.slice(output.indexOf("L0:;"), admission)).not.toContain("__gc_slots");
+		expect(output).toMatch(
+			/__gc_slots\[1\] = r1;[\s\S]*?__gc_slots\[2\] = MAL_VALUE_UNDEFINED;[\s\S]*?r2 = mal_vm_op_load_property_ic_static_miss/,
+		);
+		expect(output).toMatch(
+			/if \(mal_gc_poll\) \{[^\n]*__gc_slots\[1\] = r1;[^\n]*mal_gc_safepoint\(vm\);/,
+		);
+	});
+
 	it("publishes live private roots and clears dead private slots beyond the root mask", () => {
 		const allRoots = Array.from({ length: 67 }, (_, register) => register);
 		const loadFunction: BytecodeFunction = {
