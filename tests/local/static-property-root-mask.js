@@ -623,4 +623,64 @@ if (
 	throw new Error("throwing setter lost its preceding root or caught heap payload");
 }
 
+function retainThroughNumberCoercion(holder, operand) {
+	const retained = holder.value;
+	const result = operand + 1;
+	gc();
+	return result + retained.marker;
+}
+function retainThroughStringCoercion(holder, operand) {
+	const retained = holder.value;
+	const result = operand + 1;
+	gc();
+	return result + retained.marker;
+}
+function retainThroughThrowingCoercion(holder, operand) {
+	const retained = holder.value;
+	try {
+		return operand + 1;
+	} catch (error) {
+		gc();
+		return retained.marker + error.marker;
+	}
+}
+globalThis.rootCoercionReaders = [
+	retainThroughNumberCoercion,
+	retainThroughStringCoercion,
+	retainThroughThrowingCoercion,
+];
+for (let index = 0; index < 16; index++) {
+	const numberHolder = { value: { marker: 41 } };
+	const numberOperand = {
+		valueOf() {
+			numberHolder.value = null;
+			gc();
+			return 17;
+		},
+	};
+	if (globalThis.rootCoercionReaders[0](numberHolder, numberOperand) !== 59)
+		throw new Error("coercion lost an earlier heap-valued root");
+	const stringHolder = { value: { marker: 41 } };
+	const stringOperand = {
+		[Symbol.toPrimitive](hint) {
+			if (hint !== "default") throw new Error("wrong coercion hint");
+			stringHolder.value = null;
+			gc();
+			return "v";
+		},
+	};
+	if (globalThis.rootCoercionReaders[1](stringHolder, stringOperand) !== "v141")
+		throw new Error("coercion lost its heap-valued result or preceding root");
+	const throwHolder = { value: { marker: 41 } };
+	const throwOperand = {
+		[Symbol.toPrimitive]() {
+			throwHolder.value = null;
+			gc();
+			throw { marker: 23 };
+		},
+	};
+	if (globalThis.rootCoercionReaders[2](throwHolder, throwOperand) !== 64)
+		throw new Error("throwing coercion lost a catch root");
+}
+
 console.log("static-property-root-mask PASS");

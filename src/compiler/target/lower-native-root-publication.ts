@@ -130,3 +130,19 @@ export function nativePrivateRootRegisters(
 	// Bound native register pressure and slow-edge code size in large functions.
 	return new Set([...candidates].slice(0, 32));
 }
+
+/** Entry-published parameters need no recopy while their physical registers are unchanged. */
+export function nativeEntryStableRootRegisters(
+	fn: BytecodeFunction,
+	privateRegisters: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const stable = new Set(
+		[...privateRegisters].filter((register) => register < fn.parameterCount),
+	);
+	for (const instruction of fn.instructions) {
+		if (stable.size === 0) break;
+		for (const register of vmInstructionWriteRegisters(instruction))
+			stable.delete(register);
+	}
+	return stable;
+}

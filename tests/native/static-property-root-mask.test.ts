@@ -13,6 +13,27 @@ const hostGc = { MAL_HOST_GC: "1" };
 const expected = ["static-property-root-mask PASS"];
 const publicationKernels = [
 	{
+		name: "retainThroughNumberCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
+		name: "retainThroughStringCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
+		name: "retainThroughThrowingCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
 		name: "retainThroughArrayTraversal",
 		boundary: "ITERATOR_STEP",
 		probe: "mal_vm_iterator_try_dense_array_cursor_step",
@@ -132,13 +153,14 @@ describe("native static-property root-mask publication", () => {
 						(safepoint) =>
 							fn.instructions[safepoint.instructionIp]?.opcode === kernel.boundary,
 					)
+					.slice(0, "firstBoundaryOnly" in kernel ? 1 : undefined)
 					.map((safepoint) => safepoint.incomingRootRegisters ?? []),
 			});
 		}
 	}, 600_000);
 
 	it.each(publicationKernels)(
-		"retains private preceding roots at the emitted fast probe in $name",
+		"retains private preceding roots at the audited boundary in $name",
 		({ name, probe }) => {
 			const contract = publicationContracts.get(name);
 			expect(contract).toBeDefined();

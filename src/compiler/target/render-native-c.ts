@@ -39,6 +39,7 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import {
 	nativePrivateRootRegisters,
+	nativeEntryStableRootRegisters,
 	nativeRootedOutputRegisters,
 } from "./lower-native-root-publication.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -570,6 +571,7 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 }
 
 interface NativeRootPublication {
+	readonly entryStableRegisters: ReadonlySet<number>;
 	readonly slots: Map<number, number>;
 	readonly safepoints: ReadonlyMap<
 		number,
@@ -591,6 +593,7 @@ function cPrivateRootPublication(
 	const stores: Array<string> = [];
 	for (const [register, slot] of plan.slots) {
 		if (live.has(register)) {
+			if (plan.entryStableRegisters.has(register)) continue;
 			stores.push(`__gc_slots[${slot}] = r${register};`);
 		} else if (slot >= 64 || active.has(register)) {
 			// A dead private local can still contain a reclaimed pointer. In particular,
@@ -723,6 +726,7 @@ function emitCompiledVariant(
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const privateCandidates = nativePrivateRootRegisters(fn, nativeContract, rootRegisters);
 	const rootPublication: NativeRootPublication = {
+		entryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),
 		slots: new Map([...slotOf].filter(([register]) => privateCandidates.has(register))),
 		safepoints: new Map(
 			nativeContract.gc.safepoints.map((point) => [point.instructionIp, point]),
@@ -3236,6 +3240,10 @@ function emitBody(
 			lines.push(...incomingRootPublication.map((line) => `    ${line}`));
 		}
 		const inactiveRootMask = inactiveRootMasks.get(ip);
+		const operatorInactiveRootMask =
+			deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
 		const staticPropertyStoreInactiveRootMask =
 			deferredPropertyStoreRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
@@ -3286,6 +3294,7 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
@@ -3299,6 +3308,7 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
@@ -3337,7 +3347,12 @@ function emitBody(
 					deferredOperatorRoots ||
 					deferredTdzRoots ||
 					deferredDenseIteratorRoots
-						? incomingRootPublication
+						? operatorInactiveRootMask === undefined
+							? incomingRootPublication
+							: [
+									...incomingRootPublication,
+									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
+								]
 						: [],
 				outgoingRootPublication,
 				rootedOutputReloads,
@@ -3404,6 +3419,7 @@ function emitBody(
 			return null;
 		}
 		if (
+			operatorInactiveRootMask !== undefined ||
 			mathCallInactiveRootMask !== undefined ||
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
