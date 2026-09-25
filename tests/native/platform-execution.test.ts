@@ -10,6 +10,7 @@ import { serializeRuntimeImage } from "../../src/compiler/target/program-image-c
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { hostExecutionTarget, resolveExecution } from "../../src/platform/execution.ts";
+import type { HarnessExecutionInvocation } from "../../src/test-harness.ts";
 import {
 	buildNativeProgramImage,
 	HOST_MAIN,
@@ -24,25 +25,37 @@ const target = hostExecutionTarget(process.platform, process.arch);
 const snapshots = [false, true].map((compiled) =>
 	resolveExecution(command, config, { compiled, optimization: "full", target }),
 );
-const binaries: Array<string> = [];
+const invocations: Array<HarnessExecutionInvocation> = [];
 let runner: string;
 let deadBinary: string;
 
 beforeAll(() => {
+	const derivation = buildDerivationFromConfig(config);
+	runner = buildDevelopmentRunner(
+		resolveNativeBuildContext({ features: derivation.features }),
+		false,
+		derivation.cacheSuffix,
+	).binaryPath;
 	for (const snapshot of snapshots) {
 		const image = compileEntrypoint(path.resolve("tests/local/platform-execution.mjs"), {
 			buildConfig: config,
 			execution: snapshot,
 		});
-		binaries.push(
-			buildNativeProgramImage(image, {
-				name: `execution-${snapshot.compiled}`,
-				compiled: snapshot.compiled,
-				config,
-				mainFile: HOST_MAIN,
-				outDir: root,
-			}),
-		);
+		if (snapshot.compiled) {
+			invocations.push({
+				executable: buildNativeProgramImage(image, {
+					name: "execution-compiled",
+					config,
+					mainFile: HOST_MAIN,
+					outDir: root,
+				}),
+				args: [],
+			});
+		} else {
+			const wire = path.join(root, "execution-interpreted.malw");
+			writeFileSync(wire, serializeRuntimeImage(image.runtime));
+			invocations.push({ executable: runner, args: [wire] });
+		}
 	}
 	const deadImage = compileEntrypoint(path.join(root, "dead.mjs"), {
 		entryGoal: "module",
@@ -58,12 +71,6 @@ beforeAll(() => {
 		mainFile: HOST_MAIN,
 		outDir: root,
 	});
-	const derivation = buildDerivationFromConfig(config);
-	runner = buildDevelopmentRunner(
-		resolveNativeBuildContext({ features: derivation.features }),
-		false,
-		derivation.cacheSuffix,
-	).binaryPath;
 }, 300_000);
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -80,8 +87,8 @@ describe("prepared platform execution data", () => {
 	it.each([false, true])(
 		"preserves identity, shape and deep immutability with GC stress=%s",
 		(stress) => {
-			for (const [index, binary] of binaries.entries()) {
-				const result = spawnSync(binary, [], {
+			for (const [index, invocation] of invocations.entries()) {
+				const result = spawnSync(invocation.executable, invocation.args, {
 					encoding: "utf8",
 					timeout: 30_000,
 					env: { ...process.env, ...(stress ? STRESS_ENV : {}) },

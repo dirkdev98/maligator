@@ -22,7 +22,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
+import { compilerEntrypointSourceFiles, ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./compiler/core/core-optimization-families.ts";
 import {
@@ -114,6 +114,11 @@ function defaultCompilerBake(): CompilerBakeInput {
 	};
 }
 
+/** Reuse the canonical compiler wire without compiling its optional native companion. */
+export function prebuiltCompilerBake(): CompilerBakeInput {
+	return { kind: "prebuilt", path: ensureCompilerWire(defaultCompilerBake()) };
+}
+
 /**
  * Collect at every safepoint + poison freed cells: GCs land while callbacks,
  * suspended fibers, and in-flight promise reactions are live, so a missed root
@@ -130,6 +135,8 @@ export interface BuildOptions {
 	compiled?: boolean;
 	/** Explicit entry parse goal for fixtures whose semantics are script-specific. */
 	entryGoal?: ModuleGoal;
+	/** Initial script strictness; explicit source directives still take effect. */
+	entryStrict?: boolean;
 	/** C driver to link; defaults to the test262 harness main. */
 	mainFile?: string;
 	/** Artifact directory; defaults to process-scoped shared-cache work space. */
@@ -314,6 +321,7 @@ function compileFixtureProgramImage(
 	try {
 		const canReuseFrontend =
 			options.entryGoal === undefined &&
+			options.entryStrict === undefined &&
 			options.profileEnabled !== true &&
 			options.coreOptimizationBenchmarkAblation === undefined;
 		if (canReuseFrontend) {
@@ -332,6 +340,7 @@ function compileFixtureProgramImage(
 			buildConfig: config,
 			stripTypes: stripCompactTypes,
 			entryGoal: options.entryGoal,
+			entryStrict: options.entryStrict,
 		});
 		// Tests intentionally bypass build policy so disabled-feature fixtures can
 		// compile and assert the runtime behavior of the reduced engine.

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
@@ -22,12 +23,10 @@ describe("finite function targets with non-callable alternatives", () => {
 			fixture,
 			name: "noncallable-target-joins",
 			outDir,
-			evalEnabled: false,
-			realmsEnabled: false,
-			intlEnabled: false,
-			webPlatformEnabled: false,
+			config: resolveBuildConfig({ engine: { primordials: "mutable" } }),
 		}));
 	}, 600_000);
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 	it("preserves TypeError, TDZ, argument effects, and the callable branch", () => {
 		expect(runToStdout(compiled)).toBe(expected);

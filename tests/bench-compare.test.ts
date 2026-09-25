@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
 	classifyMetricSamples,
 	lanesForChangedFiles,
@@ -110,7 +110,31 @@ test("a budget stops the benchmark process group and leaves a resumable checkpoi
 		pairs: 1,
 		maxPairs: 1,
 	};
-	const result = await runBenchmarkComparison({ ...options, budgetSeconds: 3 });
+	const pidFile = path.join(fixture.root, "descendant.pid");
+	const realSetTimeout = setTimeout;
+	let result: Awaited<ReturnType<typeof runBenchmarkComparison>>;
+	vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+	try {
+		const deadline = performance.now() + 3_000;
+		const pending = runBenchmarkComparison({ ...options, budgetSeconds: 3 });
+		try {
+			// Expire the clock after the real process group is ready, without an idle wait.
+			const readyDeadline = Date.now() + 5_000;
+			while (!existsSync(pidFile) && Date.now() < readyDeadline) {
+				await new Promise<void>((resolve) => {
+					realSetTimeout(resolve, 10);
+				});
+			}
+			expect(existsSync(pidFile)).toBe(true);
+			vi.advanceTimersByTime(2_999);
+			expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).not.toThrow();
+		} finally {
+			vi.advanceTimersByTime(deadline - performance.now());
+			result = await pending;
+		}
+	} finally {
+		vi.useRealTimers();
+	}
 	expect(result.exitCode).toBe(2);
 	const directory = path.dirname(result.reportPath);
 	expect(JSON.parse(readFileSync(result.reportPath, "utf8"))).toMatchObject({
@@ -119,7 +143,7 @@ test("a budget stops the benchmark process group and leaves a resumable checkpoi
 		completedPairs: 0,
 	});
 	expect(existsSync(path.join(directory, "warm-base.checkpoint.json"))).toBe(true);
-	const pid = Number(readFileSync(path.join(fixture.root, "descendant.pid"), "utf8"));
+	const pid = Number(readFileSync(pidFile, "utf8"));
 	await expect
 		.poll(() => {
 			try {

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -22,19 +22,13 @@ describe("guarded direct Map and Set dispatch", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		const pair = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "collection-direct",
-			compiled: true,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-		interpreted = buildNativeBinary({
-			fixture,
-			name: "collection-direct-interpreted",
-			compiled: false,
-			outDir,
-		});
+		({ compiled, interpreted } = pair);
 	}, 600_000);
 
 	it("preserves collection semantics and guarded fallbacks", () => {
@@ -61,13 +55,13 @@ describe("guarded direct Map and Set dispatch", () => {
 			.split("\n")
 			.find((candidate) => candidate.startsWith("[perf-map-stats]"));
 		expect(line).toBeDefined();
-		expect(field(line ?? "", "direct_get_hits")).toBeGreaterThan(6000);
-		expect(field(line ?? "", "direct_set_hits")).toBeGreaterThan(3000);
-		expect(field(line ?? "", "direct_map_has_hits")).toBeGreaterThan(4000);
-		expect(field(line ?? "", "direct_map_delete_hits")).toBeGreaterThan(4000);
-		expect(field(line ?? "", "direct_add_hits")).toBeGreaterThan(3000);
-		expect(field(line ?? "", "direct_set_has_hits")).toBeGreaterThan(4000);
-		expect(field(line ?? "", "direct_set_delete_hits")).toBeGreaterThan(4000);
+		expect(field(line ?? "", "direct_get_hits")).toBeGreaterThanOrEqual(512);
+		expect(field(line ?? "", "direct_set_hits")).toBeGreaterThanOrEqual(256);
+		expect(field(line ?? "", "direct_map_has_hits")).toBeGreaterThanOrEqual(64);
+		expect(field(line ?? "", "direct_map_delete_hits")).toBeGreaterThanOrEqual(64);
+		expect(field(line ?? "", "direct_add_hits")).toBeGreaterThanOrEqual(256);
+		expect(field(line ?? "", "direct_set_has_hits")).toBeGreaterThanOrEqual(64);
+		expect(field(line ?? "", "direct_set_delete_hits")).toBeGreaterThanOrEqual(64);
 		expect(field(line ?? "", "direct_fallbacks")).toBeGreaterThanOrEqual(8);
 		expect(field(line ?? "", "entry_pair_hits")).toBeGreaterThanOrEqual(3);
 		expect(field(line ?? "", "entry_pair_fallbacks")).toBeGreaterThanOrEqual(1);

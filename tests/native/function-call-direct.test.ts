@@ -1,7 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -20,9 +21,14 @@ describe("guarded Function.prototype.call flattening", () => {
 		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/function-call-direct.js",
 			name: "function-call-direct",
+			// Script parsing covers sloppy receivers without running the eval compiler under GC stress.
+			entryGoal: "script",
+			entryStrict: false,
+			config: resolveBuildConfig({ engine: { primordials: "mutable" } }),
 			outDir,
 		}));
 	}, 600_000);
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 	it("preserves direct and generic target semantics", () => {
 		assertExactLines(runToStdout(compiled), expected);

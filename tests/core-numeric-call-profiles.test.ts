@@ -11,54 +11,56 @@ import {
 	dynamicNumericCallCases,
 	numericCallCases,
 } from "./helpers/numeric-call-profiles.ts";
-import { inspectStaticValueFunction } from "./helpers/static-values.ts";
+import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 describe("partially static numeric call profiles", () => {
 	for (const profile of dynamicCallProfiles) {
-		it.each(dynamicNumericCallCases)(
-			`resolves %s through ${profile} after one conversion`,
-			(...entry) => {
-				const output = inspectStaticValueFunction(
-					dynamicCallProfileSource(entry, profile, "+x"),
-					"probe",
-				);
-				expect(output.structure.genericLookups).toBe(0);
-				expect(output.structure.allocations).toBe(0);
-				if (profile === "repeated" || profile === "repeatedLoop")
+		describe(profile, () => {
+			it.each(
+				staticValueCases(dynamicNumericCallCases, (entry, name) =>
+					dynamicCallProfileSource(entry, profile, "+x", name),
+				),
+			)(
+				`resolves %s through ${profile} after one conversion`,
+				(_name, entry, inspect) => {
+					const output = inspect();
+					expect(output.structure.genericLookups).toBe(0);
+					expect(output.structure.allocations).toBe(0);
+					if (profile === "repeated" || profile === "repeatedLoop")
+						expect(
+							output.core.filter((op) => op.attributes.operation === entry[0]).length,
+						).toBeLessThanOrEqual(1);
+					if (
+						![
+							"isNaN",
+							"isFinite",
+							"BigInt.asIntN",
+							"BigInt.asUintN",
+							"parseInt",
+							"Number.parseInt",
+						].includes(entry[0])
+					) {
+						expect(output.c.source).not.toContain("mal_vm_call_known_native(");
+					}
 					expect(
-						output.core.filter((op) => op.attributes.operation === entry[0]).length,
-					).toBeLessThanOrEqual(1);
-				if (
-					![
-						"isNaN",
-						"isFinite",
-						"BigInt.asIntN",
-						"BigInt.asUintN",
-						"parseInt",
-						"Number.parseInt",
-					].includes(entry[0])
-				) {
-					expect(output.c.source).not.toContain("mal_vm_call_known_native(");
-				}
-				expect(
-					output.core.filter(
-						(op) => op.opcode === "unary" && op.attributes.operator === "+",
-					),
-				).toHaveLength(1);
-			},
-		);
-		it.each(dynamicNumericCallCases)(
-			`retains mutable partial %s through ${profile}`,
-			(...entry) => {
-				const output = inspectStaticValueFunction(
-					dynamicCallProfileSource(entry, profile, "+x"),
-					"probe",
+						output.core.filter(
+							(op) => op.opcode === "unary" && op.attributes.operator === "+",
+						),
+					).toHaveLength(1);
+				},
+			);
+			it.each(
+				staticValueCases(
+					dynamicNumericCallCases,
+					(entry, name) => dynamicCallProfileSource(entry, profile, "+x", name),
 					{ locked: false },
-				);
+				),
+			)(`retains mutable partial %s through ${profile}`, (_name, _entry, inspect) => {
+				const output = inspect();
 				expect(output.structure.genericLookups).toBeGreaterThan(0);
 				expect(output.structure.genericCalls).toBeGreaterThan(0);
-			},
-		);
+			});
+		});
 	}
 	it.each(["Math.abs", "Math.min", "Math.max", "Math.round"])(
 		"keeps typed %s operations through coroutine storage",
@@ -94,40 +96,45 @@ describe("partially static numeric call profiles", () => {
 
 describe("certified numeric and symbol call profiles", () => {
 	for (const profile of constantCallProfiles) {
-		it.each(numericCallCases)(
-			`folds %s through ${profile} while retaining effects`,
-			(...entry) => {
-				const output = inspectStaticValueFunction(
-					constantCallProfileSource(entry, profile),
-					"probe",
-				);
-				expect(output.structure.genericLookups).toBe(0);
-				expect(output.structure.genericCalls).toBe(
+		describe(profile, () => {
+			it.each(
+				staticValueCases(numericCallCases, (entry, name) =>
+					constantCallProfileSource(entry, profile, name),
+				),
+			)(
+				`folds %s through ${profile} while retaining effects`,
+				(_name, _entry, inspect) => {
+					const output = inspect();
+					expect(output.structure.genericLookups).toBe(0);
+					expect(output.structure.genericCalls).toBe(
+						profile === "effects" || profile === "unused" ? 2 : 1,
+					);
+					expect(output.structure.allocations).toBe(0);
+					expect(output.structure.coercions).toBe(0);
+					expect(
+						output.core.filter(
+							(op) =>
+								op.opcode === "callKnown" ||
+								op.opcode === "builtinError" ||
+								op.opcode === "mathUnaryNumber" ||
+								op.opcode === "mathBinaryNumber",
+						),
+					).toEqual([]);
+				},
+			);
+			it.each(
+				staticValueCases(
+					numericCallCases,
+					(entry, name) => constantCallProfileSource(entry, profile, name),
+					{ locked: false },
+				),
+			)(`retains mutable %s through ${profile}`, (_name, _entry, inspect) => {
+				const output = inspect();
+				expect(output.structure.genericLookups).toBeGreaterThan(0);
+				expect(output.structure.genericCalls).toBeGreaterThan(
 					profile === "effects" || profile === "unused" ? 2 : 1,
 				);
-				expect(output.structure.allocations).toBe(0);
-				expect(output.structure.coercions).toBe(0);
-				expect(
-					output.core.filter(
-						(op) =>
-							op.opcode === "callKnown" ||
-							op.opcode === "builtinError" ||
-							op.opcode === "mathUnaryNumber" ||
-							op.opcode === "mathBinaryNumber",
-					),
-				).toEqual([]);
-			},
-		);
-		it.each(numericCallCases)(`retains mutable %s through ${profile}`, (...entry) => {
-			const output = inspectStaticValueFunction(
-				constantCallProfileSource(entry, profile),
-				"probe",
-				{ locked: false },
-			);
-			expect(output.structure.genericLookups).toBeGreaterThan(0);
-			expect(output.structure.genericCalls).toBeGreaterThan(
-				profile === "effects" || profile === "unused" ? 2 : 1,
-			);
+			});
 		});
 	}
 	it.each([

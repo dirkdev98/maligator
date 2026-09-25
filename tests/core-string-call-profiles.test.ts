@@ -9,7 +9,7 @@ import {
 	dynamicCallProfiles,
 	dynamicCallProfileSource,
 } from "./helpers/dynamic-call-profiles.ts";
-import { inspectStaticValueFunction } from "./helpers/static-values.ts";
+import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 import {
 	constantStringCallCases,
 	dynamicStringCallCases,
@@ -19,41 +19,44 @@ import {
 
 describe("constant string call profiles", () => {
 	for (const profile of constantCallProfiles) {
-		it.each(constantStringCallCases)(
-			`folds %s through ${profile} while retaining effects`,
-			(...entry) => {
-				const out = inspectStaticValueFunction(
-					constantCallProfileSource(entry, profile),
-					"probe",
+		describe(profile, () => {
+			it.each(
+				staticValueCases(
+					constantStringCallCases,
+					(entry, name) => constantCallProfileSource(entry, profile, name),
 					{ intl: true },
-				);
-				expect(out.structure.genericLookups).toBe(0);
-				expect(out.structure.genericCalls).toBe(
-					profile === "effects" || profile === "unused" ? 2 : 1,
-				);
-				expect(out.structure.allocations).toBe(0);
-				expect(out.structure.coercions).toBe(0);
-				expect(
-					out.core.filter(
-						(op) => op.opcode === "callKnown" || op.opcode === "builtinError",
-					),
-				).toEqual([]);
-			},
-		);
-		it.each(constantStringCallCases)(
-			`retains mutable %s through ${profile}`,
-			(...entry) => {
-				const out = inspectStaticValueFunction(
-					constantCallProfileSource(entry, profile),
-					"probe",
+				),
+			)(
+				`folds %s through ${profile} while retaining effects`,
+				(_name, _entry, inspect) => {
+					const out = inspect();
+					expect(out.structure.genericLookups).toBe(0);
+					expect(out.structure.genericCalls).toBe(
+						profile === "effects" || profile === "unused" ? 2 : 1,
+					);
+					expect(out.structure.allocations).toBe(0);
+					expect(out.structure.coercions).toBe(0);
+					expect(
+						out.core.filter(
+							(op) => op.opcode === "callKnown" || op.opcode === "builtinError",
+						),
+					).toEqual([]);
+				},
+			);
+			it.each(
+				staticValueCases(
+					constantStringCallCases,
+					(entry, name) => constantCallProfileSource(entry, profile, name),
 					{ locked: false, intl: true },
-				);
+				),
+			)(`retains mutable %s through ${profile}`, (_name, _entry, inspect) => {
+				const out = inspect();
 				expect(out.structure.genericLookups).toBeGreaterThan(0);
 				expect(out.structure.genericCalls).toBeGreaterThan(
 					profile === "effects" || profile === "unused" ? 2 : 1,
 				);
-			},
-		);
+			});
+		});
 	}
 });
 
@@ -131,47 +134,62 @@ describe("constant locale case conversion", () => {
 
 describe("dynamic string call profiles", () => {
 	for (const profile of dynamicCallProfiles) {
-		it.each(dynamicStringCallCases)(
-			`specializes %s through ${profile} after one conversion`,
-			(callee, receiver, args, expression) => {
-				const out = inspectStaticValueFunction(
-					dynamicCallProfileSource([callee, receiver, args], profile, expression),
-					"probe",
+		describe(profile, () => {
+			it.each(
+				staticValueCases(
+					dynamicStringCallCases,
+					(entry, name) =>
+						dynamicCallProfileSource(
+							[entry[0], entry[1], entry[2]],
+							profile,
+							entry[3],
+							name,
+						),
 					{ intl: true },
-				);
-				expect(out.structure.genericLookups).toBe(0);
-				expect(out.structure.allocations).toBe(0);
-				const conversions = out.core.filter((op) =>
-					expression === "+x"
-						? op.opcode === "unary" && op.attributes.operator === "+"
-						: op.opcode === "callKnown" && op.attributes.operation === "String",
-				);
-				expect(conversions).toHaveLength(1);
-				if (profile === "repeated" || profile === "repeatedLoop")
-					expect(
-						out.core.filter(
-							(op) => op.opcode === "callKnown" && op.attributes.operation !== "String",
-						).length,
-					).toBeLessThanOrEqual(1);
-				if (callee !== "String.prototype.concat") {
-					expect(out.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(
-						expression === "String(x)" ? 1 : 0,
+				),
+			)(
+				`specializes %s through ${profile} after one conversion`,
+				(_name, [callee, , , expression], inspect) => {
+					const out = inspect();
+					expect(out.structure.genericLookups).toBe(0);
+					expect(out.structure.allocations).toBe(0);
+					const conversions = out.core.filter((op) =>
+						expression === "+x"
+							? op.opcode === "unary" && op.attributes.operator === "+"
+							: op.opcode === "callKnown" && op.attributes.operation === "String",
 					);
-				}
-			},
-		);
-		it.each(dynamicStringCallCases)(
-			`retains mutable %s through ${profile}`,
-			(callee, receiver, args, expression) => {
-				const out = inspectStaticValueFunction(
-					dynamicCallProfileSource([callee, receiver, args], profile, expression),
-					"probe",
+					expect(conversions).toHaveLength(1);
+					if (profile === "repeated" || profile === "repeatedLoop")
+						expect(
+							out.core.filter(
+								(op) => op.opcode === "callKnown" && op.attributes.operation !== "String",
+							).length,
+						).toBeLessThanOrEqual(1);
+					if (callee !== "String.prototype.concat") {
+						expect(out.c.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(
+							expression === "String(x)" ? 1 : 0,
+						);
+					}
+				},
+			);
+			it.each(
+				staticValueCases(
+					dynamicStringCallCases,
+					(entry, name) =>
+						dynamicCallProfileSource(
+							[entry[0], entry[1], entry[2]],
+							profile,
+							entry[3],
+							name,
+						),
 					{ locked: false, intl: true },
-				);
+				),
+			)(`retains mutable %s through ${profile}`, (_name, _entry, inspect) => {
+				const out = inspect();
 				expect(out.structure.genericLookups).toBeGreaterThan(0);
 				expect(out.structure.genericCalls).toBeGreaterThan(0);
-			},
-		);
+			});
+		});
 	}
 	it.each(["includes", "indexOf", "lastIndexOf", "startsWith", "endsWith"])(
 		"uses the string search entry for proved %s inputs",

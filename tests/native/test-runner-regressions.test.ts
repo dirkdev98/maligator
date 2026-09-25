@@ -35,7 +35,7 @@ function compileSupportWire(file: string): Array<Uint8Array> {
 	return frontend.wires ?? [frontend.wire];
 }
 
-function runTestFile(testFile: string, stress = false) {
+function prepareTestFile(testFile: string): Array<string> {
 	const testImage = compileRelocatableTestImage({
 		files: [testFile],
 		config,
@@ -71,11 +71,14 @@ if (result.passed !== 1 || result.failed !== 0) throw new Error("unexpected test
 		runnerWire.wire,
 		...compileSupportWire(report),
 	];
-	const wirePaths = wires.map((wire, index) => {
+	return wires.map((wire, index) => {
 		const wirePath = path.join(root, `wire-${index}.malw`);
 		write(wirePath, wire);
 		return wirePath;
 	});
+}
+
+function runTestFile(testFile: string, wirePaths: Array<string>, stress: boolean) {
 	return spawnSync(
 		runner,
 		["--maligator-internal-run-wires", String(wirePaths.length), testFile, ...wirePaths],
@@ -114,8 +117,9 @@ describe("maligator:test runner startup regressions", () => {
 	] as const) {
 		it(`completes the minimal issue #${issue} test without a signal`, () => {
 			const testFile = path.join(repositoryRoot, relativeFixture);
+			const wirePaths = prepareTestFile(testFile);
 			for (const stress of [false, true]) {
-				const result = runTestFile(testFile, stress);
+				const result = runTestFile(testFile, wirePaths, stress);
 				expect(result.signal, result.stderr).toBeNull();
 				expect(result.status, result.stderr || result.stdout).toBe(0);
 				expect(result.stdout).toContain("RUNNER_RESULT 1/0");
