@@ -79,7 +79,7 @@ test/language/expressions/function/scope-paramsbody-var-open.js
 test/staging/sm/Array/concat-spreadable-basic.js
 test/staging/sm/String/replace-math.js
 
-# Harness, Intl, and Temporal integration (32)
+# Harness, Intl, and Temporal integration (36)
 test/harness/assert-notsamevalue-tostring.js
 test/harness/assert-throws-custom-typeerror.js
 test/harness/assertRelativeDateMs.js
@@ -114,6 +114,7 @@ test/intl402/NumberFormat/prototype/format/signDisplay-negative-en-US.js
 test/intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js
 test/intl402/RelativeTimeFormat/prototype/format/en-us-numeric-always.js
 test/intl402/Segmenter/instance/prototype.js
+test/intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/transitions-close-together.js
 test/intl402/supportedLocalesOf-throws-if-element-not-string-or-object.js
 
 # Realm boundaries (30)

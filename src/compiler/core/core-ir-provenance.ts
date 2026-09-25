@@ -3091,6 +3091,7 @@ function iteratorEntryPairVirtualizationCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const candidates: Array<CoreIteratorEntryPairVirtualizationCandidate> = [];
+	// Region links require one register; canonical handler aliases can lower separately.
 	for (const outerStep of indexedOpcodeInstructions(fn, index, "iteratorStep")) {
 		if (
 			fn.instructionKind(outerStep) !== "operation" ||
@@ -3107,8 +3108,9 @@ function iteratorEntryPairVirtualizationCandidates(
 		if (
 			cursorInitialize === undefined ||
 			fn.instructionOpcodeName(cursorInitialize) !== "getIterator" ||
-			root(instructionResult(fn, cursorInitialize, 1)!) !==
-				root(instructionOperand(fn, outerStep, 1)!)
+			instructionResult(fn, cursorInitialize, 0) !==
+				instructionOperand(fn, outerStep, 0) ||
+			instructionResult(fn, cursorInitialize, 1) !== instructionOperand(fn, outerStep, 1)
 		)
 			continue;
 		const source = instructionOperand(fn, cursorInitialize, 0);
@@ -3161,6 +3163,7 @@ function iteratorEntryPairVirtualizationCandidates(
 		if (
 			innerInitialize === undefined ||
 			instructionResultCount(fn, innerInitialize) !== 2 ||
+			instructionOperand(fn, innerInitialize, 0) !== pair ||
 			!specializationInstructionDominates(control, index, outerStep, innerInitialize)
 		)
 			continue;
@@ -3190,9 +3193,15 @@ function iteratorEntryPairVirtualizationCandidates(
 			innerCloses.length > 8 ||
 			iteratorUses.length !== innerSteps.length + innerCloses.length ||
 			nextUses.length !== innerSteps.length ||
+			iteratorUses.some(
+				({ instruction }) =>
+					instructionOperand(fn, instruction, 0) !== innerIteratorValue,
+			) ||
 			nextUses.some(
 				({ instruction, position }) =>
-					position !== 1 || !innerSteps.includes(instruction),
+					position !== 1 ||
+					!innerSteps.includes(instruction) ||
+					instructionOperand(fn, instruction, 1) !== innerNextValue,
 			)
 		)
 			continue;
