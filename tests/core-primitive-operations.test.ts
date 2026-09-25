@@ -9,7 +9,7 @@ import {
 	deserializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
-import { inspectStaticValueFunction } from "./helpers/static-values.ts";
+import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 describe("primitive constructor parameter conversion", () => {
 	it.each([
@@ -655,54 +655,64 @@ describe("canonical primitive data read profiles", () => {
 		...primitiveDataExpressions,
 	];
 	const profiles = [
-		["effects", (value: string) => `function probe(x){x();return ${value};}`],
+		[
+			"effects",
+			(value: string, name: string) => `function ${name}(x){x();return ${value};}`,
+		],
 		[
 			"escape",
-			(value: string) => `function probe(x){const value=${value};x(value);return value;}`,
+			(value: string, name: string) =>
+				`function ${name}(x){const value=${value};x(value);return value;}`,
 		],
 		[
 			"loop",
-			(value: string) =>
-				`function probe(x,n){let value;for(let i=0;i<n;i++){x();value=${value};}return value;}`,
+			(value: string, name: string) =>
+				`function ${name}(x,n){let value;for(let i=0;i<n;i++){x();value=${value};}return value;}`,
 		],
 		[
 			"suspension",
-			(value: string) =>
-				`function* probe(x){const value=${value};yield x(value);return ${value};}`,
+			(value: string, name: string) =>
+				`function* ${name}(x){const value=${value};yield x(value);return ${value};}`,
 		],
 	] as const;
 	for (const [profile, source] of profiles) {
-		it.each(expressions)(
-			`resolves the own data read through ${profile} for %s`,
-			(value) => {
-				const output = inspectStaticValueFunction(
-					`${source(value)}globalThis.probe=probe;`,
-					"probe",
-				);
-				expect(output.structure.genericLookups).toBe(0);
-				expect(output.structure.genericCalls).toBe(1);
-				expect(output.structure.allocations).toBe(0);
-				expect(output.structure.coercions).toBe(0);
-				expect(output.structure.operations).toEqual([]);
-				expect(output.core.some((operation) => operation.opcode === "builtinError")).toBe(
-					false,
-				);
-			},
-		);
-		it.each(expressions)(
-			`retains mutable data reads through ${profile} for %s`,
-			(value) => {
-				const output = inspectStaticValueFunction(
-					`${source(value)}globalThis.probe=probe;`,
-					"probe",
+		describe(profile, () => {
+			it.each(
+				staticValueCases(
+					expressions.map((value) => [value]),
+					([value], name) => `${source(value!, name)}globalThis.${name}=${name};`,
+				),
+			)(
+				`resolves the own data read through ${profile} for %s`,
+				(_name, _entry, inspect) => {
+					const output = inspect();
+					expect(output.structure.genericLookups).toBe(0);
+					expect(output.structure.genericCalls).toBe(1);
+					expect(output.structure.allocations).toBe(0);
+					expect(output.structure.coercions).toBe(0);
+					expect(output.structure.operations).toEqual([]);
+					expect(
+						output.core.some((operation) => operation.opcode === "builtinError"),
+					).toBe(false);
+				},
+			);
+			it.each(
+				staticValueCases(
+					expressions.map((value) => [value]),
+					([value], name) => `${source(value!, name)}globalThis.${name}=${name};`,
 					{ locked: false },
-				);
-				expect(output.structure.genericLookups).toBeGreaterThan(0);
-				expect(
-					output.core.some((operation) => operation.opcode === "loadPrimordial"),
-				).toBe(false);
-			},
-		);
+				),
+			)(
+				`retains mutable data reads through ${profile} for %s`,
+				(_name, _entry, inspect) => {
+					const output = inspect();
+					expect(output.structure.genericLookups).toBeGreaterThan(0);
+					expect(
+						output.core.some((operation) => operation.opcode === "loadPrimordial"),
+					).toBe(false);
+				},
+			);
+		});
 	}
 });
 
@@ -885,50 +895,62 @@ describe("rejected primitive construction profiles", () => {
 		["suspension", (value: string) => `yield x();return new (${value})({value:x()});`],
 	] as const;
 	for (const [profile, body] of profiles) {
-		it.each(rejectedPrimitiveConstructors)(
-			`preserves abrupt construction through ${profile} for %s`,
-			(expression, error) => {
-				const source = `function${profile === "suspension" ? "*" : ""} probe(x){${body(expression)}}globalThis.probe=probe;`;
-				const output = inspectStaticValueFunction(source, "probe");
-				const errors = output.core
-					.filter((operation) => operation.opcode === "builtinError")
-					.map((operation) => operation.attributes.error);
-				const runtimeTargetValidation =
-					profile === "dynamic-new-target" && error !== "notConstructor";
-				expect(errors).toEqual(
-					runtimeTargetValidation
-						? []
-						: profile === "separate-errors"
-							? [error, error]
-							: [error],
-				);
-				expect(
-					output.core.filter(
-						(operation) =>
-							operation.opcode === "construct" || operation.attributes.construct === true,
-					),
-				).toHaveLength(runtimeTargetValidation ? 1 : 0);
-				if (profile === "unused") {
-					expect(output.structure.genericCalls).toBe(1);
-					expect(output.structure.allocations).toBe(0);
-				}
-				if (profile === "normal-consumer") {
-					expect(output.structure.genericCalls).toBe(1);
-					expect(output.core.some((operation) => operation.opcode === "callKnown")).toBe(
-						false,
+		describe(profile, () => {
+			const source = ([expression]: ReadonlyArray<string>, name: string) =>
+				`function${profile === "suspension" ? "*" : ""} ${name}(x){${body(expression!)}}globalThis.${name}=${name};`;
+			const mutableCases = staticValueCases(rejectedPrimitiveConstructors, source, {
+				locked: false,
+			});
+			it.each(
+				staticValueCases(rejectedPrimitiveConstructors, source).map(
+					(entry, index) => [...entry, mutableCases[index]![2]] as const,
+				),
+			)(
+				`preserves abrupt construction through ${profile} for %s`,
+				(_name, [, error], inspect, inspectMutable) => {
+					const output = inspect();
+					const errors = output.core
+						.filter((operation) => operation.opcode === "builtinError")
+						.map((operation) => operation.attributes.error);
+					const runtimeTargetValidation =
+						profile === "dynamic-new-target" && error !== "notConstructor";
+					expect(errors).toEqual(
+						runtimeTargetValidation
+							? []
+							: profile === "separate-errors"
+								? [error, error]
+								: [error],
 					);
-				}
-				if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
-				if (profile === "separate-errors") expect(output.structure.genericCalls).toBe(2);
-				expect(output.structure.allocations).toBe(profile === "escaped-argument" ? 1 : 0);
-				const mutable = inspectStaticValueFunction(source, "probe", {
-					locked: false,
-				});
-				expect(
-					mutable.core.some((operation) => operation.opcode === "builtinError"),
-				).toBe(false);
-			},
-		);
+					expect(
+						output.core.filter(
+							(operation) =>
+								operation.opcode === "construct" ||
+								operation.attributes.construct === true,
+						),
+					).toHaveLength(runtimeTargetValidation ? 1 : 0);
+					if (profile === "unused") {
+						expect(output.structure.genericCalls).toBe(1);
+						expect(output.structure.allocations).toBe(0);
+					}
+					if (profile === "normal-consumer") {
+						expect(output.structure.genericCalls).toBe(1);
+						expect(
+							output.core.some((operation) => operation.opcode === "callKnown"),
+						).toBe(false);
+					}
+					if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
+					if (profile === "separate-errors")
+						expect(output.structure.genericCalls).toBe(2);
+					expect(output.structure.allocations).toBe(
+						profile === "escaped-argument" ? 1 : 0,
+					);
+					const mutable = inspectMutable();
+					expect(
+						mutable.core.some((operation) => operation.opcode === "builtinError"),
+					).toBe(false);
+				},
+			);
+		});
 	}
 });
 
@@ -1034,48 +1056,52 @@ describe("primitive operation results", () => {
 		expect(result.core.some((op) => op.opcode === "builtinError")).toBe(false);
 		expect(result.structure.genericCalls).toBeGreaterThan(0);
 	});
-	it.each(
-		rejectedPrimitiveConstructors
-			.filter(([, error]) => error === "notConstructor")
-			.flatMap(([expression]) =>
-				[
-					"alias",
-					"bound-adapter",
-					"conditional",
-					"escaping-callee",
-					"loop",
-					"suspension",
-				].map((profile) => [expression, profile]),
-			),
-	)(
-		"specializes rejected Reflect construction of %s through %s",
-		(expression, profile) => {
-			const body =
-				profile === "alias"
-					? `const invoke = Reflect.construct; return invoke(${expression}, x, y);`
-					: profile === "bound-adapter"
-						? `const invoke = Reflect.construct.bind(null, ${expression}); return invoke(x, y);`
-						: profile === "conditional"
-							? `if(y) return Reflect.construct(${expression}, x); return 17;`
-							: profile === "escaping-callee"
-								? `const target = ${expression}; globalThis.sink(target); return Reflect.construct(target, x, y);`
-								: profile === "loop"
-									? `let result; for(let i=0;i<y;i++){try{Reflect.construct(${expression}, x);}catch(error){result=error;}} return result;`
-									: `yield 17; return Reflect.construct(${expression}, x, y);`;
-			const result = inspectStaticValueFunction(
-				`${profile === "suspension" ? "function*" : "function"} probe(x,y) { ${body} } globalThis.probe=probe;`,
-				"probe",
+	for (const profile of [
+		"alias",
+		"bound-adapter",
+		"conditional",
+		"escaping-callee",
+		"loop",
+		"suspension",
+	]) {
+		describe(`Reflect.construct ${profile}`, () => {
+			it.each(
+				staticValueCases(
+					rejectedPrimitiveConstructors.filter(([, error]) => error === "notConstructor"),
+					([expression], name) => {
+						const body =
+							profile === "alias"
+								? `const invoke = Reflect.construct; return invoke(${expression}, x, y);`
+								: profile === "bound-adapter"
+									? `const invoke = Reflect.construct.bind(null, ${expression}); return invoke(x, y);`
+									: profile === "conditional"
+										? `if(y) return Reflect.construct(${expression}, x); return 17;`
+										: profile === "escaping-callee"
+											? `const target = ${expression}; globalThis.sink(target); return Reflect.construct(target, x, y);`
+											: profile === "loop"
+												? `let result; for(let i=0;i<y;i++){try{Reflect.construct(${expression}, x);}catch(error){result=error;}} return result;`
+												: `yield 17; return Reflect.construct(${expression}, x, y);`;
+						return `${profile === "suspension" ? "function*" : "function"} ${name}(x,y) { ${body} } globalThis.${name}=${name};`;
+					},
+				).map(([label, _entry, inspect]) => [label, profile, inspect] as const),
+			)(
+				"specializes rejected Reflect construction of %s through %s",
+				(_name, _profile, inspect) => {
+					const result = inspect();
+					expect(
+						result.core
+							.filter((op) => op.opcode === "builtinError")
+							.map((op) => op.attributes.error),
+					).toEqual(["notConstructor"]);
+					expect(
+						result.core.some(
+							(op) => op.opcode === "callKnown" && op.attributes.construct,
+						),
+					).toBe(false);
+				},
 			);
-			expect(
-				result.core
-					.filter((op) => op.opcode === "builtinError")
-					.map((op) => op.attributes.error),
-			).toEqual(["notConstructor"]);
-			expect(
-				result.core.some((op) => op.opcode === "callKnown" && op.attributes.construct),
-			).toBe(false);
-		},
-	);
+		});
+	}
 
 	it.each(["BigInt", "Symbol", "Boolean", "Number", "String"])(
 		"retains argument-list observations for constructable %s",

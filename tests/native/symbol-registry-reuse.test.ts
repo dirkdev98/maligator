@@ -28,13 +28,14 @@ it.each(["locked", "mutable"] as const)(
 				})),
 			);
 			const fixture = path.join(outDir, "registry.mjs");
+			// Only the loop profile reads count; other profiles need one input sweep.
 			writeFileSync(
 				fixture,
 				`${names.map(({ key, profile, name }) => registrySource(key, profile, name)).join("\n")}
 function encode(value){if(typeof value==='symbol')return 'symbol:'+JSON.stringify(Symbol.keyFor(value));return String(value);}
-for(const run of [${names.map(({ name }) => `globalThis.${name}`).join(",")}]) {
+for(const [run,counts] of [${names.map(({ name, profile }) => `[globalThis.${name},${profile === "loop" ? "[0,3]" : "[0]"}]`).join(",")}]) {
   for(const input of [undefined,null,'','a😀',0,-0,7,12n,Symbol('input')]) {
-    for(const count of [0,3]) {
+    for(const count of counts) {
       const events=[];let output;
       const x={[Symbol.toPrimitive](hint){events.push(hint);return input;}};
       try {const result=run(x,v=>{events.push(encode(v));return v;},count);output=Array.isArray(result)?result.map(encode).join('|'):encode(result);}

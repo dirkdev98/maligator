@@ -1,4 +1,5 @@
-import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
+import { integer } from "drizzle-orm/sqlite-core/columns/integer";
+import { sqliteTable } from "drizzle-orm/sqlite-core/table";
 import { expect, test } from "maligator:test";
 
 const probes = sqliteTable("probes", {

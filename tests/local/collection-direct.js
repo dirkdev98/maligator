@@ -9,26 +9,27 @@ function ok(name, condition) {
 const map = new Map();
 const set = new Set();
 let sum = 0;
-for (let i = 0; i < 3000; i++) {
+// Two passes retain all 128 keys through table growth and update each existing key.
+for (let i = 0; i < 256; i++) {
 	const key = "key-" + (i % 128);
 	const previous = map.get(key) ?? 0;
 	ok("map set return " + i, map.set(key, previous + 1) === map);
 	ok("set add return " + i, set.add(key) === set);
 	sum += map.get(key);
 }
-ok("direct collection values", sum > 0 && map.size === 128 && set.size === 128);
+ok("direct collection values", sum === 384 && map.size === 128 && set.size === 128);
 
 const scalarMap = new Map([["hit", 1]]);
 const scalarSet = new Set(["hit"]);
 const scalarMiss = {};
 let scalarScore = 0;
-for (let i = 0; i < 4000; i++) {
+for (let i = 0; i < 64; i++) {
 	if (scalarMap.has("hit")) scalarScore++;
 	if (!scalarMap.delete(scalarMiss)) scalarScore++;
 	if (scalarSet.has("hit")) scalarScore++;
 	if (!scalarSet.delete(scalarMiss)) scalarScore++;
 }
-ok("direct scalar collection operations", scalarScore === 16000);
+ok("direct scalar collection operations", scalarScore === 256);
 
 const entryMap = new Map([
 	[1, 2],

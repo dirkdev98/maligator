@@ -21,7 +21,9 @@ ok(
 );
 ok("argument order", order.join(",") === "1,2");
 
-const sloppyTarget = Function("return this");
+const sloppyTarget = function sloppyTarget() {
+	return this;
+};
 ok("sloppy undefined this", sloppyTarget.call(undefined) === globalThis);
 ok("sloppy primitive this", sloppyTarget.call(3).valueOf() === 3);
 

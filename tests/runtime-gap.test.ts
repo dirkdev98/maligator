@@ -27,17 +27,22 @@ import type {
 	KernelOutput,
 } from "../scripts/runtime-gap.ts";
 
+const fixturePaths = new Map(
+	loadRuntimeGapCatalog().cases.map(({ id, fixturePath }) => [id, fixturePath]),
+);
+
 function fixtureOutput(id: string): {
 	readonly id: string;
 	readonly operations: number;
 	readonly checksum: number;
 } {
-	const descriptor = loadRuntimeGapCatalog().cases.find(
-		(candidate) => candidate.id === id,
-	);
-	if (descriptor === undefined) throw new Error(`unknown runtime-gap case: ${id}`);
+	const fixturePath = fixturePaths.get(id);
+	if (fixturePath === undefined) throw new Error(`unknown runtime-gap case: ${id}`);
 	const parsed: unknown = JSON.parse(
-		execFileSync(process.execPath, [descriptor.fixturePath, "1"], { encoding: "utf8" }),
+		// Checksum parity needs one warmup, not the five blocks used for timing samples.
+		execFileSync(process.execPath, [fixturePath, "1", "1"], {
+			encoding: "utf8",
+		}),
 	);
 	if (typeof parsed !== "object" || parsed === null) {
 		throw new Error("runtime-gap case produced an invalid report");

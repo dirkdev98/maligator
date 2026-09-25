@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -86,20 +87,33 @@ describe("wire loader side-data validation", () => {
 	let directory: string;
 
 	beforeAll(() => {
+		const sourceDirectory = path.resolve("src");
+		const entrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
 		driver = buildLoadDriver(false, {
 			kind: "source",
-			sourceDirectory: path.resolve("src"),
-			entrypoint: path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
+			sourceDirectory,
+			entrypoint,
+			sourceFiles: compilerEntrypointSourceFiles(
+				sourceDirectory,
+				entrypoint,
+				stripCompactTypes,
+			),
 			bake: () =>
-				compileEntrypointToBuffer(
-					path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
-					{
-						intrinsicGlobalReads: true,
-						stripTypes: stripCompactTypes,
-					},
-				),
+				compileEntrypointToBuffer(entrypoint, {
+					intrinsicGlobalReads: true,
+					stripTypes: stripCompactTypes,
+				}),
+			bakeProgram: () =>
+				compileEntrypoint(entrypoint, {
+					intrinsicGlobalReads: true,
+					stripTypes: stripCompactTypes,
+				}),
 		});
 		directory = mkdtempSync(path.join(tmpdir(), "mal-wire-loader-"));
+	});
+
+	afterAll(() => {
+		if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
 	});
 
 	function rejectsMutation(name: string, offset: number, encodedValue: number): void {
