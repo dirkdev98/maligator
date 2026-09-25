@@ -422,10 +422,9 @@ function smokeRelease(): void {
 			}).trim(),
 		],
 	];
-	// Linux compiler drivers resolve these through PATH. Keep the release smoke
-	// isolated while still providing the assembler and linker needed by cc/c++.
+	// The isolated Linux smoke needs Clang 19's matching archiver to index LTO bitcode.
 	if (process.platform === "linux") {
-		requiredTools.push(["as", "as"], ["ld", "ld"]);
+		requiredTools.push(["as", "as"], ["ld", "ld"], ["llvm-ar-19", "llvm-ar-19"]);
 	}
 	for (const [name, executable] of requiredTools) {
 		const source = executable.includes(path.sep)
