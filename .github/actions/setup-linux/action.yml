@@ -24,9 +24,9 @@ runs:
     - name: Select Clang 19
       shell: bash
       run: |
-        if ! command -v clang-19 >/dev/null || ! command -v clang++-19 >/dev/null; then
+        if ! command -v clang-19 >/dev/null || ! command -v clang++-19 >/dev/null || ! command -v llvm-ar-19 >/dev/null; then
           sudo apt-get update
-          sudo apt-get install --yes clang-19
+          sudo apt-get install --yes clang-19 llvm-19
         fi
         echo "CC=clang-19" >> "$GITHUB_ENV"
         echo "CXX=clang++-19" >> "$GITHUB_ENV"

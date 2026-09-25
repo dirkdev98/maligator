@@ -516,6 +516,31 @@ exit 7
 		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
 	});
 
+	it("selects the matching LLVM archiver for Clang on Linux", () => {
+		const fake = createFakeToolchain();
+		executable(
+			path.join(fake.bin, "fake-cc"),
+			compilerScript("Ubuntu clang version 19.1.1", fake.logPath),
+		);
+		executable(
+			path.join(fake.bin, "llvm-ar-19"),
+			`if [ "$1" = "--version" ]; then printf '%s\\n' "LLVM version 19.1.1"; exit 0; fi
+printf 'llvm-ar-19 %s\\n' "$*" >> '${fake.logPath}'
+printf '!<arch>\\n' > "$2"
+`,
+		);
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			platform: "linux",
+		});
+		expect(report.toolchain?.tools.ar.path).toBe(
+			realpathSync(path.join(fake.bin, "llvm-ar-19")),
+		);
+		expect(readFileSync(fake.logPath, "utf8")).toContain("llvm-ar-19 rcs");
+	});
+
 	it("retries required probes after an ambient linker becomes available", () => {
 		const fake = createFakeToolchain();
 		const readinessFile = path.join(fake.root, "linker-ready");

@@ -782,7 +782,13 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 			} else tools.cxx = cxx;
 		}
 
-		const ar = inspectExecutable("ar", searchPath, rootDir, env, ["--version"], true);
+		const clangMajor = /\bclang version (\d+)/.exec(cc?.version ?? "")?.[1];
+		const llvmAr =
+			platform === "linux" && clangMajor !== undefined
+				? inspectExecutable(`llvm-ar-${clangMajor}`, searchPath, rootDir, env)
+				: undefined;
+		const ar =
+			llvmAr ?? inspectExecutable("ar", searchPath, rootDir, env, ["--version"], true);
 		if (ar === undefined)
 			addMissingIssue(issues, "ar", "a static archive tool was not found on PATH");
 		else tools.ar = ar;
