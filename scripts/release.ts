@@ -450,13 +450,21 @@ function smokeRelease(): void {
 		CC: path.join(tools, "cc"),
 		CXX: path.join(tools, "c++"),
 	};
-	const invoke = (args: Array<string>): string =>
-		execFileSync(binary, args, {
+	const invoke = (args: Array<string>): string => {
+		const result = spawnSync(binary, args, {
 			cwd: project,
 			env: environment,
 			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "pipe"],
+			maxBuffer: 16 * 1024 * 1024,
 		});
+		if (result.error !== undefined) throw result.error;
+		if (result.status !== 0) {
+			throw new Error(
+				`release command ${args[0]} ${result.signal === null ? `exited with ${result.status}` : `terminated by ${result.signal}`}\n${result.stderr.slice(-16_384)}`,
+			);
+		}
+		return result.stdout;
+	};
 
 	try {
 		releaseLog("checking CLI metadata and isolated toolchain");

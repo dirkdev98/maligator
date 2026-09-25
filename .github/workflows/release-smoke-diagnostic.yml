@@ -1,0 +1,49 @@
+name: Diagnose Linux x64 release smoke
+
+run-name: Diagnose Linux x64 release smoke from run ${{ inputs.source_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Release package run containing the workspace artifact to retest
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the diagnostic revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Read release version
+        id: version
+        run: echo "value=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release workspace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-workspace-${{ steps.version.outputs.value }}-${{ inputs.source_run_id }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-workspace
+
+      - name: Restore the release workspace
+        run: tar -xzf "$RUNNER_TEMP/release-workspace/release-workspace.tar.gz"
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Smoke the Linux x64 release
+        run: npm run release:smoke
