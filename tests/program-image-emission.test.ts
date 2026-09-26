@@ -2822,10 +2822,21 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
-		expect(output).toContain("mal_vm_iterator_try_dense_array_cursor_step(");
+		expect(output).toContain("mal_vm_iterator_step_dense_array_cursor(");
 		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
-		expect(output).toContain("mal_vm_iterator_try_dense_array_step(");
-		expect(output).toContain("mal_vm_iterator_step(vm,");
+		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+		const ownerOutput = emitCompiledFunction(
+			definition.runtime.functions[ownerIndex]!,
+			owner,
+			ownerIndex,
+			"",
+			false,
+		)!.source;
+		expect(ownerOutput).not.toContain("__private_r");
+		const cursorCall = ownerOutput.indexOf("mal_vm_iterator_step_dense_array_cursor(");
+		const stepStart = ownerOutput.lastIndexOf("\nL", cursorCall);
+		expect(stepStart).toBeGreaterThan(0);
+		expect(ownerOutput.slice(stepStart, cursorCall)).toContain("MAL_ROOT_MASK(");
 
 		const retainedGeneric = withSpecializations(
 			definition,
