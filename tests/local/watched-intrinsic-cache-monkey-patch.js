@@ -2,21 +2,12 @@ function callFloor(value) {
 	return Math.floor(value);
 }
 
-function readBytesPerElement(constructor) {
-	return constructor.BYTES_PER_ELEMENT;
-}
-
-for (let i = 0; i < 100; i++) {
-	if (readBytesPerElement(Uint8Array) !== 1)
-		throw new Error("Uint8Array watched constructor warm failure");
-}
-for (let i = 0; i < 100; i++) {
-	if (readBytesPerElement(Uint32Array) !== 4)
-		throw new Error("Uint32Array watched constructor identity failure");
-}
-for (let i = 0; i < 100; i++) {
-	if (readBytesPerElement(Uint8Array) !== 1 || readBytesPerElement(Uint32Array) !== 4)
-		throw new Error("alternating watched constructor identity failure");
+// One load expression keeps both constructors on the same inline-cache site.
+for (let i = 0; i < 400; i++) {
+	const wide = i >= 100 && (i < 200 || (i & 1) !== 0);
+	const constructor = wide ? Uint32Array : Uint8Array;
+	if (constructor.BYTES_PER_ELEMENT !== (wide ? 4 : 1))
+		throw new Error("watched constructor identity failure");
 }
 
 const originalFloor = Math.floor;

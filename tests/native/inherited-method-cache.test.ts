@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
+	buildNativeBinaryResult,
 	runToStdout,
 	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
@@ -19,6 +20,7 @@ describe("inherited built-in method and native call caches", () => {
 	let monkeyPatch: string;
 	let watchedMonkeyPatch: string;
 	let watchedMonkeyPatchInterpreted: string;
+	let watchedConstructorLoadCount: number;
 	let accessor: string;
 	let ordinaryCompiled: string;
 	let ordinaryInterpreted: string;
@@ -54,12 +56,26 @@ describe("inherited built-in method and native call caches", () => {
 			compiled: true,
 			outDir,
 		});
-		watchedMonkeyPatch = buildNativeBinary({
+		const watched = buildNativeBinaryResult({
 			fixture: "tests/local/watched-intrinsic-cache-monkey-patch.js",
 			name: "watched-intrinsic-cache-monkey-patch",
 			compiled: true,
 			outDir,
 		});
+		watchedMonkeyPatch = watched.binaryPath;
+		watchedConstructorLoadCount = 0;
+		const { functions, stringConstants } = watched.programImage.runtime;
+		for (const fn of functions) {
+			for (const instruction of fn.instructions) {
+				if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					String.fromCharCode(...stringConstants[instruction.stringIndex]!) ===
+						"BYTES_PER_ELEMENT"
+				) {
+					watchedConstructorLoadCount++;
+				}
+			}
+		}
 		watchedMonkeyPatchInterpreted = buildNativeBinary({
 			fixture: "tests/local/watched-intrinsic-cache-monkey-patch.js",
 			name: "watched-intrinsic-cache-monkey-patch-ni",
@@ -190,6 +206,10 @@ describe("inherited built-in method and native call caches", () => {
 		assertExactLines(runToStdout(monkeyPatch), [
 			"inherited-method-cache-monkey-patch PASS",
 		]);
+	});
+
+	it("uses one IC for alternating watched constructors", () => {
+		expect(watchedConstructorLoadCount).toBe(1);
 	});
 
 	it.each([

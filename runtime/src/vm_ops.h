@@ -1603,7 +1603,8 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         mal_vm_object_try_load_monomorphic(object, ic->key, ic, out)) {
         return true;
     }
-    if (mal_vm_watched_try_load_static(receiver, ic, out)) return true;
+    if (ic->mode == MAL_IC_MODE_SHAPE &&
+        mal_vm_watched_try_load_static(receiver, ic, out)) return true;
     MalStaticPropertyProbeResult result =
         mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
     if (!result.hit) return false;
