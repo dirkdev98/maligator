@@ -1653,11 +1653,12 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != second->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    if (!mal_ops_is_number(first_value) || !mal_ops_is_number(second_value)) return false;
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     return true;
@@ -1685,17 +1686,15 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != third->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    MalValue third_value = object->slots[third->slot];
-    if (!mal_ops_is_number(first_value) ||
-        !mal_ops_is_number(second_value) ||
-        !mal_ops_is_number(third_value)) {
-        return false;
-    }
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
-    *third_out = mal_ops_number_as_f64(third_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    f64 third_value;
+    if (!mal_ops_try_number_as_f64(object->slots[third->slot], &third_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
+    *third_out = third_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
@@ -1729,20 +1728,18 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != fourth->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    MalValue third_value = object->slots[third->slot];
-    MalValue fourth_value = object->slots[fourth->slot];
-    if (!mal_ops_is_number(first_value) ||
-        !mal_ops_is_number(second_value) ||
-        !mal_ops_is_number(third_value) ||
-        !mal_ops_is_number(fourth_value)) {
-        return false;
-    }
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
-    *third_out = mal_ops_number_as_f64(third_value);
-    *fourth_out = mal_ops_number_as_f64(fourth_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    f64 third_value;
+    if (!mal_ops_try_number_as_f64(object->slots[third->slot], &third_value)) return false;
+    f64 fourth_value;
+    if (!mal_ops_try_number_as_f64(object->slots[fourth->slot], &fourth_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
+    *third_out = third_value;
+    *fourth_out = fourth_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
