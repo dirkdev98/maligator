@@ -1100,10 +1100,11 @@ function emitCompiledVariant(
 		directParameters!.push(
 			...directEntry.fieldParameters.keys.map((_, field) => `f64 fp${field}`),
 		);
+	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
 	lines.push(
 		directEntry === undefined
-			? `${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
-			: `${linkage === "static" ? "static " : ""}${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
+			? `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
+			: `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
@@ -1441,7 +1442,7 @@ export function emitCompiledFunction(
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
 		const symbol = `${emitted.symbol}_leaf`;
-		const source = `static f64 ${symbol}(${parameters.join(", ") || "void"}) {\n${worker.join("\n")}\n}\n${emitted.source.replace(
+		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			" {\n",
 			` {\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
 		)}`;
@@ -1583,7 +1584,7 @@ function emitResumableFunction(
 	const lines: Array<string> = [];
 
 	lines.push(
-		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
+		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);

@@ -56,6 +56,27 @@ function malFunctionRows(source: string): Array<Array<string>> {
 	);
 }
 
+function boxedNativeDefinition(
+	index: number,
+	linkage: "static" | "external" | "either" = "either",
+): RegExp {
+	const storage =
+		linkage === "static" ? "static " : linkage === "either" ? "(?:static )?" : "";
+	return new RegExp(
+		`^${storage}(?:__attribute__\\(\\([^\\n]*\\)\\) )*MalValue mal_compiled_${index}\\(MalVm \\*vm, MalValue this_value, const MalValue \\*args, i32 arg_count, MalValue new_target, MalEnv \\*env, MalValue callee, void \\*entry_state\\) \\{$`,
+		"m",
+	);
+}
+
+function boxedNativeFunction(source: string, index: number): string {
+	const definition = boxedNativeDefinition(index, "static").exec(source);
+	expect(definition).not.toBeNull();
+	const start = definition!.index;
+	const end = source.indexOf("\n}", start);
+	expect(end).toBeGreaterThan(start + definition![0].length);
+	return source.slice(start, end + 2);
+}
+
 const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
 	{ opcode: "CREATE_F64", dst: 0, value: Number.POSITIVE_INFINITY },
@@ -801,24 +822,16 @@ describe("emit-program-image instruction packing", () => {
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
 		expect(units[0]).toContain("#define MAL_DECLARE_COMPILED(name)");
 		expect(units[0]).toContain("MAL_DECLARE_COMPILED(mal_compiled_0);");
-		expect(units[0]).not.toContain(
-			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
-		);
-		expect(units.slice(1).join("\n")).toContain(
-			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value",
-		);
+		expect(units[0]).not.toMatch(boxedNativeDefinition(0));
+		expect(units.slice(1).join("\n")).toMatch(boxedNativeDefinition(0, "external"));
 		const metadataUnit = units.find((unit) =>
 			unit.includes("const MalFunction mal_functions[]"),
 		);
 		expect(metadataUnit).toContain("MAL_DECLARE_COMPILED(mal_compiled_0);");
-		expect(units.slice(1).join("\n")).not.toContain(
-			"static MalValue mal_compiled_0(MalVm *vm",
-		);
+		expect(units.slice(1).join("\n")).not.toMatch(boxedNativeDefinition(0, "static"));
 		expect(units[0]).toContain("MAL_DECLARE_COMPILED(mal_compiled_1);");
-		expect(units.slice(1).join("\n")).toContain("MalValue mal_compiled_1(MalVm *vm");
-		expect(units.slice(1).join("\n")).not.toContain(
-			"static MalValue mal_compiled_1(MalVm *vm",
-		);
+		expect(units.slice(1).join("\n")).toMatch(boxedNativeDefinition(1, "external"));
+		expect(units.slice(1).join("\n")).not.toMatch(boxedNativeDefinition(1, "static"));
 	});
 
 	it("locks the measured translation-unit policy independently of scheduling", () => {
@@ -909,8 +922,8 @@ describe("emit-program-image instruction packing", () => {
 		expect(compiledUnit.source.length).toBeGreaterThan(20_000);
 		expect(compiledUnit.definitions).toHaveLength(1);
 		expect(compiledUnit.kind).toBe("code");
-		expect(units.map((unit) => unit.source).join("\n")).toContain(
-			"MalValue mal_compiled_0(MalVm *vm",
+		expect(units.map((unit) => unit.source).join("\n")).toMatch(
+			boxedNativeDefinition(0, "external"),
 		);
 	});
 
@@ -1121,10 +1134,8 @@ describe("emit-program-image instruction packing", () => {
 			{},
 			Number.MAX_SAFE_INTEGER,
 		);
-		expect(units.slice(1).join("\n")).toContain("MalValue mal_compiled_0(MalVm *vm");
-		expect(units.slice(1).join("\n")).not.toContain(
-			"static MalValue mal_compiled_0(MalVm *vm",
-		);
+		expect(units.slice(1).join("\n")).toMatch(boxedNativeDefinition(0, "external"));
+		expect(units.slice(1).join("\n")).not.toMatch(boxedNativeDefinition(0, "static"));
 	});
 
 	it("splits bytecode and debug leaf arrays into bounded translation units", () => {
@@ -1251,7 +1262,7 @@ describe("emit-program-image instruction packing", () => {
 		const output = units.join("\n");
 
 		expect(units.every((unit) => unit.length <= 20_000)).toBe(true);
-		expect(output).not.toContain("MalValue mal_compiled_0(MalVm *vm");
+		expect(output).not.toMatch(boxedNativeDefinition(0));
 		expect(output).toContain("MalInstruction mal_function_0_instructions[201]");
 		expect(output).toContain("void mal_initialize_mal_function_0_instructions_chunk_0(");
 		expect(malFunctionRows(output)[0]?.[6]).toBe("nullptr");
@@ -3024,7 +3035,7 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
 		);
-		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).toMatch(boxedNativeDefinition(1, "static"));
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_SUB");
 	});
 
@@ -3096,7 +3107,7 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,
 		);
-		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).toMatch(boxedNativeDefinition(1, "static"));
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
 		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 		expect(output).toMatch(/r\d+ \+= r\d+;/);
@@ -3140,13 +3151,10 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; const explicit = (value) => value + 1; const fallthrough = () => {}; globalThis.keep = [explicit, fallthrough];`,
 		);
-		const explicit = output.slice(
-			output.indexOf("static MalValue mal_compiled_1("),
-			output.indexOf("static MalValue mal_compiled_2("),
-		);
+		const explicit = boxedNativeFunction(output, 1);
 		expect(explicit).toMatch(/return r\d+;/);
 		expect(explicit).not.toContain("mal_ops_construct_result");
-		const fallthrough = output.slice(output.indexOf("static MalValue mal_compiled_2("));
+		const fallthrough = boxedNativeFunction(output, 2);
 		expect(fallthrough).toContain("return MAL_VALUE_UNDEFINED;");
 	});
 
@@ -3411,7 +3419,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.result = Example();
 		`);
-		const entry = output.slice(output.indexOf("static MalValue mal_compiled_0("));
+		const entry = boxedNativeFunction(output, 0);
 		expect(entry).toContain("mal_vm_call_direct(vm,");
 		expect(entry).not.toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 	});
@@ -4746,7 +4754,7 @@ describe("native static typeof facts", () => {
 			globalThis.square = square;
 		`);
 
-		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).toMatch(boxedNativeDefinition(1, "static"));
 		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
 	});
