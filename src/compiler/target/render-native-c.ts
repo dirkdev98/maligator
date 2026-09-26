@@ -583,6 +583,7 @@ function cPrivateRootPublication(
 	plan: NativeRootPublication | undefined,
 	ip: number,
 	edge: "incoming" | "outgoing",
+	knownPublished?: ReadonlySet<number>,
 ): Array<string> {
 	const point = plan?.safepoints.get(ip);
 	if (plan === undefined || point === undefined) return [];
@@ -593,7 +594,8 @@ function cPrivateRootPublication(
 	const stores: Array<string> = [];
 	for (const [register, slot] of plan.slots) {
 		if (live.has(register)) {
-			if (plan.entryStableRegisters.has(register)) continue;
+			if (plan.entryStableRegisters.has(register) || knownPublished?.has(register))
+				continue;
 			stores.push(`__gc_slots[${slot}] = r${register};`);
 		} else if (slot >= 64 || active.has(register)) {
 			// A dead private local can still contain a reclaimed pointer. In particular,
@@ -3108,6 +3110,8 @@ function emitBody(
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
+	// Entry initialization copies every private value into its shadow slot.
+	const knownPublishedPrivateRoots = new Set(rootPublication?.slots.keys());
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
@@ -3115,9 +3119,11 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
+			knownPublishedPrivateRoots.clear();
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
+			knownPublishedPrivateRoots.clear();
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (target > branchIp) return `goto L${target};`;
@@ -3201,6 +3207,7 @@ function emitBody(
 			rootPublication,
 			ip,
 			"incoming",
+			knownPublishedPrivateRoots,
 		);
 		const outgoingRootPublication = cPrivateRootPublication(
 			rootPublication,
@@ -3232,6 +3239,9 @@ function emitBody(
 			!stackObjectMaterializations.has(ip) &&
 			!constructorInitializationActionByIp.has(ip);
 		const deferredOperatorRoots = fn.instructions[ip]!.opcode === "BINARY";
+		// Only selected private values need the operator's mask on its fallback edge.
+		const eagerOperatorRootPublication =
+			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
 		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredDenseIteratorRoots =
@@ -3243,7 +3253,7 @@ function emitBody(
 			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip);
 		const effects = nativeInstructionEffects(fn.instructions[ip]!);
-		if (
+		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
 			!deferredIndexedPropertyRoots &&
@@ -3251,8 +3261,8 @@ function emitBody(
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
 			!deferredDenseIteratorRoots &&
-			(effects.collection || effects.reentry)
-		) {
+			(effects.collection || effects.reentry);
+		if (publishesIncomingRoots) {
 			lines.push(...incomingRootPublication.map((line) => `    ${line}`));
 		}
 		const inactiveRootMask = inactiveRootMasks.get(ip);
@@ -3378,6 +3388,7 @@ function emitBody(
 									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
 								]
 						: [],
+				eagerIncomingRootPublication: eagerOperatorRootPublication,
 				onIncomingRootPublication:
 					operatorInactiveRootMask === undefined
 						? undefined
@@ -3450,6 +3461,13 @@ function emitBody(
 			return null;
 		}
 		if (
+			eagerOperatorRootPublication &&
+			operatorMaskEmitted &&
+			operatorInactiveRootMask !== undefined
+		) {
+			lines.push(`    ${cInactiveRootMaskPublication(operatorInactiveRootMask)};`);
+			lastPublishedInactiveRootMask = operatorInactiveRootMask;
+		} else if (
 			operatorMaskEmitted ||
 			mathCallInactiveRootMask !== undefined ||
 			tdzInactiveRootMask !== undefined ||
@@ -3515,6 +3533,28 @@ function emitBody(
 		for (const register of rootedOutputs) {
 			lines.push(`#undef r${register}`);
 			lines.push(`#define r${register} (__private_r${register})`);
+		}
+		if (rootPublication !== undefined) {
+			const point = rootPublication.safepoints.get(ip);
+			if (publishesIncomingRoots) {
+				for (const register of point?.incomingRootRegisters ?? []) {
+					if (rootPublication.slots.has(register))
+						knownPublishedPrivateRoots.add(register);
+				}
+			}
+			// Refined GC maps, not broad opcode effects, identify possible shadow clearing.
+			if (point !== undefined) {
+				const incoming = new Set(point.incomingRootRegisters);
+				const outgoing = new Set(point.outgoingRootRegisters);
+				for (const register of knownPublishedPrivateRoots) {
+					if (!incoming.has(register) || !outgoing.has(register))
+						knownPublishedPrivateRoots.delete(register);
+				}
+			}
+			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
+				knownPublishedPrivateRoots.delete(register);
+			// These outputs alias shadow storage until the explicit reload above.
+			for (const register of rootedOutputs) knownPublishedPrivateRoots.add(register);
 		}
 	}
 
@@ -3766,6 +3806,7 @@ interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
+	readonly eagerIncomingRootPublication?: boolean;
 	readonly onIncomingRootPublication?: () => void;
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
@@ -3927,7 +3968,7 @@ function emitInstruction(
 	const reentrantValue = (expression: string): string => {
 		const publication = context.incomingRootPublication ?? [];
 		if (publication.length > 0) context.onIncomingRootPublication?.();
-		return publication.length === 0
+		return publication.length === 0 || context.eagerIncomingRootPublication
 			? expression
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
 	};
@@ -3941,6 +3982,7 @@ function emitInstruction(
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		incomingRootPublication: context.incomingRootPublication,
+		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
 		onIncomingRootPublication: context.onIncomingRootPublication,
 		outgoingRootPublication: context.outgoingRootPublication,
 		rootedOutputReloads: context.rootedOutputReloads,

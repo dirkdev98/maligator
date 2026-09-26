@@ -1803,7 +1803,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("publishes exact static-property roots only inside the generic fallback", () => {
+	it("reuses rooted call outputs through static-property hits and misses", () => {
 		const call: BytecodeInstruction = {
 			opcode: "CALL",
 			dst: 0,
@@ -1842,23 +1842,23 @@ describe("emit-program-image instruction packing", () => {
 						{
 							kind: "operation",
 							instructionIp: 0,
-							rootRegisters: [1],
+							rootRegisters: [0, 1],
 							incomingRootRegisters: [1],
-							outgoingRootRegisters: [1],
+							outgoingRootRegisters: [0, 1],
 						},
 						{
 							kind: "operation",
 							instructionIp: 1,
-							rootRegisters: [0],
-							incomingRootRegisters: [0],
-							outgoingRootRegisters: [0],
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [0, 1],
+							outgoingRootRegisters: [1],
 						},
 						{
 							kind: "operation",
 							instructionIp: 2,
-							rootRegisters: [1],
+							rootRegisters: [0, 1],
 							incomingRootRegisters: [1],
-							outgoingRootRegisters: [1],
+							outgoingRootRegisters: [0],
 						},
 					],
 				},
@@ -1866,14 +1866,16 @@ describe("emit-program-image instruction packing", () => {
 		);
 		const output = emitProgramImage(image, { compiled: true });
 
-		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
-		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
-		expect(output).toMatch(
-			/if \(mal_vm_property_try_load_static[^\n]+\) \{[\s\S]*?\} else \{\n\s+__gc_slots\[0\] = r0;\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
-		);
-		expect(output).toMatch(
-			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
-		);
+		expect(output).toContain("#define r0 (__private_r0)");
+		const propertyStart = output.indexOf("if (mal_vm_property_try_load_static");
+		const propertyEnd = output.indexOf("static MalCallCache __cc_2", propertyStart);
+		expect(propertyStart).toBeGreaterThan(0);
+		expect(propertyEnd).toBeGreaterThan(propertyStart);
+		const property = output.slice(propertyStart, propertyEnd);
+		expect(property).toContain("r0 = __v_1;");
+		expect(property).toContain("r0 = mal_vm_op_load_property_ic_static_miss");
+		expect(property).not.toContain("__gc_slots[0] = r0;");
+
 		// Calls bind the reused destination to continuously rooted storage, then
 		// restore its private value on either control-flow exit.
 		expect(output).toMatch(/#define r0 \(__gc_slots\[0\]\)[\s\S]*?mal_vm_call_cached/);
